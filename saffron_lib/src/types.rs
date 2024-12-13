@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::io::Stdout;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,14 +207,14 @@ pub struct StyleWithoutName {
     pub fontname: String,
     pub fontsize: u32,
     // 默认显示的颜色 读取和写入需要解析类似 &H00FFFFFF
-    pub primary_colour: u32,
+    pub primary_color: u32,
     // 次要颜色
-    pub secondary_colour: u32,
+    pub secondary_color: u32,
     // WARN: 官方定义中与实际不符
     // 轮廓的颜色和透明度
-    pub outline_colour: u32,
+    pub outline_color: u32,
     // 阴影的颜色
-    pub back_colour: u32,
+    pub back_color: u32,
     // 粗体
     pub bold: StyleBool,
     // 斜体
@@ -489,20 +488,130 @@ impl fmt::Display for Effect {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventType {
+    Dialogue,
+    Comment,
+    Picture,
+    Sound,
+    Movie,
+    Command,
+}
+
+impl FromStr for EventType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Dialogue" => Ok(EventType::Dialogue),
+            "Comment" => Ok(EventType::Comment),
+            "Picture" => Ok(EventType::Picture),
+            "Sound" => Ok(EventType::Sound),
+            "Movie" => Ok(EventType::Movie),
+            "Command" => Ok(EventType::Command),
+            _ => Err(format!("Invalid value for EventType: {}", s)),
+        }
+    }
+}
+
+impl fmt::Display for EventType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            EventType::Dialogue => "Dialogue",
+            EventType::Comment => "Comment",
+            EventType::Picture => "Picture",
+            EventType::Sound => "Sound",
+            EventType::Movie => "Movie",
+            EventType::Command => "Command",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+pub struct StyledTextSegment {
+    pub text: String,
+    pub styles: HashMap<String, StyleOverride>,
+}
+
+pub enum BoldOverrideType {
+    Bold,
+    NonBold,
+    Weight(u32),
+}
+
+enum ScaleDirection {
+    Horizontal,
+    Vertical,
+}
+
+pub enum RotationAxis {
+    X,
+    Y,
+    Z,
+}
+
+pub enum KaraokeOverrideType {
+    Duration(u32),
+    FillUp(bool),
+    OutlineHighlighting(bool),
+}
+
+pub enum StyleOverride {
+    Bold(BoldOverrideType),
+    Italic(bool),
+    Underline(bool),
+    Strikeout(bool),
+    Border(i32),
+    Shadow(i32),
+    BlurEdges(bool),
+    FontName(String),
+    FontSize(u32),
+    FontScale {
+        direction: ScaleDirection,
+        percent: i32,
+    },
+    FontSpacing(i32),
+    FontRotation {
+        axis: RotationAxis,
+        degrees: f32,
+    },
+    FontEncoding(String),
+    // 十六进制颜色 WARN:<bbggrr>
+    PrimaryColor(u32),
+    // 次要颜色
+    SecondaryColor(u32),
+    OutlineColor(u32),
+    BackColor(u32),
+    PrimaryAlpha(u32),
+    SecondaryAlpha(u32),
+    OutlineAlpha(u32),
+    BackAlpha(u32),
+    // 需要解析 \a 和 \an 并应用正确
+    Alignment(Alignment),
+    Karaoke(KaraokeOverrideType),
+    // TODO: Functions
+    // TODO: Drawings
+    // TODO: Drawing commands
+}
+
 pub struct Event {
-    Layer: i32,
-    Start: AssTime,
-    End: AssTime,
-    Style: String,
-    Name: Option<String>,
-    MarginL: EventMargin,
-    MarginR: EventMargin,
-    MarginV: EventMargin,
-    Effect: Option<Effect>,
-    Text: String,
+    // Comment 也使用 Format 的格式
+    pub event_type: EventType,
+    pub layer: i32,
+    pub start: AssTime,
+    pub end: AssTime,
+    pub style: String,
+    pub name: Option<String>,
+    pub margin_l: EventMargin,
+    pub margin_r: EventMargin,
+    pub margin_v: EventMargin,
+    pub effect: Option<Effect>,
+    pub raw_text: String,
+    pub parsed_text: Option<Vec<StyledTextSegment>>,
 }
 
 pub struct ASSFile {
     pub script_info: ScriptInfo,
     pub styles: HashMap<String, StyleWithoutName>,
+    pub events: Vec<Event>,
 }
