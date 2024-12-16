@@ -1,29 +1,62 @@
 use std::collections::HashMap;
-use std::fmt;
-use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Collisions {
-    // 总是尽可能靠近垂直（底部）边距定位，如果有足够大的间隙，会填补其他字幕之间的空隙
-    Normal,
-    // 则字幕将向上移动，以便为后续重叠字幕腾出空间
-    Reverse,
+pub enum WrapStyle {
+    /// 默认值 (当头部信息不存在时)
+    /// 溢出的行会在 ASCII 空格(U+0020)或\n处自动断行
+    /// 尝试保持每行长度大致相等
+    Smart = 0,
+
+    /// 溢出的行会在 ASCII 空格或\n处在造成溢出的单词之前精确断行
+    /// 不会尝试使行长度均匀
+    EndWord = 1,
+
+    /// 永不自动断行
+    /// 但\N和\n都被视为强制换行
+    NoWrap = 2,
+}
+
+pub enum ScriptType {
+    SSAv4,
+    ASS,
+    ASS2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WrapStyle {
-    // 0: 智能换行，行均匀断开
-    SmartWrapping,
-    // 1: 行尾单词换行，仅 \N 换行
-    EndOfLineWordWrapping,
-    // 2: 无自动换行，\n 和 \N 都换行
-    NoWordWrapping,
-    // 3: 同 0，但下行更宽
-    SmartWrappingWideLower,
+pub enum YCbCrMatrix {
+    Default,     // 头部信息缺失
+    Unknown,     // 头部信息无法正确解析
+    None,        // "None" 特殊值
+    BT601TV,     // TV.601
+    BT601PC,     // PC.601
+    BT709TV,     // TV.709
+    BT709PC,     // PC.709
+    SMPTE240MTV, // TV.240m
+    SMPTE240MPC, // PC.240m
+    FCCTV,       // TV.fcc
+    FCCPC,       // PC.fcc
 }
 
 pub struct ScriptInfo {
     // 这一部分的 ; 行不需要读取，是注释
+    // 渲染相关
+    // SSA 版本号
+    pub script_type: ScriptType,
+    // 缩放边框与阴影 设置为 no 没有好处, 始终为 yes
+    pub scaled_border_and_shadow: bool,
+    // 色彩空间
+    pub ycbcr_matrix: YCbCrMatrix,
+    // 字幕作者视频宽度
+    pub layout_res_x: u32,
+    // 字幕作者视频高度
+    pub layout_res_y: u32,
+    // WARN: 需要写入文件
+    // NOTE: 需要和 layout 一致, 仅用于兼容
+    // pub play_res_x: u32,
+    // pub play_res_y: u32,
+    // 换行样式
+    pub wrap_style: WrapStyle,
+
+    // 渲染无关
     // 描述
     pub title: Option<String>,
     // 原始作者
@@ -34,28 +67,12 @@ pub struct ScriptInfo {
     pub original_editing: Option<String>,
     // 原始时间轴
     pub original_timing: Option<String>,
-    // 相对于视频的开始时间
-    pub synch_point: Option<String>,
     // 字幕更新者
     pub script_updated_by: Option<String>,
     // 更新描述
     pub update_details: Option<String>,
-    // SSA 版本号
-    pub script_type: Option<String>,
-    // 空间不足时堆叠方式
-    pub collisions: Option<Collisions>,
-    // 字幕作者视频高度
-    pub play_res_y: Option<u32>,
-    // 字幕作者视频宽度
-    pub play_res_x: Option<u32>,
-    // 字幕作者视频颜色深度
-    pub play_depth: Option<u32>,
-    // 时轴速度（百分比表示，100.0000 表示精确的100%）
-    pub timer: Option<f64>,
-    // 换行样式
-    pub wrap_style: Option<u8>,
-    // 存储未知或自定义字段
-    pub other_fields: std::collections::HashMap<String, String>,
+    // 自定义字段 !开头字段  例如 !: Release Date: 2009-08-07
+    pub other_fields: HashMap<String, String>,
 }
 
 pub enum StyleBool {

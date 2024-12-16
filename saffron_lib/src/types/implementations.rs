@@ -1,38 +1,16 @@
 use super::definitions::*;
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
-
-impl FromStr for Collisions {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Normal" => Ok(Collisions::Normal),
-            "Reverse" => Ok(Collisions::Reverse),
-            _ => Err(format!("Invalid value for Collisions: {}", s)),
-        }
-    }
-}
-
-impl fmt::Display for Collisions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Collisions::Normal => "Normal",
-            Collisions::Reverse => "Reverse",
-        };
-        write!(f, "{}", s)
-    }
-}
 
 impl FromStr for WrapStyle {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "0" => Ok(WrapStyle::SmartWrapping),
-            "1" => Ok(WrapStyle::EndOfLineWordWrapping),
-            "2" => Ok(WrapStyle::NoWordWrapping),
-            "3" => Ok(WrapStyle::SmartWrappingWideLower),
+            "0" => Ok(WrapStyle::Smart),
+            "1" => Ok(WrapStyle::EndWord),
+            "2" => Ok(WrapStyle::NoWrap),
             _ => Err(format!("Invalid value for WrapStyle: {}", s)),
         }
     }
@@ -41,14 +19,150 @@ impl FromStr for WrapStyle {
 impl fmt::Display for WrapStyle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            WrapStyle::SmartWrapping => "0",
-            WrapStyle::EndOfLineWordWrapping => "1",
-            WrapStyle::NoWordWrapping => "2",
-            WrapStyle::SmartWrappingWideLower => "3",
+            WrapStyle::Smart => "0",
+            WrapStyle::EndWord => "1",
+            WrapStyle::NoWrap => "2",
         };
         write!(f, "{}", s)
     }
 }
+
+impl FromStr for ScriptType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "v4.00" => Ok(ScriptType::SSAv4),
+            "v4.00+" => Ok(ScriptType::ASS),
+            "v4.00++" => Ok(ScriptType::ASS2),
+            _ => Err(format!("Invalid value for ScriptType: {}", s)),
+        }
+    }
+}
+impl fmt::Display for ScriptType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            ScriptType::SSAv4 => "v4.00",
+            ScriptType::ASS => "v4.00+",
+            ScriptType::ASS2 => "v4.00++",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl FromStr for YCbCrMatrix {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "tv.601" => Ok(Self::BT601TV),
+            "pc.601" => Ok(Self::BT601PC),
+            "tv.709" => Ok(Self::BT709TV),
+            "pc.709" => Ok(Self::BT709PC),
+            "tv.240m" => Ok(Self::SMPTE240MTV),
+            "pc.240m" => Ok(Self::SMPTE240MPC),
+            "tv.fcc" => Ok(Self::FCCTV),
+            "pc.fcc" => Ok(Self::FCCPC),
+            "" => Ok(Self::Default),
+            _ => Ok(Self::Unknown),
+        }
+    }
+}
+
+impl ScriptInfo {
+    pub fn new() -> Self {
+        Self {
+            // 必填部分，使用指定的默认值
+            script_type: ScriptType::ASS,
+            scaled_border_and_shadow: true,
+            ycbcr_matrix: YCbCrMatrix::Default,
+            layout_res_x: 1920,
+            layout_res_y: 1080,
+            wrap_style: WrapStyle::Smart,
+
+            // 选填部分
+            title: None,
+            original_script: None,
+            original_translation: None,
+            original_editing: None,
+            original_timing: None,
+            script_updated_by: None,
+            update_details: None,
+
+            // 初始化其他字段
+            other_fields: HashMap::new(),
+        }
+    }
+    pub fn set_field(&mut self, key: &str, value: &str) -> Result<(), String> {
+        match key {
+            "script_type" => {
+                self.script_type = ScriptType::from_str(value)?;
+                Ok(())
+            }
+            "ycbcr_matrix" => {
+                self.ycbcr_matrix = YCbCrMatrix::from_str(value)?;
+                Ok(())
+            }
+            "layout_res_x" => match value.parse::<u32>() {
+                Ok(v) => {
+                    self.layout_res_x = v;
+                    Ok(())
+                }
+                Err(_) => Err(format!("Invalid PlayResX value: {}", value)),
+            },
+            "layout_res_y" => match value.parse::<u32>() {
+                Ok(v) => {
+                    self.layout_res_y = v;
+                    Ok(())
+                }
+                Err(_) => Err(format!("Invalid PlayResY value: {}", value)),
+            },
+            "wrap_style" => {
+                self.wrap_style = WrapStyle::from_str(value)?;
+                Ok(())
+            }
+
+            // 选填部分
+            "title" => {
+                self.title = Some(value.to_string());
+                Ok(())
+            }
+            "original_script" => {
+                self.original_script = Some(value.to_string());
+                Ok(())
+            }
+            "original_translation" => {
+                self.original_translation = Some(value.to_string());
+                Ok(())
+            }
+            "original_editing" => {
+                self.original_editing = Some(value.to_string());
+                Ok(())
+            }
+            "original_timing" => {
+                self.original_timing = Some(value.to_string());
+                Ok(())
+            }
+            "script_updated_by" => {
+                self.script_updated_by = Some(value.to_string());
+                Ok(())
+            }
+            "update_details" => {
+                self.update_details = Some(value.to_string());
+                Ok(())
+            }
+            _ => Err(format!("Invalid key for ScriptInfo: {}", key)),
+        }
+    }
+    pub fn add_or_update_other_fields(&mut self, key: String, value: String) {
+        self.other_fields
+            .entry(key)
+            .and_modify(|e| *e = value.clone())
+            .or_insert(value);
+    }
+}
+
 impl FromStr for StyleBool {
     type Err = String;
 
