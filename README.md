@@ -6,3 +6,6 @@
 - [ ] GUI
 - [ ] i18n
 - [ ] A11y
+- [ ] cooperation
+- [ ] OCR
+- [ ] Language to text
