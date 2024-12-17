@@ -76,13 +76,20 @@ pub struct ScriptInfo {
     pub other_fields: HashMap<String, String>,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct ASSColor(pub u32);
+
+#[derive(Debug, PartialEq)]
+pub enum BoldType {
+    Bold,
+    NonBold,
+    Weight(i32),
+}
+
+#[derive(Debug, PartialEq)]
 pub enum StyleBool {
     True = -1,
-    False,
-}
-pub enum BorderStyle {
-    OutlineAndDropShadow = 1,
-    OpaqueBox = 3,
+    False = 0,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {
@@ -96,20 +103,27 @@ pub enum Alignment {
     TopCenter,
     TopRight,
 }
+#[derive(Debug, PartialEq)]
+pub enum BorderStyle {
+    OutlineAndDropShadow = 1,
+    OpaqueBox = 3, // 矩形框
+}
+
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_types.h#L105-L133
+#[derive(Debug, PartialEq)]
 pub struct StyleWithoutName {
     pub fontname: String,
-    pub fontsize: u32,
+    pub fontsize: f64,
     // 默认显示的颜色 读取和写入需要解析类似 &H00FFFFFF
-    pub primary_color: u32,
+    pub primary_color: ASSColor,
     // 次要颜色
-    pub secondary_color: u32,
-    // WARN: 官方定义中与实际不符
+    pub secondary_color: ASSColor,
     // 轮廓的颜色和透明度
-    pub outline_color: u32,
+    pub outline_color: ASSColor,
     // 阴影的颜色
-    pub back_color: u32,
+    pub back_color: ASSColor,
     // 粗体
-    pub bold: StyleBool,
+    pub bold: BoldType,
     // 斜体
     pub italic: StyleBool,
     // 下划线
@@ -117,26 +131,26 @@ pub struct StyleWithoutName {
     // 删除线
     pub strikeout: StyleBool,
     // 字体宽度伸缩率 [百分比]
-    pub scale_x: u32,
+    pub scale_x: f64,
     // 字体的高度伸缩率 [百分比]
-    pub scale_y: u32,
-    // 字符间距 [像素]
-    pub spacing: u32,
+    pub scale_y: f64,
+    // 字符间距
+    pub spacing: f64,
     // 角度 [度]
-    pub angle: f32,
+    pub angle: f64,
     pub border_style: BorderStyle,
     // 轮廓宽度 [像素]
-    pub outline: u32,
+    pub outline: f64,
     // 阴影的深度为像素数
-    pub shadow: u32,
+    pub shadow: f64,
     pub alignment: Alignment,
     // 距离边界距离
-    pub margin_l: u32,
-    pub margin_r: u32,
+    pub margin_l: i32,
+    pub margin_r: i32,
     // 对于字幕来说是距离底部的距离
-    pub margin_v: u32,
-    // 似乎使用 Unicode 就是 1
-    pub encoding: u32,
+    pub margin_v: i32,
+    // 必须是 1
+    pub encoding: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,12 +196,6 @@ pub enum EventType {
 pub struct StyledTextSegment {
     pub text: String,
     pub styles: HashMap<String, StyleOverride>,
-}
-
-pub enum BoldOverrideType {
-    Bold,
-    NonBold,
-    Weight(u32),
 }
 
 enum ScaleDirection {
@@ -274,7 +282,7 @@ pub struct Drawing {
 }
 
 pub enum StyleOverride {
-    Bold(BoldOverrideType),
+    Bold(BoldType),
     Italic(bool),
     Underline(bool),
     Strikeout(bool),

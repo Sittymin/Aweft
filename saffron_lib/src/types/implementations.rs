@@ -32,9 +32,15 @@ impl FromStr for ScriptType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "v4.00" => Ok(ScriptType::SSAv4),
+            "v4.00" => {
+                eprintln!("Now is only implementation ASS");
+                Ok(ScriptType::SSAv4)
+            }
             "v4.00+" => Ok(ScriptType::ASS),
-            "v4.00++" => Ok(ScriptType::ASS2),
+            "v4.00++" => {
+                eprintln!("Now is only implementation ASS");
+                Ok(ScriptType::ASS2)
+            }
             _ => Err(format!("Invalid value for ScriptType: {}", s)),
         }
     }
@@ -169,6 +175,50 @@ impl ScriptInfo {
     }
 }
 
+impl FromStr for ASSColor {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(u32_color) = s.strip_prefix("&H") {
+            u32::from_str_radix(u32_color, 16)
+                .map(ASSColor)
+                .map_err(|_| format!("Invalid value for ASSColor: {}", s))
+        } else {
+            Err(format!("Invalid format for ASSColor: {}", s))
+        }
+    }
+}
+impl fmt::Display for ASSColor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "&H{:08X}", self.0)
+    }
+}
+
+impl FromStr for BoldType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let num = s
+            .parse::<i32>()
+            .map_err(|_| format!("Invalid value for BoldType: {}", s))?;
+        match num {
+            -1 => Ok(BoldType::Bold),
+            0 => Ok(BoldType::NonBold),
+            _ => Ok(BoldType::Weight(num)),
+        }
+    }
+}
+impl fmt::Display for BoldType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            BoldType::Bold => -1,
+            BoldType::NonBold => 0,
+            BoldType::Weight(num) => *num,
+        };
+        write!(f, "{}", s)
+    }
+}
+
 impl FromStr for StyleBool {
     type Err = String;
 
@@ -245,6 +295,38 @@ impl fmt::Display for BorderStyle {
         write!(f, "{}", s)
     }
 }
+impl StyleWithoutName {
+    // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass.c#L224-L242
+    fn new() -> Self {
+        StyleWithoutName {
+            // NOTE: length <= 31
+            fontname: "Arial".to_string(),
+            // NOTE: length <= 511
+            fontsize: 18.0,
+            primary_color: ASSColor(0xFFFFFF00),
+            secondary_color: ASSColor(0x00FFFF00),
+            outline_color: ASSColor(0x00000000),
+            back_color: ASSColor(0x00000080),
+            bold: BoldType::Weight(200),
+            italic: StyleBool::False,
+            underline: StyleBool::False,
+            strikeout: StyleBool::False,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            spacing: 0.0,
+            angle: 0.0,
+            border_style: BorderStyle::OutlineAndDropShadow,
+            outline: 2.0,
+            shadow: 3.0,
+            alignment: Alignment::BottomCenter,
+            margin_l: 20,
+            margin_r: 20,
+            margin_v: 20,
+            encoding: 1,
+        }
+    }
+}
+
 impl FromStr for AssTime {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -483,5 +565,17 @@ impl fmt::Display for EventType {
             EventType::Command => "Command",
         };
         write!(f, "{}", s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parse_and_print_color_test() {
+        let parse_color_1 = ASSColor::from_str("&HFFFFFF00").unwrap();
+        let parse_color_2 = ASSColor::from_str("&Hffffff00").unwrap();
+        assert_eq!("&HFFFFFF00", parse_color_1.to_string());
+        assert_eq!("&HFFFFFF00", parse_color_2.to_string());
     }
 }
