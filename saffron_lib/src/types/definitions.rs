@@ -15,6 +15,7 @@ pub enum WrapStyle {
     NoWrap = 2,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum ScriptType {
     SSAv4,
     ASS,

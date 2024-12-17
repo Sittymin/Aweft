@@ -96,70 +96,76 @@ impl ScriptInfo {
     }
     pub fn set_field(&mut self, key: &str, value: &str) -> Result<(), String> {
         match key {
-            "script_type" => {
+            "script_type" | "ScriptType" => {
                 self.script_type = ScriptType::from_str(value)?;
                 Ok(())
             }
-            "ycbcr_matrix" => {
+            "ScaledBorderAndShadow" => {
+                // 不应修改
+                self.scaled_border_and_shadow = true;
+                Ok(())
+            }
+            "ycbcr_matrix" | "YCbCr Matrix" => {
                 self.ycbcr_matrix = YCbCrMatrix::from_str(value)?;
                 Ok(())
             }
-            "layout_res_x" => match value.parse::<u32>() {
+            "layout_res_x" | "LayoutResX" | "PlayResX" => match value.parse::<u32>() {
                 Ok(v) => {
                     self.layout_res_x = v;
                     Ok(())
                 }
                 Err(_) => Err(format!("Invalid PlayResX value: {}", value)),
             },
-            "layout_res_y" => match value.parse::<u32>() {
+            "layout_res_y" | "LayoutResY" | "PlayResY" => match value.parse::<u32>() {
                 Ok(v) => {
                     self.layout_res_y = v;
                     Ok(())
                 }
                 Err(_) => Err(format!("Invalid PlayResY value: {}", value)),
             },
-            "wrap_style" => {
+            "wrap_style" | "WrapStyle" => {
                 self.wrap_style = WrapStyle::from_str(value)?;
                 Ok(())
             }
 
             // 选填部分
-            "title" => {
+            "title" | "Title" => {
                 self.title = Some(value.to_string());
                 Ok(())
             }
-            "original_script" => {
+            "original_script" | "Original Script" => {
                 self.original_script = Some(value.to_string());
                 Ok(())
             }
-            "original_translation" => {
+            "original_translation" | "Original Translation" => {
                 self.original_translation = Some(value.to_string());
                 Ok(())
             }
-            "original_editing" => {
+            "original_editing" | "Original Editing" => {
                 self.original_editing = Some(value.to_string());
                 Ok(())
             }
-            "original_timing" => {
+            "original_timing" | "Original Timing" => {
                 self.original_timing = Some(value.to_string());
                 Ok(())
             }
-            "script_updated_by" => {
+            "script_updated_by" | "Script Updated By" => {
                 self.script_updated_by = Some(value.to_string());
                 Ok(())
             }
-            "update_details" => {
+            "update_details" | "Update Details" => {
                 self.update_details = Some(value.to_string());
                 Ok(())
             }
             _ => Err(format!("Invalid key for ScriptInfo: {}", key)),
         }
     }
-    pub fn add_or_update_other_fields(&mut self, key: String, value: String) {
+    pub fn add_or_update_other_fields(&mut self, key: String, value: String) -> Result<(), String> {
         self.other_fields
             .entry(key)
             .and_modify(|e| *e = value.clone())
             .or_insert(value);
+        Ok(())
     }
 }
 
