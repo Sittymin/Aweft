@@ -327,7 +327,7 @@ impl StyleWithoutName {
     }
 }
 
-impl FromStr for AssTime {
+impl FromStr for ASSTime {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(":").collect();
@@ -336,22 +336,28 @@ impl FromStr for AssTime {
         }
 
         let hours = parts[0]
-            .parse::<u8>()
+            .parse::<u16>()
             .map_err(|_| format!("Invalid hours in time: {s}"))?;
         let minutes = parts[1]
             .parse::<u8>()
             .map_err(|_| format!("Invalid minutes in time: {s}"))?;
-        let seconds = parts[2]
+
+        let sec_parts: Vec<&str> = parts[2].split(".").collect();
+        if sec_parts.len() != 2 {
+            return Err(format!("Invalid seconds and centiseconds in time: {s}"));
+        }
+
+        let seconds = sec_parts[0]
             .parse::<u8>()
             .map_err(|_| format!("Invalid seconds in time: {s}"))?;
-        let centiseconds = parts[3]
+        let centiseconds = sec_parts[1]
             .parse::<u8>()
             .map_err(|_| format!("Invalid centiseconds in time: {s}"))?;
 
-        if hours > 9 || minutes > 59 || seconds > 59 || centiseconds > 99 {
+        if hours > 595 || minutes > 59 || seconds > 59 || centiseconds > 99 {
             return Err(format!("Time value out of range: {s}"));
         }
-        Ok(AssTime {
+        Ok(ASSTime {
             hours,
             minutes,
             seconds,
@@ -359,6 +365,27 @@ impl FromStr for AssTime {
         })
     }
 }
+
+impl fmt::Display for ASSTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}:{:02}:{:02}.{:02}",
+            self.hours, self.minutes, self.seconds, self.centiseconds
+        )
+    }
+}
+impl ASSTime {
+    pub fn new() -> Self {
+        Self {
+            hours: 0,
+            minutes: 0,
+            seconds: 0,
+            centiseconds: 0,
+        }
+    }
+}
+
 impl FromStr for EventMargin {
     type Err = String;
 
@@ -406,21 +433,7 @@ impl FromStr for Effect {
             let delay = params[2]
                 .parse::<u16>()
                 .map_err(|_| format!("Invalid delay in effect: {}", s))?;
-            let fadeaway_height = if params.len() > 3 {
-                Some(
-                    params[3]
-                        .parse::<u16>()
-                        .map_err(|_| format!("Invalid fadeaway_height in effect: {}", s))?,
-                )
-            } else {
-                None
-            };
-            return Ok(Effect::ScrollUp {
-                y1,
-                y2,
-                delay,
-                fadeaway_height,
-            });
+            return Ok(Effect::ScrollUp { y1, y2, delay });
         }
 
         if s.starts_with("Scroll down;") {
@@ -438,21 +451,7 @@ impl FromStr for Effect {
             let delay = params[2]
                 .parse::<u16>()
                 .map_err(|_| format!("Invalid delay in effect: {}", s))?;
-            let fadeaway_height = if params.len() > 3 {
-                Some(
-                    params[3]
-                        .parse::<u16>()
-                        .map_err(|_| format!("Invalid fadeaway_height in effect: {}", s))?,
-                )
-            } else {
-                None
-            };
-            return Ok(Effect::ScrollDown {
-                y1,
-                y2,
-                delay,
-                fadeaway_height,
-            });
+            return Ok(Effect::ScrollDown { y1, y2, delay });
         }
 
         if s.starts_with("Banner;") {
@@ -461,7 +460,7 @@ impl FromStr for Effect {
                 return Err(format!("Invalid parameters for Banner effect: {}", s));
             }
             let delay = params[0]
-                .parse::<u16>()
+                .parse::<u8>()
                 .map_err(|_| format!("Invalid delay in effect: {}", s))?;
             let left_to_right = if params.len() > 1 {
                 Some(
@@ -473,19 +472,9 @@ impl FromStr for Effect {
             } else {
                 None
             };
-            let fadeaway_width = if params.len() > 2 {
-                Some(
-                    params[2]
-                        .parse::<u16>()
-                        .map_err(|_| format!("Invalid fadeaway_width in effect: {}", s))?,
-                )
-            } else {
-                None
-            };
             return Ok(Effect::Banner {
                 delay,
                 left_to_right,
-                fadeaway_width,
             });
         }
 
@@ -496,41 +485,21 @@ impl fmt::Display for Effect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Effect::Karaoke => write!(f, "Karaoke"),
-            Effect::ScrollUp {
-                y1,
-                y2,
-                delay,
-                fadeaway_height,
-            } => {
+            Effect::ScrollUp { y1, y2, delay } => {
                 write!(f, "Scroll up;{};{};{}", y1, y2, delay)?;
-                if let Some(fh) = fadeaway_height {
-                    write!(f, ";{}", fh)?;
-                }
                 Ok(())
             }
-            Effect::ScrollDown {
-                y1,
-                y2,
-                delay,
-                fadeaway_height,
-            } => {
+            Effect::ScrollDown { y1, y2, delay } => {
                 write!(f, "Scroll down;{};{};{}", y1, y2, delay)?;
-                if let Some(fh) = fadeaway_height {
-                    write!(f, ";{}", fh)?;
-                }
                 Ok(())
             }
             Effect::Banner {
                 delay,
                 left_to_right,
-                fadeaway_width,
             } => {
                 write!(f, "Banner;{}", delay)?;
                 if let Some(ltr) = left_to_right {
                     write!(f, ";{}", if *ltr { 1 } else { 0 })?;
-                }
-                if let Some(fw) = fadeaway_width {
-                    write!(f, ";{}", fw)?;
                 }
                 Ok(())
             }
@@ -545,10 +514,6 @@ impl FromStr for EventType {
         match s {
             "Dialogue" => Ok(EventType::Dialogue),
             "Comment" => Ok(EventType::Comment),
-            "Picture" => Ok(EventType::Picture),
-            "Sound" => Ok(EventType::Sound),
-            "Movie" => Ok(EventType::Movie),
-            "Command" => Ok(EventType::Command),
             _ => Err(format!("Invalid value for EventType: {}", s)),
         }
     }
@@ -559,10 +524,6 @@ impl fmt::Display for EventType {
         let s = match self {
             EventType::Dialogue => "Dialogue",
             EventType::Comment => "Comment",
-            EventType::Picture => "Picture",
-            EventType::Sound => "Sound",
-            EventType::Movie => "Movie",
-            EventType::Command => "Command",
         };
         write!(f, "{}", s)
     }

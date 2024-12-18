@@ -154,44 +154,40 @@ pub struct StyleWithoutName {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AssTime {
-    pub hours: u8,        // 0 ~ 9
+pub struct ASSTime {
+    pub hours: u16,       // 0 ~ 595 this limit will cancel in libass
     pub minutes: u8,      // 0 ~ 59
     pub seconds: u8,      // 0 ~ 59
     pub centiseconds: u8, // 0 ~ 99
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct EventMargin(pub u16);
 
 #[derive(Debug, Clone)]
 pub enum Effect {
-    Karaoke,
     ScrollUp {
+        // y1 < y2
         y1: u16,
         y2: u16,
         delay: u16,
-        fadeaway_height: Option<u16>,
     },
     ScrollDown {
         y1: u16,
         y2: u16,
         delay: u16,
-        fadeaway_height: Option<u16>,
     },
     Banner {
-        delay: u16,
+        delay: u8, // [0,100]
         left_to_right: Option<bool>,
-        fadeaway_width: Option<u16>,
     },
+    Karaoke,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventType {
+    // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/fuzz/ass.dict#L108-L110
     Dialogue,
     Comment,
-    Picture,
-    Sound,
-    Movie,
-    Command,
 }
 pub struct StyledTextSegment {
     pub text: String,
@@ -374,9 +370,9 @@ pub enum StyleOverride {
 pub struct Event {
     // Comment 也使用 Format 的格式
     pub event_type: EventType,
-    pub layer: i32,
-    pub start: AssTime,
-    pub end: AssTime,
+    pub layer: u32,
+    pub start: ASSTime,
+    pub end: ASSTime,
     pub style: String,
     pub name: Option<String>,
     pub margin_l: EventMargin,
