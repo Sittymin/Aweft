@@ -204,18 +204,18 @@ impl FromStr for BoldType {
         match num {
             -1 => Ok(BoldType::Bold),
             0 => Ok(BoldType::NonBold),
-            _ => Ok(BoldType::Weight(num)),
+            n if n > 0 => Ok(BoldType::Weight(n.try_into().unwrap())),
+            other => Err(format!("Invalid BoldType integer: {}", other)),
         }
     }
 }
 impl fmt::Display for BoldType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            BoldType::Bold => -1,
-            BoldType::NonBold => 0,
-            BoldType::Weight(num) => *num,
-        };
-        write!(f, "{}", s)
+        match self {
+            BoldType::Bold => write!(f, "-1"),
+            BoldType::NonBold => write!(f, "0"),
+            BoldType::Weight(num) => write!(f, "{}", num),
+        }
     }
 }
 
@@ -405,6 +405,8 @@ impl fmt::Display for EventMargin {
         write!(f, "{:0>4}", self.0)
     }
 }
+
+// WARN: Review this
 impl FromStr for Effect {
     type Err = String;
 
@@ -526,6 +528,68 @@ impl fmt::Display for EventType {
             EventType::Comment => "Comment",
         };
         write!(f, "{}", s)
+    }
+}
+
+pub struct TempStyledTextSegment {
+    pub text: String,
+    pub styles: HashMap<String, String>,
+}
+
+impl Event {
+    fn parse_from_raw_text(self) {
+        if self.parsed_text.is_some() {
+            return ();
+        }
+
+        let raw_text = self.raw_text.as_str();
+
+        let mut parse_result = Vec::new();
+        let mut current_text = String::new();
+        let mut current_styles = HashMap::new();
+        let mut chars = raw_text.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            // 新覆盖样式解析
+            if c == '{' {
+                // 旧文本缓冲区清空
+                if !current_text.is_empty() {
+                    parse_result.push(TempStyledTextSegment {
+                        text: current_text.clone(),
+                        styles: current_styles.clone(),
+                    });
+                    // 样式不清空
+                    current_text.clear();
+                }
+
+                // 解析样式块
+                let mut styles = String::new();
+                while let Some(&next_char) = chars.peek() {
+                    if next_char == '}' {
+                        // 消耗 } 与结束样式解析
+                        chars.next();
+                        break;
+                    }
+
+                    styles.push(chars.next().unwrap());
+                }
+                // 解析 styles 字符串 放入后续文本样式
+                // TODO: 重复样式覆盖前面的
+                // current_styles.entry("style").and_modify("style_code").or_insert("style_code")
+            } else {
+                // 非样式代码块
+                // NOTE: 反斜杠换行啥的会在普通文本当中
+                current_text.push(c);
+            }
+        }
+        // 处理剩余文本
+        if !current_text.is_empty() {
+            parse_result.push(TempStyledTextSegment {
+                text: current_text,
+                // 直接使用剩余样式
+                styles: current_styles.clone(),
+            });
+        }
     }
 }
 

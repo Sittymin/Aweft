@@ -81,9 +81,11 @@ pub struct ASSColor(pub u32);
 
 #[derive(Debug, PartialEq)]
 pub enum BoldType {
+    // Same with Weight(700)
     Bold,
+    // Same with Weight(400)
     NonBold,
-    Weight(i32),
+    Weight(u32),
 }
 
 #[derive(Debug, PartialEq)]
@@ -189,9 +191,11 @@ pub enum EventType {
     Dialogue,
     Comment,
 }
+
+// ASS tag is blow
 pub struct StyledTextSegment {
     pub text: String,
-    pub styles: HashMap<String, StyleOverride>,
+    pub styles: HashMap<StyleOverride, String>,
 }
 
 enum ScaleDirection {
@@ -278,12 +282,19 @@ pub struct Drawing {
 }
 
 pub enum StyleOverride {
-    Bold(BoldType),
     Italic(bool),
+    Bold(BoldType),
+    // 如果同一行有 Bold 会忽略 XBold 和 YBold
+    // 如果为负数转换为 0
+    XBold(f64),
+    YBold(f64),
     Underline(bool),
     Strikeout(bool),
     Border(i32),
-    Shadow(i32),
+    Shadow(f64),
+    // 这个可以负数
+    XShadow(f64),
+    YShadow(f64),
     BlurEdges(bool),
     FontName(String),
     FontSize(u32),
@@ -308,6 +319,8 @@ pub enum StyleOverride {
     OutlineAlpha(u32),
     BackAlpha(u32),
     // 需要解析 \a 和 \an 并应用正确
+    FactorX(f64),
+    FactorY(f64),
     Alignment(Alignment),
     Karaoke(KaraokeOverrideType),
 
@@ -321,10 +334,10 @@ pub enum StyleOverride {
         style_modifiers: Vec<StyleModifier>,
     },
     Move {
-        start_x: f32,
-        start_y: f32,
-        end_x: f32,
-        end_y: f32,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
         start_time: Option<u32>,
         end_time: Option<u32>,
     },
@@ -352,10 +365,11 @@ pub enum StyleOverride {
         fade_out_time: u32,
     },
     ClipRectangle {
-        x1: f32,
-        y1: f32,
-        x2: f32,
-        y2: f32,
+        x1: u32,
+        y1: u32,
+        x2: u32,
+        y2: u32,
+        is_display: bool,
     },
     ClipDrawing {
         // 相当于 /p<scale> 所以直接开启绘图模式
@@ -387,5 +401,5 @@ pub struct ASSFile {
     pub script_info: ScriptInfo,
     pub styles: HashMap<String, StyleWithoutName>,
     pub events: Vec<Event>,
-    // TODO: 嵌入字体/图片编码
+    // TODO: 嵌入字体
 }
