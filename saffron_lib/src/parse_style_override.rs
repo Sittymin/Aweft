@@ -1,9 +1,12 @@
+use std::{mem::discriminant, str::FromStr};
+
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while1},
-    character::complete::{char, digit1},
-    combinator::{map, map_res, opt},
-    sequence::{delimited, preceded, terminated, tuple},
+    bytes::complete::{tag, take_until1, take_while1, take_while_m_n},
+    character::complete::{char, digit1, not_line_ending},
+    combinator::{map, map_res, opt, verify},
+    multi::separated_list1,
+    sequence::{delimited, preceded, separated_pair, terminated, tuple},
     IResult,
 };
 
@@ -56,6 +59,65 @@ fn parse_color(input: &str) -> IResult<&str, u32> {
     let value = u32::from_str_radix(hex_digits, 16).unwrap_or(0);
     Ok((input, value))
 }
+fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\xshad")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::XShadow(val)))
+}
+fn parse_yshad(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\yshad")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::YShadow(val)))
+}
+
+fn parse_fax(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fax")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::FactorX(val)))
+}
+fn parse_fay(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fay")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::FactorY(val)))
+}
+
+fn parse_blur(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\blur")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::Blur(val)))
+}
+
+fn parse_fscx<'a>(input: &'a str) -> IResult<&'a str, StyleOverride> {
+    let (input, _) = tag(r"\fscx")(input)?;
+    let (input, x) = parse_float(input)?;
+
+    Ok((input, StyleOverride::FontScaleX(x)))
+}
+fn parse_fscy<'a>(input: &'a str) -> IResult<&'a str, StyleOverride> {
+    let (input, _) = tag(r"\fscy")(input)?;
+    let (input, y) = parse_float(input)?;
+
+    Ok((input, StyleOverride::FontScaleY(y)))
+}
+
+// \fsc 应该将字体缩放重置为样式的缩放
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L455-L456
+// fn parse_fsc(input: &str) -> IResult<&str, StyleOverride> {
+//     let (input, _) = tag(r"\fsc")(input)?;
+// }
+
+fn parse_fsp(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fsp")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::FontSpacing(val)))
+}
+fn parse_fs(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fs")(input)?;
+    let (input, val) = parse_float(input)?;
+    // WARN: 如果为负数应该重置为样式的字体大小
+    // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L474-L475
+    Ok((input, StyleOverride::FontSize(val)))
+}
 
 fn parse_xbold(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\xbord")(input)?;
@@ -80,61 +142,8 @@ fn parse_bold(input: &str) -> IResult<&str, StyleOverride> {
     Ok((input, StyleOverride::Bold(val)))
 }
 
-fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\xshad")(input)?;
-    let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::XShadow(val)))
-}
-fn parse_yshad(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\yshad")(input)?;
-    let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::YShadow(val)))
-}
-
-fn parse_fax(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\fax")(input)?;
-    let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::FactorX(val)))
-}
-fn parse_fay(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\fay")(input)?;
-    let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::FactorY(val)))
-}
-
-fn parse_iclip_rectangle(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\iclip")(input)?;
-    let (input, (x1, y1, x2, y2)) = delimited(
-        char('('),
-        tuple((
-            terminated(parse_u32, char(',')),
-            terminated(parse_u32, char(',')),
-            terminated(parse_u32, char(',')),
-            terminated(parse_u32, char(',')),
-        )),
-        char(')'),
-    )(input)?;
-    Ok((
-        input,
-        StyleOverride::ClipRectangle {
-            x1,
-            y1,
-            x2,
-            y2,
-            is_display: false,
-        },
-    ))
-}
-
-// TODO: start at https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L425
-// fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {
-//     let (input, _) = tag(r"\xshad")(input)?;
-//     let (input, val) = parse_float(input)?;
-//     Ok((input, StyleOverride::XShadow(val)))
-// }
-
 /// 演示解析“\move(...)”标签，如“\move(10,20,30,40,500,1000)”。
-fn parse_move_tag(input: &str) -> IResult<&str, StyleOverride> {
+fn parse_move(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\move")(input)?;
     let (input, (x1, y1, x2, y2, t1, t2)) = delimited(
         char('('),
@@ -162,16 +171,216 @@ fn parse_move_tag(input: &str) -> IResult<&str, StyleOverride> {
     ))
 }
 
+fn parse_frx(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\frx")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::FontRotationX(val)))
+}
+fn parse_fry(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fry")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::FontRotationY(val)))
+}
+fn parse_frz(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = alt((tag(r"\frz"), tag(r"\fr")))(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::FontRotationZ(val)))
+}
+
+fn parse_fn(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fn")(input)?;
+    // 识别除了其他标签的全部字符
+    let (input, val) = opt(take_until1(r"\"))(input)?;
+    let font_name = val.unwrap_or("").trim().to_string();
+    Ok((input, StyleOverride::FontName(font_name)))
+}
+
+fn parse_hex_alpha(input: &str) -> IResult<&str, u8> {
+    map_res(
+        preceded(tag("&H"), take_while_m_n(2, 2, |c: char| c.is_digit(16))),
+        |hex| u8::from_str_radix(hex, 16),
+    )(input)
+}
+fn parse_all_alpha(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\alpha")(input)?;
+    let (input, alpha) = parse_hex_alpha(input)?;
+    Ok((input, StyleOverride::AllAlpha(alpha)))
+}
+fn parse_primary_alpha(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\1a")(input)?;
+    let (input, alpha) = parse_hex_alpha(input)?;
+    Ok((input, StyleOverride::PrimaryAlpha(alpha)))
+}
+fn parse_secondary_alpha(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\2a")(input)?;
+    let (input, alpha) = parse_hex_alpha(input)?;
+    Ok((input, StyleOverride::SecondaryAlpha(alpha)))
+}
+fn parse_outline_alpha(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\3a")(input)?;
+    let (input, alpha) = parse_hex_alpha(input)?;
+    Ok((input, StyleOverride::OutlineAlpha(alpha)))
+}
+fn parse_back_alpha(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\4a")(input)?;
+    let (input, alpha) = parse_hex_alpha(input)?;
+    Ok((input, StyleOverride::BackAlpha(alpha)))
+}
+
+fn parse_an(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\an")(input)?;
+    let (input, val) = verify(digit1, |v: &str| {
+        v.parse::<u8>().map_or(false, |n| (1..=9).contains(&n))
+    })(input)?;
+    Ok((
+        input,
+        StyleOverride::Alignment(Alignment::from_str(val).unwrap_or(Alignment::BottomCenter)),
+    ))
+}
+fn parse_a(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\a")(input)?;
+    let (input, _) = verify(digit1, |v: &str| {
+        v.parse::<u8>().map_or(false, |n| (1..=11).contains(&n))
+    })(input)?;
+    Ok((
+        input,
+        // NOTE: if use \a with \an will override \an
+        StyleOverride::Alignment(Alignment::BottomCenter),
+    ))
+}
+
+fn parse_pos(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\pos")(input)?;
+    let (input, (x, y)) = delimited(
+        char('('),
+        separated_pair(parse_float, char(','), parse_float),
+        char(')'),
+    )(input)?;
+    Ok((input, StyleOverride::Position { x, y }))
+}
+
+fn parse_fade(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, tag) = alt((tag(r"\fade"), tag(r"\fad")))(input)?;
+    if tag == r"\fad" {
+        let (input, (time2, time3)) = delimited(
+            char('('),
+            separated_pair(parse_u32, char(','), parse_u32),
+            char(')'),
+        )(input)?;
+        Ok((
+            input,
+            StyleOverride::Fade {
+                alpha1: 0xFF,
+                alpha2: 0,
+                alpha3: 0xFF,
+                time1: 0,
+                time2,
+                // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L647-L648
+                // FIXME: will be time4 - time3
+                time3,
+                // FIXME: need from event duration
+                time4: 0,
+            },
+        ))
+    } else if tag == r"\fade" {
+        let (input, params) =
+            delimited(char('('), separated_list1(char(','), parse_u32), char(')'))(input)?;
+        if params.len() == 7 {
+            Ok((
+                input,
+                StyleOverride::Fade {
+                    alpha1: params[0],
+                    alpha2: params[1],
+                    alpha3: params[2],
+                    time1: params[3],
+                    time2: params[4],
+                    time3: params[5],
+                    time4: params[6],
+                },
+            ))
+        } else {
+            Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Count,
+            )))
+        }
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )))
+    }
+}
+
+fn parse_org(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\org")(input)?;
+    let (input, (x, y)) = delimited(
+        char('('),
+        separated_pair(parse_float, char(','), parse_float),
+        char(')'),
+    )(input)?;
+    Ok((input, StyleOverride::Origin { x, y }))
+}
+
+// TODO: 需要另外再次实现类似解析覆盖标签的解析
+// 另外需要查看libass看看哪些确实是应该在 StyleModifier 中
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L670-L728
+// fn parse_t(input: &str) -> IResult<&str, StyleOverride> {
+//     let (input, _) = tag(r"\t")(input)?;
+//     let (input, val) = parse_style_modifier_tag(input)?;
+//     Ok((input, StyleOverride::Transformation{
+//         start_time: None,
+//         end_time: None,
+//         acceleration: None,
+//         style_modifiers: StyleModifier::PrimaryColor(0)
+//     }))
+// }
+
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L729
+fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, tag) = alt((tag(r"\clip"), tag(r"\iclip")))(input)?;
+    let is_display = tag == r"\clip";
+    let (input, params) = delimited(
+        char('('),
+        separated_list1(char(','), not_line_ending),
+        char(')'),
+    )(input)?;
+    if params.len() == 4 {
+        Ok((
+            input,
+            StyleOverride::ClipRectangle {
+                x1: params[0].parse::<u32>().unwrap_or(0),
+                y1: params[1].parse::<u32>().unwrap_or(0),
+                x2: params[2].parse::<u32>().unwrap_or(0),
+                y2: params[3].parse::<u32>().unwrap_or(0),
+                is_display,
+            },
+        ))
+    } else {
+        Ok((
+            input,
+            StyleOverride::ClipDrawing {
+                scale: 1.0,
+                // TODO: wait impl
+                drawing_commands: Vec::new(),
+                is_display,
+            },
+        ))
+    }
+}
+
+// fn parse_(input: &str) -> IResult<&str, StyleOverride> {
+//     let (input, _) = tag(r"\")(input)?;
+//     let (input, val) = parse_float(input)?;
+//     Ok((input, StyleOverride::))
+// }
+
 /// 演示解析各种覆盖标签（如 \b1、\move(...)、\c&HFF00FF& 等）。
 fn parse_override(input: &str) -> IResult<&str, StyleOverride> {
     alt((
         parse_bold,
-        parse_move_tag,
+        parse_move,
         // 如需解析 \italic、\fade 等，可以在此处继续扩展
-        map(
-            preceded(tag("\\c"), parse_color),
-            StyleOverride::PrimaryColor,
-        ),
     ))(input)
 }
 

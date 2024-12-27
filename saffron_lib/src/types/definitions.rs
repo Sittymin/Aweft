@@ -198,17 +198,6 @@ pub struct StyledTextSegment {
     pub styles: HashMap<StyleOverride, String>,
 }
 
-enum ScaleDirection {
-    Horizontal,
-    Vertical,
-}
-
-pub enum RotationAxis {
-    X,
-    Y,
-    Z,
-}
-
 pub enum KaraokeOverrideType {
     Duration(u32),
     FillUp(bool),
@@ -280,6 +269,11 @@ pub struct Drawing {
     // 绘图命令列表
     pub commands: Vec<DrawingCommand>,
 }
+pub enum BlurEdgesTypes {
+    BlurEdges,
+    NonBlurEdges,
+    Weight(u32),
+}
 
 pub enum StyleOverride {
     Italic(bool),
@@ -295,18 +289,17 @@ pub enum StyleOverride {
     // 这个可以负数
     XShadow(f64),
     YShadow(f64),
-    BlurEdges(bool),
+    BlurEdges(BlurEdgesTypes),
+    Blur(f64),
     FontName(String),
-    FontSize(u32),
-    FontScale {
-        direction: ScaleDirection,
-        percent: i32,
-    },
-    FontSpacing(i32),
-    FontRotation {
-        axis: RotationAxis,
-        degrees: f32,
-    },
+    FontSize(f64),
+    // \t 的情况使用 \fsc \fscx \fscy 改变字形 而不是 \fs
+    FontScaleX(f64),
+    FontScaleY(f64),
+    FontSpacing(f64),
+    FontRotationX(f64),
+    FontRotationY(f64),
+    FontRotationZ(f64),
     FontEncoding(String),
     // 十六进制颜色 WARN:<bbggrr>
     PrimaryColor(u32),
@@ -314,10 +307,12 @@ pub enum StyleOverride {
     SecondaryColor(u32),
     OutlineColor(u32),
     BackColor(u32),
-    PrimaryAlpha(u32),
-    SecondaryAlpha(u32),
-    OutlineAlpha(u32),
-    BackAlpha(u32),
+    // 只用于类型，需要与颜色合并
+    AllAlpha(u8),
+    PrimaryAlpha(u8),
+    SecondaryAlpha(u8),
+    OutlineAlpha(u8),
+    BackAlpha(u8),
     // 需要解析 \a 和 \an 并应用正确
     FactorX(f64),
     FactorY(f64),
@@ -330,7 +325,7 @@ pub enum StyleOverride {
         end_time: Option<u32>,
         // 计算系数方式
         // pow((t-start_time)/(end_time-start_time), acceleration)，其中 t 为字幕的时间偏移量
-        acceleration: Option<f32>,
+        acceleration: Option<f64>,
         style_modifiers: Vec<StyleModifier>,
     },
     Move {
@@ -343,18 +338,18 @@ pub enum StyleOverride {
     },
     // 相当于 \move(<x>, <y>, <x>, <y>, 0, 0) 简化版本
     Position {
-        x: f32,
-        y: f32,
+        x: f64,
+        y: f64,
     },
     // 修改原点
     Origin {
-        x: f32,
-        y: f32,
+        x: f64,
+        y: f64,
     },
     Fade {
-        alpha1: u8,
-        alpha2: u8,
-        alpha3: u8,
+        alpha1: u32,
+        alpha2: u32,
+        alpha3: u32,
         time1: u32,
         time2: u32,
         time3: u32,
@@ -369,13 +364,15 @@ pub enum StyleOverride {
         y1: u32,
         x2: u32,
         y2: u32,
+        // 是否内部是需要显示的部分
         is_display: bool,
     },
     ClipDrawing {
         // 相当于 /p<scale> 所以直接开启绘图模式
-        scale: Option<f32>,
-        // TODO: 记得更改类型
+        scale: f64,
+        // 绘画矢量
         drawing_commands: Vec<DrawingCommand>,
+        is_display: bool,
     },
 
     Drawing(Drawing),
