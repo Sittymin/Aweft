@@ -11,6 +11,7 @@ use nom::{
 };
 
 use super::types::*;
+use crate::utils::*;
 
 /* -----------------------------------------------------------------------
    下面简要说明了我们使用的 nom 函数：
@@ -28,26 +29,6 @@ use super::types::*;
    11) char('(')、digit1 等是 nom 内置的对单个字符或数字字符串的解析器。
    IResult<...> 泛型第一个参数是剩余部分，第二个参数是匹配部分
 ------------------------------------------------------------------------- */
-
-fn parse_i32(input: &str) -> IResult<&str, i32> {
-    map_res(digit1, |s: &str| s.parse::<i32>())(input)
-}
-
-fn parse_u32(input: &str) -> IResult<&str, u32> {
-    map_res(digit1, |s: &str| s.parse::<u32>())(input)
-}
-
-fn parse_float(input: &str) -> IResult<&str, f64> {
-    map_res(
-        recognize_float, // 下方自定义的识别浮点数函数
-        |num_str: &str| num_str.parse::<f64>(),
-    )(input)
-}
-fn recognize_float(input: &str) -> IResult<&str, &str> {
-    // libass 使用 C 标准库支持科学计数法
-    let float_chars = "0123456789+-.eE";
-    take_while1(move |c: char| float_chars.contains(c))(input)
-}
 
 fn parse_color(input: &str) -> IResult<&str, u32> {
     // 简化的示例：期望字符串形如 &HFF00FF&
@@ -361,7 +342,7 @@ fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
             input,
             StyleOverride::ClipDrawing {
                 scale: 1.0,
-                // TODO: wait impl
+                // TODO:  wait impl
                 drawing_commands: Vec::new(),
                 is_display,
             },

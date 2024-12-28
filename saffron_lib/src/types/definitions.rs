@@ -225,37 +225,51 @@ pub enum StyleModifier {
     Shadow(i32),
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum DrawingCommand {
     // 绘图当中如果重复一条命令，命令标识符可以省略
     // l 100 0 100 100 0 100 = l 100 0 l 100 100 l 0 100
 
     // 移动命令
-    /// 移动光标到指定坐标（闭合形状）
-    MoveTo { x: f32, y: f32 }, // 对应命令 'm'
+    // 移动光标到指定坐标（闭合形状）
+    // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_outline.h#L30-L32
+    MoveTo {
+        x: u32,
+        y: u32,
+    }, // 对应命令 'm'
 
     /// 移动光标到指定坐标（不闭合未封闭的形状）
-    MoveToNoClose { x: f32, y: f32 }, // 对应命令 'n'
+    MoveToNoClose {
+        x: u32,
+        y: u32,
+    }, // 对应命令 'n'
 
     // 绘制命令
-    /// 画一条线到指定坐标
-    LineTo { x: f32, y: f32 }, // 对应命令 'l'
+    // 画一条线到指定坐标
+    LineTo {
+        x: u32,
+        y: u32,
+    }, // 对应命令 'l'
 
-    /// 绘制三次贝塞尔曲线
+    // 绘制三次贝塞尔曲线
     BezierCurveTo {
-        control_point1: (f32, f32),
-        control_point2: (f32, f32),
-        end_point: (f32, f32),
+        control_point1: (u32, u32),
+        control_point2: (u32, u32),
+        end_point: (u32, u32),
     }, // 对应命令 'b'
 
-    /// 绘制三次均匀 B 样条曲线
+    // 绘制三次均匀 B 样条曲线
     BSplineTo {
-        points: Vec<(f32, f32)>, // 至少包含三个坐标点
+        points: Vec<(u32, u32)>, // 至少包含三个坐标点
     }, // 对应命令 's'
 
-    /// 扩展 B 样条曲线到指定坐标
-    ExtendBSplineTo { x: f32, y: f32 }, // 对应命令 'p'
+    // 扩展 B 样条曲线到指定坐标(NOTE: 为了便于管理，编辑器部分把这合并到 BSplineTo)
+    ExtendBSplineTo {
+        x: u32,
+        y: u32,
+    }, // 对应命令 'p'
 
-    /// 关闭 B 样条曲线
+    // 关闭 B 样条曲线(NOTE: 为了便于管理，编辑器部分把这转换为 BSplineTo 到起始点)
     CloseBSpline, // 对应命令 'c'
 }
 
