@@ -2,13 +2,14 @@ use std::{mem::discriminant, str::FromStr};
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_until1, take_while1, take_while_m_n},
+    bytes::complete::{tag, take_until, take_until1, take_while, take_while1, take_while_m_n},
     character::complete::{char, digit1, not_line_ending},
     combinator::{map, map_res, opt, verify},
     multi::separated_list1,
     sequence::{delimited, preceded, separated_pair, terminated, tuple},
     IResult,
 };
+use parse_drawing_command::parse_drawing_commands;
 
 use super::types::*;
 use crate::utils::*;
@@ -30,16 +31,6 @@ use crate::utils::*;
    IResult<...> 泛型第一个参数是剩余部分，第二个参数是匹配部分
 ------------------------------------------------------------------------- */
 
-fn parse_color(input: &str) -> IResult<&str, u32> {
-    // 简化的示例：期望字符串形如 &HFF00FF&
-    // 例如原始 ASS 中颜色顺序可能与此不同，请根据实际需求调整
-    let (input, _) = tag("&H")(input)?;
-    let (input, hex_digits) = take_while1(|c: char| c.is_ascii_hexdigit())(input)?;
-    let (input, _) = char('&')(input)?;
-    // 将提取到的十六进制字符串转为 u32
-    let value = u32::from_str_radix(hex_digits, 16).unwrap_or(0);
-    Ok((input, value))
-}
 fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\xshad")(input)?;
     let (input, val) = parse_float(input)?;
@@ -176,35 +167,29 @@ fn parse_fn(input: &str) -> IResult<&str, StyleOverride> {
     Ok((input, StyleOverride::FontName(font_name)))
 }
 
-fn parse_hex_alpha(input: &str) -> IResult<&str, u8> {
-    map_res(
-        preceded(tag("&H"), take_while_m_n(2, 2, |c: char| c.is_digit(16))),
-        |hex| u8::from_str_radix(hex, 16),
-    )(input)
-}
 fn parse_all_alpha(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\alpha")(input)?;
-    let (input, alpha) = parse_hex_alpha(input)?;
+    let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::AllAlpha(alpha)))
 }
 fn parse_primary_alpha(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\1a")(input)?;
-    let (input, alpha) = parse_hex_alpha(input)?;
+    let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::PrimaryAlpha(alpha)))
 }
 fn parse_secondary_alpha(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\2a")(input)?;
-    let (input, alpha) = parse_hex_alpha(input)?;
+    let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::SecondaryAlpha(alpha)))
 }
 fn parse_outline_alpha(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\3a")(input)?;
-    let (input, alpha) = parse_hex_alpha(input)?;
+    let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::OutlineAlpha(alpha)))
 }
 fn parse_back_alpha(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\4a")(input)?;
-    let (input, alpha) = parse_hex_alpha(input)?;
+    let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::BackAlpha(alpha)))
 }
 
@@ -317,7 +302,6 @@ fn parse_org(input: &str) -> IResult<&str, StyleOverride> {
 //     }))
 // }
 
-// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L729
 fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
     let (input, tag) = alt((tag(r"\clip"), tag(r"\iclip")))(input)?;
     let is_display = tag == r"\clip";
@@ -338,31 +322,205 @@ fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
             },
         ))
     } else {
-        Ok((
-            input,
-            StyleOverride::ClipDrawing {
-                scale: 1.0,
-                // TODO:  wait impl
-                drawing_commands: Vec::new(),
-                is_display,
-            },
-        ))
+        let mut scale = 1;
+        let mut rest;
+        let mut drawing_commands = Vec::new();
+        if params.len() == 2 {
+            scale = params[0].parse::<u32>().unwrap_or(1);
+            (rest, drawing_commands) = parse_drawing_commands(params[1])?;
+            debug_assert!(
+                rest.is_empty(),
+                "Parsing error: Drawing commands weren't fully parsed. Remaining input: '{}'",
+                rest
+            );
+            Ok((
+                input,
+                StyleOverride::ClipDrawing {
+                    scale,
+                    drawing_commands,
+                    is_display,
+                },
+            ))
+        } else {
+            (rest, drawing_commands) = parse_drawing_commands(params[0])?;
+            debug_assert!(
+                rest.is_empty(),
+                "Parsing error: Drawing commands weren't fully parsed. Remaining input: '{}'",
+                rest
+            );
+            Ok((
+                input,
+                StyleOverride::ClipDrawing {
+                    scale,
+                    drawing_commands,
+                    is_display,
+                },
+            ))
+        }
     }
 }
-
 // fn parse_(input: &str) -> IResult<&str, StyleOverride> {
 //     let (input, _) = tag(r"\")(input)?;
 //     let (input, val) = parse_float(input)?;
 //     Ok((input, StyleOverride::))
 // }
 
+fn parse_c(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = alt((tag(r"\c"), tag(r"\1c")))(input)?;
+    let (input, color) = parse_color(input)?;
+    Ok((input, StyleOverride::PrimaryColor(color)))
+}
+fn parse_2c(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\2c")(input)?;
+    let (input, color) = parse_color(input)?;
+    Ok((input, StyleOverride::SecondaryColor(color)))
+}
+
+fn parse_3c(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\3c")(input)?;
+    let (input, color) = parse_color(input)?;
+    Ok((input, StyleOverride::OutlineColor(color)))
+}
+
+fn parse_4c(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\4c")(input)?;
+    let (input, color) = parse_color(input)?;
+    Ok((input, StyleOverride::BackColor(color)))
+}
+
+fn parse_r(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\r")(input)?;
+    if input.starts_with(r"\") {
+        Ok((input, StyleOverride::Reset(None)))
+    } else {
+        let (input, style_name) = take_while1(|c: char| c != '\\' && c != '}')(input)?;
+        Ok((input, StyleOverride::Reset(Some(style_name.to_string()))))
+    }
+}
+
+fn parse_be(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\be")(input)?;
+    let (input, val) = parse_u32(input)?;
+    match val {
+        0 => Ok((
+            input,
+            StyleOverride::BlurEdges(BlurEdgesTypes::NonBlurEdges),
+        )),
+        1 => Ok((input, StyleOverride::BlurEdges(BlurEdgesTypes::BlurEdges))),
+        _ => Ok((input, StyleOverride::BlurEdges(BlurEdgesTypes::Weight(val)))),
+    }
+}
+
+fn parse_b(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\b")(input)?;
+    let (input, val) = parse_u32(input)?;
+    match val {
+        0 => Ok((input, StyleOverride::Bold(BoldType::NonBold))),
+        1 => Ok((input, StyleOverride::Bold(BoldType::Bold))),
+        _ => Ok((input, StyleOverride::Bold(BoldType::Weight(val)))),
+    }
+}
+
+fn parse_i(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\i")(input)?;
+    let (input, val) = parse_u32(input)?;
+    match val {
+        0 => Ok((input, StyleOverride::Italic(false))),
+        1 => Ok((input, StyleOverride::Italic(true))),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
+    }
+}
+
+// v4++
+// fn parse_kt(input: &str) -> IResult<&str, StyleOverride>
+
+fn parse_kf(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = alt((tag(r"\kf"), tag(r"\K")))(input)?;
+    let (input, duration) = parse_float(input)?;
+    Ok((
+        input,
+        StyleOverride::Karaoke(KaraokeOverrideType::KaraokeKf { duration }),
+    ))
+}
+fn parse_ko(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\ko")(input)?;
+    let (input, duration) = parse_float(input)?;
+    Ok((
+        input,
+        StyleOverride::Karaoke(KaraokeOverrideType::KaraokeKo { duration }),
+    ))
+}
+fn parse_k(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\k")(input)?;
+    let (input, duration) = parse_float(input)?;
+    Ok((
+        input,
+        StyleOverride::Karaoke(KaraokeOverrideType::Karaoke { duration }),
+    ))
+}
+
+fn parse_shad(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\shad")(input)?;
+    let (input, depth) = parse_float(input)?;
+    Ok((input, StyleOverride::Shadow(depth)))
+}
+
+fn parse_s(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\s")(input)?;
+    let (input, is_enable) = parse_u32(input)?;
+    match is_enable {
+        0 => Ok((input, StyleOverride::Strikeout(false))),
+        1 => Ok((input, StyleOverride::Strikeout(true))),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
+    }
+}
+
+fn parse_u(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\u")(input)?;
+    let (input, is_enable) = parse_u32(input)?;
+    match is_enable {
+        0 => Ok((input, StyleOverride::Underline(false))),
+        1 => Ok((input, StyleOverride::Underline(true))),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
+    }
+}
+
+fn parse_pbo(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\pbo")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::BaselineOffset(val)))
+}
+
+// TODO: 应该在特效标签区外部，单独识别，移出覆盖标签区
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L901
+// https://aegisub.org/zh-cn/docs/latest/ass_tags/#p01---toggle-drawing-mode
+// fn parse_p(input: &str) -> IResult<&str, StyleOverride> {
+//     let (input, _) = tag(r"\p")(input)?;
+//     let (input, val) = parse_u32(input)?;
+//     Ok((input, StyleOverride::Drawing { scale }))
+// }
+
+fn consume_tag(input: &str) -> IResult<&str, StyleOverride> {
+    // 确保以 \ 开头
+    let (input, _) = tag(r"\")(input)?;
+    // 消耗无效标签
+    let (remaining, consumed) = take_while(|c| c != '\\' && c != '}')(input)?;
+    eprintln!("Unknown or invalid tag consumed: \\{}", consumed);
+    Ok((remaining, StyleOverride::Unknown))
+}
+
 /// 演示解析各种覆盖标签（如 \b1、\move(...)、\c&HFF00FF& 等）。
 fn parse_override(input: &str) -> IResult<&str, StyleOverride> {
-    alt((
-        parse_bold,
-        parse_move,
-        // 如需解析 \italic、\fade 等，可以在此处继续扩展
-    ))(input)
+    alt((parse_bold, parse_move, parse_c, consume_tag))(input)
 }
 
 // 解析完整的覆盖语句块（即花括号中的内容），如“{\b1\move(10,20,30,40)\c&HFF00FF&}”。

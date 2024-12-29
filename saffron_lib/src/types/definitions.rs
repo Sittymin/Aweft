@@ -199,9 +199,10 @@ pub struct StyledTextSegment {
 }
 
 pub enum KaraokeOverrideType {
-    Duration(u32),
-    FillUp(bool),
-    OutlineHighlighting(bool),
+    // centiseconds, ie. a duration of 100 is equivalent to 1 second
+    Karaoke { duration: f64 },
+    KaraokeKf { duration: f64 },
+    KaraokeKo { duration: f64 },
 }
 
 // TODO: 比对是否内容正确
@@ -299,6 +300,7 @@ pub enum StyleOverride {
     Underline(bool),
     Strikeout(bool),
     Border(i32),
+    // TODO: 需要拆散为 XShadow YShadow , Shadow 需要大于 0
     Shadow(f64),
     // 这个可以负数
     XShadow(f64),
@@ -321,17 +323,18 @@ pub enum StyleOverride {
     SecondaryColor(u32),
     OutlineColor(u32),
     BackColor(u32),
-    // 只用于类型，需要与颜色合并
-    AllAlpha(u8),
-    PrimaryAlpha(u8),
-    SecondaryAlpha(u8),
-    OutlineAlpha(u8),
-    BackAlpha(u8),
+    // TODO: 只用于类型，需要与颜色合并
+    AllAlpha(u32),
+    PrimaryAlpha(u32),
+    SecondaryAlpha(u32),
+    OutlineAlpha(u32),
+    BackAlpha(u32),
     // 需要解析 \a 和 \an 并应用正确
     FactorX(f64),
     FactorY(f64),
     Alignment(Alignment),
     Karaoke(KaraokeOverrideType),
+    BaselineOffset(f64),
 
     // Functions
     Transformation {
@@ -383,13 +386,19 @@ pub enum StyleOverride {
     },
     ClipDrawing {
         // 相当于 /p<scale> 所以直接开启绘图模式
-        scale: f64,
+        scale: u32,
         // 绘画矢量
         drawing_commands: Vec<DrawingCommand>,
         is_display: bool,
     },
 
-    Drawing(Drawing),
+    Drawing {
+        scale: u32,
+        drawing_commands: Vec<DrawingCommand>,
+    },
+    // 参数为 None 是为重置为当前行样式
+    Reset(Option<String>),
+    Unknown,
 }
 
 pub struct Event {
