@@ -1,11 +1,11 @@
-use std::{mem::discriminant, str::FromStr};
+use std::{collections::HashSet, str::FromStr};
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_until, take_until1, take_while, take_while1, take_while_m_n},
+    bytes::complete::{tag, take_until, take_until1, take_while, take_while1},
     character::complete::{char, digit1, not_line_ending},
     combinator::{map, map_res, opt, verify},
-    multi::separated_list1,
+    multi::{many0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated, tuple},
     IResult,
 };
@@ -500,14 +500,21 @@ fn parse_pbo(input: &str) -> IResult<&str, StyleOverride> {
     Ok((input, StyleOverride::BaselineOffset(val)))
 }
 
-// TODO: 应该在特效标签区外部，单独识别，移出覆盖标签区
-// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L901
-// https://aegisub.org/zh-cn/docs/latest/ass_tags/#p01---toggle-drawing-mode
-// fn parse_p(input: &str) -> IResult<&str, StyleOverride> {
-//     let (input, _) = tag(r"\p")(input)?;
-//     let (input, val) = parse_u32(input)?;
-//     Ok((input, StyleOverride::Drawing { scale }))
-// }
+fn parse_q(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\q")(input)?;
+    let (input, val) = parse_u32(input)?;
+    Ok((
+        input,
+        StyleOverride::WrapStyle(WrapStyle::try_from(val).unwrap_or(WrapStyle::Smart)),
+    ))
+}
+
+// 无视文件内的设置
+fn parse_fe(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fe")(input)?;
+    let (input, _) = parse_u32(input)?;
+    Ok((input, StyleOverride::Unknown))
+}
 
 fn consume_tag(input: &str) -> IResult<&str, StyleOverride> {
     // 确保以 \ 开头
@@ -523,9 +530,41 @@ fn parse_override(input: &str) -> IResult<&str, StyleOverride> {
     alt((parse_bold, parse_move, parse_c, consume_tag))(input)
 }
 
+// TODO: 可以在实现中使用了，可以遇到 `{` 就传递给下面两个函数
+// TODO: 下面两个函数输出需要在实现中操作文本覆盖范围
 // 解析完整的覆盖语句块（即花括号中的内容），如“{\b1\move(10,20,30,40)\c&HFF00FF&}”。
-// 在这里假设我们只传入花括号内的字符串，不包含外侧 "{" 与 "}"。
-// fn parse_override_block(input: &str) -> IResult<&str, Vec<StyleOverride>> {
-//     // separated_list0(multispace0, parse_override) 的含义是：用空白分隔符分割 parse_override 多次
-//     separated_list0(multispace0, parse_override)(input)
-// }
+pub fn parse_multiple_overrides(input: &str) -> IResult<&str, Vec<StyleOverride>> {
+    let (input, _) = delimited(tag(r"{"), not_line_ending, tag(r"}"))(input)?;
+    let (input, overrides) = many0(parse_override)(input)?;
+
+    let mut unique_overrides: Vec<StyleOverride> = Vec::new();
+    for override_item in overrides {
+        if !matches!(override_item, StyleOverride::Unknown) {
+            // 检查是否已存在相同类型的变体
+            if !unique_overrides.iter().any(|x| x == &override_item) {
+                unique_overrides.push(override_item);
+            }
+        }
+    }
+
+    Ok((input, unique_overrides))
+}
+
+// 应该在特效标签区外部，单独识别
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L901
+// https://aegisub.org/zh-cn/docs/latest/ass_tags/#p01---toggle-drawing-mode
+// TODO: 可以在实现中使用了
+// NOTE: 可能这个返回类型应该单独，而不是在 StyleOverride 下
+pub fn parse_p(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, scale) = delimited(tag(r"{\p"), parse_u32, tag(r"}"))(input)?;
+    let (input, raw_drawing_commands) = take_until(r"{\p0}")(input)?;
+    let (_, drawing_commands) = parse_drawing_commands(raw_drawing_commands)?;
+    let (input, _) = opt(tag(r"\p0"))(input)?;
+    Ok((
+        input,
+        StyleOverride::Drawing {
+            scale,
+            drawing_commands,
+        },
+    ))
+}

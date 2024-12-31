@@ -15,6 +15,18 @@ impl FromStr for WrapStyle {
         }
     }
 }
+impl TryFrom<u32> for WrapStyle {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(WrapStyle::Smart),
+            1 => Ok(WrapStyle::EndWord),
+            2 => Ok(WrapStyle::NoWrap),
+            _ => Err(format!("Invalid value for WrapStyle: {}", value)),
+        }
+    }
+}
 
 impl fmt::Display for WrapStyle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -534,6 +546,13 @@ impl fmt::Display for EventType {
 pub struct TempStyledTextSegment {
     pub text: String,
     pub styles: HashMap<String, String>,
+}
+
+impl PartialEq for StyleOverride {
+    fn eq(&self, other: &Self) -> bool {
+        // NOTE: 只比较枚举变体类型，忽略内部值
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
 }
 
 impl Event {

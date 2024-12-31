@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[derive(Debug)]
 pub enum WrapStyle {
     /// 默认值 (当头部信息不存在时)
     /// 溢出的行会在 ASCII 空格(U+0020)或\n处自动断行
@@ -151,7 +152,7 @@ pub struct StyleWithoutName {
     pub margin_r: i32,
     // 对于字幕来说是距离底部的距离
     pub margin_v: i32,
-    // 必须是 1
+    // 必须是 1 (解析时无视文件内定义)
     pub encoding: i32,
 }
 
@@ -198,6 +199,7 @@ pub struct StyledTextSegment {
     pub styles: HashMap<StyleOverride, String>,
 }
 
+#[derive(Debug)]
 pub enum KaraokeOverrideType {
     // centiseconds, ie. a duration of 100 is equivalent to 1 second
     Karaoke { duration: f64 },
@@ -206,6 +208,7 @@ pub enum KaraokeOverrideType {
 }
 
 // TODO: 比对是否内容正确
+#[derive(Debug)]
 pub enum StyleModifier {
     PrimaryColor(u32),
     // 次要颜色
@@ -284,12 +287,15 @@ pub struct Drawing {
     // 绘图命令列表
     pub commands: Vec<DrawingCommand>,
 }
+
+#[derive(Debug)]
 pub enum BlurEdgesTypes {
     BlurEdges,
     NonBlurEdges,
     Weight(u32),
 }
 
+#[derive(Debug)]
 pub enum StyleOverride {
     Italic(bool),
     Bold(BoldType),
@@ -316,7 +322,6 @@ pub enum StyleOverride {
     FontRotationX(f64),
     FontRotationY(f64),
     FontRotationZ(f64),
-    FontEncoding(String),
     // 十六进制颜色 WARN:<bbggrr>
     PrimaryColor(u32),
     // 次要颜色
@@ -335,6 +340,7 @@ pub enum StyleOverride {
     Alignment(Alignment),
     Karaoke(KaraokeOverrideType),
     BaselineOffset(f64),
+    WrapStyle(WrapStyle),
 
     // Functions
     Transformation {

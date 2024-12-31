@@ -8,7 +8,7 @@ use nom::{
 
 use crate::utils::*;
 
-use super::{Alignment, DrawingCommand};
+use super::DrawingCommand;
 
 fn parse_point(input: &str) -> IResult<&str, (u32, u32)> {
     // 先解析一个整数，然后至少一个空格，再解析另一个整数
