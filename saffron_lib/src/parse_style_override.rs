@@ -1,8 +1,8 @@
-use std::{collections::HashSet, str::FromStr};
+use std::str::FromStr;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_until, take_until1, take_while, take_while1},
+    bytes::complete::{tag, take_until1, take_while, take_while1},
     character::complete::{char, digit1, not_line_ending},
     combinator::{map, map_res, opt, verify},
     multi::{many0, separated_list1},
@@ -13,23 +13,6 @@ use parse_drawing_command::parse_drawing_commands;
 
 use super::types::*;
 use crate::utils::*;
-
-/* -----------------------------------------------------------------------
-   下面简要说明了我们使用的 nom 函数：
-   --------------------------------------
-   1) tag("..."): 匹配精确字符串（如 "\\b"）。
-   2) alt((...)): 尝试多个解析器，直到其中一个成功为止。
-   3) map(parser, |val| ...): 将解析器结果映射到另一个值或类型。
-   4) delimited(...): 解析器，用来匹配特定的“开头-内容-结尾”模式，例如括号 ( ... )。
-   5) tuple(...)、separated_pair(...)：组合多个解析器，依次解析不同项目。
-   6) opt(...)：将一个解析器变为可选解析（可匹配一次或不匹配）。
-   7) separated_list0(...)：重复同一个解析器，并用指定分隔符（比如空白符）分隔。
-   8) take_while1(...)：匹配满足特定条件的字符序列（至少一个字符）。
-   9) map_res(...)：对解析结果执行转换，并可以捕捉错误（Result）。
-   10) preceded(tag("\\c"), parse_color)：先匹配字符串“\\c”，然后解析颜色。
-   11) char('(')、digit1 等是 nom 内置的对单个字符或数字字符串的解析器。
-   IResult<...> 泛型第一个参数是剩余部分，第二个参数是匹配部分
-------------------------------------------------------------------------- */
 
 fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\xshad")(input)?;
@@ -359,11 +342,6 @@ fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
         }
     }
 }
-// fn parse_(input: &str) -> IResult<&str, StyleOverride> {
-//     let (input, _) = tag(r"\")(input)?;
-//     let (input, val) = parse_float(input)?;
-//     Ok((input, StyleOverride::))
-// }
 
 fn parse_c(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = alt((tag(r"\c"), tag(r"\1c")))(input)?;
@@ -434,7 +412,7 @@ fn parse_i(input: &str) -> IResult<&str, StyleOverride> {
     }
 }
 
-// v4++
+// TODO: v4++
 // fn parse_kt(input: &str) -> IResult<&str, StyleOverride>
 
 fn parse_kf(input: &str) -> IResult<&str, StyleOverride> {
@@ -497,7 +475,15 @@ fn parse_u(input: &str) -> IResult<&str, StyleOverride> {
 fn parse_pbo(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\pbo")(input)?;
     let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::BaselineOffset(val)))
+    Ok((input, StyleOverride::DrawingBaselineOffset(val)))
+}
+
+// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L901
+// https://aegisub.org/zh-cn/docs/latest/ass_tags/#p01---toggle-drawing-mode
+pub fn parse_p(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\p")(input)?;
+    let (input, scale) = parse_u32(input)?;
+    Ok((input, StyleOverride::DrawingScale(scale)))
 }
 
 fn parse_q(input: &str) -> IResult<&str, StyleOverride> {
@@ -525,13 +511,72 @@ fn consume_tag(input: &str) -> IResult<&str, StyleOverride> {
     Ok((remaining, StyleOverride::Unknown))
 }
 
+fn parse_override_group1(input: &str) -> IResult<&str, StyleOverride> {
+    alt((
+        parse_xshad,
+        parse_yshad,
+        parse_fax,
+        parse_fay,
+        parse_blur,
+        parse_fscx,
+        parse_fscy,
+        parse_fsp,
+        parse_fs,
+        parse_xbold,
+        parse_ybold,
+        parse_bold,
+    ))(input)
+}
+fn parse_override_group2(input: &str) -> IResult<&str, StyleOverride> {
+    alt((
+        parse_move,
+        parse_frx,
+        parse_fry,
+        parse_frz,
+        parse_fn,
+        parse_all_alpha,
+        parse_primary_alpha,
+        parse_secondary_alpha,
+        parse_outline_alpha,
+        parse_back_alpha,
+        parse_an,
+        parse_a,
+    ))(input)
+}
+fn parse_override_group3(input: &str) -> IResult<&str, StyleOverride> {
+    alt((
+        parse_pos, parse_fade, parse_org, // TODO: parse_t,
+        parse_clip, parse_c, parse_2c, parse_3c, parse_4c, parse_r, parse_be, parse_b, parse_i,
+    ))(input)
+}
+fn parse_override_group4(input: &str) -> IResult<&str, StyleOverride> {
+    alt((
+        // parse_kt,
+        parse_kf,
+        parse_ko,
+        parse_k,
+        parse_shad,
+        parse_s,
+        parse_u,
+        parse_pbo,
+        parse_p,
+        parse_q,
+        parse_fe,
+        consume_tag,
+    ))(input)
+}
 /// 演示解析各种覆盖标签（如 \b1、\move(...)、\c&HFF00FF& 等）。
 fn parse_override(input: &str) -> IResult<&str, StyleOverride> {
-    alt((parse_bold, parse_move, parse_c, consume_tag))(input)
+    alt((
+        parse_override_group1,
+        parse_override_group2,
+        parse_override_group3,
+        parse_override_group4,
+    ))(input)
 }
 
 // TODO: 可以在实现中使用了，可以遇到 `{` 就传递给下面两个函数
-// TODO: 下面两个函数输出需要在实现中操作文本覆盖范围
+// TODO: 下面函数输出需要在实现中操作文本覆盖范围
 // 解析完整的覆盖语句块（即花括号中的内容），如“{\b1\move(10,20,30,40)\c&HFF00FF&}”。
 pub fn parse_multiple_overrides(input: &str) -> IResult<&str, Vec<StyleOverride>> {
     let (input, _) = delimited(tag(r"{"), not_line_ending, tag(r"}"))(input)?;
@@ -548,23 +593,4 @@ pub fn parse_multiple_overrides(input: &str) -> IResult<&str, Vec<StyleOverride>
     }
 
     Ok((input, unique_overrides))
-}
-
-// 应该在特效标签区外部，单独识别
-// https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L901
-// https://aegisub.org/zh-cn/docs/latest/ass_tags/#p01---toggle-drawing-mode
-// TODO: 可以在实现中使用了
-// NOTE: 可能这个返回类型应该单独，而不是在 StyleOverride 下
-pub fn parse_p(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, scale) = delimited(tag(r"{\p"), parse_u32, tag(r"}"))(input)?;
-    let (input, raw_drawing_commands) = take_until(r"{\p0}")(input)?;
-    let (_, drawing_commands) = parse_drawing_commands(raw_drawing_commands)?;
-    let (input, _) = opt(tag(r"\p0"))(input)?;
-    Ok((
-        input,
-        StyleOverride::Drawing {
-            scale,
-            drawing_commands,
-        },
-    ))
 }

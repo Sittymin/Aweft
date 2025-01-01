@@ -1,4 +1,13 @@
+use nom::branch::alt;
+use nom::bytes::complete::take_until;
+use nom::combinator::{map, rest};
+use nom::multi::many0;
+use nom::IResult;
+
+use crate::parse_style_override::parse_multiple_overrides;
+
 use super::definitions::*;
+use super::parse_drawing_command::parse_drawing_commands;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
@@ -545,7 +554,7 @@ impl fmt::Display for EventType {
 
 pub struct TempStyledTextSegment {
     pub text: String,
-    pub styles: HashMap<String, String>,
+    pub styles: HashMap<StyleOverride, String>,
 }
 
 impl PartialEq for StyleOverride {
@@ -555,59 +564,82 @@ impl PartialEq for StyleOverride {
     }
 }
 
+// 解析普通文本直到下一组 `{`
+fn parse_plain_text(input: &str) -> IResult<&str, String> {
+    alt((
+        // 如果找到 '{'，在它之前的所有字符视为普通文本
+        map(take_until("{"), |s: &str| s.to_string()),
+        // 如果没有 '{' 或 take_until("{") 失败，则直接将之后的内容都当作文本
+        map(rest, |s: &str| s.to_string()),
+    ))(input)
+}
+
+fn parse_segment(input: &str) -> IResult<&str, StyledTextSegment> {
+    // 先尝试解析样式覆盖
+    if let Ok((next_input, overrides)) = parse_multiple_overrides(input) {
+        // 检查是否包含非零 DrawingScale
+        let has_nonzero_scale = overrides
+            .iter()
+            .any(|ov| matches!(ov, StyleOverride::DrawingScale(s) if *s != 0));
+
+        if has_nonzero_scale {
+            // 如果有非零的 DrawingScale，就解析绘图命令
+            if let Ok((rest_input, drawing_cmds)) = parse_drawing_commands(next_input) {
+                let segment = StyledTextSegment {
+                    text: String::new(),
+                    styles: Some(overrides),
+                    drawing_commands: Some(drawing_cmds),
+                };
+                return Ok((rest_input, segment));
+            }
+        } else {
+            // 否则，直接解析下一段普通文本
+            if let Ok((rest_input, text)) = parse_plain_text(next_input) {
+                let segment = StyledTextSegment {
+                    text,
+                    styles: Some(overrides),
+                    drawing_commands: None,
+                };
+                return Ok((rest_input, segment));
+            }
+        }
+    }
+    // 不是以覆盖标签开头
+    if let Ok((rest_input, text)) = parse_plain_text(input) {
+        let segment = StyledTextSegment {
+            text,
+            styles: None,
+            drawing_commands: None,
+        };
+        return Ok((rest_input, segment));
+    }
+
+    // 啥都没有
+    Ok((
+        input,
+        StyledTextSegment {
+            text: String::new(),
+            styles: None,
+            drawing_commands: None,
+        },
+    ))
+}
+
 impl Event {
-    fn parse_from_raw_text(self) {
+    fn parse_from_raw_text(mut self) {
         if self.parsed_text.is_some() {
             return ();
         }
-
         let raw_text = self.raw_text.as_str();
+        // TODO: 需要每次轮回继承前面的覆盖样式
+        let (rest, parsed_val) = many0(parse_segment)(raw_text)
+            .expect("Parsing error: somehow parse_segment failed even though it has a fallback.");
 
-        let mut parse_result = Vec::new();
-        let mut current_text = String::new();
-        let mut current_styles = HashMap::new();
-        let mut chars = raw_text.chars().peekable();
+        self.parsed_text = Some(parsed_val);
 
-        while let Some(c) = chars.next() {
-            // 新覆盖样式解析
-            if c == '{' {
-                // 旧文本缓冲区清空
-                if !current_text.is_empty() {
-                    parse_result.push(TempStyledTextSegment {
-                        text: current_text.clone(),
-                        styles: current_styles.clone(),
-                    });
-                    // 样式不清空
-                    current_text.clear();
-                }
-
-                // 解析样式块
-                let mut styles = String::new();
-                while let Some(&next_char) = chars.peek() {
-                    if next_char == '}' {
-                        // 消耗 } 与结束样式解析
-                        chars.next();
-                        break;
-                    }
-
-                    styles.push(chars.next().unwrap());
-                }
-                // 解析 styles 字符串 放入后续文本样式
-                // TODO: 重复样式覆盖前面的
-                // current_styles.entry("style").and_modify("style_code").or_insert("style_code")
-            } else {
-                // 非样式代码块
-                // NOTE: 反斜杠换行啥的会在普通文本当中
-                current_text.push(c);
-            }
-        }
-        // 处理剩余文本
-        if !current_text.is_empty() {
-            parse_result.push(TempStyledTextSegment {
-                text: current_text,
-                // 直接使用剩余样式
-                styles: current_styles.clone(),
-            });
+        // 如果解析后还有剩余数据，则说明 parse_segment 没有正确消费所有输入
+        if !rest.is_empty() {
+            eprintln!("Warning: leftover data after parsing: {:?}", rest);
         }
     }
 }

@@ -194,9 +194,12 @@ pub enum EventType {
 }
 
 // ASS tag is blow
+
 pub struct StyledTextSegment {
     pub text: String,
-    pub styles: HashMap<StyleOverride, String>,
+    pub styles: Option<Vec<StyleOverride>>,
+    // 绘图命令列表 (应该一次文本解析和 text 互斥)
+    pub drawing_commands: Option<Vec<DrawingCommand>>,
 }
 
 #[derive(Debug)]
@@ -277,17 +280,6 @@ pub enum DrawingCommand {
     CloseBSpline, // 对应命令 'c'
 }
 
-pub struct Drawing {
-    // 绘图模式缩放比例，对应 \p<scale>
-    // 缩放比例被解释为二的(<缩放比例> - 1)次方
-    // {\p4} 与坐标 (8,16) 的效果等同于 {\p1} 与 (1,2), (2 的 3 次方)
-    pub scale: i32, // 当 scale 为 0 时，表示关闭绘图模式
-    // 绘图基线偏移，对应 \pbo<y_offset>
-    pub baseline_offset: f32,
-    // 绘图命令列表
-    pub commands: Vec<DrawingCommand>,
-}
-
 #[derive(Debug)]
 pub enum BlurEdgesTypes {
     BlurEdges,
@@ -339,7 +331,6 @@ pub enum StyleOverride {
     FactorY(f64),
     Alignment(Alignment),
     Karaoke(KaraokeOverrideType),
-    BaselineOffset(f64),
     WrapStyle(WrapStyle),
 
     // Functions
@@ -398,10 +389,14 @@ pub enum StyleOverride {
         is_display: bool,
     },
 
-    Drawing {
-        scale: u32,
-        drawing_commands: Vec<DrawingCommand>,
-    },
+    // WARN: DrawingScale DrawingBaselineOffset DrawingCommands 三个会相互作用
+    // 绘图模式缩放比例，对应 \p<scale>
+    // 缩放比例被解释为二的(<缩放比例> - 1)次方
+    // {\p4} 与坐标 (8,16) 的效果等同于 {\p1} 与 (1,2), (2 的 3 次方)
+    DrawingScale(u32), // 当 scale 为 0 时，表示关闭绘图模式
+    // 绘图基线偏移，对应 \pbo<y_offset>
+    DrawingBaselineOffset(f64),
+
     // 参数为 None 是为重置为当前行样式
     Reset(Option<String>),
     Unknown,
