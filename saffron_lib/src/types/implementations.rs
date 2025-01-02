@@ -552,6 +552,77 @@ impl fmt::Display for EventType {
     }
 }
 
+impl TryFrom<StyleOverride> for StyleModifier {
+    type Error = ();
+
+    fn try_from(value: StyleOverride) -> Result<Self, Self::Error> {
+        match value {
+            // Font
+            StyleOverride::FontSize(fs) => Ok(StyleModifier::FontSize(fs)),
+            StyleOverride::FontSpacing(fsp) => Ok(StyleModifier::FontSpacing(fsp)),
+            StyleOverride::PrimaryColor(c) => Ok(StyleModifier::PrimaryColor(c)),
+            StyleOverride::SecondaryColor(c) => Ok(StyleModifier::SecondaryColor(c)),
+            StyleOverride::OutlineColor(c) => Ok(StyleModifier::OutlineColor(c)),
+            StyleOverride::BackColor(c) => Ok(StyleModifier::BackColor(c)),
+            StyleOverride::AllAlpha(a) => Ok(StyleModifier::AllAlpha(a)),
+            StyleOverride::PrimaryAlpha(a) => Ok(StyleModifier::PrimaryAlpha(a)),
+            StyleOverride::SecondaryAlpha(a) => Ok(StyleModifier::SecondaryAlpha(a)),
+            StyleOverride::OutlineAlpha(a) => Ok(StyleModifier::OutlineAlpha(a)),
+            StyleOverride::BackAlpha(a) => Ok(StyleModifier::BackAlpha(a)),
+
+            // Geometry
+            StyleOverride::FontScaleX(fscx) => Ok(StyleModifier::FontScaleX(fscx)),
+            StyleOverride::FontScaleY(fscy) => Ok(StyleModifier::FontScaleY(fscy)),
+            StyleOverride::FontRotationX(frx) => Ok(StyleModifier::FontRotationX(frx)),
+            StyleOverride::FontRotationY(fry) => Ok(StyleModifier::FontRotationY(fry)),
+            StyleOverride::FontRotationZ(frz) => Ok(StyleModifier::FontRotationZ(frz)),
+            StyleOverride::FactorX(fax) => Ok(StyleModifier::FactorX(fax)),
+            StyleOverride::FactorY(fay) => Ok(StyleModifier::FactorY(fay)),
+
+            // Other effects
+            StyleOverride::Bord(bord) => Ok(StyleModifier::Bord(bord)),
+            StyleOverride::XBord(xbord) => Ok(StyleModifier::XBord(xbord)),
+            StyleOverride::YBord(ybord) => Ok(StyleModifier::YBord(ybord)),
+            StyleOverride::Shadow(shad) => Ok(StyleModifier::Shadow(shad)),
+            StyleOverride::XShadow(xshad) => Ok(StyleModifier::XShadow(xshad)),
+            StyleOverride::YShadow(yshad) => Ok(StyleModifier::YShadow(yshad)),
+            StyleOverride::ClipRectangle {
+                x1,
+                y1,
+                x2,
+                y2,
+                is_display,
+            } => Ok(StyleModifier::ClipRectangle {
+                x1,
+                y1,
+                x2,
+                y2,
+                is_display,
+            }),
+            StyleOverride::ClipDrawing {
+                scale,
+                drawing_commands,
+                is_display,
+            } => Ok(StyleModifier::ClipDrawing {
+                scale,
+                drawing_commands,
+                is_display,
+            }),
+            StyleOverride::BlurEdges(be) => Ok(StyleModifier::BlurEdges(be)),
+            StyleOverride::Blur(blur) => Ok(StyleModifier::Blur(blur)),
+
+            // 其他不支持的变体返回 Err(()), 直接过滤
+            _ => Err(()),
+        }
+    }
+}
+// fn convert_style_vec(overrides: Vec<StyleOverride>) -> Vec<StyleModify> {
+//     overrides
+//         .into_iter()
+//         .filter_map(|style| StyleModify::try_from(style).ok())
+//         .collect()
+// }
+
 pub struct TempStyledTextSegment {
     pub text: String,
     pub styles: HashMap<StyleOverride, String>,

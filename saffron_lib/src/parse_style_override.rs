@@ -57,9 +57,10 @@ fn parse_fscy<'a>(input: &'a str) -> IResult<&'a str, StyleOverride> {
 
 // \fsc 应该将字体缩放重置为样式的缩放
 // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L455-L456
-// fn parse_fsc(input: &str) -> IResult<&str, StyleOverride> {
-//     let (input, _) = tag(r"\fsc")(input)?;
-// }
+fn parse_fsc(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\fsc")(input)?;
+    Ok((input, StyleOverride::FontScaleReset))
+}
 
 fn parse_fsp(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\fsp")(input)?;
@@ -74,15 +75,20 @@ fn parse_fs(input: &str) -> IResult<&str, StyleOverride> {
     Ok((input, StyleOverride::FontSize(val)))
 }
 
-fn parse_xbold(input: &str) -> IResult<&str, StyleOverride> {
+fn parse_bord(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\bord")(input)?;
+    let (input, val) = parse_float(input)?;
+    Ok((input, StyleOverride::Bord(val)))
+}
+fn parse_xbord(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\xbord")(input)?;
     let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::XBold(val)))
+    Ok((input, StyleOverride::XBord(val)))
 }
-fn parse_ybold(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\ybold")(input)?;
+fn parse_ybord(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\ybord")(input)?;
     let (input, val) = parse_float(input)?;
-    Ok((input, StyleOverride::YBold(val)))
+    Ok((input, StyleOverride::YBord(val)))
 }
 fn parse_bold(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\b")(input)?;
@@ -274,6 +280,11 @@ fn parse_org(input: &str) -> IResult<&str, StyleOverride> {
 // TODO: 需要另外再次实现类似解析覆盖标签的解析
 // 另外需要查看libass看看哪些确实是应该在 StyleModifier 中
 // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L670-L728
+
+// fn parse_t_style_modifiers_font(input: &str) -> IResult<&str, StyleModifier>{
+//     let (input)
+// }
+
 // fn parse_t(input: &str) -> IResult<&str, StyleOverride> {
 //     let (input, _) = tag(r"\t")(input)?;
 //     let (input, val) = parse_style_modifier_tag(input)?;
@@ -520,10 +531,12 @@ fn parse_override_group1(input: &str) -> IResult<&str, StyleOverride> {
         parse_blur,
         parse_fscx,
         parse_fscy,
+        parse_fsc,
         parse_fsp,
         parse_fs,
-        parse_xbold,
-        parse_ybold,
+        parse_bord,
+        parse_xbord,
+        parse_ybord,
         parse_bold,
     ))(input)
 }

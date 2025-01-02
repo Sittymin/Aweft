@@ -211,25 +211,55 @@ pub enum KaraokeOverrideType {
 }
 
 // TODO: 比对是否内容正确
+// https://aegisub.org/zh-cn/docs/latest/ass_tags/
 #[derive(Debug)]
 pub enum StyleModifier {
+    // Font
+    FontSize(f64),
+    FontSpacing(f64),
     PrimaryColor(u32),
-    // 次要颜色
     SecondaryColor(u32),
     OutlineColor(u32),
     BackColor(u32),
+    // TODO: 与 StyleOverride 一样需要外部与 Color 合并
+    AllAlpha(u32),
     PrimaryAlpha(u32),
     SecondaryAlpha(u32),
     OutlineAlpha(u32),
     BackAlpha(u32),
 
-    FontSize(u32),
-    FontRotation(f32),
-    FontScaleX(f32),
-    FontScaleY(f32),
-    FontSpacing(i32),
-    Border(i32),
-    Shadow(i32),
+    // Geometry
+    FontScaleX(f64),
+    FontScaleY(f64),
+    FontRotationX(f64),
+    FontRotationY(f64),
+    FontRotationZ(f64),
+    FactorX(f64),
+    FactorY(f64),
+    // Other effects
+    Bord(f64),
+    XBord(f64),
+    YBord(f64),
+    Shadow(f64),
+    XShadow(f64),
+    YShadow(f64),
+    ClipRectangle {
+        x1: u32,
+        y1: u32,
+        x2: u32,
+        y2: u32,
+        // 是否内部是需要显示的部分
+        is_display: bool,
+    },
+    ClipDrawing {
+        // 相当于 /p<scale> 所以直接开启绘图模式
+        scale: u32,
+        // 绘画矢量
+        drawing_commands: Vec<DrawingCommand>,
+        is_display: bool,
+    },
+    BlurEdges(BlurEdgesTypes),
+    Blur(f64),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -291,10 +321,12 @@ pub enum BlurEdgesTypes {
 pub enum StyleOverride {
     Italic(bool),
     Bold(BoldType),
-    // 如果同一行有 Bold 会忽略 XBold 和 YBold
+    // 如果同一行有 Bord 会忽略 XBord 和 YBord
     // 如果为负数转换为 0
-    XBold(f64),
-    YBold(f64),
+    // TODO: 需要拆散到 X Y
+    Bord(f64),
+    XBord(f64),
+    YBord(f64),
     Underline(bool),
     Strikeout(bool),
     Border(i32),
@@ -310,6 +342,8 @@ pub enum StyleOverride {
     // \t 的情况使用 \fsc \fscx \fscy 改变字形 而不是 \fs
     FontScaleX(f64),
     FontScaleY(f64),
+    // TODO: 重置 ScaleX/Y 为当前行 Style 指定的缩放
+    FontScaleReset,
     FontSpacing(f64),
     FontRotationX(f64),
     FontRotationY(f64),
