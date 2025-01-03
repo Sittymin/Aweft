@@ -616,12 +616,6 @@ impl TryFrom<StyleOverride> for StyleModifier {
         }
     }
 }
-// fn convert_style_vec(overrides: Vec<StyleOverride>) -> Vec<StyleModify> {
-//     overrides
-//         .into_iter()
-//         .filter_map(|style| StyleModify::try_from(style).ok())
-//         .collect()
-// }
 
 pub struct TempStyledTextSegment {
     pub text: String,

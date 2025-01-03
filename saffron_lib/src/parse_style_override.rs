@@ -2,10 +2,10 @@ use std::str::FromStr;
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_until1, take_while, take_while1},
+    bytes::complete::{is_not, tag, take_until1, take_while, take_while1},
     character::complete::{char, digit1, not_line_ending},
     combinator::{map, map_res, opt, verify},
-    multi::{many0, separated_list1},
+    multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated, tuple},
     IResult,
 };
@@ -161,22 +161,22 @@ fn parse_all_alpha(input: &str) -> IResult<&str, StyleOverride> {
     let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::AllAlpha(alpha)))
 }
-fn parse_primary_alpha(input: &str) -> IResult<&str, StyleOverride> {
+fn parse_1a(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\1a")(input)?;
     let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::PrimaryAlpha(alpha)))
 }
-fn parse_secondary_alpha(input: &str) -> IResult<&str, StyleOverride> {
+fn parse_2a(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\2a")(input)?;
     let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::SecondaryAlpha(alpha)))
 }
-fn parse_outline_alpha(input: &str) -> IResult<&str, StyleOverride> {
+fn parse_3a(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\3a")(input)?;
     let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::OutlineAlpha(alpha)))
 }
-fn parse_back_alpha(input: &str) -> IResult<&str, StyleOverride> {
+fn parse_4a(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\4a")(input)?;
     let (input, alpha) = parse_color(input)?;
     Ok((input, StyleOverride::BackAlpha(alpha)))
@@ -277,24 +277,81 @@ fn parse_org(input: &str) -> IResult<&str, StyleOverride> {
     Ok((input, StyleOverride::Origin { x, y }))
 }
 
-// TODO: 需要另外再次实现类似解析覆盖标签的解析
-// 另外需要查看libass看看哪些确实是应该在 StyleModifier 中
 // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L670-L728
+fn parse_t_style_modifiers(input: &str) -> IResult<&str, StyleModifier> {
+    let (output, style_override) = parse_override(input)?;
+    // 以上会消耗标签
 
-// fn parse_t_style_modifiers_font(input: &str) -> IResult<&str, StyleModifier>{
-//     let (input)
-// }
+    match StyleModifier::try_from(style_override) {
+        Ok(style_mod) => Ok((output, style_mod)),
+        Err(_) => Err(nom::Err::Error(nom::error::Error::new(
+            output,
+            nom::error::ErrorKind::Fail,
+        ))),
+    }
+}
+fn parse_t(input: &str) -> IResult<&str, StyleOverride> {
+    let (input, _) = tag(r"\t")(input)?;
+    let (input, _) = delimited(char('('), is_not(")"), char(')'))(input)?;
+    let (input, list) = separated_list0(char(','), is_not(","))(input)?;
 
-// fn parse_t(input: &str) -> IResult<&str, StyleOverride> {
-//     let (input, _) = tag(r"\t")(input)?;
-//     let (input, val) = parse_style_modifier_tag(input)?;
-//     Ok((input, StyleOverride::Transformation{
-//         start_time: None,
-//         end_time: None,
-//         acceleration: None,
-//         style_modifiers: StyleModifier::PrimaryColor(0)
-//     }))
-// }
+    if list.len() == 1 {
+        let (input, style_modifiers) = many0(parse_t_style_modifiers)(input)?;
+        Ok((
+            input,
+            StyleOverride::Transformation {
+                start_time: None,
+                end_time: None,
+                acceleration: None,
+                style_modifiers,
+            },
+        ))
+    } else if list.len() == 2 {
+        let (input, acceleration) = parse_float(input)?;
+        let (input, style_modifiers) = many0(parse_t_style_modifiers)(input)?;
+        Ok((
+            input,
+            StyleOverride::Transformation {
+                start_time: None,
+                end_time: None,
+                acceleration: Some(acceleration),
+                style_modifiers,
+            },
+        ))
+    } else if list.len() == 3 {
+        let (input, start_time) = parse_u32(input)?;
+        let (input, end_time) = parse_u32(input)?;
+        let (input, style_modifiers) = many0(parse_t_style_modifiers)(input)?;
+        Ok((
+            input,
+            StyleOverride::Transformation {
+                start_time: Some(start_time),
+                end_time: Some(end_time),
+                acceleration: None,
+                style_modifiers,
+            },
+        ))
+    } else if list.len() == 4 {
+        let (input, start_time) = parse_u32(input)?;
+        let (input, end_time) = parse_u32(input)?;
+        let (input, acceleration) = parse_float(input)?;
+        let (input, style_modifiers) = many0(parse_t_style_modifiers)(input)?;
+        Ok((
+            input,
+            StyleOverride::Transformation {
+                start_time: Some(start_time),
+                end_time: Some(end_time),
+                acceleration: Some(acceleration),
+                style_modifiers,
+            },
+        ))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Count,
+        )))
+    }
+}
 
 fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
     let (input, tag) = alt((tag(r"\clip"), tag(r"\iclip")))(input)?;
@@ -548,18 +605,18 @@ fn parse_override_group2(input: &str) -> IResult<&str, StyleOverride> {
         parse_frz,
         parse_fn,
         parse_all_alpha,
-        parse_primary_alpha,
-        parse_secondary_alpha,
-        parse_outline_alpha,
-        parse_back_alpha,
+        parse_1a,
+        parse_2a,
+        parse_3a,
+        parse_4a,
         parse_an,
         parse_a,
     ))(input)
 }
 fn parse_override_group3(input: &str) -> IResult<&str, StyleOverride> {
     alt((
-        parse_pos, parse_fade, parse_org, // TODO: parse_t,
-        parse_clip, parse_c, parse_2c, parse_3c, parse_4c, parse_r, parse_be, parse_b, parse_i,
+        parse_pos, parse_fade, parse_org, parse_t, parse_clip, parse_c, parse_2c, parse_3c,
+        parse_4c, parse_r, parse_be, parse_b, parse_i,
     ))(input)
 }
 fn parse_override_group4(input: &str) -> IResult<&str, StyleOverride> {

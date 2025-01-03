@@ -210,7 +210,6 @@ pub enum KaraokeOverrideType {
     KaraokeKo { duration: f64 },
 }
 
-// TODO: 比对是否内容正确
 // https://aegisub.org/zh-cn/docs/latest/ass_tags/
 #[derive(Debug)]
 pub enum StyleModifier {
