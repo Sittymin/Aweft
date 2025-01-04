@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WrapStyle {
     /// 默认值 (当头部信息不存在时)
     /// 溢出的行会在 ASCII 空格(U+0020)或\n处自动断行
@@ -80,7 +80,7 @@ pub struct ScriptInfo {
 #[derive(Debug, PartialEq)]
 pub struct ASSColor(pub u32);
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BoldType {
     // Same with Weight(700)
     Bold,
@@ -195,6 +195,7 @@ pub enum EventType {
 
 // ASS tag is blow
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct StyledTextSegment {
     pub text: String,
     pub styles: Option<Vec<StyleOverride>>,
@@ -202,7 +203,7 @@ pub struct StyledTextSegment {
     pub drawing_commands: Option<Vec<DrawingCommand>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum KaraokeOverrideType {
     // centiseconds, ie. a duration of 100 is equivalent to 1 second
     Karaoke { duration: f64 },
@@ -211,7 +212,7 @@ pub enum KaraokeOverrideType {
 }
 
 // https://aegisub.org/zh-cn/docs/latest/ass_tags/
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StyleModifier {
     // Font
     FontSize(f64),
@@ -261,7 +262,7 @@ pub enum StyleModifier {
     Blur(f64),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawingCommand {
     // 绘图当中如果重复一条命令，命令标识符可以省略
     // l 100 0 100 100 0 100 = l 100 0 l 100 100 l 0 100
@@ -309,27 +310,28 @@ pub enum DrawingCommand {
     CloseBSpline, // 对应命令 'c'
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BlurEdgesTypes {
     BlurEdges,
     NonBlurEdges,
     Weight(u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StyleOverride {
     Italic(bool),
     Bold(BoldType),
     // 如果同一行有 Bord 会忽略 XBord 和 YBord
     // 如果为负数转换为 0
-    // TODO: 需要拆散到 X Y
+    // NOTE: 拆散到 X Y, 或从 XBord, YBord 绑定合并
     Bord(f64),
     XBord(f64),
     YBord(f64),
     Underline(bool),
     Strikeout(bool),
     Border(i32),
-    // TODO: 需要拆散为 XShadow YShadow , Shadow 需要大于 0
+    // NOTE: 需要拆散为 XShadow YShadow , 或从 XShadow, YShadow 绑定合并
+    // WARN: Shadow 需要大于 0
     Shadow(f64),
     // 这个可以负数
     XShadow(f64),
@@ -341,7 +343,7 @@ pub enum StyleOverride {
     // \t 的情况使用 \fsc \fscx \fscy 改变字形 而不是 \fs
     FontScaleX(f64),
     FontScaleY(f64),
-    // TODO: 重置 ScaleX/Y 为当前行 Style 指定的缩放
+    // NOTE: 重置 ScaleX/Y 为当前行 Style 指定的缩放, 即删除前两个的定义
     FontScaleReset,
     FontSpacing(f64),
     FontRotationX(f64),
@@ -353,7 +355,7 @@ pub enum StyleOverride {
     SecondaryColor(u32),
     OutlineColor(u32),
     BackColor(u32),
-    // TODO: 只用于类型，需要与颜色合并
+    // WARN: 只用于样式覆盖类型，需要与颜色合并
     AllAlpha(u32),
     PrimaryAlpha(u32),
     SecondaryAlpha(u32),

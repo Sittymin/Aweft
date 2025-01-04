@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use nom::{
     branch::alt,
-    bytes::complete::{is_not, tag, take_until1, take_while, take_while1},
+    bytes::complete::{is_not, tag, take_until, take_until1, take_while, take_while1},
     character::complete::{char, digit1, not_line_ending},
     combinator::{map, map_res, opt, verify},
     multi::{many0, separated_list0, separated_list1},
@@ -645,12 +645,10 @@ fn parse_override(input: &str) -> IResult<&str, StyleOverride> {
     ))(input)
 }
 
-// TODO: 可以在实现中使用了，可以遇到 `{` 就传递给下面两个函数
-// TODO: 下面函数输出需要在实现中操作文本覆盖范围
 // 解析完整的覆盖语句块（即花括号中的内容），如“{\b1\move(10,20,30,40)\c&HFF00FF&}”。
 pub fn parse_multiple_overrides(input: &str) -> IResult<&str, Vec<StyleOverride>> {
-    let (input, _) = delimited(tag(r"{"), not_line_ending, tag(r"}"))(input)?;
-    let (input, overrides) = many0(parse_override)(input)?;
+    let (output, style_overrides) = delimited(tag(r"{"), take_until("}"), tag(r"}"))(input)?;
+    let (_, overrides) = many0(parse_override)(style_overrides)?;
 
     let mut unique_overrides: Vec<StyleOverride> = Vec::new();
     for override_item in overrides {
@@ -662,5 +660,53 @@ pub fn parse_multiple_overrides(input: &str) -> IResult<&str, Vec<StyleOverride>
         }
     }
 
-    Ok((input, unique_overrides))
+    Ok((output, unique_overrides))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_parse_override() {
+        let input = r"\fad(300,100)\fn方正卡通_GBK";
+        let except = (
+            r"\fn方正卡通_GBK",
+            StyleOverride::Fade {
+                alpha1: 0xFF,
+                alpha2: 0,
+                alpha3: 0xFF,
+                time1: 0,
+                time2: 300,
+                time3: 100,
+                time4: 0,
+            },
+        );
+        let (rest, style_override) = parse_override(input).unwrap();
+        assert_eq!(except, (rest, style_override));
+    }
+    #[test]
+    fn test_parse_multiple_overrides() {
+        let input = r"{\fad(300,100)\fn方正卡通_GBK\fs75\frz18.757\c&H2CA600&\pos(500,97)}";
+        let except = (
+            "",
+            vec![
+                StyleOverride::Fade {
+                    alpha1: 0xFF,
+                    alpha2: 0,
+                    alpha3: 0xFF,
+                    time1: 0,
+                    time2: 300,
+                    time3: 100,
+                    time4: 0,
+                },
+                StyleOverride::FontName("方正卡通_GBK".to_string()),
+                StyleOverride::FontSize(75.0),
+                StyleOverride::FontRotationZ(18.757),
+                StyleOverride::PrimaryColor(0x2CA600),
+                StyleOverride::Position { x: 500.0, y: 97.0 },
+            ],
+        );
+        let output = parse_multiple_overrides(input).unwrap();
+        assert_eq!(except, output);
+    }
 }

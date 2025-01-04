@@ -198,7 +198,6 @@ impl ScriptInfo {
 
 impl FromStr for ASSColor {
     type Err = String;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(u32_color) = s.strip_prefix("&H") {
             u32::from_str_radix(u32_color, 16)
@@ -641,7 +640,28 @@ fn parse_plain_text(input: &str) -> IResult<&str, String> {
 
 fn parse_segment(input: &str) -> IResult<&str, StyledTextSegment> {
     // 先尝试解析样式覆盖
-    if let Ok((next_input, overrides)) = parse_multiple_overrides(input) {
+    if let Ok((next_input, raw_overrides)) = parse_multiple_overrides(input) {
+        let mut overrides = Vec::new();
+        let mut temp_font_scale: Vec<StyleOverride> = Vec::new();
+        let mut clear_font_scale = false;
+        for val in raw_overrides {
+            match val {
+                StyleOverride::FontScaleX(f64) => {
+                    temp_font_scale.push(StyleOverride::FontScaleX(f64));
+                }
+                StyleOverride::FontScaleY(f64) => {
+                    temp_font_scale.push(StyleOverride::FontScaleY(f64));
+                }
+                StyleOverride::FontScaleReset => {
+                    clear_font_scale = true;
+                }
+                other => overrides.push(other),
+            }
+        }
+        if !clear_font_scale {
+            overrides.extend(temp_font_scale);
+        }
+
         // 检查是否包含非零 DrawingScale
         let has_nonzero_scale = overrides
             .iter()
@@ -656,6 +676,11 @@ fn parse_segment(input: &str) -> IResult<&str, StyledTextSegment> {
                     drawing_commands: Some(drawing_cmds),
                 };
                 return Ok((rest_input, segment));
+            } else {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    next_input,
+                    nom::error::ErrorKind::Fail,
+                )));
             }
         } else {
             // 否则，直接解析下一段普通文本
@@ -666,6 +691,11 @@ fn parse_segment(input: &str) -> IResult<&str, StyledTextSegment> {
                     drawing_commands: None,
                 };
                 return Ok((rest_input, segment));
+            } else {
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    next_input,
+                    nom::error::ErrorKind::Fail,
+                )));
             }
         }
     }
@@ -680,25 +710,73 @@ fn parse_segment(input: &str) -> IResult<&str, StyledTextSegment> {
     }
 
     // 啥都没有
-    Ok((
-        input,
-        StyledTextSegment {
-            text: String::new(),
-            styles: None,
-            drawing_commands: None,
-        },
-    ))
+    if input.is_empty() {
+        Ok((
+            input,
+            StyledTextSegment {
+                text: String::new(),
+                styles: None,
+                drawing_commands: None,
+            },
+        ))
+    } else {
+        Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Fail,
+        )))
+    }
+}
+
+fn parse_segment_with_state<'a>(
+    state: &'a mut Vec<StyleOverride>,
+) -> impl FnMut(&'a str) -> IResult<&'a str, StyledTextSegment> {
+    move |input| {
+        if input.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof,
+            )));
+        }
+
+        let (input, mut segment) = parse_segment(input)
+            .expect("Parsing error: somehow parse_segment failed even though it has a fallback.");
+
+        // 在解析过程中直接处理样式继承
+        if let Some(current_styles) = segment.styles.take() {
+            let mut new_styles = state.clone();
+
+            for new_style in current_styles {
+                if let Some(pos) = new_styles.iter().position(|s| s == &new_style) {
+                    new_styles[pos] = new_style;
+                } else {
+                    new_styles.push(new_style);
+                }
+            }
+
+            *state = new_styles.clone();
+            segment.styles = Some(new_styles);
+        } else if !state.is_empty() {
+            segment.styles = Some(state.clone());
+        }
+
+        Ok((input, segment))
+    }
 }
 
 impl Event {
-    fn parse_from_raw_text(mut self) {
+    fn parse_from_raw_text(&mut self) {
+        if self.event_type == EventType::Comment {
+            return ();
+        }
         if self.parsed_text.is_some() {
             return ();
         }
+
         let raw_text = self.raw_text.as_str();
-        // TODO: 需要每次轮回继承前面的覆盖样式
-        let (rest, parsed_val) = many0(parse_segment)(raw_text)
-            .expect("Parsing error: somehow parse_segment failed even though it has a fallback.");
+        let mut inherited_styles: Vec<StyleOverride> = Vec::new();
+
+        let (rest, parsed_val) = many0(parse_segment_with_state(&mut inherited_styles))(raw_text)
+            .expect("Parseing error at parse_segment_with_state: ");
 
         self.parsed_text = Some(parsed_val);
 
@@ -713,10 +791,95 @@ impl Event {
 mod tests {
     use super::*;
     #[test]
-    fn parse_and_print_color_test() {
+    fn test_parse_and_print_color() {
         let parse_color_1 = ASSColor::from_str("&HFFFFFF00").unwrap();
         let parse_color_2 = ASSColor::from_str("&Hffffff00").unwrap();
         assert_eq!("&HFFFFFF00", parse_color_1.to_string());
         assert_eq!("&HFFFFFF00", parse_color_2.to_string());
+    }
+
+    #[test]
+    fn test_parse_segment() {
+        let input = r"{\fad(300,100)\fn方正卡通_GBK\fs75\frz18.757\c&H2CA600&\pos(500,97)}漫";
+        let except = (
+            "",
+            StyledTextSegment {
+                text: "漫".to_string(),
+                styles: Some(vec![
+                    StyleOverride::Fade {
+                        alpha1: 0xFF,
+                        alpha2: 0,
+                        alpha3: 0xFF,
+                        time1: 0,
+                        time2: 300,
+                        time3: 100,
+                        time4: 0,
+                    },
+                    StyleOverride::FontName("方正卡通_GBK".to_string()),
+                    StyleOverride::FontSize(75.0),
+                    StyleOverride::FontRotationZ(18.757),
+                    StyleOverride::PrimaryColor(0x2CA600),
+                    StyleOverride::Position { x: 500.0, y: 97.0 },
+                ]),
+                drawing_commands: None,
+            },
+        );
+        let output = parse_segment(input).unwrap();
+        assert_eq!(output, except)
+    }
+
+    #[test]
+    fn parse_from_raw_text_test() {
+        let except_parsed_text = Some(vec![StyledTextSegment {
+            text: "漫".to_string(),
+            styles: Some(vec![
+                StyleOverride::Fade {
+                    alpha1: 0xFF,
+                    alpha2: 0,
+                    alpha3: 0xFF,
+                    time1: 0,
+                    time2: 300,
+                    time3: 100,
+                    time4: 0,
+                },
+                StyleOverride::FontName("方正卡通_GBK".to_string()),
+                StyleOverride::FontSize(75.0),
+                StyleOverride::FontRotationZ(18.757),
+                StyleOverride::PrimaryColor(0x2CA600),
+                StyleOverride::Position { x: 500.0, y: 97.0 },
+            ]),
+            drawing_commands: None,
+        }]);
+
+        let mut test_event = Event {
+            event_type: EventType::Dialogue,
+            layer: 0,
+            start: ASSTime {
+                hours: 0,
+                minutes: 0,
+                seconds: 0,
+                centiseconds: 0,
+            },
+            end: ASSTime {
+                hours: 0,
+                minutes: 0,
+                seconds: 0,
+                centiseconds: 0,
+            },
+            style: "".to_string(),
+            name: None,
+            margin_l: EventMargin(0),
+            margin_r: EventMargin(0),
+            margin_v: EventMargin(0),
+            effect: None,
+            raw_text: r"{\fad(300,100)\fn方正卡通_GBK\fs75\frz18.757\c&H2CA600&\pos(500,97)}漫"
+                .to_string(),
+            parsed_text: None,
+        };
+        test_event.parse_from_raw_text();
+
+        // WARN: No validation value
+        // Because StyleOverride does not implement equality validation for values
+        assert_eq!(except_parsed_text, test_event.parsed_text);
     }
 }
