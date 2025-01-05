@@ -1,5 +1,4 @@
-use std::str::FromStr;
-
+use super::*;
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, take_until, take_until1, take_while, take_while1},
@@ -10,8 +9,8 @@ use nom::{
     IResult,
 };
 use parse_drawing_command::parse_drawing_commands;
+use std::str::FromStr;
 
-use super::types::*;
 use crate::utils::*;
 
 fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {

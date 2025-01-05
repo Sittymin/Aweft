@@ -4,10 +4,9 @@ use nom::combinator::{map, rest};
 use nom::multi::many0;
 use nom::IResult;
 
-use crate::parse_style_override::parse_multiple_overrides;
-
 use super::definitions::*;
 use super::parse_drawing_command::parse_drawing_commands;
+use super::parse_style_override::parse_multiple_overrides;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
