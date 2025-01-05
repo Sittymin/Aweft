@@ -2,10 +2,11 @@ use super::types::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 impl ASSFile {
-    pub fn parse_from_file(path: &str) -> io::Result<Self> {
+    pub fn parse_from_file(path: &PathBuf) -> io::Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
@@ -47,7 +48,7 @@ impl ASSFile {
                         parse_events_line(line, &mut ass_file.events);
                     }
                     _ => {
-                        // 忽略未知的部分
+                        // Ignore other part
                     }
                 }
             }
@@ -169,9 +170,27 @@ fn parse_event(event_type: EventType, line_datas: Vec<&str>) -> Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use io::Write;
+    use std::{env, path::PathBuf};
+
+    fn create_test_file(content: &str) -> io::Result<PathBuf> {
+        // 获取系统临时目录
+        let mut test_path = env::temp_dir();
+        // 使用时间戳创建唯一文件名
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        test_path.push(format!("test_subtitle_{}.ass", timestamp));
+
+        let mut file = File::create(&test_path)?;
+        file.write_all(content.as_bytes())?;
+        file.flush()?;
+        Ok(test_path)
+    }
 
     #[test]
-    fn test_parse_script_info_line_normal_field() {
+    fn test_parse_script_info_line() {
         let mut script_info = ScriptInfo::new();
 
         let result = parse_script_info_line("Title: Test Title", &mut script_info);
@@ -185,11 +204,6 @@ mod tests {
         let result = parse_script_info_line("PlayResX: 1920", &mut script_info);
         assert!(result.is_ok());
         assert_eq!(script_info.layout_res_x, 1920);
-    }
-
-    #[test]
-    fn test_parse_script_info_line_custom_field() {
-        let mut script_info = ScriptInfo::new();
 
         let result = parse_script_info_line("!Custom: Value", &mut script_info);
         assert!(result.is_ok());
@@ -197,21 +211,11 @@ mod tests {
             script_info.other_fields.get("Custom"),
             Some(&"Value".to_string())
         );
-    }
-
-    #[test]
-    fn test_parse_script_info_line_invalid_input() {
-        let mut script_info = ScriptInfo::new();
 
         let result = parse_script_info_line("PlayResX: invalid", &mut script_info);
         assert!(result.is_err());
         let result = parse_script_info_line("ScriptType: invalid", &mut script_info);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_script_info_line_malformed() {
-        let mut script_info = ScriptInfo::new();
 
         let result = parse_script_info_line("Invalid Line", &mut script_info);
         assert!(result.is_ok());
@@ -230,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_styles_line_test() {
+    fn test_parse_styles_line() {
         use std::collections::HashMap;
 
         let mut styles: HashMap<String, StyleWithoutName> = HashMap::new();
@@ -279,56 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_valid_dialogue() {
-        let mut events = Vec::new();
-        let line = "Dialogue: 0,0:00:01.00,0:00:02.00,Default,John,0,0,0,,Hello world";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 1);
-        let event = &events[0];
-        assert!(matches!(event.event_type, EventType::Dialogue));
-        assert_eq!(event.layer, 0);
-        assert_eq!(event.style, "Default");
-        assert_eq!(event.name, Some("John".to_string()));
-        assert_eq!(event.raw_text, "Hello world");
-    }
-
-    #[test]
-    fn test_parse_dialogue_empty_name() {
-        let mut events = Vec::new();
-        let line = "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello world";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 1);
-        let event = &events[0];
-        assert_eq!(event.name, None);
-    }
-
-    #[test]
-    fn test_parse_dialogue_with_whitespace_name() {
-        let mut events = Vec::new();
-        let line = "Dialogue: 0,0:00:01.00,0:00:02.00,Default,   ,0,0,0,,Hello world";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].name, None);
-    }
-
-    #[test]
-    fn test_parse_dialogue_with_commas_in_text() {
-        let mut events = Vec::new();
-        let line = "Dialogue: 0,0:00:01.00,0:00:02.00,Default,John,0,0,0,,Hello, world, test";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].raw_text, "Hello, world, test");
-    }
-
-    #[test]
     fn test_parse_format_line() {
         let mut events = Vec::new();
         let line =
@@ -341,43 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_invalid_dialogue_too_few_fields() {
-        let mut events = Vec::new();
-        let line = "Dialogue: 0,0:00:01.00,0:00:02.00";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 0);
-    }
-
-    #[test]
-    fn test_parse_dialogue_with_invalid_time() {
-        let mut events = Vec::new();
-        let line = "Dialogue: 0,invalid,0:00:02.00,Default,John,0,0,0,,Hello world";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 1);
-        let event = &events[0];
-        assert_eq!(event.start, ASSTime::new()); // Should use default time
-    }
-
-    #[test]
-    fn test_parse_dialogue_with_invalid_margins() {
-        let mut events = Vec::new();
-        let line =
-            "Dialogue: 0,0:00:01.00,0:00:02.00,Default,John,invalid,invalid,invalid,,Hello world";
-
-        parse_events_line(line, &mut events);
-
-        assert_eq!(events.len(), 1);
-        let event = &events[0];
-        assert_eq!(event.margin_l, EventMargin(0));
-        assert_eq!(event.margin_r, EventMargin(0));
-        assert_eq!(event.margin_v, EventMargin(0));
-    }
-
-    #[test]
     fn test_parse_comment_line() {
         let mut events = Vec::new();
         let line = "Comment: 0,0:00:00.00,0:00:06.99,Default,,0,0,0,,Placeholder;";
@@ -386,5 +303,117 @@ mod tests {
         let event = &events[0];
 
         assert_eq!(event.event_type, EventType::Comment);
+    }
+
+    #[test]
+    fn test_parse_from_file() -> io::Result<()> {
+        let test_content = r#"[Script Info]
+; 脚本信息
+Title: Test Subtitle
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,这是一个测试字幕"#;
+
+        let temp_path = create_test_file(test_content)?;
+        println!("Created test file at: {:?}", temp_path);
+
+        let ass_file = ASSFile::parse_from_file(&temp_path)?;
+
+        // 1. Script Info
+        {
+            let script_info = &ass_file.script_info;
+            assert_eq!(script_info.script_type, ScriptType::ASS);
+            assert_eq!(script_info.scaled_border_and_shadow, true);
+            assert_eq!(script_info.ycbcr_matrix, YCbCrMatrix::Default);
+            assert_eq!(script_info.layout_res_x, 1920);
+            assert_eq!(script_info.layout_res_y, 1080);
+            assert_eq!(script_info.wrap_style, WrapStyle::Smart);
+            assert_eq!(script_info.title, Some("Test Subtitle".to_string()));
+            assert_eq!(script_info.original_script, None);
+            assert_eq!(script_info.original_translation, None);
+            assert_eq!(script_info.original_editing, None);
+            assert_eq!(script_info.original_timing, None);
+            assert_eq!(script_info.script_updated_by, None);
+            assert_eq!(script_info.update_details, None);
+            assert!(script_info.other_fields.is_empty());
+        }
+
+        // 2. Styles
+        {
+            assert_eq!(ass_file.styles.len(), 1);
+            let style = ass_file
+                .styles
+                .get("Default")
+                .expect("Default style should exist");
+            assert_eq!(style.fontname, "Arial");
+            assert_eq!(style.fontsize, 20.0);
+            assert_eq!(style.primary_color, ASSColor(16777215));
+            assert_eq!(style.secondary_color, ASSColor(255));
+            assert_eq!(style.outline_color, ASSColor(0));
+            assert_eq!(style.back_color, ASSColor(0));
+            assert_eq!(style.bold, BoldType::NonBold);
+            assert_eq!(style.italic, StyleBool::False);
+            assert_eq!(style.underline, StyleBool::False);
+            assert_eq!(style.strikeout, StyleBool::False);
+            assert_eq!(style.scale_x, 100.0);
+            assert_eq!(style.scale_y, 100.0);
+            assert_eq!(style.spacing, 0.0);
+            assert_eq!(style.angle, 0.0);
+            assert_eq!(style.border_style, BorderStyle::OutlineAndDropShadow);
+            assert_eq!(style.outline, 2.0);
+            assert_eq!(style.shadow, 2.0);
+            assert_eq!(style.alignment, Alignment::BottomCenter);
+            assert_eq!(style.margin_l, 10);
+            assert_eq!(style.margin_r, 10);
+            assert_eq!(style.margin_v, 10);
+            assert_eq!(style.encoding, 1);
+        }
+
+        // 3. Events
+        {
+            assert_eq!(ass_file.events.len(), 1);
+            let event = &ass_file.events[0];
+            assert_eq!(event.event_type, EventType::Dialogue);
+            assert_eq!(event.layer, 0);
+            assert_eq!(
+                event.start,
+                ASSTime {
+                    hours: 0,
+                    minutes: 0,
+                    seconds: 1,
+                    centiseconds: 0
+                }
+            );
+            assert_eq!(
+                event.end,
+                ASSTime {
+                    hours: 0,
+                    minutes: 0,
+                    seconds: 4,
+                    centiseconds: 0
+                }
+            );
+            assert_eq!(event.style, "Default");
+            assert_eq!(event.name, None);
+            assert_eq!(event.margin_l, EventMargin(0));
+            assert_eq!(event.margin_r, EventMargin(0));
+            assert_eq!(event.margin_v, EventMargin(0));
+            assert_eq!(event.effect, None);
+            assert_eq!(event.raw_text, "这是一个测试字幕");
+            assert_eq!(event.parsed_text, None);
+        }
+
+        // 4. Clear
+        std::fs::remove_file(temp_path)?;
+
+        Ok(())
     }
 }

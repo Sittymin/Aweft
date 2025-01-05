@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WrapStyle {
     /// 默认值 (当头部信息不存在时)
     /// 溢出的行会在 ASCII 空格(U+0020)或\n处自动断行
@@ -38,6 +38,7 @@ pub enum YCbCrMatrix {
     FCCPC,       // PC.fcc
 }
 
+#[derive(Debug)]
 pub struct ScriptInfo {
     // 这一部分的 ; 行不需要读取，是注释
     // 渲染相关
@@ -167,7 +168,7 @@ pub struct ASSTime {
 #[derive(Debug, PartialEq, Eq)]
 pub struct EventMargin(pub u16);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     ScrollUp {
         // y1 < y2
@@ -437,6 +438,7 @@ pub enum StyleOverride {
     Unknown,
 }
 
+#[derive(Debug)]
 pub struct Event {
     // Comment 也使用 Format 的格式
     pub event_type: EventType,
@@ -453,6 +455,7 @@ pub struct Event {
     pub parsed_text: Option<Vec<StyledTextSegment>>,
 }
 
+#[derive(Debug)]
 pub struct ASSFile {
     pub script_info: ScriptInfo,
     pub styles: HashMap<String, StyleWithoutName>,

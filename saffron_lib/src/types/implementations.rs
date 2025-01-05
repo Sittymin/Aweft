@@ -351,7 +351,7 @@ impl FromStr for ASSTime {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(":").collect();
-        if parts.len() != 4 {
+        if parts.len() != 3 {
             return Err(format!("Invalid time format: {s}"));
         }
 
