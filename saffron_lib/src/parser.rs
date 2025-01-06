@@ -1,7 +1,8 @@
 use super::types::*;
+use core::panic;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -55,6 +56,38 @@ impl ASSFile {
         }
         Ok(ass_file)
     }
+    pub fn write_to_file_buffered(
+        &self,
+        path: &PathBuf,
+        events_flush_interval: u32,
+    ) -> io::Result<()> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        writeln!(writer, "[Script Info]")?;
+        writeln!(writer, "{}", self.script_info)?;
+        writer.flush()?;
+
+        if self.script_info.script_type == ScriptType::ASS {
+            writeln!(writer, "[V4+ Styles]")?;
+            writeln!(writer, "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")?;
+            for (key, value) in &self.styles {
+                writeln!(writer, "Style: {},{}", key, value)?;
+            }
+        } else {
+            panic!("No script type other than ASS has been implemented")
+        }
+
+        // TODO: Event
+        // writeln!(writer, "\n[Events]")?;
+        // for (index, event) in self.events.iter().enumerate() {
+        //     writeln!(writer, "{}", event)?;
+        //     if (index + 1) % events_flush_interval == 0 {
+        //         writer.flush()?;
+        //     }
+        // }
+
+        Ok(())
+    }
 }
 
 fn parse_script_info_line(line: &str, script_info: &mut ScriptInfo) -> Result<(), String> {
@@ -69,8 +102,9 @@ fn parse_script_info_line(line: &str, script_info: &mut ScriptInfo) -> Result<()
             return Ok(());
         }
 
+        // example: !: Release Date: 2009-08-07
         if key.starts_with("!") {
-            script_info.add_or_update_other_fields(key[1..].to_string(), value.to_string())?;
+            script_info.add_or_update_other_fields(key[3..].to_string(), value.to_string())?;
         } else {
             script_info.set_field(key, value)?;
         }
