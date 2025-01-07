@@ -59,7 +59,7 @@ impl ASSFile {
     pub fn write_to_file_buffered(
         &self,
         path: &PathBuf,
-        events_flush_interval: u32,
+        events_flush_interval: usize,
     ) -> io::Result<()> {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
@@ -68,7 +68,7 @@ impl ASSFile {
         writer.flush()?;
 
         if self.script_info.script_type == ScriptType::ASS {
-            writeln!(writer, "[V4+ Styles]")?;
+            writeln!(writer, "\n[V4+ Styles]")?;
             writeln!(writer, "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")?;
             for (key, value) in &self.styles {
                 writeln!(writer, "Style: {},{}", key, value)?;
@@ -77,14 +77,18 @@ impl ASSFile {
             panic!("No script type other than ASS has been implemented")
         }
 
-        // TODO: Event
-        // writeln!(writer, "\n[Events]")?;
-        // for (index, event) in self.events.iter().enumerate() {
-        //     writeln!(writer, "{}", event)?;
-        //     if (index + 1) % events_flush_interval == 0 {
-        //         writer.flush()?;
-        //     }
-        // }
+        writeln!(writer, "\n[Events]")?;
+        writeln!(
+            writer,
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+        )?;
+        for (index, event) in self.events.iter().enumerate() {
+            // TODO: parsed_text Display is not impl
+            writeln!(writer, "{}", event)?;
+            if (index + 1) % events_flush_interval == 0 {
+                writer.flush()?;
+            }
+        }
 
         Ok(())
     }

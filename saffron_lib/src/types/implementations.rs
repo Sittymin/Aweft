@@ -2,7 +2,7 @@ use nom::branch::alt;
 use nom::bytes::complete::take_until;
 use nom::combinator::{map, rest};
 use nom::multi::many0;
-use nom::IResult;
+use nom::{AsBytes, IResult};
 
 use super::definitions::*;
 use super::parse_drawing_command::parse_drawing_commands;
@@ -884,6 +884,38 @@ impl Event {
         if !rest.is_empty() {
             eprintln!("Warning: leftover data after parsing: {:?}", rest);
         }
+    }
+}
+
+impl Display for Event {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: {},{},{},{},",
+            self.event_type, self.layer, self.start, self.end, self.style
+        )?;
+
+        if let Some(name) = &self.name {
+            write!(f, "{},", name)?;
+        } else {
+            f.write_str(",")?;
+        }
+
+        write!(f, "{},{},{},", self.margin_l, self.margin_r, self.margin_v)?;
+
+        if let Some(effect) = &self.effect {
+            write!(f, "{},", effect)?;
+        } else {
+            f.write_str(",")?;
+        }
+
+        // if let Some(styled_text_segments) = self.parsed_text {
+        // NOTE: Vec<StyledTextSegment>
+        // TODO: Impl StyledTextSegment Display
+        // } else {
+        //     write!(f, "{}", self.raw_text)?;
+        // }
+        Ok(())
     }
 }
 
