@@ -102,11 +102,47 @@ fn parse_single_command(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
 }
 
 pub fn parse_drawing_commands(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    // 先用 many0(parse_single_command) 得到 Vec<Vec<DrawingCommand>>
     let (input, all_cmds) = many0(parse_single_command)(input)?;
-    // 将 Vec<Vec<DrawingCommand>> 扁平化为 Vec<DrawingCommand>
-    let flattened = all_cmds.into_iter().flatten().collect();
-    Ok((input, flattened))
+    // Vec<Vec<DrawingCommand>> -> Vec<DrawingCommand>
+    let mut result = Vec::new();
+    let mut current_bspline: Option<Vec<(u32, u32)>> = None;
+    let mut spline_start: Option<Vec<(u32, u32)>> = None;
+    for cmd in all_cmds.into_iter().flatten() {
+        match cmd {
+            DrawingCommand::BSplineTo { points } => {
+                // start new b-spline
+                if let Some(points) = current_bspline.take() {
+                    result.push(DrawingCommand::BSplineTo { points });
+                }
+                // add 3 points
+                // https://github.com/libass/libass/blob/4d6e9ef3077fb279cab051cc00b216c5f08efb34/libass/ass_drawing.c#L235-L242
+                spline_start = Some(points[..3].to_vec());
+                current_bspline = Some(points);
+            }
+            DrawingCommand::ExtendBSplineTo { x, y } => {
+                if let Some(ref mut points) = current_bspline {
+                    points.push((x, y));
+                }
+            }
+            DrawingCommand::CloseBSpline => {
+                if let Some(ref mut points) = current_bspline {
+                    if let Some(start_points) = &spline_start {
+                        points.extend_from_slice(start_points);
+                    }
+                }
+            }
+            other => {
+                result.push(other);
+            }
+        }
+    }
+
+    // last b-spline
+    if let Some(points) = current_bspline {
+        result.push(DrawingCommand::BSplineTo { points });
+    }
+
+    Ok((input, result))
 }
 
 #[cfg(test)]
@@ -157,10 +193,16 @@ mod tests {
             vec![
                 DrawingCommand::MoveTo { x: 0, y: 0 },
                 DrawingCommand::BSplineTo {
-                    points: vec![(100, 0), (100, 100), (0, 100)],
+                    points: vec![
+                        (100, 0),
+                        (100, 100),
+                        (0, 100),
+                        (50, 150),
+                        (100, 0),
+                        (100, 100),
+                        (0, 100)
+                    ],
                 },
-                DrawingCommand::ExtendBSplineTo { x: 50, y: 150 },
-                DrawingCommand::CloseBSpline,
             ]
         );
     }

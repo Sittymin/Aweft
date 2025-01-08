@@ -198,10 +198,10 @@ pub enum EventType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StyledTextSegment {
-    pub text: String,
     pub styles: Option<Vec<StyleOverride>>,
     // 绘图命令列表 (应该一次文本解析和 text 互斥)
     pub drawing_commands: Option<Vec<DrawingCommand>>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -222,7 +222,6 @@ pub enum StyleModifier {
     SecondaryColor(u32),
     OutlineColor(u32),
     BackColor(u32),
-    // TODO: 与 StyleOverride 一样需要外部与 Color 合并
     AllAlpha(u32),
     PrimaryAlpha(u32),
     SecondaryAlpha(u32),
@@ -265,50 +264,42 @@ pub enum StyleModifier {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawingCommand {
-    // 绘图当中如果重复一条命令，命令标识符可以省略
-    // l 100 0 100 100 0 100 = l 100 0 l 100 100 l 0 100
+    // l 100 0 100 100 0 100 is same with l 100 0 l 100 100 l 0 100
 
-    // 移动命令
-    // 移动光标到指定坐标（闭合形状）
     // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_outline.h#L30-L32
     MoveTo {
         x: u32,
         y: u32,
-    }, // 对应命令 'm'
+    }, // 'm'
 
-    /// 移动光标到指定坐标（不闭合未封闭的形状）
     MoveToNoClose {
         x: u32,
         y: u32,
-    }, // 对应命令 'n'
+    }, // 'n'
 
-    // 绘制命令
-    // 画一条线到指定坐标
     LineTo {
         x: u32,
         y: u32,
-    }, // 对应命令 'l'
+    }, // 'l'
 
-    // 绘制三次贝塞尔曲线
     BezierCurveTo {
         control_point1: (u32, u32),
         control_point2: (u32, u32),
         end_point: (u32, u32),
-    }, // 对应命令 'b'
+    }, // 'b'
 
-    // 绘制三次均匀 B 样条曲线
     BSplineTo {
-        points: Vec<(u32, u32)>, // 至少包含三个坐标点
-    }, // 对应命令 's'
+        points: Vec<(u32, u32)>, // At least 3 points are included
+    }, // 's'
 
-    // 扩展 B 样条曲线到指定坐标(NOTE: 为了便于管理，编辑器部分把这合并到 BSplineTo)
+    // WARN: Only used in parse
     ExtendBSplineTo {
         x: u32,
         y: u32,
-    }, // 对应命令 'p'
+    }, // 'p'
 
-    // 关闭 B 样条曲线(NOTE: 为了便于管理，编辑器部分把这转换为 BSplineTo 到起始点)
-    CloseBSpline, // 对应命令 'c'
+    // WARN: Only used in parse
+    CloseBSpline, // 'c'
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +342,7 @@ pub enum StyleOverride {
     FontRotationY(f64),
     FontRotationZ(f64),
     // 十六进制颜色 WARN:<bbggrr>
+    // WARN: here not use ASSColor
     PrimaryColor(u32),
     // 次要颜色
     SecondaryColor(u32),

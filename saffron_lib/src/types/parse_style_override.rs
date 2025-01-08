@@ -89,18 +89,6 @@ fn parse_ybord(input: &str) -> IResult<&str, StyleOverride> {
     let (input, val) = parse_float(input)?;
     Ok((input, StyleOverride::YBord(val)))
 }
-fn parse_bold(input: &str) -> IResult<&str, StyleOverride> {
-    let (input, _) = tag(r"\b")(input)?;
-    let (input, val) = alt((
-        map(char('0'), |_| BoldType::NonBold),
-        map(char('1'), |_| BoldType::Bold),
-        map_res(digit1, |n: &str| {
-            let weight = n.parse::<i32>()?;
-            Ok::<_, std::num::ParseIntError>(BoldType::Weight(weight.try_into().unwrap_or(100)))
-        }),
-    ))(input)?;
-    Ok((input, StyleOverride::Bold(val)))
-}
 
 /// 演示解析“\move(...)”标签，如“\move(10,20,30,40,500,1000)”。
 fn parse_move(input: &str) -> IResult<&str, StyleOverride> {
@@ -373,8 +361,8 @@ fn parse_clip(input: &str) -> IResult<&str, StyleOverride> {
         ))
     } else {
         let mut scale = 1;
-        let mut rest;
-        let mut drawing_commands = Vec::new();
+        let rest;
+        let drawing_commands;
         if params.len() == 2 {
             scale = params[0].parse::<u32>().unwrap_or(1);
             (rest, drawing_commands) = parse_drawing_commands(params[1])?;
@@ -593,7 +581,6 @@ fn parse_override_group1(input: &str) -> IResult<&str, StyleOverride> {
         parse_bord,
         parse_xbord,
         parse_ybord,
-        parse_bold,
     ))(input)
 }
 fn parse_override_group2(input: &str) -> IResult<&str, StyleOverride> {

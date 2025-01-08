@@ -68,7 +68,7 @@ impl ASSFile {
         writer.flush()?;
 
         if self.script_info.script_type == ScriptType::ASS {
-            writeln!(writer, "\n[V4+ Styles]")?;
+            writeln!(writer, "[V4+ Styles]")?;
             writeln!(writer, "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")?;
             for (key, value) in &self.styles {
                 writeln!(writer, "Style: {},{}", key, value)?;
@@ -83,7 +83,6 @@ impl ASSFile {
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         )?;
         for (index, event) in self.events.iter().enumerate() {
-            // TODO: parsed_text Display is not impl
             writeln!(writer, "{}", event)?;
             if (index + 1) % events_flush_interval == 0 {
                 writer.flush()?;
@@ -107,8 +106,15 @@ fn parse_script_info_line(line: &str, script_info: &mut ScriptInfo) -> Result<()
         }
 
         // example: !: Release Date: 2009-08-07
-        if key.starts_with("!") {
-            script_info.add_or_update_other_fields(key[3..].to_string(), value.to_string())?;
+        if line.starts_with("!:") {
+            let rest = &line[2..];
+            if let Some((key, value)) = rest.split_once(':') {
+                let key = key.trim();
+                let value = value.trim();
+                if !key.is_empty() && !value.is_empty() {
+                    script_info.add_or_update_other_fields(key.to_string(), value.to_string())?;
+                }
+            }
         } else {
             script_info.set_field(key, value)?;
         }
@@ -243,7 +249,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(script_info.layout_res_x, 1920);
 
-        let result = parse_script_info_line("!Custom: Value", &mut script_info);
+        let result = parse_script_info_line("!: Custom: Value", &mut script_info);
         assert!(result.is_ok());
         assert_eq!(
             script_info.other_fields.get("Custom"),
@@ -448,6 +454,138 @@ Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,这是一个测试字幕"#;
             assert_eq!(event.raw_text, "这是一个测试字幕");
             assert_eq!(event.parsed_text, None);
         }
+
+        // 4. Clear
+        std::fs::remove_file(temp_path)?;
+
+        Ok(())
+    }
+    #[test]
+    fn test_write_to_file_buffered() -> io::Result<()> {
+        let mut ass_file = ASSFile {
+            script_info: ScriptInfo::new(),
+            styles: HashMap::new(),
+            events: Vec::new(),
+        };
+
+        ass_file.script_info.script_type = ScriptType::ASS;
+        ass_file.script_info.scaled_border_and_shadow = true;
+        ass_file.script_info.ycbcr_matrix = YCbCrMatrix::None;
+        ass_file.script_info.layout_res_x = 640;
+        ass_file.script_info.layout_res_y = 360;
+        ass_file.script_info.wrap_style = WrapStyle::Smart;
+
+        let style_without_name = StyleWithoutName {
+            fontname: "DejaVu Sans".to_string(),
+            fontsize: 65.0,
+            primary_color: ASSColor::from_str("&H007F67D0").unwrap(),
+            secondary_color: ASSColor::from_str("&H00187DC1").unwrap(),
+            outline_color: ASSColor::from_str("&H00000000").unwrap(),
+            back_color: ASSColor::from_str("&H00D4AA86").unwrap(),
+            bold: BoldType::Bold,
+            italic: StyleBool::False,
+            underline: StyleBool::False,
+            strikeout: StyleBool::False,
+            scale_x: 100.0,
+            scale_y: 100.0,
+            spacing: 0.0,
+            angle: 0.0,
+            border_style: BorderStyle::OutlineAndDropShadow,
+            outline: 0.4,
+            shadow: 0.0,
+            alignment: Alignment::TopLeft,
+            margin_l: 10,
+            margin_r: 10,
+            margin_v: 10,
+            encoding: 1,
+        };
+
+        ass_file
+            .styles
+            .insert("Default".to_string(), style_without_name);
+
+        let events = vec![
+            Event {
+                event_type: EventType::Comment,
+                layer: 0,
+                start: ASSTime::from_str("0:00:00.00").unwrap(),
+                end: ASSTime::from_str("0:00:06.99").unwrap(),
+                style: "Default".to_string(),
+                name: None,
+                margin_l: EventMargin(0),
+                margin_r: EventMargin(0),
+                margin_v: EventMargin(0),
+                effect: None,
+                raw_text: "Placeholder; replace with proper type later".to_string(),
+                parsed_text: None
+            },
+            Event {
+                event_type: EventType::Dialogue,
+                layer: 0,
+                start: ASSTime::from_str("0:00:00.00").unwrap(),
+                end: ASSTime::from_str("0:00:06.99").unwrap(),
+                style: "Default".to_string(),
+                name: None,
+                margin_l: EventMargin(0),
+                margin_r: EventMargin(0),
+                margin_v: EventMargin(0),
+                effect: None,
+                raw_text: r"{\pos(52,72)\an7\1c&HB3B3B3&\p1}m 2 34 l 8 60 112 37 107 24{\p0}".to_string(),
+                parsed_text: None
+            },
+            Event {
+                event_type: EventType::Dialogue,
+                layer: 0,
+                start: ASSTime::from_str("0:00:00.00").unwrap(),
+                end: ASSTime::from_str("0:00:06.99").unwrap(),
+                style: "Default".to_string(),
+                name: None,
+                margin_l: EventMargin(0),
+                margin_r: EventMargin(0),
+                margin_v: EventMargin(0),
+                effect: None,
+                raw_text: r"{\q2\shad0\bord2\fs36\org(126.31,107.61)\pos(128.85,116.69)\fax-0.068131\fscx207.70\fscy50.43\frz4.2185\frx25.9522\fry63.2018}Bakery".to_string(),
+                parsed_text: None
+            },
+        ];
+        ass_file.events = events;
+        for event in &mut ass_file.events {
+            event.parse_from_raw_text();
+        }
+
+        let temp_path = create_test_file("")?;
+        println!("Created test file at: {:?}", temp_path);
+
+        ass_file.write_to_file_buffered(&temp_path, 5)?;
+
+        let written_content = std::fs::read_to_string(&temp_path)?;
+
+        let pre_line = format!(
+            "[Script Info]\n; Script generated by {} version {}\n",
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION")
+        );
+        let content = r#"ScriptType: v4.00+
+ScaledBorderAndShadow: yes
+YCbCr Matrix: None
+LayoutResX: 640
+PlayResX: 640
+LayoutResY: 360
+PlayResY: 360
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,DejaVu Sans,65,&H007F67D0,&H00187DC1,&H00000000,&H00D4AA86,-1,0,0,0,100,100,0,0,1,0.4,0,7,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Comment: 0,0:00:00.00,0:00:06.99,Default,,0000,0000,0000,,Placeholder; replace with proper type later
+Dialogue: 0,0:00:00.00,0:00:06.99,Default,,0000,0000,0000,,{\pos(52,72)\an7\c&HB3B3B3&\p1}m 2 34 l 8 60 l 112 37 l 107 24{\pos(52,72)\an7\c&HB3B3B3&\p0}
+Dialogue: 0,0:00:00.00,0:00:06.99,Default,,0000,0000,0000,,{\q2\shad0\bord2\fs36\org(126.31,107.61)\pos(128.85,116.69)\fax-0.068131\frz4.2185\frx25.9522\fry63.2018\fscx207.7\fscy50.43}Bakery"#;
+        let expected_content = pre_line + content;
+
+        assert_eq!(written_content.trim(), expected_content);
 
         // 4. Clear
         std::fs::remove_file(temp_path)?;

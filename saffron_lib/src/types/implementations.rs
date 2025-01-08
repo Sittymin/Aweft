@@ -2,13 +2,14 @@ use nom::branch::alt;
 use nom::bytes::complete::take_until;
 use nom::combinator::{map, rest};
 use nom::multi::many0;
-use nom::{AsBytes, IResult};
+use nom::IResult;
 
 use super::definitions::*;
 use super::parse_drawing_command::parse_drawing_commands;
 use super::parse_style_override::parse_multiple_overrides;
+use core::panic;
 use std::collections::HashMap;
-use std::fmt::{self, Display, Write};
+use std::fmt::{self, Display};
 use std::str::FromStr;
 
 impl FromStr for WrapStyle {
@@ -715,16 +716,272 @@ impl TryFrom<StyleOverride> for StyleModifier {
         }
     }
 }
+// TODO: 使用宏避免转换性能损失与避免代码重复
+impl Display for StyleModifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 将 StyleModifier 转换回等价的 StyleOverride，然后使用其 Display 实现
+        let style_override = match self {
+            // Font
+            StyleModifier::FontSize(fs) => StyleOverride::FontSize(*fs),
+            StyleModifier::FontSpacing(fsp) => StyleOverride::FontSpacing(*fsp),
+            StyleModifier::PrimaryColor(c) => StyleOverride::PrimaryColor(*c),
+            StyleModifier::SecondaryColor(c) => StyleOverride::SecondaryColor(*c),
+            StyleModifier::OutlineColor(c) => StyleOverride::OutlineColor(*c),
+            StyleModifier::BackColor(c) => StyleOverride::BackColor(*c),
+            StyleModifier::AllAlpha(a) => StyleOverride::AllAlpha(*a),
+            StyleModifier::PrimaryAlpha(a) => StyleOverride::PrimaryAlpha(*a),
+            StyleModifier::SecondaryAlpha(a) => StyleOverride::SecondaryAlpha(*a),
+            StyleModifier::OutlineAlpha(a) => StyleOverride::OutlineAlpha(*a),
+            StyleModifier::BackAlpha(a) => StyleOverride::BackAlpha(*a),
 
-pub struct TempStyledTextSegment {
-    pub text: String,
-    pub styles: HashMap<StyleOverride, String>,
+            // Geometry
+            StyleModifier::FontScaleX(fscx) => StyleOverride::FontScaleX(*fscx),
+            StyleModifier::FontScaleY(fscy) => StyleOverride::FontScaleY(*fscy),
+            StyleModifier::FontRotationX(frx) => StyleOverride::FontRotationX(*frx),
+            StyleModifier::FontRotationY(fry) => StyleOverride::FontRotationY(*fry),
+            StyleModifier::FontRotationZ(frz) => StyleOverride::FontRotationZ(*frz),
+            StyleModifier::FactorX(fax) => StyleOverride::FactorX(*fax),
+            StyleModifier::FactorY(fay) => StyleOverride::FactorY(*fay),
+
+            // Other effects
+            StyleModifier::Bord(bord) => StyleOverride::Bord(*bord),
+            StyleModifier::XBord(xbord) => StyleOverride::XBord(*xbord),
+            StyleModifier::YBord(ybord) => StyleOverride::YBord(*ybord),
+            StyleModifier::Shadow(shad) => StyleOverride::Shadow(*shad),
+            StyleModifier::XShadow(xshad) => StyleOverride::XShadow(*xshad),
+            StyleModifier::YShadow(yshad) => StyleOverride::YShadow(*yshad),
+            StyleModifier::ClipRectangle {
+                x1,
+                y1,
+                x2,
+                y2,
+                is_display,
+            } => StyleOverride::ClipRectangle {
+                x1: *x1,
+                y1: *y1,
+                x2: *x2,
+                y2: *y2,
+                is_display: *is_display,
+            },
+            StyleModifier::ClipDrawing {
+                scale,
+                drawing_commands,
+                is_display,
+            } => StyleOverride::ClipDrawing {
+                scale: *scale,
+                drawing_commands: drawing_commands.clone(),
+                is_display: *is_display,
+            },
+            StyleModifier::BlurEdges(be) => StyleOverride::BlurEdges(be.clone()),
+            StyleModifier::Blur(blur) => StyleOverride::Blur(*blur),
+        };
+
+        write!(f, "{}", style_override)
+    }
+}
+
+impl Display for DrawingCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DrawingCommand::MoveTo { x, y } => {
+                write!(f, "m {} {}", x, y)
+            }
+            DrawingCommand::MoveToNoClose { x, y } => {
+                write!(f, "n {} {}", x, y)
+            }
+            DrawingCommand::LineTo { x, y } => {
+                write!(f, "l {} {}", x, y)
+            }
+            DrawingCommand::BezierCurveTo {
+                control_point1: (x1, y1),
+                control_point2: (x2, y2),
+                end_point: (x3, y3),
+            } => {
+                write!(f, "b {} {} {} {} {} {}", x1, y1, x2, y2, x3, y3)
+            }
+            DrawingCommand::BSplineTo { points } => {
+                write!(f, "s")?;
+                for (x, y) in points {
+                    write!(f, " {} {}", x, y)?;
+                }
+                Ok(())
+            }
+            DrawingCommand::ExtendBSplineTo { .. } => {
+                unreachable!("Invalid drawingcommand combination: ExtendBSplineTo")
+            }
+
+            DrawingCommand::CloseBSpline => {
+                unreachable!("Invalid drawingcommand combination: CloseBSpline")
+            }
+        }
+    }
 }
 
 impl PartialEq for StyleOverride {
     fn eq(&self, other: &Self) -> bool {
         // NOTE: 只比较枚举变体类型，忽略内部值
         std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+impl Display for StyleOverride {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StyleOverride::XShadow(val) => write!(f, "\\xshad{}", val),
+            StyleOverride::YShadow(val) => write!(f, "\\yshad{}", val),
+            StyleOverride::FactorX(val) => write!(f, "\\fax{}", val),
+            StyleOverride::FactorY(val) => write!(f, "\\fay{}", val),
+            StyleOverride::Blur(val) => write!(f, "\\blur{}", val),
+            StyleOverride::FontScaleX(val) => write!(f, "\\fscx{}", val),
+            StyleOverride::FontScaleY(val) => write!(f, "\\fscy{}", val),
+            StyleOverride::FontScaleReset => write!(f, "\\fsc"),
+            StyleOverride::FontSpacing(val) => write!(f, "\\fsp{}", val),
+            StyleOverride::FontSize(val) => write!(f, "\\fs{}", val),
+            StyleOverride::Bord(val) => write!(f, "\\bord{}", val),
+            StyleOverride::XBord(val) => write!(f, "\\xbord{}", val),
+            StyleOverride::YBord(val) => write!(f, "\\ybord{}", val),
+            StyleOverride::Move {
+                start_x: x1,
+                start_y: y1,
+                end_x: x2,
+                end_y: y2,
+                start_time: t1,
+                end_time: t2,
+            } => match (t1, t2) {
+                (Some(start), Some(end)) => {
+                    write!(f, "\\move({},{},{},{},{},{})", x1, y1, x2, y2, start, end)
+                }
+                _ => write!(f, "\\move({},{},{},{})", x1, y1, x2, y2),
+            },
+            StyleOverride::FontRotationX(val) => write!(f, "\\frx{}", val),
+            StyleOverride::FontRotationY(val) => write!(f, "\\fry{}", val),
+            StyleOverride::FontRotationZ(val) => write!(f, "\\frz{}", val),
+            StyleOverride::FontName(font_name) => write!(f, "\\fn{}", font_name),
+            StyleOverride::AllAlpha(alpha) => write!(f, "\\alpha&H{:02X}&", alpha),
+            StyleOverride::PrimaryAlpha(alpha) => write!(f, "\\1a&H{:02X}&", alpha),
+
+            StyleOverride::SecondaryAlpha(alpha) => write!(f, "\\2a&H{:02X}&", alpha),
+            StyleOverride::OutlineAlpha(alpha) => write!(f, "\\3a&H{:02X}&", alpha),
+            StyleOverride::BackAlpha(alpha) => write!(f, "\\4a&H{:02X}&", alpha),
+            StyleOverride::Alignment(val) => write!(f, "\\an{}", val),
+            StyleOverride::Position { x, y } => write!(f, "\\pos({},{})", x, y),
+            StyleOverride::Fade {
+                alpha1: a1,
+                alpha2: a2,
+                alpha3: a3,
+                time1: t1,
+                time2: t2,
+                time3: t3,
+                time4: t4,
+            } => write!(
+                f,
+                "\\fade({},{},{},{},{},{},{})",
+                a1, a2, a3, t1, t2, t3, t4
+            ),
+            StyleOverride::Origin { x, y } => write!(f, "\\org({},{})", x, y),
+            StyleOverride::Transformation {
+                start_time: t1,
+                end_time: t2,
+                acceleration: accel,
+                style_modifiers,
+            } => match (t1, t2, accel) {
+                (Some(t1), Some(t2), Some(accel)) => {
+                    write!(f, "\\t({},{},{},", t1, t2, accel)?;
+                    for modifier in style_modifiers {
+                        write!(f, "{}", modifier)?;
+                    }
+                    write!(f, ")")
+                }
+                (Some(t1), Some(t2), None) => {
+                    write!(f, "\\t({},{},", t1, t2)?;
+                    for modifier in style_modifiers {
+                        write!(f, "{}", modifier)?;
+                    }
+                    write!(f, ")")
+                }
+                (None, None, Some(accel)) => {
+                    write!(f, "\\t({},", accel)?;
+                    for modifier in style_modifiers {
+                        write!(f, "{}", modifier)?;
+                    }
+                    write!(f, ")")
+                }
+                (None, None, None) => {
+                    write!(f, "\\t(")?;
+                    for modifier in style_modifiers {
+                        write!(f, "{}", modifier)?;
+                    }
+                    write!(f, ")")
+                }
+                _ => unreachable!(
+                    "Invalid transformation combination: t1={:?}, t2={:?}, accel={:?}",
+                    t1, t2, accel
+                ),
+            },
+            StyleOverride::ClipRectangle {
+                x1,
+                y1,
+                x2,
+                y2,
+                is_display,
+            } => {
+                write!(f, "\\")?;
+                if !is_display {
+                    write!(f, "i")?;
+                }
+                write!(f, "clip({},{},{},{})", x1, y1, x2, y2)
+            }
+            StyleOverride::ClipDrawing {
+                scale,
+                drawing_commands,
+                is_display,
+            } => {
+                write!(f, "\\")?;
+                if !is_display {
+                    write!(f, "i")?;
+                }
+                write!(f, "clip({},", scale)?;
+                for (index, drawing_command) in drawing_commands.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{}", drawing_command)?;
+                }
+                write!(f, ")")
+            }
+            StyleOverride::PrimaryColor(color) => write!(f, "\\c&H{:06X}&", color),
+            StyleOverride::SecondaryColor(color) => write!(f, "\\2c&H{:06X}&", color),
+            StyleOverride::OutlineColor(color) => write!(f, "\\3c&H{:06X}&", color),
+            StyleOverride::BackColor(color) => write!(f, "\\4c&H{:06X}&", color),
+            StyleOverride::Reset(None) => write!(f, "\\r"),
+            StyleOverride::Reset(Some(style_name)) => write!(f, "\\r{}", style_name),
+            StyleOverride::BlurEdges(be) => match be {
+                BlurEdgesTypes::NonBlurEdges => write!(f, "\\be0"),
+                BlurEdgesTypes::BlurEdges => write!(f, "\\be1"),
+                BlurEdgesTypes::Weight(val) => write!(f, "\\be{}", val),
+            },
+            StyleOverride::Bold(b) => match b {
+                BoldType::NonBold => write!(f, "\\b0"),
+                BoldType::Bold => write!(f, "\\b1"),
+                BoldType::Weight(val) => write!(f, "\\b{}", val),
+            },
+            StyleOverride::Italic(val) => write!(f, "\\i{}", if *val { 1 } else { 0 }),
+            StyleOverride::Karaoke(ko_type) => match ko_type {
+                KaraokeOverrideType::KaraokeKf { duration } => write!(f, "\\kf{}", duration),
+                KaraokeOverrideType::KaraokeKo { duration } => write!(f, "\\ko{}", duration),
+                KaraokeOverrideType::Karaoke { duration } => write!(f, "\\k{}", duration),
+            },
+            StyleOverride::Shadow(depth) => write!(f, "\\shad{}", depth),
+            StyleOverride::Strikeout(is_enable) => {
+                write!(f, "\\s{}", if *is_enable { 1 } else { 0 })
+            }
+            StyleOverride::Underline(is_enable) => {
+                write!(f, "\\u{}", if *is_enable { 1 } else { 0 })
+            }
+            StyleOverride::DrawingBaselineOffset(val) => write!(f, "\\pbo{}", val),
+            StyleOverride::DrawingScale(scale) => write!(f, "\\p{}", scale),
+            StyleOverride::WrapStyle(wrap_style) => write!(f, "\\q{}", wrap_style),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -736,6 +993,29 @@ fn parse_plain_text(input: &str) -> IResult<&str, String> {
         // 如果没有 '{' 或 take_until("{") 失败，则直接将之后的内容都当作文本
         map(rest, |s: &str| s.to_string()),
     ))(input)
+}
+
+impl Display for StyledTextSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(styles) = &self.styles {
+            write!(f, "{{")?;
+            for style in styles {
+                write!(f, "{}", style)?;
+            }
+            write!(f, "}}")?;
+        }
+        if let Some(drawing_commands) = &self.drawing_commands {
+            for (index, drawing_command) in drawing_commands.iter().enumerate() {
+                if index > 0 {
+                    write!(f, " ")?;
+                }
+                write!(f, "{}", drawing_command)?;
+            }
+        } else {
+            write!(f, "{}", self.text)?;
+        }
+        Ok(())
+    }
 }
 
 fn parse_segment(input: &str) -> IResult<&str, StyledTextSegment> {
@@ -864,7 +1144,7 @@ fn parse_segment_with_state<'a>(
 }
 
 impl Event {
-    fn parse_from_raw_text(&mut self) {
+    pub fn parse_from_raw_text(&mut self) {
         if self.event_type == EventType::Comment {
             return ();
         }
@@ -909,12 +1189,13 @@ impl Display for Event {
             f.write_str(",")?;
         }
 
-        // if let Some(styled_text_segments) = self.parsed_text {
-        // NOTE: Vec<StyledTextSegment>
-        // TODO: Impl StyledTextSegment Display
-        // } else {
-        //     write!(f, "{}", self.raw_text)?;
-        // }
+        if let Some(styled_text_segments) = &self.parsed_text {
+            for styled_text_segment in styled_text_segments {
+                write!(f, "{}", styled_text_segment)?;
+            }
+        } else {
+            write!(f, "{}", self.raw_text)?;
+        }
         Ok(())
     }
 }
