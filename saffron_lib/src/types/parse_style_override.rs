@@ -1,17 +1,16 @@
 use super::*;
+use crate::utils::*;
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, take_until, take_until1, take_while, take_while1},
     character::complete::{char, digit1, not_line_ending},
-    combinator::{map, map_res, opt, verify},
+    combinator::{opt, verify},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, terminated, tuple},
     IResult,
 };
 use parse_drawing_command::parse_drawing_commands;
 use std::str::FromStr;
-
-use crate::utils::*;
 
 fn parse_xshad(input: &str) -> IResult<&str, StyleOverride> {
     let (input, _) = tag(r"\xshad")(input)?;

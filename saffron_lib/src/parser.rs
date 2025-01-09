@@ -1,10 +1,12 @@
 use super::types::*;
 use core::panic;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{self, BufRead, BufReader, BufWriter, Write},
+    path::PathBuf,
+    str::FromStr,
+};
 
 impl ASSFile {
     pub fn parse_from_file(path: &PathBuf) -> io::Result<Self> {
@@ -90,6 +92,16 @@ impl ASSFile {
         }
 
         Ok(())
+    }
+    fn merge_events_with(mut self, other: &ASSFile) {
+        self.events = [&self.events[..], &other.events[..]].concat();
+    }
+    fn merge_styles_with(mut self, other: &ASSFile) {
+        for (key, value) in other.styles.clone() {
+            if !self.styles.contains_key(&key) {
+                self.styles.insert(key, value);
+            }
+        }
     }
 }
 

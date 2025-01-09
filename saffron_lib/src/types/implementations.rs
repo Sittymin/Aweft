@@ -1,16 +1,18 @@
-use nom::branch::alt;
-use nom::bytes::complete::take_until;
-use nom::combinator::{map, rest};
-use nom::multi::many0;
-use nom::IResult;
-
 use super::definitions::*;
 use super::parse_drawing_command::parse_drawing_commands;
 use super::parse_style_override::parse_multiple_overrides;
-use core::panic;
-use std::collections::HashMap;
-use std::fmt::{self, Display};
-use std::str::FromStr;
+use nom::{
+    branch::alt,
+    bytes::complete::take_until,
+    combinator::{map, rest},
+    multi::many0,
+    IResult,
+};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    str::FromStr,
+};
 
 impl FromStr for WrapStyle {
     type Err = String;
@@ -504,6 +506,38 @@ impl ASSTime {
             seconds: 0,
             centiseconds: 0,
         }
+    }
+    /// Adjusts the time by the given hours, minutes, seconds, and centiseconds.
+    /// Positive values will add to the current time, while negative values will subtract from it.
+    ///
+    /// # Arguments
+    ///
+    /// * `hours` - The number of hours to adjust by.
+    /// * `minutes` - The number of minutes to adjust by.
+    /// * `seconds` - The number of seconds to adjust by.
+    /// * `centiseconds` - The number of centiseconds (hundredths of a second) to adjust by.
+    pub fn adjust_time(&mut self, hours: i32, minutes: i32, seconds: i32, centiseconds: i32) {
+        let total_centiseconds = (self.hours as i64 * 360_000
+            + self.minutes as i64 * 6_000
+            + self.seconds as i64 * 100
+            + self.centiseconds as i64)
+            + (hours as i64 * 360_000
+                + minutes as i64 * 6_000
+                + seconds as i64 * 100
+                + centiseconds as i64);
+
+        // Convert back to hours, minutes, seconds, and centiseconds
+        let positive_total = if total_centiseconds < 0 {
+            0
+        } else {
+            total_centiseconds
+        };
+        self.centiseconds = (positive_total % 100) as u8;
+        let remaining_after_cs = positive_total / 100;
+        self.seconds = (remaining_after_cs % 60) as u8;
+        let remaining_after_seconds = remaining_after_cs / 60;
+        self.minutes = (remaining_after_seconds % 60) as u8;
+        self.hours = (remaining_after_seconds / 60) as u16;
     }
 }
 
@@ -1163,6 +1197,43 @@ impl Event {
         // 如果解析后还有剩余数据，则说明 parse_segment 没有正确消费所有输入
         if !rest.is_empty() {
             eprintln!("Warning: leftover data after parsing: {:?}", rest);
+        }
+    }
+    pub fn adjust_time(
+        &mut self,
+        offset_hours: i32,
+        offset_minutes: i32,
+        offset_seconds: i32,
+        offset_centiseconds: i32,
+        target: TimeAdjustTarget,
+    ) {
+        match target {
+            TimeAdjustTarget::Start => self.start.adjust_time(
+                offset_hours as i32,
+                offset_minutes as i32,
+                offset_seconds as i32,
+                offset_centiseconds as i32,
+            ),
+            TimeAdjustTarget::End => self.end.adjust_time(
+                offset_hours as i32,
+                offset_minutes as i32,
+                offset_seconds as i32,
+                offset_centiseconds as i32,
+            ),
+            TimeAdjustTarget::Both => {
+                self.start.adjust_time(
+                    offset_hours as i32,
+                    offset_minutes as i32,
+                    offset_seconds as i32,
+                    offset_centiseconds as i32,
+                );
+                self.end.adjust_time(
+                    offset_hours as i32,
+                    offset_minutes as i32,
+                    offset_seconds as i32,
+                    offset_centiseconds as i32,
+                );
+            }
         }
     }
 }

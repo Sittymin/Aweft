@@ -16,7 +16,7 @@ pub enum WrapStyle {
     NoWrap = 2,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ScriptType {
     SSAv4,
     ASS,
@@ -38,7 +38,7 @@ pub enum YCbCrMatrix {
     FCCPC,       // PC.fcc
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScriptInfo {
     // 这一部分的 ; 行不需要读取，是注释
     // 渲染相关
@@ -78,7 +78,7 @@ pub struct ScriptInfo {
     pub other_fields: HashMap<String, String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ASSColor(pub u32);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,7 +90,7 @@ pub enum BoldType {
     Weight(u32),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum StyleBool {
     True = -1,
     False = 0,
@@ -107,14 +107,14 @@ pub enum Alignment {
     TopCenter,
     TopRight,
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum BorderStyle {
     OutlineAndDropShadow = 1,
     OpaqueBox = 3, // 矩形框
 }
 
 // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_types.h#L105-L133
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct StyleWithoutName {
     pub fontname: String,
     pub fontsize: f64,
@@ -165,7 +165,7 @@ pub struct ASSTime {
     pub centiseconds: u8, // 0 ~ 99
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct EventMargin(pub u16);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -430,7 +430,13 @@ pub enum StyleOverride {
     Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+pub enum TimeAdjustTarget {
+    Start,
+    End,
+    Both,
+}
+#[derive(Debug, Clone)]
 pub struct Event {
     // Comment 也使用 Format 的格式
     pub event_type: EventType,
