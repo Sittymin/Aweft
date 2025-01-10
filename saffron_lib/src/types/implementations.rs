@@ -557,7 +557,7 @@ impl FromStr for EventMargin {
 }
 impl Display for EventMargin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:0>4}", self.0)
+        write!(f, "{}", self.0)
     }
 }
 

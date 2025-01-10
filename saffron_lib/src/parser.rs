@@ -226,24 +226,7 @@ fn parse_event(event_type: EventType, line_datas: Vec<&str>) -> Event {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use io::Write;
-    use std::{env, path::PathBuf};
-
-    fn create_test_file(content: &str) -> io::Result<PathBuf> {
-        // 获取系统临时目录
-        let mut test_path = env::temp_dir();
-        // 使用时间戳创建唯一文件名
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        test_path.push(format!("test_subtitle_{}.ass", timestamp));
-
-        let mut file = File::create(&test_path)?;
-        file.write_all(content.as_bytes())?;
-        file.flush()?;
-        Ok(test_path)
-    }
+    use crate::utils::create_test_file;
 
     #[test]
     fn test_parse_script_info_line() {
@@ -592,9 +575,9 @@ Style: Default,DejaVu Sans,65,&H007F67D0,&H00187DC1,&H00000000,&H00D4AA86,-1,0,0
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Comment: 0,0:00:00.00,0:00:06.99,Default,,0000,0000,0000,,Placeholder; replace with proper type later
-Dialogue: 0,0:00:00.00,0:00:06.99,Default,,0000,0000,0000,,{\pos(52,72)\an7\c&HB3B3B3&\p1}m 2 34 l 8 60 l 112 37 l 107 24{\pos(52,72)\an7\c&HB3B3B3&\p0}
-Dialogue: 0,0:00:00.00,0:00:06.99,Default,,0000,0000,0000,,{\q2\shad0\bord2\fs36\org(126.31,107.61)\pos(128.85,116.69)\fax-0.068131\frz4.2185\frx25.9522\fry63.2018\fscx207.7\fscy50.43}Bakery"#;
+Comment: 0,0:00:00.00,0:00:06.99,Default,,0,0,0,,Placeholder; replace with proper type later
+Dialogue: 0,0:00:00.00,0:00:06.99,Default,,0,0,0,,{\pos(52,72)\an7\c&HB3B3B3&\p1}m 2 34 l 8 60 l 112 37 l 107 24{\pos(52,72)\an7\c&HB3B3B3&\p0}
+Dialogue: 0,0:00:00.00,0:00:06.99,Default,,0,0,0,,{\q2\shad0\bord2\fs36\org(126.31,107.61)\pos(128.85,116.69)\fax-0.068131\frz4.2185\frx25.9522\fry63.2018\fscx207.7\fscy50.43}Bakery"#;
         let expected_content = pre_line + content;
 
         assert_eq!(written_content.trim(), expected_content);
