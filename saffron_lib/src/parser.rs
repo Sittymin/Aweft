@@ -9,6 +9,20 @@ use std::{
 };
 
 impl ASSFile {
+    pub fn new() -> Self {
+        Self {
+            script_info: ScriptInfo::new(),
+            styles: HashMap::new(),
+            events: Vec::new(),
+        }
+    }
+    pub fn from(other: &ASSFile) -> Self {
+        Self {
+            script_info: ScriptInfo::from(&other.script_info),
+            styles: other.styles.clone(),
+            events: other.events.clone(),
+        }
+    }
     pub fn parse_from_file(path: &PathBuf) -> io::Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -57,6 +71,13 @@ impl ASSFile {
             }
         }
         Ok(ass_file)
+    }
+    pub fn merge_styles(&mut self, other: &ASSFile) {
+        for (key, val) in &other.styles {
+            if !self.styles.contains_key(key) {
+                self.styles.insert(key.clone(), val.clone());
+            }
+        }
     }
     pub fn write_to_file_buffered(
         &self,

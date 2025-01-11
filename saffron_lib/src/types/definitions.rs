@@ -38,7 +38,7 @@ pub enum YCbCrMatrix {
     FCCPC,       // PC.fcc
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptInfo {
     // 这一部分的 ; 行不需要读取，是注释
     // 渲染相关

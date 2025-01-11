@@ -177,6 +177,7 @@ impl ScriptInfo {
             script_type: ScriptType::ASS,
             scaled_border_and_shadow: true,
             ycbcr_matrix: YCbCrMatrix::Default,
+            // TODO: 后续根据视频变化
             layout_res_x: 1920,
             layout_res_y: 1080,
             wrap_style: WrapStyle::Smart,
@@ -192,6 +193,26 @@ impl ScriptInfo {
 
             // 初始化其他字段
             other_fields: HashMap::new(),
+        }
+    }
+    pub fn from(other: &ScriptInfo) -> Self {
+        Self {
+            script_type: other.script_type.clone(),
+            scaled_border_and_shadow: other.scaled_border_and_shadow,
+            ycbcr_matrix: other.ycbcr_matrix,
+            layout_res_x: other.layout_res_x,
+            layout_res_y: other.layout_res_y,
+            wrap_style: other.wrap_style.clone(),
+
+            title: other.title.clone(),
+            original_script: other.original_script.clone(),
+            original_translation: other.original_translation.clone(),
+            original_editing: other.original_editing.clone(),
+            original_timing: other.original_timing.clone(),
+            script_updated_by: other.script_updated_by.clone(),
+            update_details: other.update_details.clone(),
+
+            other_fields: other.other_fields.clone(),
         }
     }
     pub fn set_field(&mut self, key: &str, value: &str) -> Result<(), String> {
@@ -661,6 +682,27 @@ impl Display for Effect {
                 Ok(())
             }
         }
+    }
+}
+impl PartialEq for Event {
+    fn eq(&self, other: &Self) -> bool {
+        // 比较其他字段
+        self.event_type == other.event_type
+            && self.layer == other.layer
+            && self.start == other.start
+            && self.end == other.end
+            && self.style == other.style
+            && self.name == other.name
+            && self.margin_l == other.margin_l
+            && self.margin_r == other.margin_r
+            && self.margin_v == other.margin_v
+            && self.effect == other.effect
+            && self.raw_text == other.raw_text
+            && match (&self.parsed_text, &other.parsed_text) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            }
     }
 }
 
