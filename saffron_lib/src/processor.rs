@@ -5,7 +5,7 @@ use std::{
 
 use crate::types::*;
 
-struct FileWithOffset<'a> {
+pub struct FileWithOffset<'a> {
     file_path: &'a Path,
     offset_hours: i32,
     offset_minutes: i32,
@@ -13,7 +13,7 @@ struct FileWithOffset<'a> {
     offset_centiseconds: i32,
 }
 impl<'a> FileWithOffset<'a> {
-    fn new(
+    pub fn new(
         file_path: &'a Path,
         offset_hours: i32,
         offset_minutes: i32,
@@ -30,7 +30,7 @@ impl<'a> FileWithOffset<'a> {
     }
 }
 
-fn merge_ass_files_with_offsets(
+pub fn merge_ass_files_with_offsets(
     files: Vec<FileWithOffset>,
     mut output: PathBuf,
 ) -> Result<ASSFile, Error> {
@@ -82,7 +82,7 @@ fn merge_ass_files_with_offsets(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, str::FromStr};
+    use std::{collections::HashMap, str::FromStr};
 
     use super::*;
     use crate::utils::create_test_file;
