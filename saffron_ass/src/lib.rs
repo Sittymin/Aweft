@@ -1,6 +1,6 @@
 mod parser;
 mod processor;
-mod types;
+pub mod types;
 mod utils;
 
 use std::{

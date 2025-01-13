@@ -1,0 +1,7 @@
+[package]
+name = "saffron_convert"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+saffron_ass = { path = "../saffron_ass" }

@@ -28,12 +28,19 @@ dependencies = [
 name = "saffron"
 version = "0.1.0"
 dependencies = [
- "saffron_lib",
+ "saffron_ass",
 ]
 
 [[package]]
-name = "saffron_lib"
+name = "saffron_ass"
 version = "0.1.0"
 dependencies = [
  "nom",
+]
+
+[[package]]
+name = "saffron_convert"
+version = "0.1.0"
+dependencies = [
+ "saffron_ass",
 ]
