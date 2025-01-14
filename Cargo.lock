@@ -42,5 +42,6 @@ dependencies = [
 name = "saffron_convert"
 version = "0.1.0"
 dependencies = [
+ "nom",
  "saffron_ass",
 ]

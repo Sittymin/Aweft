@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 saffron_ass = { path = "../saffron_ass" }
+nom = "7"

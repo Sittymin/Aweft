@@ -1,47 +1,115 @@
-use saffron_ass::types::Event;
+use nom::{
+    bytes::complete::tag,
+    character::complete::{char, digit1, line_ending, not_line_ending},
+    combinator::map_res,
+    multi::many1,
+    sequence::{separated_pair, terminated, tuple},
+    IResult,
+};
+use saffron_ass::types::{ASSTime, Event, EventMargin, EventType};
 
-#[derive(Debug, PartialEq)]
-pub struct Subtitle {
-    pub start: String,
-    pub end: String,
-    pub text: String,
+fn parse_timestamp(input: &str) -> IResult<&str, (u16, u8, u8, u16)> {
+    let (input, (mut hours, _, mut minutes, _, mut seconds, _, milliseconds)) = tuple((
+        map_res(digit1, |s: &str| s.parse::<u32>()),
+        char(':'),
+        map_res(digit1, |s: &str| s.parse::<u32>()),
+        char(':'),
+        map_res(digit1, |s: &str| s.parse::<u32>()),
+        char(','),
+        map_res(digit1, |s: &str| s.parse::<u32>()),
+    ))(input)?;
+
+    seconds += milliseconds / 1000;
+    let milliseconds = milliseconds % 1000;
+
+    minutes += seconds / 60;
+    let seconds = (seconds % 60) as u8;
+
+    hours += minutes / 60;
+    let minutes = (minutes % 60) as u8;
+
+    Ok((input, (hours as u16, minutes, seconds, milliseconds as u16)))
 }
 
-// TODO: 使用 nom 重写, 并直接使用 ASS 的 Event
-pub fn parse_srt(srt_content: &str) -> Vec<Subtitle> {
-    let mut subtitles = Vec::new();
-    let mut lines = srt_content.lines().peekable();
+pub fn parse_srt(input: &str) -> IResult<&str, Event> {
+    let (input, _index) = terminated(digit1, line_ending)(input)?;
+    let (
+        input,
+        (
+            (start_hours, start_minutes, start_seconds, start_milliseconds),
+            (end_hours, end_minutes, end_seconds, end_milliseconds),
+        ),
+    ) = separated_pair(parse_timestamp, tag(" --> "), parse_timestamp)(input)?;
 
-    while let Some(line) = lines.next() {
-        if line.parse::<usize>().is_ok() {
-            // Skip the index line
-            if let Some(time_line) = lines.next() {
-                if let Some(text_start) = lines.peek() {
-                    if !time_line.is_empty() && !text_start.is_empty() {
-                        let (start, end) = time_line.split_once(" --> ").unwrap_or(("", ""));
-                        let mut text_lines = Vec::new();
+    // remove \n after timestamp
+    let (mut rest, _) = line_ending(input)?;
+    let mut subtitle_lines = Vec::new();
 
-                        // Collect all lines until the next empty line or number
-                        for text_line in lines.by_ref() {
-                            if text_line.is_empty() || text_line.parse::<usize>().is_ok() {
-                                break;
-                            }
-                            text_lines.push(text_line.trim());
-                        }
+    loop {
+        if rest.is_empty() {
+            break;
+        }
 
-                        let text = text_lines.join(" ");
-                        subtitles.push(Subtitle {
-                            start: start.to_string(),
-                            end: end.to_string(),
-                            text,
-                        });
-                    }
+        match terminated(not_line_ending, line_ending)(rest) {
+            Ok((new_rest, line)) => {
+                if line.trim().is_empty() {
+                    rest = new_rest;
+                    break;
                 }
+                subtitle_lines.push(line);
+                rest = new_rest;
             }
+            Err(nom::Err::Error(_)) if !rest.is_empty() => {
+                let line = rest.trim();
+                if !line.is_empty() {
+                    subtitle_lines.push(line);
+                }
+                rest = "";
+                break;
+            }
+            Err(e) => return Err(e),
         }
     }
 
-    subtitles
+    if !subtitle_lines.is_empty() {
+        return Ok((
+            rest,
+            Event {
+                event_type: EventType::Dialogue,
+                layer: 0,
+                start: ASSTime {
+                    hours: start_hours,
+                    minutes: start_minutes,
+                    seconds: start_seconds,
+                    centiseconds: (start_milliseconds / 10) as u8,
+                },
+                end: ASSTime {
+                    hours: end_hours,
+                    minutes: end_minutes,
+                    seconds: end_seconds,
+                    centiseconds: (end_milliseconds / 10) as u8,
+                },
+                style: "Default".to_string(),
+                name: None,
+                margin_l: EventMargin(20),
+                margin_r: EventMargin(20),
+                margin_v: EventMargin(20),
+                effect: None,
+                raw_text: subtitle_lines.join("\n"),
+                parsed_text: None,
+            },
+        ));
+    }
+
+    Err(nom::Err::Error(nom::error::Error::new(
+        rest,
+        nom::error::ErrorKind::Fail,
+    )))
+}
+
+pub fn parse_srt_file(content: &str) -> IResult<&str, Vec<Event>> {
+    let (rest, events) = many1(parse_srt)(content)?;
+    Ok((rest, events))
 }
 
 #[cfg(test)]
@@ -49,31 +117,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_srt() {
-        let srt_content = r#"
-45
-00:02:52,184 --> 00:02:53,617
-慢慢来
+    fn test_parse_str_file() {
+        let test_srt_content: &str = r#"1
+00:00:01,600 --> 00:00:04,200
+English subtitle line 1
+中文字幕行 2
 
-46
-00:02:55,000 --> 00:02:57,000
-不要着急，一切都会好起来的。
+2
+00:00:05,900 --> 00:00:07,999
+This is a test subtitle
+
 "#;
+        let (_, events) = parse_srt_file(test_srt_content).unwrap();
+        let first_event = &events[0];
+        let second_event = &events[1];
+        assert_eq!(first_event.start.hours, 0);
+        assert_eq!(first_event.start.minutes, 0);
+        assert_eq!(first_event.start.seconds, 1);
+        assert_eq!(first_event.start.centiseconds, 60);
+        assert_eq!(first_event.end.centiseconds, 20);
+        assert_eq!(
+            first_event.raw_text,
+            "English subtitle line 1\n中文字幕行 2"
+        );
+        assert_eq!(second_event.end.centiseconds, 99);
+    }
 
-        let expected_subtitles = vec![
-            Subtitle {
-                start: "00:02:52,184".to_string(),
-                end: "00:02:53,617".to_string(),
-                text: "慢慢来".to_string(),
-            },
-            Subtitle {
-                start: "00:02:55,000".to_string(),
-                end: "00:02:57,000".to_string(),
-                text: "不要着急，一切都会好起来的。".to_string(),
-            },
-        ];
+    #[test]
+    fn test_parse_timestamp() {
+        let input = "00:00:01,600";
+        let result = parse_timestamp(input);
+        assert!(result.is_ok());
+        let (_, (hours, minutes, seconds, milliseconds)) = result.unwrap();
+        assert_eq!(hours, 0);
+        assert_eq!(minutes, 0);
+        assert_eq!(seconds, 1);
+        assert_eq!(milliseconds, 600);
+    }
 
-        let parsed_subtitles = parse_srt(srt_content);
-        assert_eq!(parsed_subtitles, expected_subtitles);
+    #[test]
+    fn test_parse_single_subtitle() {
+        let result = parse_srt("1\n00:00:01,600 --> 00:00:04,200\nTest subtitle\n\n");
+        assert!(result.is_ok());
+        let (rest, event) = result.unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(event.raw_text, "Test subtitle");
+        assert_eq!(event.start.hours, 0);
+        assert_eq!(event.start.minutes, 0);
+        assert_eq!(event.start.seconds, 1);
+        assert_eq!(event.start.centiseconds, 60);
+    }
+
+    #[test]
+    fn test_parse_multiple_lines() {
+        let result = parse_srt("1\n00:00:01,600 --> 00:00:04,200\nLine 1\nLine 2\n\n");
+        assert!(result.is_ok());
+        let (rest, event) = result.unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(event.raw_text, "Line 1\nLine 2");
     }
 }
