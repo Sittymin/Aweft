@@ -1,11 +1,11 @@
-# TODO
+# Todo
 
 - [ ] Edit ass
-- [ ] File conversion
-- [ ] cross-platform
+- [ ] Sub File conversion
+- [ ] Android
 - [ ] GUI
 - [ ] i18n
 - [ ] A11y
 - [ ] cooperation
 - [ ] OCR
-- [ ] Language to text
+- [ ] STT
