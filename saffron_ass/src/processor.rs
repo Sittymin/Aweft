@@ -30,18 +30,12 @@ impl<'a> FileWithOffset<'a> {
     }
 }
 
-pub fn merge_ass_files_with_offsets(
-    files: Vec<FileWithOffset>,
-    mut output: PathBuf,
-) -> Result<ASSFile, Error> {
+pub fn merge_ass_files_with_offsets(files: Vec<FileWithOffset>) -> Result<ASSFile, Error> {
     if files.is_empty() {
         return Err(Error::new(
             std::io::ErrorKind::InvalidInput,
             "No files provided for merging.",
         ));
-    }
-    if output.is_dir() {
-        output.push("merged.ass");
     }
 
     let first_file = &files[0];
@@ -277,10 +271,8 @@ Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,这是第二个测试字幕"#;
         let temp_output_path = create_test_file("")?;
         let file_with_offset_1 = FileWithOffset::new(temp_path_1.as_path(), 0, 0, 0, 0);
         let file_with_offset_2 = FileWithOffset::new(temp_path_2.as_path(), 0, 0, 4, 0);
-        let output_ass_file = merge_ass_files_with_offsets(
-            vec![file_with_offset_1, file_with_offset_2],
-            temp_output_path,
-        )?;
+        let output_ass_file =
+            merge_ass_files_with_offsets(vec![file_with_offset_1, file_with_offset_2])?;
 
         assert_eq!(output_ass_file.script_info, except_ass_file.script_info);
         assert_eq!(output_ass_file.styles, except_ass_file.styles);
