@@ -10,24 +10,27 @@ fn main() -> io::Result<()> {
     let mut files_with_offsets = Vec::new();
     let mut output_path = None;
 
-    // FIXME: 还不可以正确解析命令行参数
+    // TODO: 重构此解析
     while let Some(arg) = args.next() {
         println!("参数是: {}", arg);
         if arg == "-m" || arg == "--merge" {
-            // 确保接下来有足够的参数
-            for _ in 0..5 {
-                match parse_file_with_offset(&mut args) {
-                    Ok(fwo) => files_with_offsets.push(fwo),
-                    Err(e) => {
-                        eprintln!("错误：{}", e);
-                        return Err(e);
-                    }
+            match parse_file_with_offset(&mut args) {
+                Ok(fwo) => files_with_offsets.push(fwo),
+                Err(e) => {
+                    eprintln!("错误：{}", e);
+                    return Err(e);
                 }
             }
-            continue; // 处理完一组 '-m' 参数后，继续检查剩余的参数
-        } else if output_path.is_none() {
-            // 如果没有设置输出路径，则当前参数为输出路径
-            output_path = Some(PathBuf::from(arg));
+        } else if arg == "-o" || arg == "--output" {
+            if output_path.is_some() {
+                eprintln!("警告：已有输出路径，忽略{:#?}", output_path);
+                continue;
+            } else if let Some(output_arg) = args.next() {
+                output_path = Some(PathBuf::from(output_arg));
+                continue;
+            }
+
+            eprintln!("错误：输出路径解析出错");
         }
     }
 
