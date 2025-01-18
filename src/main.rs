@@ -1,5 +1,6 @@
 use saffron_ass::merge_ass_files;
 use saffron_ass::save_ass;
+use saffron_convert::parse_srt;
 use std::env;
 use std::io::{self, Error, ErrorKind};
 use std::path::PathBuf;
@@ -9,12 +10,13 @@ fn main() -> io::Result<()> {
 
     let mut files_with_offsets = Vec::new();
     let mut output_path = None;
+    let mut index: usize = 0;
 
     // TODO: 重构此解析
     while let Some(arg) = args.next() {
         println!("参数是: {}", arg);
         if arg == "-m" || arg == "--merge" {
-            match parse_file_with_offset(&mut args) {
+            match parse_args_file_with_offset(&mut args) {
                 Ok(fwo) => files_with_offsets.push(fwo),
                 Err(e) => {
                     eprintln!("错误：{}", e);
@@ -31,6 +33,10 @@ fn main() -> io::Result<()> {
             }
 
             eprintln!("错误：输出路径解析出错");
+        } else if arg == "--main" {
+            if let Some(index_string) = args.next() {
+                index = index_string.parse::<usize>().unwrap_or(0);
+            }
         }
     }
 
@@ -40,6 +46,7 @@ fn main() -> io::Result<()> {
                 .iter()
                 .map(|&(ref path, h, m, s, cs)| (path.as_path(), h, m, s, cs))
                 .collect(),
+            index,
         ) {
             Ok(ass_file) => {
                 println!("文件合并成功: {:#?}", output_path);
@@ -58,7 +65,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn parse_file_with_offset(
+fn parse_args_file_with_offset(
     args_iter: &mut impl Iterator<Item = String>,
 ) -> Result<(PathBuf, i32, i32, i32, i32), io::Error> {
     // 获取文件路径

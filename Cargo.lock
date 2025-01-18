@@ -29,6 +29,7 @@ name = "saffron"
 version = "0.1.0"
 dependencies = [
  "saffron_ass",
+ "saffron_convert",
 ]
 
 [[package]]
@@ -37,6 +38,10 @@ version = "0.1.0"
 dependencies = [
  "nom",
 ]
+
+[[package]]
+name = "saffron_collab"
+version = "0.1.0"
 
 [[package]]
 name = "saffron_convert"

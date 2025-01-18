@@ -30,7 +30,10 @@ impl<'a> FileWithOffset<'a> {
     }
 }
 
-pub fn merge_ass_files_with_offsets(files: Vec<FileWithOffset>) -> Result<ASSFile, Error> {
+pub fn merge_ass_files_with_offsets(
+    files: Vec<FileWithOffset>,
+    index: usize,
+) -> Result<ASSFile, Error> {
     if files.is_empty() {
         return Err(Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -38,23 +41,28 @@ pub fn merge_ass_files_with_offsets(files: Vec<FileWithOffset>) -> Result<ASSFil
         ));
     }
 
-    let first_file = &files[0];
-    let mut first_ass = ASSFile::parse_from_file(&PathBuf::from(&first_file.file_path))?;
+    let main_file = if index > files.len() {
+        &files[0]
+    } else {
+        &files[index]
+    };
+    let mut main_ass = ASSFile::parse_from_file(&PathBuf::from(&main_file.file_path))?;
 
-    for event in &mut first_ass.events {
+    for event in &mut main_ass.events {
         event.adjust_time(
-            first_file.offset_hours,
-            first_file.offset_minutes,
-            first_file.offset_seconds,
-            first_file.offset_centiseconds,
+            main_file.offset_hours,
+            main_file.offset_minutes,
+            main_file.offset_seconds,
+            main_file.offset_centiseconds,
             TimeAdjustTarget::Both,
         );
     }
 
-    // TODO: 实现可以指定主要使用 ScriptInfo 的文件
-    let mut merged_ass = ASSFile::from(&first_ass);
+    let mut merged_ass = ASSFile::from(&main_ass);
 
-    for file in &files[1..] {
+    let iter = files.iter().enumerate().filter(|&(i, _)| i != index);
+
+    for (_index, file) in iter {
         let path = PathBuf::from(&file.file_path);
         let mut ass_file = ASSFile::parse_from_file(&path)?;
 
@@ -268,11 +276,10 @@ Dialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,这是第二个测试字幕"#;
 
         let temp_path_1 = create_test_file(test_content_1)?;
         let temp_path_2 = create_test_file(test_content_2)?;
-        let temp_output_path = create_test_file("")?;
         let file_with_offset_1 = FileWithOffset::new(temp_path_1.as_path(), 0, 0, 0, 0);
         let file_with_offset_2 = FileWithOffset::new(temp_path_2.as_path(), 0, 0, 4, 0);
         let output_ass_file =
-            merge_ass_files_with_offsets(vec![file_with_offset_1, file_with_offset_2])?;
+            merge_ass_files_with_offsets(vec![file_with_offset_1, file_with_offset_2], 0)?;
 
         assert_eq!(output_ass_file.script_info, except_ass_file.script_info);
         assert_eq!(output_ass_file.styles, except_ass_file.styles);

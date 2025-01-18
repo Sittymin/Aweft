@@ -5,8 +5,9 @@ edition = "2021"
 
 [workspace]
 members = [
-    "saffron_ass", "saffron_convert",
+    "saffron_ass", "saffron_collab", "saffron_convert",
 ]
 
 [dependencies]
 saffron_ass = { path = "saffron_ass" }
+saffron_convert = {path = "saffron_convert"}
