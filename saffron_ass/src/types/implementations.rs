@@ -792,7 +792,7 @@ impl TryFrom<StyleOverride> for StyleModifier {
         }
     }
 }
-// TODO: 使用宏避免转换性能损失与避免代码重复
+// TODO: 手动复制一下（用过程宏实现会加太多复杂性）
 impl Display for StyleModifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // 将 StyleModifier 转换回等价的 StyleOverride，然后使用其 Display 实现
@@ -848,7 +848,7 @@ impl Display for StyleModifier {
                 drawing_commands: drawing_commands.clone(),
                 is_display: *is_display,
             },
-            StyleModifier::BlurEdges(be) => StyleOverride::BlurEdges(be.clone()),
+            StyleModifier::BlurEdges(be) => StyleOverride::BlurEdges(*be),
             StyleModifier::Blur(blur) => StyleOverride::Blur(*blur),
         };
 

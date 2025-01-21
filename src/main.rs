@@ -35,7 +35,7 @@ fn main() -> io::Result<()> {
             eprintln!("错误：输出路径解析出错");
         } else if arg == "--main" {
             if let Some(index_string) = args.next() {
-                index = index_string.parse::<usize>().unwrap_or(0);
+                index = index_string.parse::<usize>().unwrap_or(1) - 1;
             }
         }
     }

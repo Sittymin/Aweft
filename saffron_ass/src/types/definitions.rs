@@ -302,7 +302,7 @@ pub enum DrawingCommand {
     CloseBSpline, // 'c'
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum BlurEdgesTypes {
     BlurEdges,
     NonBlurEdges,
