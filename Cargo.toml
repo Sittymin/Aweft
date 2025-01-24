@@ -5,7 +5,7 @@ edition = "2021"
 
 [workspace]
 members = [
-    "saffron_ass", "saffron_collab", "saffron_convert",
+    "saffron_ass", "saffron_collab", "saffron_convert", "saffron-gui/src-tauri"
 ]
 
 [dependencies]
