@@ -10,52 +10,77 @@
     content: string;
   };
   interface GridLine {
-    type: "horizontal" | "vertical";
-    index: number;
-    // 添加范围属性
-    start: number; // 起始网格线索引（从1开始）
-    end: number; // 结束网格线索引（从1开始）
+    direction: "horizontal" | "vertical";
+    positionIndex: number;
+    // 网格线索引
+    // WARN: start at 1
+    start: number;
+    end: number;
     adjacentPanels: string[];
   }
 
   // ================= 状态管理 =================
-  // 每一行初始状态所占百分比
-  let columns: number[] = $state([50, 50]);
-  let rows: number[] = $state([50, 50]);
-  let gridGap = $state(10);
+  // 每一行初始状态所占百分比 WARN: 需要总和为100%
+  let columns: number[] = $state([30, 40, 30]);
+  let rows: number[] = $state([30, 40, 30]);
+  let panelGap: number = $state(10);
 
-  // 网格边缘是从 1 开始的
+  // WARN: grid is start at 1
   let panels: Panel[] = [
     {
-      id: "panel1",
+      id: "topLeft",
       gridColumnStart: 1,
       gridColumnEnd: 2,
       gridRowStart: 1,
       gridRowEnd: 2,
-      content: "Left Top",
+      content: "Top Left",
     },
     {
-      id: "panel2",
-      gridColumnStart: 1,
-      gridColumnEnd: 2,
-      gridRowStart: 2,
-      gridRowEnd: 3,
-      content: "Left Bottom",
-    },
-    {
-      id: "panel3",
+      id: "topMiddle",
       gridColumnStart: 2,
       gridColumnEnd: 3,
       gridRowStart: 1,
+      gridRowEnd: 2,
+      content: "Top Middle",
+    },
+    {
+      id: "topRight",
+      gridColumnStart: 3,
+      gridColumnEnd: 4,
+      gridRowStart: 1,
+      gridRowEnd: 3, // 竖直延伸两个单位
+      content: "Top Right",
+    },
+    {
+      id: "middleLeft",
+      gridColumnStart: 1,
+      gridColumnEnd: 3, // 水平跨越两个单位
+      gridRowStart: 2,
       gridRowEnd: 3,
-      content: "Right Full",
+      content: "Middle Left",
+    },
+    {
+      id: "bottomLeft",
+      gridColumnStart: 1,
+      gridColumnEnd: 2,
+      gridRowStart: 3,
+      gridRowEnd: 4,
+      content: "Bottom Left",
+    },
+    {
+      id: "bottomMiddle",
+      gridColumnStart: 2,
+      gridColumnEnd: 4, // 水平跨越两个单位
+      gridRowStart: 3,
+      gridRowEnd: 4,
+      content: "Bottom Middle & Right",
     },
   ];
 
   // 动态计算分隔线位置
   function findGridLines(panels: Panel[]): GridLine[] {
     const gridLines: GridLine[] = [];
-    const processedLines = new Set<string>();
+    const processedLines = new Map<string, GridLine>();
 
     for (let i = 0; i < panels.length; i++) {
       for (let j = i + 1; j < panels.length; j++) {
@@ -71,19 +96,40 @@
               panel2.gridRowEnd > panel1.gridRowStart))
         ) {
           const key = `v${panel1.gridColumnEnd}`;
-          if (!processedLines.has(key)) {
-            // 计算这条垂直线的行范围
+          const existingLine = processedLines.get(key);
+
+          if (!existingLine) {
+            // 创建新线
             const rowStart = Math.min(panel1.gridRowStart, panel2.gridRowStart);
             const rowEnd = Math.max(panel1.gridRowEnd, panel2.gridRowEnd);
-
-            gridLines.push({
-              type: "vertical",
-              index: panel1.gridColumnEnd,
-              start: rowStart, // 行范围开始
-              end: rowEnd, // 行范围结束
+            const newLine: GridLine = {
+              direction: "vertical",
+              positionIndex: panel1.gridColumnEnd,
+              start: rowStart,
+              end: rowEnd,
               adjacentPanels: [panel1.id, panel2.id],
-            });
-            processedLines.add(key);
+            };
+            gridLines.push(newLine);
+            processedLines.set(key, newLine);
+          } else {
+            // 合并现有线
+            existingLine.start = Math.min(
+              existingLine.start,
+              panel1.gridRowStart,
+              panel2.gridRowStart,
+            );
+            existingLine.end = Math.max(
+              existingLine.end,
+              panel1.gridRowEnd,
+              panel2.gridRowEnd,
+            );
+            // 添加新的相邻面板ID（去重）
+            if (!existingLine.adjacentPanels.includes(panel1.id)) {
+              existingLine.adjacentPanels.push(panel1.id);
+            }
+            if (!existingLine.adjacentPanels.includes(panel2.id)) {
+              existingLine.adjacentPanels.push(panel2.id);
+            }
           }
         }
 
@@ -96,22 +142,43 @@
               panel2.gridColumnEnd > panel1.gridColumnStart))
         ) {
           const key = `h${panel1.gridRowEnd}`;
-          if (!processedLines.has(key)) {
-            // 计算这条水平线的列范围
+          const existingLine = processedLines.get(key);
+
+          if (!existingLine) {
+            // 创建新线
             const colStart = Math.min(
               panel1.gridColumnStart,
               panel2.gridColumnStart,
             );
             const colEnd = Math.max(panel1.gridColumnEnd, panel2.gridColumnEnd);
-
-            gridLines.push({
-              type: "horizontal",
-              index: panel1.gridRowEnd,
-              start: colStart, // 列范围开始
-              end: colEnd, // 列范围结束
+            const newLine: GridLine = {
+              direction: "horizontal",
+              positionIndex: panel1.gridRowEnd,
+              start: colStart,
+              end: colEnd,
               adjacentPanels: [panel1.id, panel2.id],
-            });
-            processedLines.add(key);
+            };
+            gridLines.push(newLine);
+            processedLines.set(key, newLine);
+          } else {
+            // 合并现有线
+            existingLine.start = Math.min(
+              existingLine.start,
+              panel1.gridColumnStart,
+              panel2.gridColumnStart,
+            );
+            existingLine.end = Math.max(
+              existingLine.end,
+              panel1.gridColumnEnd,
+              panel2.gridColumnEnd,
+            );
+            // 添加新的相邻面板ID（去重）
+            if (!existingLine.adjacentPanels.includes(panel1.id)) {
+              existingLine.adjacentPanels.push(panel1.id);
+            }
+            if (!existingLine.adjacentPanels.includes(panel2.id)) {
+              existingLine.adjacentPanels.push(panel2.id);
+            }
           }
         }
       }
@@ -120,32 +187,17 @@
     return gridLines;
   }
   const gridLines = findGridLines(panels);
-  //
-  // [
-  //  {
-  //    type: 'horizontal',
-  //    index: 2,             // 第2条水平网格线
-  //    start: 1,            // 从第1列开始
-  //    end: 2,              // 到第2列结束
-  //    adjacentPanels: ['panel1', 'panel2']
-  //  },
-  //  {
-  //    type: 'vertical',
-  //    index: 2,             // 第2条垂直网格线
-  //    start: 1,            // 从第1行开始
-  //    end: 3,              // 到第3行结束
-  //    adjacentPanels: ['panel1', 'panel2', 'panel3']
-  //  }
-  //]
-  //
-  function sumToIndex(arr: number[], index: number): number {
+  console.table(gridLines);
+
+  function rangeSum(arr: Array<number>, start: number, end: number) {
     let sum = 0;
-    for (let i = 0; i < index; i++) {
+
+    for (let i = start; i < end; i++) {
       sum += arr[i];
     }
+
     return sum;
   }
-
   // ================= 拖拽逻辑 =================
   type DragState = {
     type: "column" | "row";
@@ -257,11 +309,20 @@
   }
 </script>
 
+<!-- 由于内联样式优先级高，所以可能内嵌的 style 不会被应用 -->
+<!-- 将网格容器不获取鼠标事件来让下面的分割线可以被点到 -->
 <div
   class="container"
+  style:position="fixed"
+  style:display="grid"
   style:grid-template-columns="{columns.join('% ')}%"
   style:grid-template-rows="{rows.join('% ')}%"
-  style:gap="{gridGap}px"
+  style:top="0"
+  style:left="0"
+  style:right="0"
+  style:bottom="0"
+  style:overflow="auto"
+  style:pointer-events="none"
 >
   {#each panels as panel (panel.id)}
     <div
@@ -270,59 +331,53 @@
       style:grid-column-end={panel.gridColumnEnd}
       style:grid-row-start={panel.gridRowStart}
       style:grid-row-end={panel.gridRowEnd}
+      style:pointer-events="auto"
+      style:margin="{panelGap}px"
     >
       {panel.content}
     </div>
   {/each}
-
-  <!-- 动态生成垂直分隔线 -->
-  {#each gridLines as line}
-    {#if line.type === "vertical"}
-      <button
-        type="button"
-        aria-label="垂直分隔线"
-        class="splitter"
-        data-orientation="vertical"
-        style:left="{sumToIndex(columns, line.index - 1)}%"
-        style:height="{((line.end - line.start) / rows.length) * 100}%"
-        style:top="{((line.start - 1) / rows.length) * 100}%"
-        onmousedown={(e) => startDrag("column", line.index, e)}
-      ></button>
-    {:else}
-      <button
-        type="button"
-        aria-label="水平分隔线"
-        class="splitter"
-        data-orientation="horizontal"
-        style:top="{sumToIndex(rows, line.index - 1)}%"
-        style:width="{((line.end - line.start) / columns.length) * 100}%"
-        style:left="{((line.start - 1) / columns.length) * 100}%"
-        onmousedown={(e) => startDrag("row", line.index, e)}
-      ></button>
-    {/if}
-  {/each}
 </div>
 
-<style>
-  .container {
-    display: grid;
-    position: fixed; /* 不受父标签影响 */
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-  }
+<!-- 动态生成垂直分隔线 -->
+{#each gridLines as gridLine}
+  {#if gridLine.direction === "vertical"}
+    <button
+      type="button"
+      aria-label="垂直分隔线"
+      class="splitter"
+      data-orientation="vertical"
+      style:left="{rangeSum(columns, 0, gridLine.positionIndex - 1)}%"
+      style:height="{rangeSum(rows, gridLine.start - 1, gridLine.end - 1)}%"
+      style:top="{((gridLine.start - 1) / rows.length) * 100}%"
+      onmousedown={(e) => startDrag("column", gridLine.positionIndex, e)}
+    ></button>
+  {:else}
+    <button
+      type="button"
+      aria-label="水平分隔线"
+      class="splitter"
+      data-orientation="horizontal"
+      style:top="{rangeSum(rows, 0, gridLine.positionIndex - 1)}%"
+      style:width="{rangeSum(columns, gridLine.start - 1, gridLine.end - 1)}%"
+      style:left="{((gridLine.start - 1) / columns.length) * 100}%"
+      onmousedown={(e) => startDrag("row", gridLine.positionIndex, e)}
+    ></button>
+  {/if}
+{/each}
 
+<style>
   .panel {
     background: #2d2d2d;
     border: 1px solid #444;
     position: relative;
+    border-radius: 10px;
     overflow: hidden;
   }
 
   .splitter {
     position: absolute;
-    z-index: 1;
+    z-index: -1;
     transition: background-color 0.2s;
     appearance: none;
     -webkit-appearance: none;
@@ -330,18 +385,19 @@
     margin: 0;
     border: none;
     background: blue;
-    transform: translate(-50%, -50%);
 
     &[data-orientation="vertical"] {
       width: 5px;
       height: 100%;
       cursor: col-resize;
+      transform: translateX(-50%);
     }
 
     &[data-orientation="horizontal"] {
       height: 5px;
       width: 100%;
       cursor: row-resize;
+      transform: translateY(-50%);
     }
 
     &:hover {
