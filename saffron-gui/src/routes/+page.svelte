@@ -1,14 +1,13 @@
-<!-- TODO: 规范网格轨道index与行列index 与修复网格控制条长度更新 -->
 <script lang="ts">
+  import { onMount } from "svelte";
   // ================= 类型定义 =================
-  type Panel = {
+  interface Panel {
     id: string;
     gridColumnStart: number;
     gridColumnEnd: number;
     gridRowStart: number;
     gridRowEnd: number;
-    content: string;
-  };
+  }
   interface GridLine {
     direction: "horizontal" | "vertical";
     positionIndex: number;
@@ -18,67 +17,118 @@
     end: number;
     adjacentPanels: string[];
   }
+  interface PanelCorner {
+    panelId: string;
+    position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+    columnLine: number;
+    rowLine: number;
+  }
 
+  // ================= 常量 =================
+
+  const SPLITTERZINDEX: number = 1;
+  const CONTAINERZINDEX: number = 2;
+  const PANELCORNERZINDEX: number = 3;
   // ================= 状态管理 =================
   // 每一行初始状态所占百分比 WARN: 需要总和为100%
-  let columns: number[] = $state([30, 40, 30]);
-  let rows: number[] = $state([30, 40, 30]);
-  let panelGap: number = $state(10);
+  let columns = $state<number[]>([30, 40, 30]);
+  const columnsLength = $derived(columns.length);
+  $inspect(columns).with((_type, data) => {
+    const tableData = [
+      {
+        ratios: data.map(
+          (value, _index) => `${((value / 100) * 100).toFixed(1)}%`,
+        ),
+      },
+    ];
+    console.table(tableData[0]);
+  });
+  let rows = $state<number[]>([30, 40, 30]);
+  const rowsLength = $derived(rows.length);
+  $inspect(rows).with((_type, data) => {
+    const tableData = [
+      {
+        ratios: data.map(
+          (value, _index) => `${((value / 100) * 100).toFixed(1)}%`,
+        ),
+      },
+    ];
+    console.table(tableData[0]);
+  });
+
+  // 累积百分比用于定位
+  let cumulativeColumns = $derived.by(() => {
+    let sum = 0;
+    return [0, ...columns.map((value) => (sum += value))];
+  });
+  let cumulativeRows = $derived.by(() => {
+    let sum = 0;
+    return [0, ...rows.map((value) => (sum += value))];
+  });
+
+  let panelGap = $state<number>(10);
 
   // WARN: grid is start at 1
-  let panels: Panel[] = [
+  let panels = $state<Panel[]>([
     {
-      id: "topLeft",
+      id: crypto.randomUUID(),
       gridColumnStart: 1,
       gridColumnEnd: 2,
       gridRowStart: 1,
       gridRowEnd: 2,
-      content: "Top Left",
     },
     {
-      id: "topMiddle",
+      id: crypto.randomUUID(),
       gridColumnStart: 2,
       gridColumnEnd: 3,
       gridRowStart: 1,
       gridRowEnd: 2,
-      content: "Top Middle",
     },
     {
-      id: "topRight",
+      id: crypto.randomUUID(),
       gridColumnStart: 3,
       gridColumnEnd: 4,
       gridRowStart: 1,
       gridRowEnd: 3, // 竖直延伸两个单位
-      content: "Top Right",
     },
     {
-      id: "middleLeft",
+      id: crypto.randomUUID(),
       gridColumnStart: 1,
       gridColumnEnd: 3, // 水平跨越两个单位
       gridRowStart: 2,
       gridRowEnd: 3,
-      content: "Middle Left",
     },
     {
-      id: "bottomLeft",
+      id: crypto.randomUUID(),
       gridColumnStart: 1,
       gridColumnEnd: 2,
       gridRowStart: 3,
       gridRowEnd: 4,
-      content: "Bottom Left",
     },
     {
-      id: "bottomMiddle",
+      id: crypto.randomUUID(),
       gridColumnStart: 2,
       gridColumnEnd: 4, // 水平跨越两个单位
       gridRowStart: 3,
       gridRowEnd: 4,
-      content: "Bottom Middle & Right",
     },
-  ];
+  ]);
 
-  // 动态计算分隔线位置
-  function findGridLines(panels: Panel[]): GridLine[] {
+  let panelCorners = $derived.by<PanelCorner[]>(() => {
+    return panels.flatMap((panel) => getPanelCorners(panel));
+  });
+
+  let gridLines = $state<GridLine[]>([]);
+  $inspect(gridLines).with((type, data) => {
+    if (type == "update") {
+      console.table(data);
+    }
+  });
+
+  // ================ 函数定义 ================
+
+  // 动态计算分隔线位置 WARN: 假定命名为 panels
+  function findGridLines(): GridLine[] {
     const gridLines: GridLine[] = [];
     const processedLines = new Map<string, GridLine>();
 
@@ -186,8 +236,12 @@
 
     return gridLines;
   }
-  const gridLines = findGridLines(panels);
-  console.table(gridLines);
+  $effect(() => {
+    if (columnsLength && rowsLength) {
+      console.log("获得更新");
+      gridLines = findGridLines();
+    }
+  });
 
   function rangeSum(arr: Array<number>, start: number, end: number) {
     let sum = 0;
@@ -198,6 +252,36 @@
 
     return sum;
   }
+
+  function getPanelCorners(panel: Panel): PanelCorner[] {
+    return [
+      {
+        panelId: panel.id,
+        position: "top-left",
+        columnLine: panel.gridColumnStart,
+        rowLine: panel.gridRowStart,
+      },
+      {
+        panelId: panel.id,
+        position: "top-right",
+        columnLine: panel.gridColumnEnd,
+        rowLine: panel.gridRowStart,
+      },
+      {
+        panelId: panel.id,
+        position: "bottom-left",
+        columnLine: panel.gridColumnStart,
+        rowLine: panel.gridRowEnd,
+      },
+      {
+        panelId: panel.id,
+        position: "bottom-right",
+        columnLine: panel.gridColumnEnd,
+        rowLine: panel.gridRowEnd,
+      },
+    ];
+  }
+
   // ================= 拖拽逻辑 =================
   type DragState = {
     type: "column" | "row";
@@ -264,10 +348,6 @@
         // 强制更新状态
         columns = newColumns;
       }
-      console.log("Drag Column Update:", {
-        type: currentDragState.type,
-        delta: deltaPercent,
-      });
     } else {
       const dy = event.clientY - currentDragState.startY;
       const containerHeight = rect.height;
@@ -292,10 +372,6 @@
         // 强制更新状态
         rows = newRows;
       }
-      console.log("Drag Row Update:", {
-        type: currentDragState.type,
-        delta: deltaPercent,
-      });
     }
   }
   function stopDrag() {
@@ -307,6 +383,10 @@
     window.removeEventListener("mousemove", handleDragMove);
     window.removeEventListener("mouseup", stopDrag);
   }
+
+  onMount(() => {
+    // gridLines = findGridLines();
+  });
 </script>
 
 <!-- 由于内联样式优先级高，所以可能内嵌的 style 不会被应用 -->
@@ -321,8 +401,8 @@
   style:left="0"
   style:right="0"
   style:bottom="0"
-  style:overflow="auto"
   style:pointer-events="none"
+  style:z-index={CONTAINERZINDEX}
 >
   {#each panels as panel (panel.id)}
     <div
@@ -333,9 +413,11 @@
       style:grid-row-end={panel.gridRowEnd}
       style:pointer-events="auto"
       style:margin="{panelGap}px"
-    >
-      {panel.content}
-    </div>
+      style:background="#2d2d2d"
+      style:border="1px solid #444"
+      style:position="relative"
+      style:border-radius="10px"
+    ></div>
   {/each}
 </div>
 
@@ -347,9 +429,10 @@
       aria-label="垂直分隔线"
       class="splitter"
       data-orientation="vertical"
-      style:left="{rangeSum(columns, 0, gridLine.positionIndex - 1)}%"
+      style:left="{cumulativeColumns[gridLine.positionIndex - 1]}%"
       style:height="{rangeSum(rows, gridLine.start - 1, gridLine.end - 1)}%"
       style:top="{((gridLine.start - 1) / rows.length) * 100}%"
+      style:z-index={SPLITTERZINDEX}
       onmousedown={(e) => startDrag("column", gridLine.positionIndex, e)}
     ></button>
   {:else}
@@ -358,26 +441,64 @@
       aria-label="水平分隔线"
       class="splitter"
       data-orientation="horizontal"
-      style:top="{rangeSum(rows, 0, gridLine.positionIndex - 1)}%"
+      style:top="{cumulativeRows[gridLine.positionIndex - 1]}%"
       style:width="{rangeSum(columns, gridLine.start - 1, gridLine.end - 1)}%"
       style:left="{((gridLine.start - 1) / columns.length) * 100}%"
+      style:z-index={SPLITTERZINDEX}
       onmousedown={(e) => startDrag("row", gridLine.positionIndex, e)}
     ></button>
   {/if}
 {/each}
+{#each panelCorners as panelCorner}
+  {#if panelCorner.position === "top-left"}
+    <button
+      style:position="fixed"
+      style:background-color="red"
+      style:left="{cumulativeColumns[panelCorner.columnLine - 1]}%"
+      style:top="{cumulativeRows[panelCorner.rowLine - 1]}%"
+      style:z-index={PANELCORNERZINDEX}
+    >
+      左上
+    </button>
+  {:else if panelCorner.position === "top-right"}
+    <button
+      style:position="fixed"
+      style:background-color="purple"
+      style:left="{cumulativeColumns[panelCorner.columnLine - 1]}%"
+      style:top="{cumulativeRows[panelCorner.rowLine - 1]}%"
+      style:transform="translateX(-100%)"
+      style:z-index={PANELCORNERZINDEX}
+    >
+      右上
+    </button>
+  {:else if panelCorner.position === "bottom-left"}
+    <button
+      style:position="fixed"
+      style:background-color="lime"
+      style:left="{cumulativeColumns[panelCorner.columnLine - 1]}%"
+      style:top="{cumulativeRows[panelCorner.rowLine - 1]}%"
+      style:transform="translateY(-100%)"
+      style:z-index={PANELCORNERZINDEX}
+    >
+      左下
+    </button>
+  {:else if panelCorner.position === "bottom-right"}
+    <button
+      style:position="fixed"
+      style:background-color="blue"
+      style:left="{cumulativeColumns[panelCorner.columnLine - 1]}%"
+      style:top="{cumulativeRows[panelCorner.rowLine - 1]}%"
+      style:transform="translate(-100%, -100%)"
+      style:z-index={PANELCORNERZINDEX}
+    >
+      右下
+    </button>
+  {/if}
+{/each}
 
 <style>
-  .panel {
-    background: #2d2d2d;
-    border: 1px solid #444;
-    position: relative;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-
   .splitter {
     position: absolute;
-    z-index: -1;
     transition: background-color 0.2s;
     appearance: none;
     -webkit-appearance: none;
