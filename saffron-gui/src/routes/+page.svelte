@@ -18,7 +18,7 @@
     adjacentPanels: string[];
   }
   interface PanelCorner {
-    panelId: string;
+    panelIndex: number;
     position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
     columnLine: number;
     rowLine: number;
@@ -115,7 +115,7 @@
   ]);
 
   let panelCorners = $derived.by<PanelCorner[]>(() => {
-    return panels.flatMap((panel) => getPanelCorners(panel));
+    return panels.flatMap((panel, index) => getPanelCorners(panel, index));
   });
 
   let gridLines = $state<GridLine[]>([]);
@@ -253,28 +253,28 @@
     return sum;
   }
 
-  function getPanelCorners(panel: Panel): PanelCorner[] {
+  function getPanelCorners(panel: Panel, index: number): PanelCorner[] {
     return [
       {
-        panelId: panel.id,
+        panelIndex: index,
         position: "top-left",
         columnLine: panel.gridColumnStart,
         rowLine: panel.gridRowStart,
       },
       {
-        panelId: panel.id,
+        panelIndex: index,
         position: "top-right",
         columnLine: panel.gridColumnEnd,
         rowLine: panel.gridRowStart,
       },
       {
-        panelId: panel.id,
+        panelIndex: index,
         position: "bottom-left",
         columnLine: panel.gridColumnStart,
         rowLine: panel.gridRowEnd,
       },
       {
-        panelId: panel.id,
+        panelIndex: index,
         position: "bottom-right",
         columnLine: panel.gridColumnEnd,
         rowLine: panel.gridRowEnd,
@@ -318,14 +318,11 @@
   function handleDragMove(event: MouseEvent) {
     if (!currentDragState) return;
 
-    const container = document.querySelector(".container")!;
-    const rect = container.getBoundingClientRect();
     const minSize = 10;
 
     if (currentDragState.type === "column") {
       const dx = event.clientX - currentDragState.startX;
-      const containerWidth = rect.width;
-      const deltaPercent = (dx / containerWidth) * 100;
+      const deltaPercent = (dx / window.innerWidth) * 100;
 
       // 创建新数组而不是修改现有数组
       const newColumns = [...currentDragState.startSize];
@@ -350,8 +347,7 @@
       }
     } else {
       const dy = event.clientY - currentDragState.startY;
-      const containerHeight = rect.height;
-      const deltaPercent = (dy / containerHeight) * 100;
+      const deltaPercent = (dy / window.innerHeight) * 100;
 
       const newRows = [...currentDragState.startSize];
       const idx = currentDragState.index - 2;
@@ -382,6 +378,233 @@
 
     window.removeEventListener("mousemove", handleDragMove);
     window.removeEventListener("mouseup", stopDrag);
+  }
+
+  let currentCorner: PanelCorner | null = null;
+  let currentPanelClone: Panel | null = null;
+  let shouldDeletePanel: number[] = [];
+  function startCornerDrag(corner: PanelCorner, event: MouseEvent) {
+    event.preventDefault();
+    currentCorner = corner;
+    currentPanelClone = $state.snapshot(panels[currentCorner.panelIndex]);
+
+    // 存储初始状态
+
+    // 添加事件监听
+    window.addEventListener("mousemove", handleCornerDragMove);
+    window.addEventListener("mouseup", stopCornerDrag, { once: true }); // 使用 once 选项
+
+    // 设置样式
+    document.body.style.userSelect = "none";
+  }
+  function stopCornerDrag() {
+    document.body.style.userSelect = "";
+    window.removeEventListener("mousemove", handleCornerDragMove);
+    window.removeEventListener("mouseup", stopCornerDrag);
+    currentCorner = null;
+    currentPanelClone = null;
+
+    // WARN: 拖动结束才删除会导致触屏可以接触其他合并拆分按钮
+    // 对索引数组进行降序排序(从后向前才能正确删除)
+    shouldDeletePanel.sort((a, b) => b - a);
+
+    // 遍历要删除的索引数组，并从原数组中删除对应索引的元素
+    shouldDeletePanel.forEach((index) => {
+      if (panels[index] !== undefined) {
+        panels.splice(index, 1);
+      }
+    });
+  }
+
+  // TODO: 分割与合并面板（先完成左上角的）
+  function handleCornerDragMove(event: MouseEvent) {
+    if (currentCorner == null) {
+      return;
+    }
+
+    const fullHeight = window.innerHeight;
+    const fullWidth = window.innerWidth;
+    if (currentCorner.position === "top-left") {
+      const panelTop =
+        (fullHeight *
+          cumulativeColumns[
+            panels[currentCorner.panelIndex].gridRowStart - 1
+          ]) /
+        100;
+      const panelLeft =
+        (fullWidth *
+          cumulativeRows[
+            panels[currentCorner.panelIndex].gridColumnStart - 1
+          ]) /
+        100;
+      const panelBottom =
+        (fullHeight *
+          cumulativeColumns[panels[currentCorner.panelIndex].gridRowEnd - 1]) /
+        100;
+      const panelRight =
+        (fullWidth *
+          cumulativeRows[panels[currentCorner.panelIndex].gridColumnEnd - 1]) /
+        100;
+
+      const panelHeigth = panelBottom - panelTop;
+      const panelWidth = panelRight - panelLeft;
+      // 鼠标距离面板各个边框偏移(向外为正)
+      const cornerOffsetTopLine = panelTop - event.clientY;
+      const cornerOffsetLeftLine = panelLeft - event.clientX;
+      const cornerOffsetRightLine = event.clientX - panelRight;
+      const cornerOffsetBottomLine = event.clientY - panelBottom;
+      let maxVal = Math.max(
+        cornerOffsetTopLine,
+        cornerOffsetLeftLine,
+        cornerOffsetRightLine,
+        cornerOffsetBottomLine,
+      );
+      // 哪一个最大说明在哪一条边外面, 如果小于 0 也一样
+      if (maxVal > 20) {
+        switch (maxVal) {
+          case cornerOffsetTopLine:
+            // TODO: 上方合并
+            // WARN: 合并判断有问题
+
+            panels.forEach((p, index) => {
+              if (currentCorner == null || currentPanelClone == null) {
+                console.error("上方合并时未正确赋值当前按钮或当前比较面板");
+                return;
+              }
+              // 跳过自身
+              if (index === currentCorner.panelIndex) {
+                return;
+              }
+              // 找到下方紧贴当前面板的面板
+              if (p.gridRowEnd == currentPanelClone.gridRowStart) {
+                // WARN: 有合并逻辑的错误
+                // 左边右边都包含的面板
+                if (
+                  p.gridColumnStart >= currentPanelClone.gridColumnStart &&
+                  p.gridColumnEnd <= currentPanelClone.gridColumnEnd
+                ) {
+                  // 当前面板扩张
+                  console.log(
+                    "触发全包含合并\n",
+                    "当前循环面板",
+                    $state.snapshot(p),
+                    "当前控制面板",
+                    $state.snapshot(panels[currentCorner.panelIndex]),
+                    "比较的克隆对象",
+                    currentPanelClone,
+                  );
+                  panels[currentCorner.panelIndex].gridRowStart =
+                    p.gridRowStart;
+                  // 移除被覆盖的面板
+                  shouldDeletePanel.push(index);
+                  // 左不包含 右包含
+                } else if (
+                  p.gridColumnStart < currentPanelClone.gridColumnStart &&
+                  p.gridColumnEnd <= currentPanelClone.gridColumnEnd
+                ) {
+                  console.log(
+                    "触发右包含合并",
+                    "当前循环面板",
+                    $state.snapshot(p),
+                    "当前控制面板",
+                    $state.snapshot(panels[currentCorner.panelIndex]),
+                    "比较的克隆对象",
+                    currentPanelClone,
+                  );
+                  panels[currentCorner.panelIndex].gridRowStart =
+                    p.gridRowStart;
+                  // 其他面板缩小
+                  p.gridColumnEnd =
+                    panels[currentCorner.panelIndex].gridColumnEnd;
+                  // 左包含，右不包含
+                } else if (
+                  p.gridColumnStart >= currentPanelClone.gridColumnStart &&
+                  p.gridColumnEnd > currentPanelClone.gridColumnEnd
+                ) {
+                  console.log(
+                    "触发左包含合并",
+                    "当前循环面板",
+                    $state.snapshot(p),
+                    "当前控制面板",
+                    $state.snapshot(panels[currentCorner.panelIndex]),
+                    "比较的克隆对象",
+                    currentPanelClone,
+                  );
+                  panels[currentCorner.panelIndex].gridRowStart =
+                    p.gridRowStart;
+                  p.gridColumnStart =
+                    panels[currentCorner.panelIndex].gridColumnStart;
+                  // 左右不包含, 中间包含
+                } else if (
+                  p.gridColumnStart < currentPanelClone.gridColumnStart &&
+                  p.gridColumnEnd > currentPanelClone.gridColumnEnd
+                ) {
+                  console.log(
+                    "触发拆分合并",
+                    "当前循环面板",
+                    $state.snapshot(p),
+                    "当前控制面板",
+                    $state.snapshot(panels[currentCorner.panelIndex]),
+                    "比较的克隆对象",
+                    currentPanelClone,
+                  );
+                  let p2: Panel = {
+                    id: crypto.randomUUID(),
+                    gridColumnStart:
+                      panels[currentCorner.panelIndex].gridColumnEnd,
+                    gridColumnEnd: p.gridColumnEnd,
+                    gridRowStart: p.gridRowStart,
+                    gridRowEnd: p.gridRowEnd,
+                  };
+                  panels.push(p2);
+                  p.gridColumnEnd =
+                    panels[currentCorner.panelIndex].gridColumnStart;
+                  panels[currentCorner.panelIndex].gridRowStart =
+                    p.gridRowStart;
+                } else if (
+                  p.gridColumnEnd < currentPanelClone.gridColumnStart ||
+                  p.gridColumnStart > currentPanelClone.gridColumnEnd
+                ) {
+                  console.log(
+                    "触发不合并",
+                    "当前循环面板",
+                    $state.snapshot(p),
+                    "当前控制面板",
+                    $state.snapshot(panels[currentCorner.panelIndex]),
+                    "比较的克隆对象",
+                    currentPanelClone,
+                  );
+                  return;
+                }
+              }
+            });
+            break;
+          case cornerOffsetBottomLine:
+            // TODO: 下方合并
+            break;
+          case cornerOffsetLeftLine:
+            // TODO: 左方合并
+            break;
+          case cornerOffsetRightLine:
+            // TODO: 右方合并
+            break;
+          default:
+            break;
+        }
+      } else if (maxVal < -20) {
+        // TODO: 需要使用与按钮相邻的两条边，两条边哪一条边距离按钮远，就用哪一条边
+        switch (currentCorner.position) {
+          case "top-left":
+            if (cornerOffsetTopLine < cornerOffsetLeftLine) {
+              // 说明距离 Top 更远
+              // TODO: 水平线
+            } else {
+              // TODO: 竖直线
+            }
+            break;
+        }
+      }
+    }
   }
 
   onMount(() => {
@@ -425,10 +648,11 @@
 {#each gridLines as gridLine}
   {#if gridLine.direction === "vertical"}
     <button
+      data-orientation="vertical"
       type="button"
       aria-label="垂直分隔线"
       class="splitter"
-      data-orientation="vertical"
+      style:position="fixed"
       style:left="{cumulativeColumns[gridLine.positionIndex - 1]}%"
       style:height="{rangeSum(rows, gridLine.start - 1, gridLine.end - 1)}%"
       style:top="{((gridLine.start - 1) / rows.length) * 100}%"
@@ -437,10 +661,11 @@
     ></button>
   {:else}
     <button
+      data-orientation="horizontal"
       type="button"
       aria-label="水平分隔线"
       class="splitter"
-      data-orientation="horizontal"
+      style:position="fixed"
       style:top="{cumulativeRows[gridLine.positionIndex - 1]}%"
       style:width="{rangeSum(columns, gridLine.start - 1, gridLine.end - 1)}%"
       style:left="{((gridLine.start - 1) / columns.length) * 100}%"
@@ -457,6 +682,7 @@
       style:left="{cumulativeColumns[panelCorner.columnLine - 1]}%"
       style:top="{cumulativeRows[panelCorner.rowLine - 1]}%"
       style:z-index={PANELCORNERZINDEX}
+      onmousedown={(e) => startCornerDrag(panelCorner, e)}
     >
       左上
     </button>
@@ -496,9 +722,10 @@
   {/if}
 {/each}
 
+<!--TODO: 白色遮罩 用于合并分割提示-->
+
 <style>
   .splitter {
-    position: absolute;
     transition: background-color 0.2s;
     appearance: none;
     -webkit-appearance: none;
@@ -509,14 +736,12 @@
 
     &[data-orientation="vertical"] {
       width: 5px;
-      height: 100%;
       cursor: col-resize;
       transform: translateX(-50%);
     }
 
     &[data-orientation="horizontal"] {
       height: 5px;
-      width: 100%;
       cursor: row-resize;
       transform: translateY(-50%);
     }
