@@ -1,7 +1,8 @@
 [package]
-name = "saffron_ass"
+name = "aweft-convert"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+aweft-ass = { path = "../aweft-ass" }
 nom = "7"

@@ -1,3 +1,4 @@
+use aweft_ass::types::{ASSTime, Event, EventMargin, EventType};
 use nom::{
     bytes::complete::tag,
     character::complete::{char, digit1, line_ending, not_line_ending},
@@ -6,7 +7,6 @@ use nom::{
     sequence::{separated_pair, terminated, tuple},
     IResult,
 };
-use saffron_ass::types::{ASSTime, Event, EventMargin, EventType};
 
 fn parse_timestamp(input: &str) -> IResult<&str, (u16, u8, u8, u16)> {
     let (input, (mut hours, _, mut minutes, _, mut seconds, _, milliseconds)) = tuple((

@@ -1,13 +1,14 @@
 [package]
-name = "saffron"
+name = "aweft"
 version = "0.1.0"
 edition = "2021"
 
 [workspace]
 members = [
-    "saffron_ass", "saffron_collab", "saffron_convert",
+    "aweft-gui", "aweft-ass", "aweft-collab", "aweft-convert",
 ]
 
 [dependencies]
-saffron_ass = { path = "saffron_ass" }
-saffron_convert = {path = "saffron_convert"}
+aweft-ass = { path = "aweft-ass" }
+aweft-convert = {path = "aweft-convert"}
+aweft-gui = { path = "aweft-gui" }
