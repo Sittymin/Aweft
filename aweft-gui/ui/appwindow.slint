@@ -1,9 +1,111 @@
-export component AppWindow inherits Window {
-    title: "Aweft GUI";
+struct ScrAreaData {
+    // 用于索引 ScrArea
+    key: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
 
-    Text {
-        text: "Hello, world from Slint!";
-        horizontal-alignment: center;
-        vertical-alignment: center;
+export enum ActionZoneCorner {
+    top-left,
+    top-right,
+    bottom-left,
+    bottom-right
+}
+
+component ActionZone inherits Rectangle {
+    in property <ActionZoneCorner> position;
+    border-width: 2px;
+    border-color: green;
+
+    callback actionzone-drag(corner: ActionZoneCorner, x: length, y: length);
+
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.move && self.pressed) {
+                // 在区域之外才触发
+                if (self.mouse-x < 0px || self.mouse-x > self.width || self.mouse-y < 0px || self.mouse-y > self.height) {
+                    // 获得的 x,y 是与当前 x,y 的相对位置
+                    root.actionzone-drag(root.position, self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+    }
+}
+
+component SlintScrArea inherits Rectangle {
+    in property <int> area-key;
+    in property <length> container-x;
+    in property <length> container-y;
+    in property <length> container-width;
+    in property <length> container-height;
+    in property <length> actionzone-side-length;
+
+    callback actionzone-drag(area-key: int, corner: ActionZoneCorner, x: length, y: length);
+    x: container-x;
+    y: container-y;
+    width: container-width;
+    height: container-height;
+    border-width: 2px;
+    border-color: red;
+    ActionZone {
+        x: container-x;
+        y: container-y;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.top-left;
+        actionzone-drag(corner, mouse-x, mouse-y) => {
+            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+    }
+
+    ActionZone {
+        x: container-width - actionzone-side-length;
+        y: container-y;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.top-right;
+        actionzone-drag(corner, mouse-x, mouse-y) => {
+            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+    }
+
+    ActionZone {
+        x: container-width - actionzone-side-length;
+        y: container-height - actionzone-side-length;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.bottom-right;
+        actionzone-drag(corner, mouse-x, mouse-y) => {
+            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+    }
+
+    ActionZone {
+        x: container-x;
+        y: container-height - actionzone-side-length;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.bottom-left;
+        actionzone-drag(corner, mouse-x, mouse-y) => {
+            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    in property <[ScrAreaData]> scrareas: [];
+    callback actionzone-drag(area-key: int, corner: ActionZoneCorner, x: length, y: length);
+    for scrarea[index] in scrareas: SlintScrArea {
+        area-key: scrarea.key;
+        container-x: scrarea.x;
+        container-y: scrarea.y;
+        container-width: scrarea.width;
+        container-height: scrarea.height;
+        actionzone-side-length: 10px;
+        actionzone-drag(area-key, corner, x, y) => {
+            root.actionzone-drag(area-key, corner, x, y);
+        }
     }
 }
