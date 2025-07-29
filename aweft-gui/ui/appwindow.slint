@@ -5,6 +5,7 @@ struct ScrAreaData {
     y: length,
     width: length,
     height: length,
+    actionzone-side-length: length,
 }
 
 export enum ActionZoneCorner {
@@ -17,7 +18,6 @@ export enum ActionZoneCorner {
 component ActionZone inherits Rectangle {
     in property <ActionZoneCorner> position;
     border-width: 2px;
-    border-color: green;
 
     callback actionzone-drag(corner: ActionZoneCorner, x: length, y: length);
 
@@ -48,13 +48,14 @@ component SlintScrArea inherits Rectangle {
     width: container-width;
     height: container-height;
     border-width: 2px;
-    border-color: red;
+    border-color: #00FFFF; // 青色 - 区域边框
     ActionZone {
-        x: container-x;
-        y: container-y;
+        x: 0;
+        y: 0;
         width: actionzone-side-length;
         height: actionzone-side-length;
         position: ActionZoneCorner.top-left;
+        border-color: #FF0080; // 亮粉色 - 左上角
         actionzone-drag(corner, mouse-x, mouse-y) => {
             root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
@@ -62,10 +63,11 @@ component SlintScrArea inherits Rectangle {
 
     ActionZone {
         x: container-width - actionzone-side-length;
-        y: container-y;
+        y: 0;
         width: actionzone-side-length;
         height: actionzone-side-length;
         position: ActionZoneCorner.top-right;
+        border-color: #0080FF; // 亮蓝色 - 右上角
         actionzone-drag(corner, mouse-x, mouse-y) => {
             root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
@@ -77,17 +79,19 @@ component SlintScrArea inherits Rectangle {
         width: actionzone-side-length;
         height: actionzone-side-length;
         position: ActionZoneCorner.bottom-right;
+        border-color: #FF8000; // 亮橙色 - 右下角
         actionzone-drag(corner, mouse-x, mouse-y) => {
             root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
     }
 
     ActionZone {
-        x: container-x;
+        x: 0;
         y: container-height - actionzone-side-length;
         width: actionzone-side-length;
         height: actionzone-side-length;
         position: ActionZoneCorner.bottom-left;
+        border-color: #FFFF00; // 亮黄色 - 左下角
         actionzone-drag(corner, mouse-x, mouse-y) => {
             root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
@@ -103,7 +107,7 @@ export component MainWindow inherits Window {
         container-y: scrarea.y;
         container-width: scrarea.width;
         container-height: scrarea.height;
-        actionzone-side-length: 10px;
+        actionzone-side-length: scrarea.actionzone-side-length;
         actionzone-drag(area-key, corner, x, y) => {
             root.actionzone-drag(area-key, corner, x, y);
         }

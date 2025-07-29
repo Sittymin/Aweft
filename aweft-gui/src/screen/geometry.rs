@@ -1,41 +1,35 @@
-use super::types::*;
+use crate::types::{
+    ScrAreaMap, ScrArea, ScrVert, ScrEdge, ScrVertKey, ScrEdgeKey, ScrAreaKey,
+    UISettings, Rcti, Vec2u32, AreaType, SplitDirection
+};
 use slotmap::SlotMap;
 
 impl ScrAreaMap {
-    /// 创建一个空的区域地图
-    pub fn new() -> Self {
-        Self {
-            verts: SlotMap::with_key(),
-            edges: SlotMap::with_key(),
-            areas: SlotMap::with_key(),
-        }
-    }
-
-    /// 创建具有正确DPI缩放的初始屏幕
+    /// 创建具有正确DPI缩放的初始屏幕（Slint坐标系）
     pub fn create_initial_screen_with_scaling(
         &mut self, 
         width: u32, 
         height: u32,
-        ui_settings: &UIScaleSettings
+        ui_settings: &UISettings
     ) -> ScrAreaKey {
-        // 创建四个顶点
-        let bottom_left = self.create_vertex(0, 0);
-        let top_left = self.create_vertex(0, height - 1);
-        let top_right = self.create_vertex(width - 1, height - 1);
-        let bottom_right = self.create_vertex(width - 1, 0);
+        // 创建四个顶点（Slint坐标系，左上角原点）
+        let top_left = self.create_vertex(0, 0);
+        let top_right = self.create_vertex(width - 1, 0);
+        let bottom_right = self.create_vertex(width - 1, height - 1);
+        let bottom_left = self.create_vertex(0, height - 1);
         
         // 创建边
-        self.create_edge(bottom_left, top_left);
         self.create_edge(top_left, top_right);
         self.create_edge(top_right, bottom_right);
         self.create_edge(bottom_right, bottom_left);
+        self.create_edge(bottom_left, top_left);
         
-        // 创建区域 - 遵循Blender方式：只传入顶点引用和区域类型
+        // 创建区域 - 顶点顺序：左上、右上、右下、左下
         let mut area = ScrArea::new(
-            bottom_left,
             top_left,
             top_right,
             bottom_right,
+            bottom_left,
             AreaType::Empty,
         );
         
@@ -64,11 +58,118 @@ impl ScrAreaMap {
         self.areas.insert(area)
     }
 
+    /// 创建三个区域的布局：第一行水平两个区域，第二行独占一个区域
+    /// 
+    /// 布局示意图 (Slint坐标系，左上角原点，y向下增长)：
+    /// (0,0) +-------+-------+ (width,0)
+    ///       | Area1 | Area2 |  <- 第一行，各占50%宽度
+    ///       +-------+-------+ (0,mid_y) -> (width,mid_y)
+    ///       |    Area3      |  <- 第二行，独占100%宽度
+    /// (0,height) +-----------+ (width,height)
+    pub fn create_three_area_layout(
+        &mut self,
+        width: u32,
+        height: u32,
+        ui_settings: &UISettings,
+    ) -> Vec<ScrAreaKey> {
+        // 计算分割点
+        let mid_x = width / 2;  // 水平中点
+        let mid_y = height / 2; // 垂直中点
+        
+        // 创建6个顶点（Slint坐标系，左上角原点）
+        // 外围4个顶点
+        let v_top_left = self.create_vertex(0, 0);                      // 左上角
+        let v_top_right = self.create_vertex(width - 1, 0);            // 右上角
+        let v_bottom_right = self.create_vertex(width - 1, height - 1); // 右下角
+        let v_bottom_left = self.create_vertex(0, height - 1);          // 左下角
+        
+        // 内部2个顶点（只需要这两个！）
+        let v_mid_top = self.create_vertex(mid_x, 0);                   // 上边中点
+        let v_left_middle = self.create_vertex(0, mid_y);               // 左边中点
+        let v_right_middle = self.create_vertex(width - 1, mid_y);      // 右边中点
+        let v_mid_middle = self.create_vertex(mid_x, mid_y);            // 中心点
+        
+        // 创建边
+        // 外围边界
+        self.create_edge(v_top_left, v_top_right);        // 上边界
+        self.create_edge(v_top_right, v_bottom_right);    // 右边界
+        self.create_edge(v_bottom_right, v_bottom_left);  // 下边界
+        self.create_edge(v_bottom_left, v_top_left);      // 左边界
+        
+        // 内部分割线
+        self.create_edge(v_mid_top, v_mid_middle);        // 垂直分割线（上半段）
+        self.create_edge(v_left_middle, v_right_middle);  // 水平分割线
+        
+        // 连接分割线到边界
+        self.create_edge(v_top_left, v_mid_top);          // 上边左半段
+        self.create_edge(v_mid_top, v_top_right);         // 上边右半段
+        self.create_edge(v_left_middle, v_mid_middle);    // 左边下半段到中心
+        self.create_edge(v_mid_middle, v_right_middle);   // 中心到右边中点
+        
+        // 窗口矩形（Slint坐标系）
+        let window_rect = Rcti {
+            xmin: 0,
+            xmax: width - 1,
+            ymin: 0,
+            ymax: height - 1,
+        };
+        
+        // 创建三个区域
+        let mut areas = Vec::new();
+        
+        // 区域1：左上角 (Timeline)
+        // 顶点顺序：左上、右上、右下、左下
+        let mut area1 = ScrArea::new(
+            v_top_left,      // 左上
+            v_mid_top,       // 右上（上边中点）
+            v_mid_middle,    // 右下（中心点）
+            v_left_middle,   // 左下（左边中点）
+            AreaType::Timeline,
+        );
+        area1.calculate_totrct_and_size(&self.verts, &window_rect, ui_settings, false, false, false);
+        let area1_key = self.areas.insert(area1);
+        areas.push(area1_key);
+        
+        // 区域2：右上角 (Video)
+        // 顶点顺序：左上、右上、右下、左下
+        let mut area2 = ScrArea::new(
+            v_mid_top,       // 左上（上边中点）
+            v_top_right,     // 右上
+            v_right_middle,  // 右下（右边中点）
+            v_mid_middle,    // 左下（中心点）
+            AreaType::Video,
+        );
+        area2.calculate_totrct_and_size(&self.verts, &window_rect, ui_settings, false, false, false);
+        let area2_key = self.areas.insert(area2);
+        areas.push(area2_key);
+        
+        // 区域3：下方整行 (SubtitleEditor)
+        // 顶点顺序：左上、右上、右下、左下
+        let mut area3 = ScrArea::new(
+            v_left_middle,   // 左上（左边中点）
+            v_right_middle,  // 右上（右边中点）
+            v_bottom_right,  // 右下
+            v_bottom_left,   // 左下
+            AreaType::SubtitleEditor,
+        );
+        area3.calculate_totrct_and_size(&self.verts, &window_rect, ui_settings, false, false, false);
+        let area3_key = self.areas.insert(area3);
+        areas.push(area3_key);
+        
+        // 验证所有区域几何都已正确计算
+        for &area_key in &areas {
+            let area = self.areas.get(area_key).unwrap();
+            debug_assert!(area.is_geometry_calculated(), "区域 {:?} 几何属性计算失败", area_key);
+        }
+        
+        areas
+    }
+
     /// 更新所有区域的winx/winy，当窗口大小或DPI改变时调用
     pub fn update_all_areas_with_scaling(
         &mut self,
         window_rect: &Rcti,
-        ui_settings: &UIScaleSettings,
+        ui_settings: &UISettings,
         is_fullscreen: bool,
         is_temp_window: bool,
     ) {
@@ -232,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_create_vertex_simple() {
-        let mut screen_map = ScrAreaMap::new();
+        let mut screen_map = <ScrAreaMap>::new();
 
         // 测试创建一个独立的顶点
         let vertex_key = screen_map.create_vertex(100, 200);
@@ -366,7 +467,7 @@ mod tests {
     #[test]
     fn test_area_size_calculation() {
         let mut screen_map = ScrAreaMap::new();
-        let ui_settings = UIScaleSettings::default();
+        let ui_settings = UISettings::default();
 
         // 创建一个1920x1080的屏幕
         let area_key = screen_map.create_initial_screen_with_scaling(1920, 1080, &ui_settings);

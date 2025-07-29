@@ -1,9 +1,12 @@
+use crate::screen::geometry::*;
 use bitflags::bitflags;
 use slotmap::{SlotMap, new_key_type};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
+// Slint 类型在 lib.rs 中导入了
+use crate::ActionZoneCorner;
 
 new_key_type! {
     pub struct ScrVertKey;
@@ -12,41 +15,44 @@ new_key_type! {
 }
 
 /// UI缩放相关的设置
-/// 
+///
 /// 设计原则（修正版）：
 /// - window().size() 返回物理像素大小
 /// - 内部所有计算使用物理像素（与Blender一致）
 /// - 边距等UI元素在物理像素基础上缩放
 /// - 最终传递给Slint时除以scale_factor转换为逻辑坐标
 #[derive(Debug, Clone)]
-pub struct UIScaleSettings {
-    pub scale_factor: f32,    // 缩放因子（从Slint获取）
-    pub border_width: i16,    // 基础边框宽度（逻辑像素）
+pub struct UISettings {
+    scale_factor: f32,           // 缩放因子（从Slint获取）
+    border_width: f32,           // 基础边框宽度（物理像素）
+    actionzone_side_length: f32, // 边角区域边长（物理像素）
 }
 
-impl Default for UIScaleSettings {
+impl Default for UISettings {
     fn default() -> Self {
         Self {
             scale_factor: 1.0,
-            border_width: 1,
+            border_width: 1.0,
+            actionzone_side_length: 5.0,
         }
     }
 }
 
-impl UIScaleSettings {
+impl UISettings {
     /// 从Slint窗口获取缩放设置
     pub fn from_slint_window(window_handle: &slint::Window) -> Self {
         Self {
             scale_factor: window_handle.scale_factor(),
-            border_width: 1, // 默认边框宽度
+            border_width: 1.0, // 默认边框宽度
+            actionzone_side_length: 5.0 * window_handle.scale_factor(),
         }
     }
-    
+
     /// 计算UI_SCALE_FAC等价值（用于物理像素边距计算）
     pub fn ui_scale_fac(&self) -> f32 {
         self.scale_factor
     }
-    
+
     /// 计算边距像素值（返回物理像素）
     pub fn calculate_margin(&self, is_edge: bool) -> u32 {
         if is_edge {
@@ -56,6 +62,10 @@ impl UIScaleSettings {
             // 区域间的边距（物理像素）
             (self.border_width as f32 * self.ui_scale_fac()).max(self.ui_scale_fac()) as u32
         }
+    }
+
+    pub fn actionzone_side_length(&self) -> f32 {
+        self.actionzone_side_length
     }
 }
 
@@ -89,6 +99,43 @@ pub struct Vec2u32 {
     pub x: u32,
     pub y: u32,
 }
+#[derive(Debug, Clone)]
+pub struct Vec2f32 {
+    pub x: f32,
+    pub y: f32,
+}
+impl Vec2u32 {
+    /// 安全地将 Vec2f32 转换为 Vec2u32，返回 Result
+    /// 
+    /// # Errors
+    /// 
+    /// 当输入的 x 或 y 坐标为负数时返回错误，因为无法将负数转换为无符号整数
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// # use aweft_gui::types::{Vec2u32, Vec2f32};
+    /// let positive = Vec2f32 { x: 10.5, y: 20.3 };
+    /// let result = Vec2u32::try_from_f32(positive);
+    /// assert!(result.is_ok());
+    /// 
+    /// let negative = Vec2f32 { x: -5.0, y: 10.0 };
+    /// let result = Vec2u32::try_from_f32(negative);
+    /// assert!(result.is_err());
+    /// ```
+    pub fn try_from_f32(value: Vec2f32) -> Result<Self, String> {
+        if value.x < 0.0 || value.y < 0.0 {
+            return Err(format!(
+                "无法将负数坐标转换为无符号整数: x={}, y={}。负数会导致数据丢失", 
+                value.x, value.y
+            ));
+        }
+        Ok(Self {
+            x: value.x as u32,
+            y: value.y as u32,
+        })
+    }
+}
 
 /// 整数定义的矩形区域
 #[derive(Debug, Clone)]
@@ -101,13 +148,14 @@ pub struct Rcti {
 
 impl Rcti {
     /// 从四个顶点坐标计算矩形边界（类似Blender中的实现）
-    pub fn from_vertices(bl: &Vec2u32, tl: &Vec2u32, tr: &Vec2u32, br: &Vec2u32) -> Self {
+    /// 顶点顺序不重要，函数会自动计算边界框
+    pub fn from_vertices(v1: &Vec2u32, v2: &Vec2u32, v3: &Vec2u32, v4: &Vec2u32) -> Self {
         // 根据四个顶点找出最小和最大的x、y坐标
-        let xmin = bl.x.min(tl.x).min(tr.x).min(br.x);
-        let xmax = bl.x.max(tl.x).max(tr.x).max(br.x);
-        let ymin = bl.y.min(tl.y).min(tr.y).min(br.y);
-        let ymax = bl.y.max(tl.y).max(tr.y).max(br.y);
-        
+        let xmin = v1.x.min(v2.x).min(v3.x).min(v4.x);
+        let xmax = v1.x.max(v2.x).max(v3.x).max(v4.x);
+        let ymin = v1.y.min(v2.y).min(v3.y).min(v4.y);
+        let ymax = v1.y.max(v2.y).max(v3.y).max(v4.y);
+
         Self {
             xmin,
             xmax,
@@ -115,12 +163,12 @@ impl Rcti {
             ymax,
         }
     }
-    
+
     /// 获取矩形的宽度
     pub fn width(&self) -> u32 {
         self.xmax - self.xmin + 1
     }
-    
+
     /// 获取矩形的高度
     pub fn height(&self) -> u32 {
         self.ymax - self.ymin + 1
@@ -379,11 +427,11 @@ pub struct ScrArea {
     pub next: Option<ScrAreaKey>,
     pub prev: Option<ScrAreaKey>,
 
-    // 定义区域的四个角顶点
-    pub v_bottom_left: ScrVertKey,
+    // 定义区域的四个角顶点（Slint坐标系，左上角原点）
     pub v_top_left: ScrVertKey,
     pub v_top_right: ScrVertKey,
     pub v_bottom_right: ScrVertKey,
+    pub v_bottom_left: ScrVertKey,
 
     // 重要：这些几何属性设为私有，只能通过计算方法访问
     // Rect bound by v_buttom_left...
@@ -406,32 +454,32 @@ pub struct ScrArea {
     do_refresh: bool,
 
     flag: AreaFlags,
-    
+
     // region_active_win
-    
+
     // 改为可选的ActionZone列表，以支持多个action zone
     pub action_zones: Option<Vec<ActionZone>>,
 }
 
 impl ScrArea {
-    /// 创建新的ScrArea实例 - 遵循Blender的screen_addarea_ex实现
+    /// 创建新的ScrArea实例 - 适配Slint坐标系（左上角原点）
     /// 只接受顶点引用和区域类型，所有几何属性都需要后续计算
     pub fn new(
-        v_bottom_left: ScrVertKey,
         v_top_left: ScrVertKey,
         v_top_right: ScrVertKey,
         v_bottom_right: ScrVertKey,
+        v_bottom_left: ScrVertKey,
         area_type: AreaType,
     ) -> Self {
         let area_data = Self::create_area_data(area_type.clone());
-        
+
         Self {
             next: None,
             prev: None,
-            v_bottom_left,
             v_top_left,
             v_top_right,
             v_bottom_right,
+            v_bottom_left,
             // 初始化为零值，必须通过calculate_totrct_and_size()计算
             tot_rct: Rcti {
                 xmin: 0,
@@ -450,37 +498,36 @@ impl ScrArea {
             action_zones: None,
         }
     }
-    
+
     /// 基于Blender的area_calc_totrct实现，从顶点位置计算所有几何属性
     /// 这是唯一应该修改tot_rct、winx、winy的方法
-    /// 
+    ///
     /// 重要：这个方法体现了"区域几何完全由顶点决定"的设计原则
     pub fn calculate_totrct_and_size(
-        &mut self, 
+        &mut self,
         vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>,
         window_rect: &Rcti,
-        ui_settings: &UIScaleSettings,
+        ui_settings: &UISettings,
         is_fullscreen: bool,
         is_temp_window: bool,
         is_single_area: bool,
     ) {
         // 1. 从顶点计算基础矩形 - 这是几何的"真相来源"
-        let bl = &vertices.get(self.v_bottom_left).unwrap().vec;
         let tl = &vertices.get(self.v_top_left).unwrap().vec;
         let tr = &vertices.get(self.v_top_right).unwrap().vec;
-        let br = &vertices.get(self.v_bottom_right).unwrap().vec;
+        let bl = &vertices.get(self.v_bottom_left).unwrap().vec;
 
-        // 直接从顶点位置设置边界（遵循Blender实现）
-        self.tot_rct.xmin = bl.x;
+        // 直接从顶点位置设置边界（Slint坐标系：左上角原点，y向下增长）
+        self.tot_rct.xmin = tl.x;
         self.tot_rct.xmax = tr.x;
-        self.tot_rct.ymin = bl.y;
-        self.tot_rct.ymax = tl.y;
+        self.tot_rct.ymin = tl.y;
+        self.tot_rct.ymax = bl.y;
 
         // 2. 根据DPI和UI设置计算边距
         let px = ui_settings.calculate_margin(false); // 区域间边距
         let px_edge = ui_settings.calculate_margin(true); // 窗口边缘边距
 
-        // 3. 应用边距调整（模拟Blender的逻辑）
+        // 3. 应用边距调整（适配Slint坐标系）
         // 只有在非全屏、非临时窗口、且有多个区域的情况下才应用边距
         if !is_fullscreen && !is_temp_window && !is_single_area {
             // 左边距
@@ -497,19 +544,19 @@ impl ScrArea {
                 self.tot_rct.xmax -= px_edge;
             }
 
-            // 下边距
+            // 上边距（Slint坐标系中y=0是顶部）
             if self.tot_rct.ymin > window_rect.ymin {
                 self.tot_rct.ymin += px;
             } else {
                 self.tot_rct.ymin += px_edge;
             }
 
-            // 上边距
+            // 下边距（Slint坐标系中y增长是向下）
             if self.tot_rct.ymax < (window_rect.ymax - 1) {
                 self.tot_rct.ymax -= px;
             } else if !is_single_area {
-                // 顶部栏下方的小间隙
-                self.tot_rct.ymax -= ui_settings.border_width as u32; // 使用border_width
+                // 底部边缘的小间隙
+                self.tot_rct.ymax -= ui_settings.border_width as u32;
             } else {
                 self.tot_rct.ymax -= px_edge;
             }
@@ -519,44 +566,43 @@ impl ScrArea {
         self.winx = self.tot_rct.width();
         self.winy = self.tot_rct.height();
     }
-    
+
     /// 只读访问几何属性 - 强调这些属性不能被直接修改
-    /// 
+    ///
     /// 返回值说明（使用物理像素，与Blender一致）：
     /// - tot_rct: 区域的边界矩形（物理像素坐标，边距已通过scale_factor缩放）
     /// - winx: 区域宽度（物理像素大小）
     /// - winy: 区域高度（物理像素大小）
-    /// 
+    ///
     /// 重要：内部计算使用物理像素，传递给Slint时需要除以scale_factor转换为逻辑坐标
     pub fn geometry(&self) -> (&Rcti, u32, u32) {
         (&self.tot_rct, self.winx, self.winy)
     }
-    
+
     /// 检查区域几何是否已正确计算（用于调试）
     pub fn is_geometry_calculated(&self) -> bool {
         self.winx > 0 && self.winy > 0
     }
-    
+
     /// 获取私有字段flag的引用
     pub fn flag(&self) -> AreaFlags {
         self.flag
     }
-    
+
     /// 设置私有字段flag
     pub fn set_flag(&mut self, flag: AreaFlags) {
         self.flag = flag;
     }
-    
+
     /// 获取do_refresh字段
     pub fn do_refresh(&self) -> bool {
         self.do_refresh
     }
-    
+
     /// 设置do_refresh字段
     pub fn set_do_refresh(&mut self, refresh: bool) {
         self.do_refresh = refresh;
     }
-    
 
     pub fn create_area_data(area_type: AreaType) -> AreaData {
         match area_type {
@@ -607,19 +653,104 @@ pub struct ScrAreaMap {
 }
 
 impl ScrAreaMap {
-    /// 分割一个指定区域的核心函数
-    pub fn area_split(
-        &mut self,
-        _area_key: ScrAreaKey,
-        _direction: SplitDirection,
-        _factor: f32, // 分割比例，取值范围 0.0-1.0
-    ) -> Result<ScrAreaKey, ()> {
-        // TODO: 实现区域分割逻辑
-        // 1. 获取目标区域的四个顶点。
-        // 2. 根据分割方向和比例计算新的顶点和边的位置。
-        // 3. 调整原区域的顶点连接关系。
-        // 4. 创建一个新的区域。
-        // 5. 更新所有相关的几何关系和数据结构。
-        unimplemented!()
+    pub fn new() -> Self {
+        ScrAreaMap {
+            verts: SlotMap::with_key(),
+            edges: SlotMap::with_key(),
+            areas: SlotMap::with_key(),
+        }
+    }
+    pub fn find_area_with_actionzone(
+        &self,
+        area_key: ScrAreaKey,
+        corner: ActionZoneCorner,
+        offset_x: f32,
+        offset_y: f32,
+        actionzone_side_length: f32,
+    ) -> Option<ScrAreaKey> {
+        let area = self.areas.get(area_key).unwrap();
+        let actionzone_side_length_u32 = actionzone_side_length as u32;
+
+        let mouse_pos = match corner {
+            ActionZoneCorner::TopLeft => {
+                let mut mouse_pos = Vec2f32 {
+                    x: area.tot_rct.xmin as f32,
+                    y: area.tot_rct.ymin as f32,
+                };
+                mouse_pos.x += offset_x;
+                mouse_pos.y += offset_y;
+                mouse_pos
+            }
+            ActionZoneCorner::TopRight => {
+                let mut mouse_pos = Vec2f32 {
+                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f32,
+                    y: area.tot_rct.ymin as f32,
+                };
+                mouse_pos.x += offset_x;
+                mouse_pos.y += offset_y;
+                mouse_pos
+            }
+            ActionZoneCorner::BottomLeft => {
+                let mut mouse_pos = Vec2f32 {
+                    x: area.tot_rct.xmin as f32,
+                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f32,
+                };
+                mouse_pos.x += offset_x;
+                mouse_pos.y += offset_y;
+                mouse_pos
+            }
+            ActionZoneCorner::BottomRight => {
+                let mut mouse_pos = Vec2f32 {
+                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f32,
+                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f32,
+                };
+                mouse_pos.x += offset_x;
+                mouse_pos.y += offset_y;
+                mouse_pos
+            }
+        };
+        println!("当前计算出的鼠标绝对位置: {:#?}", mouse_pos);
+        self.find_area_at_position(mouse_pos.x as u32, mouse_pos.y as u32)
+    }
+    /// 根据物理像素坐标查找鼠标所在的区域
+    pub fn find_area_at_position(&self, x: u32, y: u32) -> Option<ScrAreaKey> {
+        for (area_key, area) in &self.areas {
+            let (totrct, _, _) = area.geometry();
+
+            // 使用物理像素坐标进行比较
+            if x >= totrct.xmin && x <= totrct.xmax && y >= totrct.ymin && y <= totrct.ymax {
+                return Some(area_key);
+            }
+        }
+        None
+    }
+
+    /// 根据区域类型查找区域（类似Blender的spacetype过滤）
+    pub fn find_area_at_position_with_type(
+        &self,
+        x: f32,
+        y: f32,
+        area_type: Option<AreaType>,
+    ) -> Option<ScrAreaKey> {
+        for (area_key, area) in &self.areas {
+            let (totrct, _, _) = area.geometry();
+
+            if x >= totrct.xmin as f32
+                && x <= totrct.xmax as f32
+                && y >= totrct.ymin as f32
+                && y <= totrct.ymax as f32
+            {
+                // 如果指定了类型，检查类型是否匹配
+                if let Some(target_type) = &area_type {
+                    if &area.area_type == target_type {
+                        return Some(area_key);
+                    }
+                } else {
+                    // 没有指定类型，返回第一个匹配的区域
+                    return Some(area_key);
+                }
+            }
+        }
+        None
     }
 }
