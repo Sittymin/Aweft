@@ -1,249 +1,293 @@
 slint::include_modules!();
 
-mod types;
-mod app_state;
 mod screen;
+mod types;
+
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Context, Result};
-use app_state::{APP_STATE, get_app_state, get_app_state_mut};
 use screen::geometry::*;
-use types::*;
+use slint::{
+    PhysicalSize, RenderingState,
+    winit_030::{WinitWindowAccessor, WinitWindowEventResult, winit},
+};
 use slotmap::{Key, KeyData};
+use types::*;
+
+/// 应用状态和逻辑的唯一管理者
+pub struct AppState {
+    pub screen_map: ScrAreaMap,
+    pub ui_settings: UISettings,
+    pub window_size: PhysicalSize,
+    pub initialized: bool,
+}
+impl AppState {
+    /// 构造函数，从 Slint 窗口初始化
+    pub fn new(window: &slint::Window) -> Self {
+        Self {
+            screen_map: ScrAreaMap::new(),
+            ui_settings: UISettings::from_slint_window(window),
+            window_size: window.size(),
+            initialized: false,
+        }
+    }
+
+    /// 将内部区域数据转换为 Slint 需要的格式
+    /// 这个函数现在是 AppState 的一部分，可以直接访问其字段，无需加锁
+    fn convert_areas_to_slint_data(&self) -> Vec<ScrAreaData> {
+        let mut areas_data = Vec::new();
+        let scale_factor = self.ui_settings.get_scale_factor();
+        let actionzone_side_length = self.ui_settings.get_actionzone_side_length() as f32;
+
+        for (area_key, area) in &self.screen_map.areas {
+            let (geometry_rect, winx, winy) = area.geometry();
+
+            // 物理像素 -> 逻辑像素转换
+            let logical_x = geometry_rect.xmin as f64 / scale_factor;
+            let logical_y = geometry_rect.ymin as f64 / scale_factor;
+            let logical_width = winx as f64 / scale_factor;
+            let logical_height = winy as f64 / scale_factor;
+
+            areas_data.push(ScrAreaData {
+                key: area_key.data().as_ffi() as i32,
+                x: logical_x as f32,
+                y: logical_y as f32,
+                width: logical_width as f32,
+                height: logical_height as f32,
+                actionzone_side_length,
+            });
+        }
+        areas_data
+    }
+}
 
 /// 简化的应用窗口管理器
 pub struct AppWindowManager {
-    ui: MainWindow,
+    instance: MainWindow,
+    state: Rc<RefCell<AppState>>,
 }
 
 impl AppWindowManager {
     /// 创建新的应用窗口管理器
     pub fn new() -> Result<Self> {
-        let ui = MainWindow::new().context("创建 Slint 主窗口失败")?;
-        Ok(Self { ui })
+        use slint::BackendSelector;
+        // 强制选择winit后端
+        BackendSelector::new()
+            .backend_name("winit".into())
+            // 使用 WGPU 渲染
+            .require_wgpu_24(slint::wgpu_24::WGPUConfiguration::default())
+            .select()?;
+        let instance = MainWindow::new().context("创建 Slint 主窗口失败")?;
+        let state = Rc::new(RefCell::new(AppState::new(&instance.window())));
+        Ok(Self { instance, state })
     }
 
     /// 获取 MainWindow 的引用
-    pub fn get_window(&self) -> &MainWindow {
-        &self.ui
+    pub fn get_instance(&self) -> &MainWindow {
+        &self.instance
     }
 
     /// 运行应用
     pub fn run(&mut self) -> Result<()> {
-        // 安排在窗口显示后初始化屏幕布局（异步执行）
-        let window_weak = self.ui.as_weak();
+        self.setup_callbacks();
 
-        if let Err(e) = slint::invoke_from_event_loop(move || {
-            if let Some(app) = window_weak.upgrade() {
-                if let Err(e) = Self::initialize_layout(&app) {
-                    eprintln!("初始化布局失败: {}", e);
+        // 直接启动 UI 事件循环
+        self.instance.run().context("启动 UI 事件循环失败")
+    }
+
+    fn setup_callbacks(&self) {
+        let weak_instance = self.instance.as_weak();
+        let window = self.instance.window();
+
+        let weak = weak_instance.clone();
+        let state_for_init = Rc::clone(&self.state);
+        if let Err(e) = window.set_rendering_notifier(move |rendering_state, graphics_api| {
+            if let Some(instance) = weak.upgrade() {
+                match rendering_state {
+                    RenderingState::RenderingSetup => {
+                        println!(
+                            "窗口初始化完成: {:?}, {:?}",
+                            instance.window().size(),
+                            graphics_api
+                        );
+                        if let Err(e) =
+                            AppWindowManager::initialize_layout(&state_for_init, &instance)
+                        {
+                            panic!("布局初始化失败: {e}")
+                        }
+                    }
+                    _ => (),
                 }
             }
         }) {
-            eprintln!("安排初始化任务失败: {}", e);
-        }
+            eprintln!("注册渲染初始化失败: {:?}", e);
+        };
 
-        // 直接启动 UI 事件循环
-        self.ui.run().context("启动 UI 事件循环失败")
-    }
+        let state_for_drag = Rc::clone(&self.state);
+        self.instance
+            .on_actionzone_drag(move |area_key, corner, offset_x, offset_y| {
+                let state = state_for_drag.borrow();
+                let scale_factor = state.ui_settings.get_scale_factor();
+                let actionzone_side_length = state.ui_settings.get_actionzone_side_length();
 
-    /// 初始化屏幕布局
-    fn initialize_layout(app: &MainWindow) -> Result<()> {
-        let physical_window_size = app.window().size(); // 物理像素大小
-        let scale_factor = app.window().scale_factor();
+                let physical_offset_x = offset_x as f64 * scale_factor;
+                let physical_offset_y = offset_y as f64 * scale_factor;
 
-        println!(
-            "窗口已初始化，物理尺寸: {}x{}, 缩放因子: {:.2}",
-            physical_window_size.width, physical_window_size.height, scale_factor
-        );
+                let source_key = ScrAreaKey::from(KeyData::from_ffi(area_key as u64));
 
-        // 初始化应用状态和提取必要数据
-        let (area_keys, ui_scale_fac, actionzone_side_length) = {
-            let mut state = get_app_state_mut()?;
-            
-            if !state.initialized {
-                state.ui_settings = UISettings::from_slint_window(&app.window());
-
-                // 克隆UI设置以避免借用冲突
-                let ui_settings = state.ui_settings.clone();
-                let area_keys = state.screen_map.create_three_area_layout(
-                    physical_window_size.width,  // 使用物理像素进行内部计算
-                    physical_window_size.height, // 使用物理像素进行内部计算
-                    &ui_settings,
-                );
-
-                state.initialized = true;
-                (
-                    Some(area_keys), 
-                    state.ui_settings.ui_scale_fac(),
-                    state.ui_settings.actionzone_side_length()
-                )
-            } else {
-                (
-                    None, 
-                    state.ui_settings.ui_scale_fac(),
-                    state.ui_settings.actionzone_side_length()
-                )
-            }
-        }; // 作用域结束，自动释放锁
-
-        // 打印区域信息并传递给Slint UI
-        if let Some(area_keys) = area_keys {
-            let slint_area_data = {
-                let state = get_app_state()?;
-                let mut areas_data = Vec::new();
-                
-                for area_key in &area_keys {
-                    if let Some(area) = state.screen_map.areas.get(*area_key) {
-                        let (geometry_rect, winx, winy) = area.geometry();
-                        println!("区域 {:?}: {}x{} (物理像素), 坐标({},{})", area_key, winx, winy, geometry_rect.xmin, geometry_rect.ymin);
-
-                        // 转换为逻辑像素（Slint期望的坐标系统）
-                        let scale_factor = state.ui_settings.ui_scale_fac();
-                        let logical_x = geometry_rect.xmin as f32 / scale_factor;
-                        let logical_y = geometry_rect.ymin as f32 / scale_factor;
-                        let logical_width = winx as f32 / scale_factor;
-                        let logical_height = winy as f32 / scale_factor;
-
-                        areas_data.push(ScrAreaData {
-                            key: area_key.data().as_ffi() as i32,
-                            x: logical_x,
-                            y: logical_y,
-                            width: logical_width,
-                            height: logical_height,
-                            actionzone_side_length: state.ui_settings.actionzone_side_length(),
-                        });
+                if let Some(target_area) = state.screen_map.find_area_with_actionzone(
+                    source_key,
+                    corner,
+                    physical_offset_x,
+                    physical_offset_y,
+                    actionzone_side_length,
+                ) {
+                    if target_area == source_key {
+                        println!("在相同区域内 - 执行分割操作");
+                        // TODO: 调用分割逻辑
                     } else {
-                        println!("区域 {:?} 不存在", area_key);
+                        println!("移动到不同区域 {:?} - 执行合并操作", target_area);
+                        // TODO: 调用合并逻辑
                     }
-                }
-                areas_data
-            };
-
-            // 使用Slint自动生成的setter方法传递数据
-            app.set_scrareas(slint_area_data.as_slice().into());
-            
-            // 设置高性能拖拽回调 - 预先提取所有必要数据，完全避免在回调中访问全局状态
-            app.on_actionzone_drag({
-                move |area_key, corner, offset_x, offset_y| {
-                    // 直接使用预先提取的数据，无需访问全局状态
-                    let physical_offset_x = offset_x * ui_scale_fac;
-                    let physical_offset_y = offset_y * ui_scale_fac;
-                    
-                    if let Err(e) = Self::handle_actionzone_drag_optimized(
-                        area_key as u64, 
-                        corner, 
-                        physical_offset_x, 
-                        physical_offset_y,
-                        actionzone_side_length
-                    ) {
-                        eprintln!("处理actionzone拖拽失败: {}", e);
-                    }
+                } else {
+                    println!("移动到区域外 - 可能执行窗口操作");
                 }
             });
 
-            println!("传递给Slint UI（逻辑像素）: {:#?}", slint_area_data);
-        }
+        // Winit 事件处理
+        let weak_window = self.instance.as_weak();
+        let state_for_event = Rc::clone(&self.state);
+        self.instance
+            .window()
+            .on_winit_window_event(move |_slint_window, event| {
+                match event {
+                    winit::event::WindowEvent::Resized(new_size) => {
+                        println!("窗口大小发生改变: {}x{}", new_size.width, new_size.height);
+                        let mut state = state_for_event.borrow_mut();
+
+                        // 调用新的、清晰的逻辑
+                        if let Err(e) = Self::handle_window_resize(&mut state, *new_size) {
+                            eprintln!("处理窗口大小变化失败: {}", e);
+                        }
+
+                        // 更新 UI
+                        let slint_data = state.convert_areas_to_slint_data();
+                        if let Some(window) = weak_window.upgrade() {
+                            window.set_scrareas(slint_data.as_slice().into());
+                        }
+                    }
+                    winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                        println!("检测到屏幕缩放因子变化: {:.2}", scale_factor);
+                        let mut state = state_for_event.borrow_mut();
+
+                        if let Err(e) = Self::handle_scale_change(&mut state, *scale_factor) {
+                            eprintln!("处理缩放因子变化失败: {}", e);
+                        }
+
+                        // 更新 UI
+                        let slint_data = state.convert_areas_to_slint_data();
+                        if let Some(window) = weak_window.upgrade() {
+                            window.set_scrareas(slint_data.as_slice().into());
+                        }
+                    }
+                    _ => {}
+                }
+                WinitWindowEventResult::Propagate
+            });
+    }
+    fn update_slint_areas_data(state: &AppState, instance: &MainWindow) -> Result<()> {
+        let slint_area_data = state.convert_areas_to_slint_data();
+
+        println!("正在更新 Slint UI 数据: {:#?}", slint_area_data);
+        instance.set_scrareas(slint_area_data.as_slice().into());
 
         Ok(())
     }
 
-    /// 优化的 ActionZone 拖拽处理（完全避免全局状态访问）
-    fn handle_actionzone_drag_optimized(
-        area_key: u64, 
-        corner: ActionZoneCorner, 
-        physical_offset_x: f32, 
-        physical_offset_y: f32,
-        actionzone_side_length: f32
-    ) -> Result<()> {
-        // 快速获取状态，查找区域后立即释放锁
-        let current_area = {
-            let state = get_app_state()?;
-            state.screen_map.find_area_with_actionzone(
-                ScrAreaKey::from(KeyData::from_ffi(area_key)), 
-                corner, 
-                physical_offset_x, 
-                physical_offset_y,
-                actionzone_side_length
-            )
-        }; // 锁在这里被释放
-        
-        println!(
-            "回调数据: area_key: {area_key}, corner: {:?}, x（物理像素）: {}, y（物理像素）: {}, 当前区域: {:?}",
-            corner,
-            physical_offset_x,
-            physical_offset_y,
-            current_area
-        );
-        
-        // 根据当前区域决定操作类型（无需再次获取锁）
-        let source_area_key = ScrAreaKey::from(KeyData::from_ffi(area_key));
-        match current_area {
-            Some(current) if current == source_area_key => {
-                println!("在相同区域内 - 执行分割操作");
-            },
-            Some(other) => {
-                println!("移动到不同区域 {:?} - 执行合并操作", other);
-            },
-            None => {
-                println!("移动到区域外 - 可能执行窗口操作");
+    fn initialize_layout(state_rc: &Rc<RefCell<AppState>>, instance: &MainWindow) -> Result<()> {
+        let mut state = state_rc.borrow_mut();
+        let (width, height, ui_settings) = {
+            if state.initialized {
+                return Ok(());
             }
-        }
 
-        Ok(())
-    }
-
-    /// 处理窗口大小或DPI变化
-    pub fn handle_window_change(&mut self) -> Result<()> {
-        let mut state = get_app_state_mut()?;
-
-        let physical_window_size = self.ui.window().size(); // 物理像素大小
-        let scale_factor = self.ui.window().scale_factor();
-
-        // 更新UI设置
-        state.ui_settings = UISettings::from_slint_window(&self.ui.window());
-
-        // 计算新的窗口矩形（使用物理像素）
-        let window_rect = Rcti {
-            xmin: 0,
-            xmax: physical_window_size.width - 1,
-            ymin: 0,
-            ymax: physical_window_size.height - 1,
+            println!(
+                "窗口已初始化，物理尺寸: {}x{}, 缩放因子: {:.2}",
+                state.window_size.width,
+                state.window_size.height,
+                state.ui_settings.get_scale_factor()
+            );
+            (
+                state.window_size.width,
+                state.window_size.height,
+                state.ui_settings.clone(),
+            )
         };
 
-        // 克隆UI设置以避免借用冲突
-        let ui_settings = state.ui_settings.clone();
+        state
+            .screen_map
+            .create_three_area_layout(&width, &height, &ui_settings);
+        state.initialized = true;
 
-        // 更新所有区域的大小和位置
-        state.screen_map.update_all_areas_with_scaling(
-            &window_rect,
-            &ui_settings,
-            false, // 是否全屏
-            false, // 是否临时窗口
-        );
-
-        println!("窗口变化后的区域信息:");
-        println!(
-            "  物理窗口大小: {}x{}",
-            physical_window_size.width, physical_window_size.height
-        );
-        println!(
-            "  逻辑窗口大小: {}x{}",
-            (physical_window_size.width as f32 / scale_factor) as u32,
-            (physical_window_size.height as f32 / scale_factor) as u32
-        );
-        println!("  缩放因子: {:.2}", scale_factor);
-
-        for (area_key, area) in &state.screen_map.areas {
-            let (_, winx, winy) = area.geometry();
-            println!("  区域 {:?}: {}x{} (物理像素)", area_key, winx, winy);
-        }
-
+        Self::update_slint_areas_data(&state, instance)?;
         Ok(())
     }
 
-    /// 检查是否已初始化
-    pub fn is_initialized() -> bool {
-        APP_STATE.read().map_or(false, |state| state.initialized)
+    fn handle_window_resize(
+        state: &mut AppState,
+        new_size: winit::dpi::PhysicalSize<u32>,
+    ) -> Result<()> {
+        let old_size = state.window_size;
+
+        let old_window_rect = Rcti {
+            xmin: 0,
+            xmax: old_size.width.saturating_sub(1),
+            ymin: 0,
+            ymax: old_size.height.saturating_sub(1),
+        };
+
+        let new_window_rect = Rcti {
+            xmin: 0,
+            xmax: new_size.width.saturating_sub(1),
+            ymin: 0,
+            ymax: new_size.height.saturating_sub(1),
+        };
+
+        // 关键：缩放所有顶点
+        state.screen_map.scale_vertices_to_window(
+            &old_window_rect,
+            &new_window_rect,
+            &state.ui_settings,
+        );
+
+        // 更新状态中的窗口大小
+        state.window_size = PhysicalSize {
+            width: new_size.width,
+            height: new_size.height,
+        };
+        // TODO: 由于是直接缩放，如果持续有误差可能会导致窗口最边角错位
+        // 之后实现一下窗口边缘resize之后吸附靠近的顶点到最边缘
+        Ok(())
+    }
+    // WARN: TODO: 这个存在问题，没有正确处理缩放(至少边角是错误了)
+    fn handle_scale_change(state: &mut AppState, new_scale_factor: f64) -> Result<()> {
+        state.ui_settings.update_scale_factor(new_scale_factor);
+
+        let window_rect = Rcti {
+            xmin: 0,
+            xmax: state.window_size.width.saturating_sub(1),
+            ymin: 0,
+            ymax: state.window_size.height.saturating_sub(1),
+        };
+
+        // 更新所有区域的几何属性，以应用新的边距等
+        state.screen_map.update_all_areas_rcti(
+            &window_rect,
+            &state.ui_settings, // 直接传递引用
+            false,
+            false,
+        );
+        Ok(())
     }
 }
 

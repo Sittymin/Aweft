@@ -1,5 +1,6 @@
 use crate::screen::geometry::*;
 use bitflags::bitflags;
+use slint::PhysicalSize;
 use slotmap::{SlotMap, new_key_type};
 use std::{
     collections::{HashMap, HashSet},
@@ -23,49 +24,55 @@ new_key_type! {
 /// - 最终传递给Slint时除以scale_factor转换为逻辑坐标
 #[derive(Debug, Clone)]
 pub struct UISettings {
-    scale_factor: f32,           // 缩放因子（从Slint获取）
-    border_width: f32,           // 基础边框宽度（物理像素）
-    actionzone_side_length: f32, // 边角区域边长（物理像素）
+    scale_factor: f64,                // 缩放因子（从Slint获取）
+    base_border_width: f64,           // 基础边框宽度（物理像素）
+    base_actionzone_side_length: f64, // 边角区域边长（物理像素）
 }
 
 impl Default for UISettings {
     fn default() -> Self {
         Self {
             scale_factor: 1.0,
-            border_width: 1.0,
-            actionzone_side_length: 5.0,
+            base_border_width: 1.0,
+            base_actionzone_side_length: 5.0,
         }
     }
 }
 
 impl UISettings {
     /// 从Slint窗口获取缩放设置
-    pub fn from_slint_window(window_handle: &slint::Window) -> Self {
+    pub fn from_slint_window(window: &slint::Window) -> Self {
         Self {
-            scale_factor: window_handle.scale_factor(),
-            border_width: 1.0, // 默认边框宽度
-            actionzone_side_length: 5.0 * window_handle.scale_factor(),
+            scale_factor: window.scale_factor() as f64,
+            base_border_width: 1.0, // 默认边框宽度
+            base_actionzone_side_length: 5.0,
         }
     }
 
-    /// 计算UI_SCALE_FAC等价值（用于物理像素边距计算）
-    pub fn ui_scale_fac(&self) -> f32 {
-        self.scale_factor
+    pub fn update_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor;
     }
 
     /// 计算边距像素值（返回物理像素）
     pub fn calculate_margin(&self, is_edge: bool) -> u32 {
         if is_edge {
             // 窗口边缘的边距（物理像素）
-            (self.ui_scale_fac() * 2.0).min(self.border_width as f32 * self.ui_scale_fac()) as u32
+            (self.get_scale_factor() * 2.0).min(self.get_border_width()) as u32
         } else {
             // 区域间的边距（物理像素）
-            (self.border_width as f32 * self.ui_scale_fac()).max(self.ui_scale_fac()) as u32
+            (self.get_border_width() * self.get_scale_factor()).max(self.get_scale_factor()) as u32
         }
     }
 
-    pub fn actionzone_side_length(&self) -> f32 {
-        self.actionzone_side_length
+    pub fn get_scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+
+    pub fn get_border_width(&self) -> f64 {
+        self.base_border_width * self.scale_factor
+    }
+    pub fn get_actionzone_side_length(&self) -> f64 {
+        self.base_actionzone_side_length * self.scale_factor
     }
 }
 
@@ -100,33 +107,33 @@ pub struct Vec2u32 {
     pub y: u32,
 }
 #[derive(Debug, Clone)]
-pub struct Vec2f32 {
-    pub x: f32,
-    pub y: f32,
+pub struct Vec2f64 {
+    pub x: f64,
+    pub y: f64,
 }
 impl Vec2u32 {
     /// 安全地将 Vec2f32 转换为 Vec2u32，返回 Result
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// 当输入的 x 或 y 坐标为负数时返回错误，因为无法将负数转换为无符号整数
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// # use aweft_gui::types::{Vec2u32, Vec2f32};
     /// let positive = Vec2f32 { x: 10.5, y: 20.3 };
     /// let result = Vec2u32::try_from_f32(positive);
     /// assert!(result.is_ok());
-    /// 
+    ///
     /// let negative = Vec2f32 { x: -5.0, y: 10.0 };
     /// let result = Vec2u32::try_from_f32(negative);
     /// assert!(result.is_err());
     /// ```
-    pub fn try_from_f32(value: Vec2f32) -> Result<Self, String> {
+    pub fn try_from_f32(value: Vec2f64) -> Result<Self, String> {
         if value.x < 0.0 || value.y < 0.0 {
             return Err(format!(
-                "无法将负数坐标转换为无符号整数: x={}, y={}。负数会导致数据丢失", 
+                "无法将负数坐标转换为无符号整数: x={}, y={}。负数会导致数据丢失",
                 value.x, value.y
             ));
         }
@@ -556,7 +563,7 @@ impl ScrArea {
                 self.tot_rct.ymax -= px;
             } else if !is_single_area {
                 // 底部边缘的小间隙
-                self.tot_rct.ymax -= ui_settings.border_width as u32;
+                self.tot_rct.ymax -= ui_settings.get_border_width() as u32;
             } else {
                 self.tot_rct.ymax -= px_edge;
             }
@@ -664,45 +671,45 @@ impl ScrAreaMap {
         &self,
         area_key: ScrAreaKey,
         corner: ActionZoneCorner,
-        offset_x: f32,
-        offset_y: f32,
-        actionzone_side_length: f32,
+        offset_x: f64,
+        offset_y: f64,
+        actionzone_side_length: f64,
     ) -> Option<ScrAreaKey> {
         let area = self.areas.get(area_key).unwrap();
         let actionzone_side_length_u32 = actionzone_side_length as u32;
 
         let mouse_pos = match corner {
             ActionZoneCorner::TopLeft => {
-                let mut mouse_pos = Vec2f32 {
-                    x: area.tot_rct.xmin as f32,
-                    y: area.tot_rct.ymin as f32,
+                let mut mouse_pos = Vec2f64 {
+                    x: area.tot_rct.xmin as f64,
+                    y: area.tot_rct.ymin as f64,
                 };
                 mouse_pos.x += offset_x;
                 mouse_pos.y += offset_y;
                 mouse_pos
             }
             ActionZoneCorner::TopRight => {
-                let mut mouse_pos = Vec2f32 {
-                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f32,
-                    y: area.tot_rct.ymin as f32,
+                let mut mouse_pos = Vec2f64 {
+                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f64,
+                    y: area.tot_rct.ymin as f64,
                 };
                 mouse_pos.x += offset_x;
                 mouse_pos.y += offset_y;
                 mouse_pos
             }
             ActionZoneCorner::BottomLeft => {
-                let mut mouse_pos = Vec2f32 {
-                    x: area.tot_rct.xmin as f32,
-                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f32,
+                let mut mouse_pos = Vec2f64 {
+                    x: area.tot_rct.xmin as f64,
+                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f64,
                 };
                 mouse_pos.x += offset_x;
                 mouse_pos.y += offset_y;
                 mouse_pos
             }
             ActionZoneCorner::BottomRight => {
-                let mut mouse_pos = Vec2f32 {
-                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f32,
-                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f32,
+                let mut mouse_pos = Vec2f64 {
+                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f64,
+                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f64,
                 };
                 mouse_pos.x += offset_x;
                 mouse_pos.y += offset_y;
@@ -752,5 +759,35 @@ impl ScrAreaMap {
             }
         }
         None
+    }
+    pub fn scale_vertices_to_window(
+        &mut self,
+        old_rect: &Rcti,
+        new_rect: &Rcti,
+        ui_setting: &UISettings,
+    ) {
+        // 1. 计算缩放比例
+        let scale_x =
+            (new_rect.xmax - new_rect.xmin) as f64 / (old_rect.xmax - old_rect.xmin) as f64;
+        let scale_y =
+            (new_rect.ymax - new_rect.ymin) as f64 / (old_rect.ymax - old_rect.ymin) as f64;
+
+        // 2. 缩放所有顶点
+        for (_, vertex) in &mut self.verts {
+            // 计算相对位置
+            let rel_x = (vertex.vec.x - old_rect.xmin) as f64;
+            let rel_y = (vertex.vec.y - old_rect.ymin) as f64;
+
+            // 应用缩放
+            vertex.vec.x = new_rect.xmin + (rel_x * scale_x).round() as u32;
+            vertex.vec.y = new_rect.ymin + (rel_y * scale_y).round() as u32;
+
+            // 边界限制
+            vertex.vec.x = vertex.vec.x.clamp(new_rect.xmin, new_rect.xmax);
+            vertex.vec.y = vertex.vec.y.clamp(new_rect.ymin, new_rect.ymax);
+        }
+
+        // 3. 重新计算所有区域的几何
+        self.update_all_areas_rcti(new_rect, ui_setting, false, false);
     }
 }
