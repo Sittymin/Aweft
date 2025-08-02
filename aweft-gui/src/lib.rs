@@ -99,10 +99,10 @@ impl AppWindowManager {
         let weak_instance = self.instance.as_weak();
         let window = self.instance.window();
 
-        let weak = weak_instance.clone();
+        let weak_instance_for_init = weak_instance.clone();
         let state_for_init = Rc::clone(&self.state);
         if let Err(e) = window.set_rendering_notifier(move |rendering_state, graphics_api| {
-            if let Some(instance) = weak.upgrade() {
+            if let Some(instance) = weak_instance_for_init.upgrade() {
                 match rendering_state {
                     RenderingState::RenderingSetup => {
                         println!(
@@ -123,6 +123,7 @@ impl AppWindowManager {
             eprintln!("注册渲染初始化失败: {:?}", e);
         };
 
+        let weak_instance_for_drag = weak_instance.clone();
         let state_for_drag = Rc::clone(&self.state);
         self.instance
             .on_actionzone_drag(move |area_key, corner, offset_x, offset_y| {
@@ -134,28 +135,48 @@ impl AppWindowManager {
                 let physical_offset_y = offset_y as f64 * scale_factor;
 
                 let source_key = ScrAreaKey::from(KeyData::from_ffi(area_key as u64));
-
-                if let Some(target_area) = state.screen_map.find_area_with_actionzone(
-                    source_key,
-                    corner,
-                    physical_offset_x,
-                    physical_offset_y,
-                    actionzone_side_length,
-                ) {
-                    if target_area == source_key {
-                        println!("在相同区域内 - 执行分割操作");
-                        // TODO: 调用分割逻辑
+                if let Some(instance) = weak_instance_for_drag.upgrade() {
+                    if let Some(target_area_key) = state.screen_map.find_area_with_actionzone(
+                        source_key,
+                        corner,
+                        physical_offset_x,
+                        physical_offset_y,
+                        actionzone_side_length,
+                    ) {
+                        if target_area_key == source_key {
+                            println!("在相同区域内 - 执行分割操作");
+                            let (relative_offset_x, relative_offset_y) = state
+                                .screen_map
+                                .convert_corner_offset_to_relative_offset_and_split_ratio(
+                                    target_area_key,
+                                    corner,
+                                    physical_offset_x,
+                                    physical_offset_y,
+                                    actionzone_side_length,
+                                );
+                            let split_preview_overlay_data =
+                                state.screen_map.calculate_split_areas(
+                                    target_area_key,
+                                    physical_offset_x,
+                                    physical_offset_y,
+                                    relative_offset_x,
+                                    relative_offset_y,
+                                );
+                            instance.set_show_split_preview_overlay(true);
+                            println!("对于区域左上角偏移({relative_offset_x},{relative_offset_y})");
+                            println!("生成的分割数据: {:#?}", split_preview_overlay_data);
+                            instance.set_split_preview_overlay_data(split_preview_overlay_data);
+                        } else {
+                            println!("移动到不同区域 {:?} - 执行合并操作", target_area_key);
+                            // TODO: 调用合并逻辑
+                        }
                     } else {
-                        println!("移动到不同区域 {:?} - 执行合并操作", target_area);
-                        // TODO: 调用合并逻辑
+                        println!("移动到区域外 - 可能执行窗口操作");
                     }
-                } else {
-                    println!("移动到区域外 - 可能执行窗口操作");
                 }
             });
 
         // Winit 事件处理
-        let weak_window = self.instance.as_weak();
         let state_for_event = Rc::clone(&self.state);
         self.instance
             .window()
@@ -172,8 +193,8 @@ impl AppWindowManager {
 
                         // 更新 UI
                         let slint_data = state.convert_areas_to_slint_data();
-                        if let Some(window) = weak_window.upgrade() {
-                            window.set_scrareas(slint_data.as_slice().into());
+                        if let Some(instance) = weak_instance.upgrade() {
+                            instance.set_scrareas(slint_data.as_slice().into());
                         }
                     }
                     winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -186,8 +207,9 @@ impl AppWindowManager {
 
                         // 更新 UI
                         let slint_data = state.convert_areas_to_slint_data();
-                        if let Some(window) = weak_window.upgrade() {
-                            window.set_scrareas(slint_data.as_slice().into());
+                        println!("更新后的传入数据: {:#?}", slint_data);
+                        if let Some(instance) = weak_instance.upgrade() {
+                            instance.set_scrareas(slint_data.as_slice().into());
                         }
                     }
                     _ => {}

@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
 };
 // Slint 类型在 lib.rs 中导入了
-use crate::ActionZoneCorner;
+use crate::{ActionZoneCorner, SplitPreviewOverlayData};
 
 new_key_type! {
     pub struct ScrVertKey;
@@ -45,7 +45,7 @@ impl UISettings {
         Self {
             scale_factor: window.scale_factor() as f64,
             base_border_width: 1.0, // 默认边框宽度
-            base_actionzone_side_length: 5.0,
+            base_actionzone_side_length: 10.0,
         }
     }
 
@@ -68,11 +68,19 @@ impl UISettings {
         self.scale_factor
     }
 
+    // NOTE: 边缘大小 Slint 会自动缩放
+    // pub fn get_border_width_logical(&self) -> f64 {
+    //     self.base_border_width / self.scale_factor
+    // }
     pub fn get_border_width(&self) -> f64 {
-        self.base_border_width * self.scale_factor
+        self.base_border_width
     }
+    // NOTE: 边缘大小 Slint 会自动缩放
+    // pub fn get_actionzone_side_length_logical(&self) -> f64 {
+    //     self.base_actionzone_side_length / self.scale_factor
+    // }
     pub fn get_actionzone_side_length(&self) -> f64 {
-        self.base_actionzone_side_length * self.scale_factor
+        self.base_actionzone_side_length
     }
 }
 
@@ -534,7 +542,7 @@ impl ScrArea {
         let px = ui_settings.calculate_margin(false); // 区域间边距
         let px_edge = ui_settings.calculate_margin(true); // 窗口边缘边距
 
-        // 3. 应用边距调整（适配Slint坐标系）
+        // 3. 应用边距调整
         // 只有在非全屏、非临时窗口、且有多个区域的情况下才应用边距
         if !is_fullscreen && !is_temp_window && !is_single_area {
             // 左边距
@@ -545,7 +553,7 @@ impl ScrArea {
             }
 
             // 右边距
-            if self.tot_rct.xmax < (window_rect.xmax - 1) {
+            if self.tot_rct.xmax < (window_rect.xmax) {
                 self.tot_rct.xmax -= px;
             } else {
                 self.tot_rct.xmax -= px_edge;
@@ -559,7 +567,7 @@ impl ScrArea {
             }
 
             // 下边距（Slint坐标系中y增长是向下）
-            if self.tot_rct.ymax < (window_rect.ymax - 1) {
+            if self.tot_rct.ymax < (window_rect.ymax) {
                 self.tot_rct.ymax -= px;
             } else if !is_single_area {
                 // 底部边缘的小间隙
@@ -574,14 +582,7 @@ impl ScrArea {
         self.winy = self.tot_rct.height();
     }
 
-    /// 只读访问几何属性 - 强调这些属性不能被直接修改
-    ///
-    /// 返回值说明（使用物理像素，与Blender一致）：
-    /// - tot_rct: 区域的边界矩形（物理像素坐标，边距已通过scale_factor缩放）
-    /// - winx: 区域宽度（物理像素大小）
-    /// - winy: 区域高度（物理像素大小）
-    ///
-    /// 重要：内部计算使用物理像素，传递给Slint时需要除以scale_factor转换为逻辑坐标
+    /// 只读访问几何属性
     pub fn geometry(&self) -> (&Rcti, u32, u32) {
         (&self.tot_rct, self.winx, self.winy)
     }
@@ -667,6 +668,39 @@ impl ScrAreaMap {
             areas: SlotMap::with_key(),
         }
     }
+    /// 计算指定角落的绝对坐标位置
+    fn calculate_corner_position(
+        area: &ScrArea,
+        corner: ActionZoneCorner,
+        offset_x: f64,
+        offset_y: f64,
+        actionzone_side_length: f64,
+    ) -> Vec2f64 {
+        let base_pos = match corner {
+            ActionZoneCorner::TopLeft => Vec2f64 {
+                x: area.tot_rct.xmin as f64,
+                y: area.tot_rct.ymin as f64,
+            },
+            ActionZoneCorner::TopRight => Vec2f64 {
+                x: (area.tot_rct.xmax as f64 - actionzone_side_length),
+                y: area.tot_rct.ymin as f64,
+            },
+            ActionZoneCorner::BottomLeft => Vec2f64 {
+                x: area.tot_rct.xmin as f64,
+                y: (area.tot_rct.ymax as f64 - actionzone_side_length),
+            },
+            ActionZoneCorner::BottomRight => Vec2f64 {
+                x: (area.tot_rct.xmax as f64 - actionzone_side_length),
+                y: (area.tot_rct.ymax as f64 - actionzone_side_length),
+            },
+        };
+
+        Vec2f64 {
+            x: base_pos.x + offset_x,
+            y: base_pos.y + offset_y,
+        }
+    }
+
     pub fn find_area_with_actionzone(
         &self,
         area_key: ScrAreaKey,
@@ -676,48 +710,149 @@ impl ScrAreaMap {
         actionzone_side_length: f64,
     ) -> Option<ScrAreaKey> {
         let area = self.areas.get(area_key).unwrap();
-        let actionzone_side_length_u32 = actionzone_side_length as u32;
-
-        let mouse_pos = match corner {
-            ActionZoneCorner::TopLeft => {
-                let mut mouse_pos = Vec2f64 {
-                    x: area.tot_rct.xmin as f64,
-                    y: area.tot_rct.ymin as f64,
-                };
-                mouse_pos.x += offset_x;
-                mouse_pos.y += offset_y;
-                mouse_pos
-            }
-            ActionZoneCorner::TopRight => {
-                let mut mouse_pos = Vec2f64 {
-                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f64,
-                    y: area.tot_rct.ymin as f64,
-                };
-                mouse_pos.x += offset_x;
-                mouse_pos.y += offset_y;
-                mouse_pos
-            }
-            ActionZoneCorner::BottomLeft => {
-                let mut mouse_pos = Vec2f64 {
-                    x: area.tot_rct.xmin as f64,
-                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f64,
-                };
-                mouse_pos.x += offset_x;
-                mouse_pos.y += offset_y;
-                mouse_pos
-            }
-            ActionZoneCorner::BottomRight => {
-                let mut mouse_pos = Vec2f64 {
-                    x: (area.tot_rct.xmax - actionzone_side_length_u32) as f64,
-                    y: (area.tot_rct.ymax - actionzone_side_length_u32) as f64,
-                };
-                mouse_pos.x += offset_x;
-                mouse_pos.y += offset_y;
-                mouse_pos
-            }
-        };
+        let mouse_pos = Self::calculate_corner_position(
+            area,
+            corner,
+            offset_x,
+            offset_y,
+            actionzone_side_length,
+        );
         println!("当前计算出的鼠标绝对位置: {:#?}", mouse_pos);
+
         self.find_area_at_position(mouse_pos.x as u32, mouse_pos.y as u32)
+    }
+
+    /// 将偏移量转换为相对于区域左上角的偏移量
+    pub fn convert_corner_offset_to_relative_offset_and_split_ratio(
+        &self,
+        area_key: ScrAreaKey,
+        corner: ActionZoneCorner,
+        offset_x: f64,
+        offset_y: f64,
+        actionzone_side_length: f64,
+    ) -> (f64, f64) {
+        let area = self.areas.get(area_key).unwrap();
+        let absolute_pos = Self::calculate_corner_position(
+            area,
+            corner,
+            offset_x,
+            offset_y,
+            actionzone_side_length,
+        );
+
+        (
+            absolute_pos.x - area.tot_rct.xmin as f64,
+            absolute_pos.y - area.tot_rct.ymin as f64,
+        )
+    }
+    pub fn calculate_split_areas(
+        &self,
+        area_key: ScrAreaKey,
+        original_offset_x: f64,
+        original_offset_y: f64,
+        relative_offset_x: f64,
+        relative_offset_y: f64,
+    ) -> SplitPreviewOverlayData {
+        let area = self.areas.get(area_key).unwrap();
+        let (tot_rct, winx, winy) = area.geometry();
+
+        // 定义最小区域尺寸（像素）
+        const MIN_AREA_SIZE: u32 = 50;
+
+        // 根据原始偏移量的绝对值大小决定分割方向
+        let is_horizontal_split = original_offset_x.abs() > original_offset_y.abs();
+
+        if is_horizontal_split {
+            // 水平分割（垂直分割线）
+            let split_x = tot_rct.xmin + relative_offset_x as u32;
+
+            // WARN: TODO: 这里返回如果实现边拆分后需要合并距离近的顶点
+            // 检查是否可以进行水平分割
+            if winx < MIN_AREA_SIZE * 2
+                || split_x < tot_rct.xmin + MIN_AREA_SIZE
+                || split_x > tot_rct.xmax - MIN_AREA_SIZE
+            {
+                // 无法分割，返回完整的原始区域数据
+                return SplitPreviewOverlayData {
+                    x1: tot_rct.xmin as f32,
+                    y1: tot_rct.ymin as f32,
+                    width1: winx as f32,
+                    height1: winy as f32,
+                    x2: 0.0,
+                    y2: 0.0,
+                    width2: 0.0,
+                    height2: 0.0,
+                };
+            }
+
+            // 第一个区域（左侧）
+            let x1 = tot_rct.xmin;
+            let y1 = tot_rct.ymin;
+            let width1 = split_x - tot_rct.xmin;
+            let height1 = winy;
+
+            // 第二个区域（右侧）
+            let x2 = split_x;
+            let y2 = tot_rct.ymin;
+            // ymax - ymin 会少一个像素，所以加上(后续类似的相减一样)
+            let width2 = tot_rct.xmax - split_x + 1;
+            let height2 = winy;
+
+            SplitPreviewOverlayData {
+                x1: x1 as f32,
+                y1: y1 as f32,
+                width1: width1 as f32,
+                height1: height1 as f32,
+                x2: x2 as f32,
+                y2: y2 as f32,
+                width2: width2 as f32,
+                height2: height2 as f32,
+            }
+        } else {
+            // 垂直分割（水平分割线）
+            let split_y = tot_rct.ymin + relative_offset_y as u32;
+
+            // 检查是否可以进行垂直分割
+            if winy < MIN_AREA_SIZE * 2
+                || split_y < tot_rct.ymin + MIN_AREA_SIZE
+                || split_y > tot_rct.ymax - MIN_AREA_SIZE
+            {
+                // 无法分割，返回完整的原始区域数据
+                return SplitPreviewOverlayData {
+                    x1: tot_rct.xmin as f32,
+                    y1: tot_rct.ymin as f32,
+                    width1: winx as f32,
+                    height1: winy as f32,
+                    x2: 0.0,
+                    y2: 0.0,
+                    width2: 0.0,
+                    height2: 0.0,
+                };
+            }
+
+            // 第一个区域（上方）
+            let x1 = tot_rct.xmin;
+            let y1 = tot_rct.ymin;
+            let width1 = winx;
+            let height1 = split_y - tot_rct.ymin;
+
+            // 第二个区域（下方）
+            let x2 = tot_rct.xmin;
+            let y2 = split_y;
+            let width2 = winx;
+            let height2 = tot_rct.ymax - split_y + 1;
+
+            SplitPreviewOverlayData {
+                x1: x1 as f32,
+                y1: y1 as f32,
+                width1: width1 as f32,
+                height1: height1 as f32,
+                x2: x2 as f32,
+                y2: y2 as f32,
+                width2: width2 as f32,
+                height2: height2 as f32,
+            }
+        }
     }
     /// 根据物理像素坐标查找鼠标所在的区域
     pub fn find_area_at_position(&self, x: u32, y: u32) -> Option<ScrAreaKey> {

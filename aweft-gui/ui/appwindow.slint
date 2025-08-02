@@ -1,3 +1,4 @@
+import { SplitPreviewOverlay, SplitPreviewOverlayData, JoinHighlightOverlayData, AreaCloseOverlayData, JoinHighlightOverlay, AreaCloseOverlays } from "overlay.slint";
 struct ScrAreaData {
     // 用于索引 ScrArea
     key: int,
@@ -100,6 +101,14 @@ component SlintScrArea inherits Rectangle {
 
 export component MainWindow inherits Window {
     in property <[ScrAreaData]> scrareas: [];
+    in property <length> border-width: 2px;
+    in property <bool> show-split-preview-overlay: true;
+    in property <SplitPreviewOverlayData> split-preview-overlay-data;
+    in property <bool> show-join-highlight-overlay: false;
+    in property <JoinHighlightOverlayData> join-highlight-overlay-data;
+    in property <bool> show-area-close-overlays: false;
+    in property <[AreaCloseOverlayData]> area-close-overlay-datas;
+
     callback actionzone-drag(area-key: int, corner: ActionZoneCorner, x: length, y: length);
     for scrarea[index] in scrareas: SlintScrArea {
         area-key: scrarea.key;
@@ -111,5 +120,16 @@ export component MainWindow inherits Window {
         actionzone-drag(area-key, corner, x, y) => {
             root.actionzone-drag(area-key, corner, x, y);
         }
+    }
+
+    if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {
+        data: split-preview-overlay-data;
+        border-width: border-width;
+    }
+    if show-join-highlight-overlay: join-highlight-overlay := JoinHighlightOverlay {
+        data: join-highlight-overlay-data;
+    }
+    if show-area-close-overlays: area-close-overlays := AreaCloseOverlays {
+        datas: area-close-overlay-datas;
     }
 }
