@@ -125,8 +125,8 @@ impl AppWindowManager {
 
         let weak_instance_for_drag = weak_instance.clone();
         let state_for_drag = Rc::clone(&self.state);
-        self.instance
-            .on_actionzone_drag(move |area_key, corner, offset_x, offset_y| {
+        self.instance.global::<ActionManager>().on_actionzone_drag(
+            move |area_key, corner, offset_x, offset_y| {
                 let state = state_for_drag.borrow();
                 let scale_factor = state.ui_settings.get_scale_factor();
                 let actionzone_side_length = state.ui_settings.get_actionzone_side_length();
@@ -174,8 +174,63 @@ impl AppWindowManager {
                         println!("移动到区域外 - 可能执行窗口操作");
                     }
                 }
-            });
+            },
+        );
 
+        let weak_instance_for_drag_end = weak_instance.clone();
+        let state_for_drag_end = Rc::clone(&self.state);
+        self.instance
+            .global::<ActionManager>()
+            .on_actionzone_drag_end(move |area_key, is_cancel| {
+                println!("鼠标拖动结束, 是否是右键取消: {is_cancel}");
+
+                if !is_cancel {
+                    // 获取当前状态
+                    let mut state = state_for_drag_end.borrow_mut();
+
+                    // 获取拆分预览数据
+                    if let Some(instance) = weak_instance_for_drag_end.upgrade() {
+                        let split_data = instance.get_split_preview_overlay_data();
+
+                        // 检查是否有有效的拆分数据（第二个区域不为0表示有效拆分）
+                        if split_data.width2 > 0.0 && split_data.height2 > 0.0 {
+                            println!("执行拆分操作，预览数据: {:#?}", split_data);
+                            let window_rect = Rcti {
+                                xmin: 0,
+                                xmax: state.window_size.width.saturating_sub(1),
+                                ymin: 0,
+                                ymax: state.window_size.height.saturating_sub(1),
+                            };
+                            let ui_settings = &state.ui_settings.clone();
+                            // 执行实际的拆分操作
+                            if let Err(e) = state.screen_map.split_area(
+                                ScrAreaKey::from(KeyData::from_ffi(area_key as u64)),
+                                split_data,
+                                &window_rect,
+                                ui_settings,
+                            ) {
+                                eprintln!("执行区域拆分失败: {}", e);
+                            } else {
+                                // 更新UI显示
+                                let slint_data = state.convert_areas_to_slint_data();
+                                instance.set_scrareas(slint_data.as_slice().into());
+                                println!("拆分完成，更新后的区域数据: {:#?}", slint_data);
+                            }
+                        } else {
+                            println!("无效的拆分数据，取消拆分操作");
+                        }
+
+                        // 清除预览
+                        instance.set_show_split_preview_overlay(false);
+                    }
+                } else {
+                    println!("用户取消拆分操作");
+                    // 清除预览
+                    if let Some(instance) = weak_instance_for_drag_end.upgrade() {
+                        instance.set_show_split_preview_overlay(false);
+                    }
+                }
+            });
         // Winit 事件处理
         let state_for_event = Rc::clone(&self.state);
         self.instance

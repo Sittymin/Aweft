@@ -16,20 +16,34 @@ export enum ActionZoneCorner {
     bottom-right
 }
 
+export global ActionManager {
+    // 定义回调
+    callback actionzone-drag(area-key: int, corner: ActionZoneCorner, x: length, y: length);
+    callback actionzone-drag-end(area-key: int, is-cancel: bool);
+}
+
 component ActionZone inherits Rectangle {
     in property <ActionZoneCorner> position;
     border-width: 2px;
+    property <bool> is-dragging;
 
     callback actionzone-drag(corner: ActionZoneCorner, x: length, y: length);
+    callback actionzone-drag-end(is-cancel: bool);
 
     TouchArea {
         pointer-event(event) => {
-            if (event.kind == PointerEventKind.move && self.pressed) {
-                // 在区域之外才触发
-                if (self.mouse-x < 0px || self.mouse-x > self.width || self.mouse-y < 0px || self.mouse-y > self.height) {
-                    // 获得的 x,y 是与当前 x,y 的相对位置
-                    root.actionzone-drag(root.position, self.mouse-x, self.mouse-y);
-                }
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                // 开始拖拽
+                root.is-dragging = true;
+            } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && root.is-dragging) {
+                // 松开时触发结束回调
+                root.actionzone-drag-end(false);
+                root.is-dragging = false;
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.is-dragging) {
+                root.actionzone-drag-end(true);
+                root.is-dragging = false;
+            } else if (event.kind == PointerEventKind.move && root.is-dragging) {
+                root.actionzone-drag(root.position, self.mouse-x, self.mouse-y);
             }
         }
     }
@@ -43,7 +57,6 @@ component SlintScrArea inherits Rectangle {
     in property <length> container-height;
     in property <length> actionzone-side-length;
 
-    callback actionzone-drag(area-key: int, corner: ActionZoneCorner, x: length, y: length);
     x: container-x;
     y: container-y;
     width: container-width;
@@ -58,7 +71,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.top-left;
         border-color: #FF0080; // 亮粉色 - 左上角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+            ActionManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+        actionzone-drag-end(is-cancel) => {
+            ActionManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 
@@ -70,7 +86,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.top-right;
         border-color: #0080FF; // 亮蓝色 - 右上角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+            ActionManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+        actionzone-drag-end(is-cancel) => {
+            ActionManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 
@@ -82,7 +101,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.bottom-right;
         border-color: #FF8000; // 亮橙色 - 右下角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+            ActionManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+        actionzone-drag-end(is-cancel) => {
+            ActionManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 
@@ -94,7 +116,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.bottom-left;
         border-color: #FFFF00; // 亮黄色 - 左下角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            root.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+            ActionManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
+        }
+        actionzone-drag-end(is-cancel) => {
+            ActionManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 }
@@ -109,7 +134,6 @@ export component MainWindow inherits Window {
     in property <bool> show-area-close-overlays: false;
     in property <[AreaCloseOverlayData]> area-close-overlay-datas;
 
-    callback actionzone-drag(area-key: int, corner: ActionZoneCorner, x: length, y: length);
     for scrarea[index] in scrareas: SlintScrArea {
         area-key: scrarea.key;
         container-x: scrarea.x;
@@ -117,9 +141,6 @@ export component MainWindow inherits Window {
         container-width: scrarea.width;
         container-height: scrarea.height;
         actionzone-side-length: scrarea.actionzone-side-length;
-        actionzone-drag(area-key, corner, x, y) => {
-            root.actionzone-drag(area-key, corner, x, y);
-        }
     }
 
     if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {

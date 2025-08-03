@@ -1,3 +1,6 @@
+use anyhow::Result;
+
+use crate::SplitPreviewOverlayData;
 use crate::types::{
     AreaType, Rcti, ScrArea, ScrAreaKey, ScrAreaMap, ScrEdge, ScrEdgeKey, ScrVert, ScrVertKey,
     SplitDirection, UISettings, Vec2u32,
@@ -271,23 +274,127 @@ impl ScrAreaMap {
     pub fn split_area(
         &mut self,
         area_key: ScrAreaKey,
-        direction: SplitDirection,
-        factor: f32,
-    ) -> Option<ScrAreaKey> {
-        // TODO: 实现区域分割 - 遵循新的设计原则
-        //
-        // 正确的实现步骤：
-        // 1. 获取要分割的原始区域的四个顶点
-        // 2. 根据分割方向和比例，在适当位置创建新的顶点
-        // 3. 创建新的边来连接这些顶点
-        // 4. 修改原始区域的顶点引用（通过更新其v_xxx字段）
-        // 5. 创建新区域 - 只传入顶点引用和区域类型
-        // 6. 对两个区域都调用calculate_totrct_and_size()来计算几何属性
-        // 7. 返回新区域的key
-        //
-        // 重要：区域的几何属性完全由顶点位置决定，不应该直接设置winx/winy
+        split_data: SplitPreviewOverlayData,
+        window_rect: &Rcti,
+        ui_settings: &UISettings,
+    ) -> Result<ScrAreaKey> {
+        let is_horizontal_split = split_data.width1 != split_data.width2;
+        if is_horizontal_split {
+            let split_x = split_data.x2 as u32;
+            let (original_rect, v1, v2, v3, v4, area_type) = {
+                let source_area = self
+                    .areas
+                    .get(area_key)
+                    .ok_or_else(|| anyhow::anyhow!("源区域 {:?} 不存在", area_key))?;
+                let (rect, _, _) = source_area.geometry();
+                (
+                    *rect,
+                    source_area.v_top_left,
+                    source_area.v_top_right,
+                    source_area.v_bottom_right,
+                    source_area.v_bottom_left,
+                    source_area.area_type.clone(),
+                )
+            };
 
-        unimplemented!("区域分割功能待实现 - 需要遵循'顶点->计算->几何'的设计原则")
+            let new_vert_top = self.add_vertex_to_geometry(split_x, original_rect.ymin);
+            let new_vert_bottom = self.add_vertex_to_geometry(split_x, original_rect.ymax);
+
+            // 左部分
+            self.add_edge_to_geometry(v1, new_vert_top);
+            self.add_edge_to_geometry(v4, new_vert_bottom);
+            // 右部分
+            self.add_edge_to_geometry(new_vert_top, v2);
+            self.add_edge_to_geometry(new_vert_bottom, v3);
+            self.add_edge_to_geometry(new_vert_top, new_vert_bottom);
+
+            let new_area = ScrArea::new(new_vert_top, v2, v3, new_vert_bottom, area_type);
+            let new_area_key = self.areas.insert(new_area);
+
+            // 修改原始区域
+            let source_area = self.areas.get_mut(area_key).unwrap();
+            source_area.v_top_right = new_vert_top;
+            source_area.v_bottom_right = new_vert_bottom;
+
+            // 重新计算两个区域的几何属性
+            source_area.calculate_totrct_and_size(
+                &self.verts,
+                window_rect,
+                ui_settings,
+                false,
+                false,
+                false,
+            );
+            let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
+            new_area_mut.calculate_totrct_and_size(
+                &self.verts,
+                window_rect,
+                ui_settings,
+                false,
+                false,
+                false,
+            );
+
+            println!("水平拆分完成，创建了新区域: {:?}", new_area_key);
+            Ok(new_area_key)
+        } else {
+            let split_y = split_data.y2 as u32;
+            let (original_rect, v1, v2, v3, v4, area_type) = {
+                let source_area = self
+                    .areas
+                    .get(area_key)
+                    .ok_or_else(|| anyhow::anyhow!("源区域 {:?} 不存在", area_key))?;
+                let (rect, _, _) = source_area.geometry();
+                (
+                    *rect,
+                    source_area.v_top_left,
+                    source_area.v_top_right,
+                    source_area.v_bottom_right,
+                    source_area.v_bottom_left,
+                    source_area.area_type.clone(),
+                )
+            };
+            let new_vert_left = self.add_vertex_to_geometry(original_rect.xmin, split_y);
+            let new_vert_right = self.add_vertex_to_geometry(original_rect.xmax, split_y);
+
+            // 上部分
+            self.add_edge_to_geometry(v1, new_vert_left);
+            self.add_edge_to_geometry(v2, new_vert_right);
+            // 下部分
+            self.add_edge_to_geometry(new_vert_left, v4);
+            self.add_edge_to_geometry(new_vert_right, v3);
+            self.add_edge_to_geometry(new_vert_left, new_vert_right);
+
+            let new_area = ScrArea::new(new_vert_left, new_vert_right, v3, v4, area_type);
+            let new_area_key = self.areas.insert(new_area);
+
+            // 修改原始区域
+            let source_area = self.areas.get_mut(area_key).unwrap();
+            source_area.v_bottom_left = new_vert_left;
+            source_area.v_bottom_right = new_vert_right;
+
+            // 重新计算两个区域的几何属性
+            source_area.calculate_totrct_and_size(
+                &self.verts,
+                window_rect,
+                ui_settings,
+                false,
+                false,
+                false,
+            );
+            let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
+            new_area_mut.calculate_totrct_and_size(
+                &self.verts,
+                window_rect,
+                ui_settings,
+                false,
+                false,
+                false,
+            );
+
+            println!("水平拆分完成，创建了新区域: {:?}", new_area_key);
+            Ok(new_area_key)
+        }
     }
 
     /// 辅助函数：创建一个新顶点（简化版）

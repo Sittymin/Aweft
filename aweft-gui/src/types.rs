@@ -22,7 +22,7 @@ new_key_type! {
 /// - 内部所有计算使用物理像素（与Blender一致）
 /// - 边距等UI元素在物理像素基础上缩放
 /// - 最终传递给Slint时除以scale_factor转换为逻辑坐标
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UISettings {
     scale_factor: f64,                // 缩放因子（从Slint获取）
     base_border_width: f64,           // 基础边框宽度（物理像素）
@@ -153,7 +153,7 @@ impl Vec2u32 {
 }
 
 /// 整数定义的矩形区域
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rcti {
     pub xmin: u32,
     pub xmax: u32,
