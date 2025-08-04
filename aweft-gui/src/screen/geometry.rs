@@ -1,9 +1,9 @@
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 
 use crate::SplitPreviewOverlayData;
 use crate::types::{
     AreaType, Rcti, ScrArea, ScrAreaKey, ScrAreaMap, ScrEdge, ScrEdgeKey, ScrVert, ScrVertKey,
-    SplitDirection, UISettings, Vec2u32,
+    UISettings, Vec2u32, VertPosition,
 };
 
 impl ScrAreaMap {
@@ -35,19 +35,10 @@ impl ScrAreaMap {
             AreaType::Empty,
         );
 
-        // 窗口矩形
-        let window_rect = Rcti {
-            xmin: 0,
-            xmax: width - 1,
-            ymin: 0,
-            ymax: height - 1,
-        };
-
         // 关键：区域创建后立即计算几何属性
         // 这体现了"顶点->几何计算->区域属性"的正确顺序
         area.calculate_totrct_and_size(
             &self.verts,
-            &window_rect,
             ui_settings,
             false, // 非全屏
             false, // 非临时窗口
@@ -108,14 +99,6 @@ impl ScrAreaMap {
         self.create_edge(v_left_middle, v_mid_middle); // 左边下半段到中心
         self.create_edge(v_mid_middle, v_right_middle); // 中心到右边中点
 
-        // 窗口矩形（Slint坐标系）
-        let window_rect = Rcti {
-            xmin: 0,
-            xmax: width - 1,
-            ymin: 0,
-            ymax: height - 1,
-        };
-
         // 创建三个区域
         let mut areas = Vec::new();
 
@@ -128,14 +111,7 @@ impl ScrAreaMap {
             v_left_middle, // 左下（左边中点）
             AreaType::Timeline,
         );
-        area1.calculate_totrct_and_size(
-            &self.verts,
-            &window_rect,
-            ui_settings,
-            false,
-            false,
-            false,
-        );
+        area1.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
         let area1_key = self.areas.insert(area1);
         areas.push(area1_key);
 
@@ -148,14 +124,7 @@ impl ScrAreaMap {
             v_mid_middle,   // 左下（中心点）
             AreaType::Video,
         );
-        area2.calculate_totrct_and_size(
-            &self.verts,
-            &window_rect,
-            ui_settings,
-            false,
-            false,
-            false,
-        );
+        area2.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
         let area2_key = self.areas.insert(area2);
         areas.push(area2_key);
 
@@ -168,14 +137,7 @@ impl ScrAreaMap {
             v_bottom_left,  // 左下
             AreaType::SubtitleEditor,
         );
-        area3.calculate_totrct_and_size(
-            &self.verts,
-            &window_rect,
-            ui_settings,
-            false,
-            false,
-            false,
-        );
+        area3.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
         let area3_key = self.areas.insert(area3);
         areas.push(area3_key);
 
@@ -195,7 +157,6 @@ impl ScrAreaMap {
     /// 更新所有区域的winx/winy，当窗口大小或DPI改变时调用
     pub fn update_all_areas_rcti(
         &mut self,
-        window_rect: &Rcti,
         ui_settings: &UISettings,
         is_fullscreen: bool,
         is_temp_window: bool,
@@ -209,7 +170,6 @@ impl ScrAreaMap {
             if let Some(area) = self.areas.get_mut(area_key) {
                 area.calculate_totrct_and_size(
                     &self.verts,
-                    window_rect,
                     ui_settings,
                     is_fullscreen,
                     is_temp_window,
@@ -254,52 +214,271 @@ impl ScrAreaMap {
         }
     }
 
-    /// 查找可以分割的点
-    pub fn find_split_point(
-        &self,
-        area_key: ScrAreaKey,
-        mouse_x: i16,
-        mouse_y: i16,
-    ) -> Option<(SplitDirection, f32)> {
-        // TODO: 你需要实现这个函数
-        // 1. 获取指定的 area
-        // 2. 检查鼠标位置是否在 area 内
-        // 3. 根据鼠标位置计算分割方向和比例
-        // 4. 返回分割信息
+    /// 合并两个相邻的区域
+    /// 这个函数实现了Blender中screen_area_join_aligned的逻辑
+    pub fn join_adjacent_areas(
+        &mut self,
+        source_area_key: ScrAreaKey,
+        target_area_key: ScrAreaKey,
+        ui_settings: &UISettings,
+    ) -> Result<()> {
+        if source_area_key == target_area_key {
+            return Ok(());
+        }
 
-        unimplemented!("你需要实现查找分割点的逻辑")
+        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
+        const MIN_AREA_SIZE: u32 = 50;
+
+        let source_rect = self
+            .areas
+            .get(source_area_key)
+            .context(format!("源区域不存在: {:?}", source_area_key))? // 到这里得到 &Area
+            .get_raw_geometry(&self.verts); // 调用方法，得到 Rect
+
+        let target_rect = self
+            .areas
+            .get(target_area_key)
+            .context(format!("目标区域不存在: {:?}", target_area_key))?
+            .get_raw_geometry(&self.verts);
+
+        // 计算重叠点坐标
+        let overlap_left = std::cmp::max(source_rect.xmin, target_rect.xmin);
+        let overlap_right = std::cmp::min(source_rect.xmax, target_rect.xmax);
+        let overlap_top = std::cmp::max(source_rect.ymin, target_rect.ymin);
+        let overlap_bottom = std::cmp::min(source_rect.ymax, target_rect.ymax);
+        let overlap_x = overlap_right - overlap_left;
+        let overlap_y = overlap_bottom - overlap_top;
+
+        // 产生的空白区域
+        // let mut remainders = Vec::new();
+        let mut merge_area_key: ScrAreaKey = target_area_key;
+
+        // （上下关系）
+        // source 在上
+        if (source_rect.ymax == target_rect.ymin) && overlap_x >= MIN_AREA_SIZE {
+            //   ┏━━━━━━░
+            //   ┃source░
+            // ┏━┻━━━━━━░
+            // ┃        ░
+            // ┃  target░
+            // ┃        ░
+            // ┗━━━━━━━━░
+            if source_rect.xmin > target_rect.xmin {
+                // 右方的新建Area
+                // 此时 target_area 已经被修改
+                merge_area_key = self.split_area_by_coordinates(
+                    target_area_key,
+                    source_rect.xmin,
+                    true,
+                    ui_settings,
+                )?;
+
+            // ┏━━━━━━━━░
+            // ┃        ░
+            // ┃  source░
+            // ┃        ░
+            // ┗━┳━━━━━━░
+            //   ┃target░
+            //   ┗━━━━━━░
+            } else if source_rect.xmin < target_rect.xmin {
+                unimplemented!("source 在上的大合小的实现(左侧)")
+            }
+
+            // ░━━━━━━┓
+            // ░source┃
+            // ░━━━━━━┻━┓
+            // ░        ┃
+            // ░target  ┃
+            // ░        ┃
+            // ░━━━━━━━━┛
+            // 说明右边目标区域更大(即目标区域需要split, 可能已被上方代码分割过)
+            if source_rect.xmax < target_rect.xmax {
+                self.split_area_by_coordinates(
+                    merge_area_key,
+                    source_rect.xmin,
+                    true,
+                    ui_settings,
+                )?;
+            // ░━━━━━━━━┓
+            // ░        ┃
+            // ░source  ┃
+            // ░        ┃
+            // ░━━━━━━┳━┛
+            // ░target┃
+            // ░━━━━━━┛
+            } else if source_rect.xmax > target_rect.xmax {
+                unimplemented!("source 在上的大合小的实现(右侧)")
+            }
+
+            // 开始合并对齐的面板
+
+            // WARN: TODO: 需要想一个可以在可变与不可变当中设置顶点的方法来统一一下
+            self.set_area_vert(
+                source_area_key,
+                VertPosition::BottomLeft(
+                    self.areas
+                        .get(merge_area_key)
+                        .context(format!("合并区域不存在: {:?}", merge_area_key))?
+                        .v_bottom_left,
+                ),
+            );
+            self.set_area_vert(
+                source_area_key,
+                VertPosition::BottomRight(
+                    self.areas
+                        .get(merge_area_key)
+                        .context(format!("合并区域不存在: {:?}", merge_area_key))?
+                        .v_bottom_right,
+                ),
+            );
+            self.add_edge_to_geometry(
+                self.areas
+                    .get(source_area_key)
+                    .context("不存在的source_area_key")?
+                    .v_top_left,
+                self.areas
+                    .get(source_area_key)
+                    .context("不存在的source_area_key")?
+                    .v_bottom_left,
+            );
+            self.add_edge_to_geometry(
+                self.areas
+                    .get(source_area_key)
+                    .context("不存在的source_area_key")?
+                    .v_top_right,
+                self.areas
+                    .get(source_area_key)
+                    .context("不存在的source_area_key")?
+                    .v_bottom_right,
+            );
+        } else if (source_rect.ymin == target_rect.ymax) && overlap_x >= MIN_AREA_SIZE {
+            unimplemented!("source 在下的合并实现")
+        } else {
+            panic!("上下 Area 坐标不一致")
+        }
+
+        // WARN: 如果前面触发,这里可以清理然后返回不执行后面了
+
+        // （左右关系）
+        // source 在左
+        if (source_rect.xmax == target_rect.xmin) && overlap_y >= MIN_AREA_SIZE {
+            //        ┏━━━━━━━━━━┓
+            // ┏━━━━━━┫          ┃
+            // ┃source┃  target  ┃
+            // ░░░░░░░░░░░░░░░░░░░
+            if source_rect.ymin > target_rect.ymin {
+                let merge_area_key = self.split_area_by_coordinates(
+                    target_area_key,
+                    source_rect.ymin,
+                    false,
+                    ui_settings,
+                )?;
+            // ┏━━━━━━━━━━┓
+            // ┃          ┣━━━━━━┓
+            // ┃  source  ┃target┃
+            // ░░░░░░░░░░░░░░░░░░░
+            } else if source_rect.ymin < target_rect.ymin {
+                unimplemented!("source 在左的大合小的实现(上侧)")
+            }
+
+            // ░░░░░░░░░░░░░░░░░░░
+            // ┃source┃  target  ┃
+            // ┗━━━━━━┫          ┃
+            //        ┗━━━━━━━━━━┛
+            if source_rect.ymax < target_rect.ymax {
+                self.split_area_by_coordinates(
+                    merge_area_key,
+                    source_rect.ymax,
+                    false,
+                    ui_settings,
+                )?;
+            // ░░░░░░░░░░░░░░░░░░░
+            // ┃  source  ┃target┃
+            // ┃          ┣━━━━━━┛
+            // ┗━━━━━━━━━━┛
+            } else if source_rect.ymax > target_rect.ymax {
+                unimplemented!("source 在左的大合小的实现(下侧)")
+            }
+            // 开始合并对齐的面板
+            self.set_area_vert(
+                source_area_key,
+                VertPosition::TopRight(
+                    self.areas
+                        .get(merge_area_key)
+                        .context("不存在合并area")?
+                        .v_top_right,
+                ),
+            );
+            self.set_area_vert(
+                source_area_key,
+                VertPosition::BottomRight(
+                    self.areas
+                        .get(merge_area_key)
+                        .context("不存在合并area")?
+                        .v_bottom_right,
+                ),
+            );
+            self.add_edge_to_geometry(
+                self.areas
+                    .get(source_area_key)
+                    .context(format!("源区域不存在: {:?}", source_area_key))?
+                    .v_top_left,
+                self.areas
+                    .get(source_area_key)
+                    .context(format!("源区域不存在: {:?}", source_area_key))?
+                    .v_top_right,
+            );
+            self.add_edge_to_geometry(
+                self.areas
+                    .get(source_area_key)
+                    .context(format!("源区域不存在: {:?}", source_area_key))?
+                    .v_bottom_left,
+                self.areas
+                    .get(source_area_key)
+                    .context(format!("源区域不存在: {:?}", source_area_key))?
+                    .v_bottom_right,
+            );
+        } else if (source_rect.xmin == target_rect.xmax) && overlap_y >= MIN_AREA_SIZE {
+            unimplemented!("source 在右的合并实现")
+        }
+
+        // 删除目标区域
+        self.areas.remove(target_area_key);
+
+        // 清理重复的边和顶点
+        self.remove_duplicate_edges();
+        self.remove_unused_edges();
+
+        Ok(())
     }
 
-    /// 分割一个区域
-    pub fn split_area(
+    pub fn split_area_by_coordinates(
         &mut self,
         area_key: ScrAreaKey,
-        split_data: SplitPreviewOverlayData,
-        window_rect: &Rcti,
+        split_coord: u32,
+        is_horizontal_split: bool,
         ui_settings: &UISettings,
     ) -> Result<ScrAreaKey> {
-        let is_horizontal_split = split_data.width1 != split_data.width2;
+        let (vert_rect, v1, v2, v3, v4, area_type) = {
+            let area = self
+                .areas
+                .get(area_key)
+                .ok_or_else(|| anyhow::anyhow!("源区域 {:?} 不存在", area_key))?;
+            // 使用原始几何信息（边距调整之前的）
+            let vert_rect = area.get_raw_geometry(&self.verts);
+            (
+                vert_rect,
+                area.v_top_left,
+                area.v_top_right,
+                area.v_bottom_right,
+                area.v_bottom_left,
+                area.area_type.clone(),
+            )
+        };
         if is_horizontal_split {
-            let split_x = split_data.x2 as u32;
-            let (original_rect, v1, v2, v3, v4, area_type) = {
-                let source_area = self
-                    .areas
-                    .get(area_key)
-                    .ok_or_else(|| anyhow::anyhow!("源区域 {:?} 不存在", area_key))?;
-                let (rect, _, _) = source_area.geometry();
-                (
-                    *rect,
-                    source_area.v_top_left,
-                    source_area.v_top_right,
-                    source_area.v_bottom_right,
-                    source_area.v_bottom_left,
-                    source_area.area_type.clone(),
-                )
-            };
-
-            let new_vert_top = self.add_vertex_to_geometry(split_x, original_rect.ymin);
-            let new_vert_bottom = self.add_vertex_to_geometry(split_x, original_rect.ymax);
-
+            // 注意：split_coord 已经包含了 +1 的补偿，所以这里直接使用
+            let new_vert_top = self.add_vertex_to_geometry(split_coord, vert_rect.ymin);
+            let new_vert_bottom = self.add_vertex_to_geometry(split_coord, vert_rect.ymax);
             // 左部分
             self.add_edge_to_geometry(v1, new_vert_top);
             self.add_edge_to_geometry(v4, new_vert_bottom);
@@ -317,45 +496,19 @@ impl ScrAreaMap {
             source_area.v_bottom_right = new_vert_bottom;
 
             // 重新计算两个区域的几何属性
-            source_area.calculate_totrct_and_size(
-                &self.verts,
-                window_rect,
-                ui_settings,
-                false,
-                false,
-                false,
-            );
+            source_area.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
             let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
-            new_area_mut.calculate_totrct_and_size(
-                &self.verts,
-                window_rect,
-                ui_settings,
-                false,
-                false,
-                false,
-            );
+            new_area_mut.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
+
+            // 清理重复的边和顶点（参考Blender的实现）
+            self.remove_duplicate_edges();
+            self.remove_unused_edges();
 
             println!("水平拆分完成，创建了新区域: {:?}", new_area_key);
             Ok(new_area_key)
         } else {
-            let split_y = split_data.y2 as u32;
-            let (original_rect, v1, v2, v3, v4, area_type) = {
-                let source_area = self
-                    .areas
-                    .get(area_key)
-                    .ok_or_else(|| anyhow::anyhow!("源区域 {:?} 不存在", area_key))?;
-                let (rect, _, _) = source_area.geometry();
-                (
-                    *rect,
-                    source_area.v_top_left,
-                    source_area.v_top_right,
-                    source_area.v_bottom_right,
-                    source_area.v_bottom_left,
-                    source_area.area_type.clone(),
-                )
-            };
-            let new_vert_left = self.add_vertex_to_geometry(original_rect.xmin, split_y);
-            let new_vert_right = self.add_vertex_to_geometry(original_rect.xmax, split_y);
+            let new_vert_left = self.add_vertex_to_geometry(vert_rect.xmin, split_coord);
+            let new_vert_right = self.add_vertex_to_geometry(vert_rect.xmax, split_coord);
 
             // 上部分
             self.add_edge_to_geometry(v1, new_vert_left);
@@ -374,26 +527,33 @@ impl ScrAreaMap {
             source_area.v_bottom_right = new_vert_right;
 
             // 重新计算两个区域的几何属性
-            source_area.calculate_totrct_and_size(
-                &self.verts,
-                window_rect,
-                ui_settings,
-                false,
-                false,
-                false,
-            );
+            source_area.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
             let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
-            new_area_mut.calculate_totrct_and_size(
-                &self.verts,
-                window_rect,
-                ui_settings,
-                false,
-                false,
-                false,
-            );
+            new_area_mut.calculate_totrct_and_size(&self.verts, ui_settings, false, false, false);
 
-            println!("水平拆分完成，创建了新区域: {:?}", new_area_key);
+            // 清理重复的边和顶点（参考Blender的实现）
+            self.remove_duplicate_edges();
+            self.remove_unused_edges();
+
+            println!("垂直拆分完成，创建了新区域: {:?}", new_area_key);
             Ok(new_area_key)
+        }
+    }
+
+    /// 分割一个区域
+    pub fn split_area(
+        &mut self,
+        area_key: ScrAreaKey,
+        split_data: SplitPreviewOverlayData,
+        ui_settings: &UISettings,
+    ) -> Result<ScrAreaKey> {
+        let is_horizontal_split = split_data.width1 != split_data.width2;
+        if is_horizontal_split {
+            let split_x = split_data.x2 as u32;
+            self.split_area_by_coordinates(area_key, split_x, is_horizontal_split, ui_settings)
+        } else {
+            let split_y = split_data.y2 as u32;
+            self.split_area_by_coordinates(area_key, split_y, is_horizontal_split, ui_settings)
         }
     }
 
@@ -429,6 +589,12 @@ impl ScrAreaMap {
 
     /// 添加新边到现有几何结构中
     pub fn add_edge_to_geometry(&mut self, v1: ScrVertKey, v2: ScrVertKey) -> ScrEdgeKey {
+        // 检查是否已存在相同的边
+        if let Some(existing_edge_key) = self.find_edge_between_vertices(v1, v2) {
+            // 如果边已存在，直接返回现有的边
+            return existing_edge_key;
+        }
+
         // 简单地创建新边，不需要设置prev/next
         // 几何关系通过v1/v2维护，SlotMap管理存储
         self.create_edge(v1, v2)
@@ -458,6 +624,80 @@ impl ScrAreaMap {
             Some(new_vertex)
         } else {
             None
+        }
+    }
+
+    /// 清理重复的边（参考Blender的BKE_screen_remove_double_scredges）
+    fn remove_duplicate_edges(&mut self) {
+        let edge_keys: Vec<ScrEdgeKey> = self.edges.keys().collect();
+        let mut edges_to_remove = Vec::new();
+
+        for (i, &edge_key1) in edge_keys.iter().enumerate() {
+            if let Some(edge1) = self.edges.get(edge_key1) {
+                // 检查与后续边的重复
+                for &edge_key2 in edge_keys.iter().skip(i + 1) {
+                    if let Some(edge2) = self.edges.get(edge_key2) {
+                        // 检查是否是相同的边（考虑方向）
+                        if (edge1.v1 == edge2.v1 && edge1.v2 == edge2.v2)
+                            || (edge1.v1 == edge2.v2 && edge1.v2 == edge2.v1)
+                        {
+                            edges_to_remove.push(edge_key2);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 移除重复的边
+        let removed_count = edges_to_remove.len();
+        for edge_key in edges_to_remove {
+            self.edges.remove(edge_key);
+        }
+
+        if removed_count > 0 {
+            println!("清理了 {} 条重复边", removed_count);
+        }
+    }
+
+    /// 清理未使用的边（参考Blender的BKE_screen_remove_unused_scredges）
+    fn remove_unused_edges(&mut self) {
+        // 标记所有被区域使用的边
+        let mut used_edges = std::collections::HashSet::new();
+
+        for area in self.areas.values() {
+            // 检查区域的四条边
+            let area_edges = [
+                (area.v_top_left, area.v_top_right),
+                (area.v_top_right, area.v_bottom_right),
+                (area.v_bottom_right, area.v_bottom_left),
+                (area.v_bottom_left, area.v_top_left),
+            ];
+
+            for (v1, v2) in area_edges {
+                // 查找连接这两个顶点的边
+                if let Some(edge_key) = self.find_edge_between_vertices(v1, v2) {
+                    used_edges.insert(edge_key);
+                }
+            }
+        }
+
+        // 移除未使用的边
+        let edge_keys: Vec<ScrEdgeKey> = self.edges.keys().collect();
+        let mut unused_edges = Vec::new();
+
+        for &edge_key in &edge_keys {
+            if !used_edges.contains(&edge_key) {
+                unused_edges.push(edge_key);
+            }
+        }
+
+        let removed_count = unused_edges.len();
+        for edge_key in unused_edges {
+            self.edges.remove(edge_key);
+        }
+
+        if removed_count > 0 {
+            println!("清理了 {} 条未使用的边", removed_count);
         }
     }
 }
@@ -624,5 +864,62 @@ mod tests {
             "区域边界: ({}, {}) 到 ({}, {})",
             tot_rct.xmin, tot_rct.ymin, tot_rct.xmax, tot_rct.ymax
         );
+    }
+
+    #[test]
+    fn test_duplicate_edge_removal() {
+        let mut screen_map = ScrAreaMap::new();
+
+        // 创建顶点
+        let v1 = screen_map.create_vertex(0, 0);
+        let v2 = screen_map.create_vertex(100, 0);
+
+        // 创建相同的边两次
+        let edge1 = screen_map.create_edge(v1, v2);
+        let edge2 = screen_map.create_edge(v1, v2);
+
+        // 验证确实创建了两条边
+        assert_eq!(screen_map.edges.len(), 2);
+
+        // 运行清理函数
+        screen_map.remove_duplicate_edges();
+
+        // 验证重复边被清理
+        assert_eq!(screen_map.edges.len(), 1);
+    }
+
+    #[test]
+    fn test_unused_edge_removal() {
+        let mut screen_map = ScrAreaMap::new();
+
+        // 创建顶点
+        let v1 = screen_map.create_vertex(0, 0);
+        let v2 = screen_map.create_vertex(100, 0);
+        let v3 = screen_map.create_vertex(100, 100);
+        let v4 = screen_map.create_vertex(0, 100);
+
+        // 创建区域
+        let area = ScrArea::new(v1, v2, v3, v4, AreaType::Empty);
+        let area_key = screen_map.areas.insert(area);
+
+        // 创建区域使用的边
+        screen_map.create_edge(v1, v2);
+        screen_map.create_edge(v2, v3);
+        screen_map.create_edge(v3, v4);
+        screen_map.create_edge(v4, v1);
+
+        // 创建一些未使用的边
+        let v5 = screen_map.create_vertex(50, 50);
+        screen_map.create_edge(v1, v5);
+        screen_map.create_edge(v5, v3);
+
+        // 验证初始状态
+        assert_eq!(screen_map.edges.len(), 6);
+
+        // 运行清理函数
+        screen_map.remove_unused_edges();
+
+        // 验证未使用的边被清理
+        assert_eq!(screen_map.edges.len(), 4);
     }
 }

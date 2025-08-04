@@ -1,4 +1,5 @@
 use crate::screen::geometry::*;
+use anyhow::{Context, Result, anyhow};
 use bitflags::bitflags;
 use slint::PhysicalSize;
 use slotmap::{SlotMap, new_key_type};
@@ -138,11 +139,12 @@ impl Vec2u32 {
     /// let result = Vec2u32::try_from_f32(negative);
     /// assert!(result.is_err());
     /// ```
-    pub fn try_from_f32(value: Vec2f64) -> Result<Self, String> {
+    pub fn try_from_f32(value: Vec2f64) -> Result<Self> {
         if value.x < 0.0 || value.y < 0.0 {
-            return Err(format!(
+            return Err(anyhow!(
                 "无法将负数坐标转换为无符号整数: x={}, y={}。负数会导致数据丢失",
-                value.x, value.y
+                value.x,
+                value.y
             ));
         }
         Ok(Self {
@@ -199,13 +201,6 @@ pub struct Rctf {
     pub ymax: f32,
 }
 
-/// 定义区域分割的方向
-#[derive(Debug, Clone, Copy)]
-pub enum SplitDirection {
-    Horizontal, // 水平分割
-    Vertical,   // 垂直分割
-}
-
 /// 定义编辑器 UI 中不同区域的类型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AreaType {
@@ -231,8 +226,8 @@ pub enum AreaType {
 #[derive(Debug, Clone)]
 pub struct ScrVert {
     // 移除手动维护的双向链表指针 - 让SlotMap来管理顺序
-    // 只保留分割操作需要的newv指针
-    pub newv: Option<ScrVertKey>, // 用于分割操作的新顶点
+    // 保留 newv 字段用于重复顶点合并功能
+    pub newv: Option<ScrVertKey>, // 用于重复顶点合并的新顶点引用
     pub vec: Vec2u32,
     // NOTE: Maybe is not necessary (Copy from Blender code)
     // first one used internally, second one for tools
@@ -439,9 +434,6 @@ pub struct ActionZone {
 /// 屏幕区域（Screen Area），是 UI 布局的基本单元
 #[derive(Debug, Clone)]
 pub struct ScrArea {
-    pub next: Option<ScrAreaKey>,
-    pub prev: Option<ScrAreaKey>,
-
     // 定义区域的四个角顶点（Slint坐标系，左上角原点）
     pub v_top_left: ScrVertKey,
     pub v_top_right: ScrVertKey,
@@ -489,8 +481,6 @@ impl ScrArea {
         let area_data = Self::create_area_data(area_type.clone());
 
         Self {
-            next: None,
-            prev: None,
             v_top_left,
             v_top_right,
             v_bottom_right,
@@ -521,7 +511,6 @@ impl ScrArea {
     pub fn calculate_totrct_and_size(
         &mut self,
         vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>,
-        window_rect: &Rcti,
         ui_settings: &UISettings,
         is_fullscreen: bool,
         is_temp_window: bool,
@@ -540,41 +529,21 @@ impl ScrArea {
 
         // 2. 根据DPI和UI设置计算边距
         let px = ui_settings.calculate_margin(false); // 区域间边距
-        let px_edge = ui_settings.calculate_margin(true); // 窗口边缘边距
 
         // 3. 应用边距调整
         // 只有在非全屏、非临时窗口、且有多个区域的情况下才应用边距
         if !is_fullscreen && !is_temp_window && !is_single_area {
             // 左边距
-            if self.tot_rct.xmin > window_rect.xmin {
-                self.tot_rct.xmin += px;
-            } else {
-                self.tot_rct.xmin += px_edge;
-            }
+            self.tot_rct.xmin += px;
 
             // 右边距
-            if self.tot_rct.xmax < (window_rect.xmax) {
-                self.tot_rct.xmax -= px;
-            } else {
-                self.tot_rct.xmax -= px_edge;
-            }
+            self.tot_rct.xmax -= px;
 
             // 上边距（Slint坐标系中y=0是顶部）
-            if self.tot_rct.ymin > window_rect.ymin {
-                self.tot_rct.ymin += px;
-            } else {
-                self.tot_rct.ymin += px_edge;
-            }
+            self.tot_rct.ymin += px;
 
             // 下边距（Slint坐标系中y增长是向下）
-            if self.tot_rct.ymax < (window_rect.ymax) {
-                self.tot_rct.ymax -= px;
-            } else if !is_single_area {
-                // 底部边缘的小间隙
-                self.tot_rct.ymax -= ui_settings.get_border_width() as u32;
-            } else {
-                self.tot_rct.ymax -= px_edge;
-            }
+            self.tot_rct.ymax -= px;
         }
 
         // 4. 最终计算winx和winy（Blender注释："for speedup"）
@@ -583,8 +552,23 @@ impl ScrArea {
     }
 
     /// 只读访问几何属性
+    /// 不要使用这个属性来计算位置（它包含边距调整）
     pub fn geometry(&self) -> (&Rcti, u32, u32) {
         (&self.tot_rct, self.winx, self.winy)
+    }
+
+    /// 获取原始几何信息（边距调整之前的）
+    pub fn get_raw_geometry(&self, vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>) -> Rcti {
+        let tl = &vertices.get(self.v_top_left).unwrap().vec;
+        let tr = &vertices.get(self.v_top_right).unwrap().vec;
+        let bl = &vertices.get(self.v_bottom_left).unwrap().vec;
+
+        Rcti {
+            xmin: tl.x,
+            xmax: tr.x,
+            ymin: tl.y,
+            ymax: bl.y,
+        }
     }
 
     /// 检查区域几何是否已正确计算（用于调试）
@@ -652,6 +636,14 @@ impl ScrArea {
     // 15. blend_read/write() -> 在文件读写时序列化或反序列化编辑器数据
 }
 
+// 用于在ScrAreaMap当中匹配设置ScrArea
+pub enum VertPosition {
+    TopLeft(ScrVertKey),
+    TopRight(ScrVertKey),
+    BottomRight(ScrVertKey),
+    BottomLeft(ScrVertKey),
+}
+
 /// 屏幕区域地图，管理所有的顶点、边和区域
 #[derive(Debug)]
 pub struct ScrAreaMap {
@@ -667,6 +659,23 @@ impl ScrAreaMap {
             edges: SlotMap::with_key(),
             areas: SlotMap::with_key(),
         }
+    }
+    pub fn set_area_vert(
+        &mut self,
+        area_key: ScrAreaKey,
+        vert_pos_and_key: VertPosition,
+    ) -> Result<()> {
+        let area = self
+            .areas
+            .get_mut(area_key)
+            .context(format!("不存在的area: {:?}", area_key))?;
+        match vert_pos_and_key {
+            VertPosition::TopLeft(tl) => area.v_top_left = tl,
+            VertPosition::TopRight(tr) => area.v_top_right = tr,
+            VertPosition::BottomLeft(bl) => area.v_bottom_left = bl,
+            VertPosition::BottomRight(br) => area.v_bottom_right = br,
+        }
+        Ok(())
     }
     /// 计算指定角落的绝对坐标位置
     fn calculate_corner_position(
@@ -723,7 +732,7 @@ impl ScrAreaMap {
     }
 
     /// 将偏移量转换为相对于区域左上角的偏移量
-    pub fn convert_corner_offset_to_relative_offset_and_split_ratio(
+    pub fn convert_corner_offset_to_relative_offset(
         &self,
         area_key: ScrAreaKey,
         corner: ActionZoneCorner,
@@ -923,6 +932,6 @@ impl ScrAreaMap {
         }
 
         // 3. 重新计算所有区域的几何
-        self.update_all_areas_rcti(new_rect, ui_setting, false, false);
+        self.update_all_areas_rcti(ui_setting, false, false);
     }
 }

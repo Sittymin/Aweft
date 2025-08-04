@@ -145,9 +145,8 @@ impl AppWindowManager {
                     ) {
                         if target_area_key == source_key {
                             println!("在相同区域内 - 执行分割操作");
-                            let (relative_offset_x, relative_offset_y) = state
-                                .screen_map
-                                .convert_corner_offset_to_relative_offset_and_split_ratio(
+                            let (relative_offset_x, relative_offset_y) =
+                                state.screen_map.convert_corner_offset_to_relative_offset(
                                     target_area_key,
                                     corner,
                                     physical_offset_x,
@@ -195,18 +194,11 @@ impl AppWindowManager {
                         // 检查是否有有效的拆分数据（第二个区域不为0表示有效拆分）
                         if split_data.width2 > 0.0 && split_data.height2 > 0.0 {
                             println!("执行拆分操作，预览数据: {:#?}", split_data);
-                            let window_rect = Rcti {
-                                xmin: 0,
-                                xmax: state.window_size.width.saturating_sub(1),
-                                ymin: 0,
-                                ymax: state.window_size.height.saturating_sub(1),
-                            };
                             let ui_settings = &state.ui_settings.clone();
                             // 执行实际的拆分操作
                             if let Err(e) = state.screen_map.split_area(
                                 ScrAreaKey::from(KeyData::from_ffi(area_key as u64)),
                                 split_data,
-                                &window_rect,
                                 ui_settings,
                             ) {
                                 eprintln!("执行区域拆分失败: {}", e);
@@ -346,20 +338,11 @@ impl AppWindowManager {
         // 之后实现一下窗口边缘resize之后吸附靠近的顶点到最边缘
         Ok(())
     }
-    // WARN: TODO: 这个存在问题，没有正确处理缩放(至少边角是错误了)
     fn handle_scale_change(state: &mut AppState, new_scale_factor: f64) -> Result<()> {
         state.ui_settings.update_scale_factor(new_scale_factor);
 
-        let window_rect = Rcti {
-            xmin: 0,
-            xmax: state.window_size.width.saturating_sub(1),
-            ymin: 0,
-            ymax: state.window_size.height.saturating_sub(1),
-        };
-
         // 更新所有区域的几何属性，以应用新的边距等
         state.screen_map.update_all_areas_rcti(
-            &window_rect,
             &state.ui_settings, // 直接传递引用
             false,
             false,
