@@ -1,7 +1,7 @@
 slint::include_modules!();
 
 mod screen;
-mod types;
+pub mod types;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -344,8 +344,6 @@ impl AppWindowManager {
         // 更新所有区域的几何属性，以应用新的边距等
         state.screen_map.update_all_areas_rcti(
             &state.ui_settings, // 直接传递引用
-            false,
-            false,
         );
         Ok(())
     }

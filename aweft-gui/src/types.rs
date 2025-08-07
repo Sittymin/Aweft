@@ -121,7 +121,7 @@ pub struct Vec2f64 {
     pub y: f64,
 }
 impl Vec2u32 {
-    /// 安全地将 Vec2f32 转换为 Vec2u32，返回 Result
+    /// 安全地将 Vec2f64 转换为 Vec2u32，返回 Result
     ///
     /// # Errors
     ///
@@ -130,12 +130,12 @@ impl Vec2u32 {
     /// # Examples
     ///
     /// ```
-    /// # use aweft_gui::types::{Vec2u32, Vec2f32};
-    /// let positive = Vec2f32 { x: 10.5, y: 20.3 };
+    /// # use aweft_gui::types::{Vec2u32, Vec2f64};
+    /// let positive = Vec2f64 { x: 10.5, y: 20.3 };
     /// let result = Vec2u32::try_from_f32(positive);
     /// assert!(result.is_ok());
     ///
-    /// let negative = Vec2f32 { x: -5.0, y: 10.0 };
+    /// let negative = Vec2f64 { x: -5.0, y: 10.0 };
     /// let result = Vec2u32::try_from_f32(negative);
     /// assert!(result.is_err());
     /// ```
@@ -183,11 +183,27 @@ impl Rcti {
 
     /// 获取矩形的宽度
     pub fn width(&self) -> u32 {
+        if self.xmax < self.xmin {
+            eprintln!("错误：Rcti.width() 中 xmax < xmin!");
+            eprintln!(
+                "  矩形: xmin={}, xmax={}, ymin={}, ymax={}",
+                self.xmin, self.xmax, self.ymin, self.ymax
+            );
+            panic!("xmax ({}) < xmin ({})", self.xmax, self.xmin);
+        }
         self.xmax - self.xmin + 1
     }
 
     /// 获取矩形的高度
     pub fn height(&self) -> u32 {
+        if self.ymax < self.ymin {
+            eprintln!("错误：Rcti.height() 中 ymax < ymin!");
+            eprintln!(
+                "  矩形: xmin={}, xmax={}, ymin={}, ymax={}",
+                self.xmin, self.xmax, self.ymin, self.ymax
+            );
+            panic!("ymax ({}) < ymin ({})", self.ymax, self.ymin);
+        }
         self.ymax - self.ymin + 1
     }
 }
@@ -451,7 +467,7 @@ pub struct ScrArea {
     // pub area_history: Vec<AreaData>,
 
     // Temporarily used while switching area type, otherwise this should be AreaType::Empty.
-    pub next_area_type: Option<AreaType>,
+    next_area_type: Option<AreaType>,
 
     // Size - 设为私有
     winx: u32,
@@ -461,6 +477,11 @@ pub struct ScrArea {
     do_refresh: bool,
 
     flag: AreaFlags,
+
+    // 边距计算相关参数
+    pub is_fullscreen: bool,
+    pub is_temp_window: bool,
+    pub is_single_area: bool,
 
     // region_active_win
 
@@ -477,6 +498,9 @@ impl ScrArea {
         v_bottom_right: ScrVertKey,
         v_bottom_left: ScrVertKey,
         area_type: AreaType,
+        is_temp_window: bool,
+        is_fullscreen: bool,
+        is_single_area: bool,
     ) -> Self {
         let area_data = Self::create_area_data(area_type.clone());
 
@@ -500,6 +524,9 @@ impl ScrArea {
             winy: 0,
             do_refresh: false,
             flag: AreaFlags::empty(),
+            is_fullscreen,
+            is_temp_window,
+            is_single_area,
             action_zones: None,
         }
     }
@@ -512,9 +539,6 @@ impl ScrArea {
         &mut self,
         vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>,
         ui_settings: &UISettings,
-        is_fullscreen: bool,
-        is_temp_window: bool,
-        is_single_area: bool,
     ) {
         // 1. 从顶点计算基础矩形 - 这是几何的"真相来源"
         let tl = &vertices.get(self.v_top_left).unwrap().vec;
@@ -532,7 +556,7 @@ impl ScrArea {
 
         // 3. 应用边距调整
         // 只有在非全屏、非临时窗口、且有多个区域的情况下才应用边距
-        if !is_fullscreen && !is_temp_window && !is_single_area {
+        if !self.is_fullscreen && !self.is_temp_window && !self.is_single_area {
             // 左边距
             self.tot_rct.xmin += px;
 
@@ -932,6 +956,6 @@ impl ScrAreaMap {
         }
 
         // 3. 重新计算所有区域的几何
-        self.update_all_areas_rcti(ui_setting, false, false);
+        self.update_all_areas_rcti(ui_setting);
     }
 }
