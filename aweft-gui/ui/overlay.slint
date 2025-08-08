@@ -45,34 +45,34 @@ export struct JoinHighlightOverlayData {
 export component JoinHighlightOverlay inherits Rectangle {
     in property <JoinHighlightOverlayData> data;
     border-color: rgba(1.0, 1.0, 1.0, 0.4);
-    background: rgba(1.0, 1.0, 1.0, 0.10);
+    background: red;
     x: data.x;
     y: data.y;
-    z: 2;
+    z: 100;
     width: data.width;
     height: data.height;
 }
 
-export struct AreaCloseOverlayData {
+export struct CloseAreaOverlayData {
     x: length,
     y: length,
     width: length,
     height: length,
 }
 
-export component AreaCloseOverlay inherits Rectangle {
-    in property <AreaCloseOverlayData> data;
-    background: rgba(0.0, 0.0, 0.0, 0.7);
+export component CloseAreaOverlay inherits Rectangle {
+    in property <CloseAreaOverlayData> data;
+    background: blue;
     x: data.x;
     y: data.y;
-    z: 1;
+    z: 99;
     width: data.width;
     height: data.height;
 }
 
-export component AreaCloseOverlays {
-    in property <[AreaCloseOverlayData]> datas;
-    for data[index] in datas: AreaCloseOverlay {
+export component CloseAreaOverlays {
+    in property <[CloseAreaOverlayData]> datas;
+    for data[index] in datas: CloseAreaOverlay {
         data: data;
     }
 }

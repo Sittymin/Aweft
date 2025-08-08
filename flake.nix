@@ -26,11 +26,12 @@
           wayland
           libxkbcommon
           fontconfig
-          # 添加 OpenGL 驱动实现
-          libGL
+          vulkan-loader
+          mesa
         ];
       in
       {
+        # WARN: 启动失败可能是需要flake更新一下
         # 定义默认的开发环境
         devShells.default = pkgs.mkShell {
           # buildInputs 用于提供编译时依赖和命令行工具
@@ -49,6 +50,8 @@
           # pkgs.lib.makeLibraryPath 会接收一个包列表，并生成一个正确的、
           # 以冒号分隔的路径字符串，指向这些包的 `lib` 目录。
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
+
+          SLINT_BACKEND = "winit-femtovg-wgpu";
         };
       }
     );

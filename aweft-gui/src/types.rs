@@ -451,10 +451,10 @@ pub struct ActionZone {
 #[derive(Debug, Clone)]
 pub struct ScrArea {
     // 定义区域的四个角顶点（Slint坐标系，左上角原点）
-    pub v_top_left: ScrVertKey,
-    pub v_top_right: ScrVertKey,
-    pub v_bottom_right: ScrVertKey,
-    pub v_bottom_left: ScrVertKey,
+    v_top_left: ScrVertKey,
+    v_top_right: ScrVertKey,
+    v_bottom_right: ScrVertKey,
+    v_bottom_left: ScrVertKey,
 
     // 重要：这些几何属性设为私有，只能通过计算方法访问
     // Rect bound by v_buttom_left...
@@ -490,6 +490,25 @@ pub struct ScrArea {
 }
 
 impl ScrArea {
+    /// 读取左上角顶点键
+    pub fn v_top_left(&self) -> ScrVertKey {
+        self.v_top_left
+    }
+
+    /// 读取右上角顶点键
+    pub fn v_top_right(&self) -> ScrVertKey {
+        self.v_top_right
+    }
+
+    /// 读取右下角顶点键
+    pub fn v_bottom_right(&self) -> ScrVertKey {
+        self.v_bottom_right
+    }
+
+    /// 读取左下角顶点键
+    pub fn v_bottom_left(&self) -> ScrVertKey {
+        self.v_bottom_left
+    }
     /// 创建新的ScrArea实例 - 适配Slint坐标系（左上角原点）
     /// 只接受顶点引用和区域类型，所有几何属性都需要后续计算
     pub fn new(
@@ -750,7 +769,7 @@ impl ScrAreaMap {
             offset_y,
             actionzone_side_length,
         );
-        println!("当前计算出的鼠标绝对位置: {:#?}", mouse_pos);
+        // println!("当前计算出的鼠标绝对位置: {:#?}", mouse_pos);
 
         self.find_area_at_position(mouse_pos.x as u32, mouse_pos.y as u32)
     }

@@ -1,61 +1,25 @@
 use anyhow::{Context, Result, anyhow};
 
-use crate::SplitPreviewOverlayData;
 use crate::types::{
     AreaType, Rcti, ScrArea, ScrAreaKey, ScrAreaMap, ScrEdge, ScrEdgeKey, ScrVert, ScrVertKey,
     UISettings, Vec2u32, VertPosition,
 };
+use crate::{CloseAreaOverlayData, JoinHighlightOverlayData, SplitPreviewOverlayData};
+
+/// 描述两个区域的邻接关系
+#[derive(Debug, Clone, Copy)]
+pub enum Adjacency {
+    /// Source 在 Target 上方
+    TopToBottom { top: Rcti, bottom: Rcti },
+    /// Source 在 Target 下方
+    BottomToTop { bottom: Rcti, top: Rcti },
+    /// Source 在 Target 左方
+    LeftToRight { left: Rcti, right: Rcti },
+    /// Source 在 Target 右方
+    RightToLeft { right: Rcti, left: Rcti },
+}
 
 impl ScrAreaMap {
-    /// 创建具有正确DPI缩放的初始屏幕（Slint坐标系）
-    pub fn create_initial_screen_with_scaling(
-        &mut self,
-        width: u32,
-        height: u32,
-        ui_settings: &UISettings,
-    ) -> ScrAreaKey {
-        // 创建四个顶点（Slint坐标系，左上角原点）
-        let top_left = self.create_vertex(0, 0);
-        let top_right = self.create_vertex(width - 1, 0);
-        let bottom_right = self.create_vertex(width - 1, height - 1);
-        let bottom_left = self.create_vertex(0, height - 1);
-
-        // 创建边
-        self.create_edge(top_left, top_right);
-        self.create_edge(top_right, bottom_right);
-        self.create_edge(bottom_right, bottom_left);
-        self.create_edge(bottom_left, top_left);
-
-        // 创建区域 - 顶点顺序：左上、右上、右下、左下
-        let mut area = ScrArea::new(
-            top_left,
-            top_right,
-            bottom_right,
-            bottom_left,
-            AreaType::Empty,
-            false, // is_temp_window
-            false, // is_fullscreen
-            false, // is_single_area
-        );
-
-        // 关键：区域创建后立即计算几何属性
-        // 这体现了"顶点->几何计算->区域属性"的正确顺序
-        area.calculate_totrct_and_size(&self.verts, ui_settings);
-
-        // 验证几何已正确计算
-        debug_assert!(area.is_geometry_calculated(), "区域几何属性计算失败");
-
-        self.areas.insert(area)
-    }
-
-    /// 创建三个区域的布局：第一行水平两个区域，第二行独占一个区域
-    ///
-    /// 布局示意图 (Slint坐标系，左上角原点，y向下增长)：
-    /// (0,0) +-------+-------+ (width,0)
-    ///       | Area1 | Area2 |  <- 第一行，各占50%宽度
-    ///       +-------+-------+ (0,mid_y) -> (width,mid_y)
-    ///       |    Area3      |  <- 第二行，独占100%宽度
-    /// (0,height) +-----------+ (width,height)
     pub fn create_three_area_layout(
         &mut self,
         width: &u32,
@@ -202,543 +166,719 @@ impl ScrAreaMap {
     pub fn get_area_vertices_ordered(&self, area_key: ScrAreaKey) -> Option<[ScrVertKey; 4]> {
         if let Some(area) = self.areas.get(area_key) {
             Some([
-                area.v_bottom_left,
-                area.v_top_left,
-                area.v_top_right,
-                area.v_bottom_right,
+                area.v_bottom_left(),
+                area.v_top_left(),
+                area.v_top_right(),
+                area.v_bottom_right(),
             ])
         } else {
             None
         }
     }
 
+    /// 辅助函数：检测邻接关系
+    fn detect_adjacency(
+        &self,
+        source_rcti: Rcti,
+        target_rcti: Rcti,
+        min_overlap: u32,
+    ) -> Option<Adjacency> {
+        // 安全减法
+        let overlap_x = (source_rcti.xmax.min(target_rcti.xmax))
+            .saturating_sub(source_rcti.xmin.max(target_rcti.xmin));
+        let overlap_y = (source_rcti.ymax.min(target_rcti.ymax))
+            .saturating_sub(source_rcti.ymin.max(target_rcti.ymin));
+
+        // ░━━━━━━━━░
+        // ░ source ░
+        // ░━━━━━━━━░
+        // ░ target ░
+        // ░━━━━━━━━░
+        if source_rcti.ymax == target_rcti.ymin && overlap_x >= min_overlap {
+            Some(Adjacency::TopToBottom {
+                top: source_rcti,
+                bottom: target_rcti,
+            })
+        }
+        // ░━━━━━━━━░
+        // ░ target ░
+        // ░━━━━━━━━░
+        // ░ source ░
+        // ░━━━━━━━━░
+        else if source_rcti.ymin == target_rcti.ymax && overlap_x >= min_overlap {
+            Some(Adjacency::BottomToTop {
+                bottom: source_rcti,
+                top: target_rcti,
+            })
+        }
+        // ░░░░░░░░░░░░░░░░░░░
+        // ┃ source ┃ target ┃
+        // ░░░░░░░░░░░░░░░░░░░
+        else if source_rcti.xmax == target_rcti.xmin && overlap_y >= min_overlap {
+            Some(Adjacency::LeftToRight {
+                left: source_rcti,
+                right: target_rcti,
+            })
+        }
+        // ░░░░░░░░░░░░░░░░░░░
+        // ┃ target ┃ source ┃
+        // ░░░░░░░░░░░░░░░░░░░
+        else if source_rcti.xmin == target_rcti.xmax && overlap_y >= min_overlap {
+            Some(Adjacency::RightToLeft {
+                right: source_rcti,
+                left: target_rcti,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn preview_join_adjacent_areas(
+        &self,
+        source_area_key: ScrAreaKey,
+        adjacency: Adjacency,
+        ui_settings: &UISettings,
+    ) -> Result<(JoinHighlightOverlayData, Vec<CloseAreaOverlayData>)> {
+        let (source_area_rcti, source_area_width, source_area_height) = self
+            .areas
+            .get(source_area_key)
+            .context("找不到Area")?
+            .geometry();
+        let mut join_highlight_overlay_data = JoinHighlightOverlayData {
+            height: source_area_height as f32,
+            width: source_area_width as f32,
+            x: source_area_rcti.xmin as f32,
+            y: source_area_rcti.ymin as f32,
+        };
+        // 产生的 close 区域
+        let mut close_areas_overlay_data: Vec<CloseAreaOverlayData> = Vec::new();
+        match adjacency {
+            Adjacency::TopToBottom { top, bottom } => {
+                join_highlight_overlay_data.height += bottom.height() as f32;
+                //   ┏━━━━━━░
+                //   ┃source░
+                // ┏━┻━━━━━━░
+                // ┃        ░
+                // ┃  target░
+                // ┃        ░
+                // ┗━━━━━━━━░
+                if top.xmin > bottom.xmin {
+                    ();
+                }
+                // ┏━━━━━━━━░
+                // ┃        ░
+                // ┃  source░
+                // ┃        ░
+                // ┗━┳━━━━━━░
+                //   ┃target░
+                //   ┗━━━━━━░
+                else if top.xmin < bottom.xmin {
+                    let close_width = bottom.xmin - top.xmin + 1;
+                    let close_height = top.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: top.xmin as f32,
+                        y: top.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.x = bottom.xmin as f32;
+                    join_highlight_overlay_data.width -= close_width as f32;
+                }
+
+                // ░━━━━━━┓
+                // ░source┃
+                // ░━━━━━━┻━┓
+                // ░        ┃
+                // ░target  ┃
+                // ░        ┃
+                // ░━━━━━━━━┛
+                if top.xmax < bottom.xmax {
+                    ();
+                }
+                // ░━━━━━━━━┓
+                // ░        ┃
+                // ░source  ┃
+                // ░        ┃
+                // ░━━━━━━┳━┛
+                // ░target┃
+                // ░━━━━━━┛
+                else if top.xmax > bottom.xmax {
+                    let close_width = top.xmax - bottom.xmax + 1;
+                    let close_height = top.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: bottom.xmax as f32,
+                        y: top.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.width -= close_width as f32;
+                }
+            }
+            Adjacency::BottomToTop { bottom, top } => {
+                join_highlight_overlay_data.y = top.ymin as f32;
+                join_highlight_overlay_data.height += top.height() as f32;
+                // ┏━━━━━━━━░
+                // ┃        ░
+                // ┃  target░
+                // ┃        ░
+                // ┗━┳━━━━━━░
+                //   ┃source░
+                //   ┗━━━━━━░
+                if bottom.xmin > top.xmin {
+                    ();
+                }
+                //   ┏━━━━━━░
+                //   ┃target░
+                // ┏━┻━━━━━━░
+                // ┃        ░
+                // ┃  source░
+                // ┃        ░
+                // ┗━━━━━━━━░
+                else if bottom.xmin < top.xmin {
+                    let close_width = top.xmin - bottom.xmin + 1;
+                    let close_height = bottom.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: bottom.xmin as f32,
+                        y: bottom.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.x = top.xmin as f32;
+                    join_highlight_overlay_data.width -= close_width as f32;
+                }
+
+                // ░━━━━━━━━┓
+                // ░        ┃
+                // ░target  ┃
+                // ░        ┃
+                // ░━━━━━━┳━┛
+                // ░source┃
+                // ░━━━━━━┛
+                if bottom.xmax < top.xmax {
+                    ();
+                }
+                // ░━━━━━━┓
+                // ░target┃
+                // ░━━━━━━┻━┓
+                // ░        ┃
+                // ░source  ┃
+                // ░        ┃
+                // ░━━━━━━━━┛
+                else if bottom.xmax > top.xmax {
+                    let close_width = bottom.xmax - top.xmax + 1;
+                    let close_height = bottom.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: top.xmax as f32,
+                        y: bottom.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.width -= close_width as f32;
+                }
+            }
+            Adjacency::LeftToRight { left, right } => {
+                join_highlight_overlay_data.width += right.width() as f32;
+                //        ┏━━━━━━━━━━┓
+                // ┏━━━━━━┫          ┃
+                // ┃source┃  target  ┃
+                // ░░░░░░░░░░░░░░░░░░░
+                if left.ymin > right.ymin {
+                    ();
+                }
+                // ┏━━━━━━━━━━┓
+                // ┃          ┣━━━━━━┓
+                // ┃  source  ┃target┃
+                // ░░░░░░░░░░░░░░░░░░░
+                else if left.ymin < right.ymin {
+                    let close_width = left.width();
+                    let close_height = right.ymin - left.ymin + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: left.xmin as f32,
+                        y: left.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.y = right.ymin as f32;
+                    join_highlight_overlay_data.height -= close_height as f32;
+                    println!("触发：{:#?}", left)
+                }
+
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃source┃  target  ┃
+                // ┗━━━━━━┫          ┃
+                //        ┗━━━━━━━━━━┛
+                if left.ymax < right.ymax {
+                    ();
+                }
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃  source  ┃target┃
+                // ┃          ┣━━━━━━┛
+                // ┗━━━━━━━━━━┛
+                else if left.ymax > right.ymax {
+                    let close_width = left.width();
+                    let close_height = left.ymax - right.ymax + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: left.xmin as f32,
+                        y: right.ymax as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.height -= close_height as f32;
+                }
+            }
+            Adjacency::RightToLeft { right, left } => {
+                join_highlight_overlay_data.x = left.xmin as f32;
+                join_highlight_overlay_data.width += left.width() as f32;
+                // ┏━━━━━━━━━━┓
+                // ┃          ┣━━━━━━┓
+                // ┃  target  ┃source┃
+                // ░░░░░░░░░░░░░░░░░░░
+                if right.ymin > left.ymin {
+                    ();
+                }
+                //        ┏━━━━━━━━━━┓
+                // ┏━━━━━━┫          ┃
+                // ┃target┃  source  ┃
+                // ░░░░░░░░░░░░░░░░░░░
+                else if right.ymin < left.ymin {
+                    let close_width = right.width();
+                    let close_height = left.ymin - right.ymin + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: right.xmin as f32,
+                        y: right.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.y = left.ymin as f32;
+                    join_highlight_overlay_data.height -= close_height as f32;
+                }
+
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃  target  ┃source┃
+                // ┃          ┣━━━━━━┛
+                // ┗━━━━━━━━━━┛
+                if right.ymax < left.ymax {
+                    ();
+                }
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃target┃  source  ┃
+                // ┗━━━━━━┫          ┃
+                //        ┗━━━━━━━━━━┛
+                else if right.ymax > left.ymax {
+                    let close_width = right.width();
+                    let close_height = right.ymax - left.ymax + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: right.xmin as f32,
+                        y: left.ymax as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
+                    join_highlight_overlay_data.height -= close_height as f32;
+                }
+            }
+        };
+        Ok((join_highlight_overlay_data, close_areas_overlay_data))
+    }
+
     /// 合并两个相邻的区域
     /// 这个函数实现了Blender中screen_area_join_aligned的逻辑
-    pub fn join_adjacent_areas(
+    pub fn apply_join_adjacent_areas(
         &mut self,
         source_area_key: ScrAreaKey,
         target_area_key: ScrAreaKey,
+        adjacency: Adjacency,
         ui_settings: &UISettings,
     ) -> Result<()> {
         if source_area_key == target_area_key {
             return Ok(());
         }
 
-        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
-        #[cfg(test)]
-        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
-        #[cfg(not(test))]
-        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
-
-        let source_rect = self
-            .areas
-            .get(source_area_key)
-            .context(format!("源区域不存在: {:?}", source_area_key))? // 到这里得到 &Area
-            .get_raw_geometry(&self.verts); // 调用方法，得到 Rect
-
-        let target_rect = self
-            .areas
-            .get(target_area_key)
-            .context(format!("目标区域不存在: {:?}", target_area_key))?
-            .get_raw_geometry(&self.verts);
-
-        // 计算重叠点坐标
-        let overlap_left = std::cmp::max(source_rect.xmin, target_rect.xmin);
-        let overlap_right = std::cmp::min(source_rect.xmax, target_rect.xmax);
-        let overlap_top = std::cmp::max(source_rect.ymin, target_rect.ymin);
-        let overlap_bottom = std::cmp::min(source_rect.ymax, target_rect.ymax);
-
-        // 使用安全的减法避免溢出
-        let overlap_x = if overlap_right > overlap_left {
-            overlap_right - overlap_left
-        } else {
-            0
-        };
-        let overlap_y = if overlap_bottom > overlap_top {
-            overlap_bottom - overlap_top
-        } else {
-            0
-        };
-
         // 产生的空白区域
         let mut new_empty_areas = Vec::new();
         let mut merged_area_key: ScrAreaKey = target_area_key;
         let mut working_source_area_key: ScrAreaKey = source_area_key;
 
-        // （上下关系）
-        // source 在上
-        if (source_rect.ymax == target_rect.ymin) && overlap_x >= MIN_AREA_SIZE {
-            //   ┏━━━━━━░
-            //   ┃source░
-            // ┏━┻━━━━━━░
-            // ┃        ░
-            // ┃  target░
-            // ┃        ░
-            // ┗━━━━━━━━░
-            if source_rect.xmin > target_rect.xmin {
-                // 右方的新建Area
-                // 此时 target_area 已经被修改
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.xmin,
-                    true,
-                    ui_settings,
-                )?;
-            }
-            // ┏━━━━━━━━░
-            // ┃        ░
-            // ┃  source░
-            // ┃        ░
-            // ┗━┳━━━━━━░
-            //   ┃target░
-            //   ┗━━━━━━░
-            else if source_rect.xmin < target_rect.xmin {
-                new_empty_areas.push(working_source_area_key.clone());
-                working_source_area_key = self.split_area_by_coordinates(
+        match adjacency {
+            Adjacency::TopToBottom { top, bottom } => {
+                //   ┏━━━━━━░
+                //   ┃source░
+                // ┏━┻━━━━━━░
+                // ┃        ░
+                // ┃  target░
+                // ┃        ░
+                // ┗━━━━━━━━░
+                if top.xmin > bottom.xmin {
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        top.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+                // ┏━━━━━━━━░
+                // ┃        ░
+                // ┃  source░
+                // ┃        ░
+                // ┗━┳━━━━━━░
+                //   ┃target░
+                //   ┗━━━━━━░
+                else if top.xmin < bottom.xmin {
+                    new_empty_areas.push(working_source_area_key.clone());
+                    working_source_area_key = self.split_area_by_coordinates(
+                        working_source_area_key,
+                        bottom.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+
+                // ░━━━━━━┓
+                // ░source┃
+                // ░━━━━━━┻━┓
+                // ░        ┃
+                // ░target  ┃
+                // ░        ┃
+                // ░━━━━━━━━┛
+                if top.xmax < bottom.xmax {
+                    self.split_area_by_coordinates(merged_area_key, top.xmax, true, ui_settings)?;
+                }
+                // ░━━━━━━━━┓
+                // ░        ┃
+                // ░source  ┃
+                // ░        ┃
+                // ░━━━━━━┳━┛
+                // ░target┃
+                // ░━━━━━━┛
+                else if top.xmax > bottom.xmax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_source_area_key,
+                        bottom.xmax,
+                        true,
+                        ui_settings,
+                    )?)
+                }
+
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.xmin,
-                    true,
-                    ui_settings,
+                    VertPosition::BottomLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_bottom_left(),
+                    ),
                 )?;
-            }
-
-            // ░━━━━━━┓
-            // ░source┃
-            // ░━━━━━━┻━┓
-            // ░        ┃
-            // ░target  ┃
-            // ░        ┃
-            // ░━━━━━━━━┛
-            // 说明右边目标区域更大(即目标区域需要split, 可能已被上方代码分割过)
-            if source_rect.xmax < target_rect.xmax {
-                self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.xmin,
-                    true,
-                    ui_settings,
-                )?;
-            }
-            // ░━━━━━━━━┓
-            // ░        ┃
-            // ░source  ┃
-            // ░        ┃
-            // ░━━━━━━┳━┛
-            // ░target┃
-            // ░━━━━━━┛
-            else if source_rect.xmax > target_rect.xmax {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.xmax,
-                    true,
-                    ui_settings,
-                )?)
-            }
-
-            // 开始合并对齐的面板
-            println!("开始合并上下相邻的区域");
-
-            // WARN: TODO: 需要想一个可以在可变与不可变当中设置顶点的方法来统一一下
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::BottomLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_bottom_left,
-                ),
-            );
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::BottomRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_bottom_right,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_top_left,
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_bottom_left,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_top_right,
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_bottom_right,
-            );
-        } else if (source_rect.ymin == target_rect.ymax) && overlap_x >= MIN_AREA_SIZE {
-            // ┏━━━━━━━━░
-            // ┃        ░
-            // ┃  target░
-            // ┃        ░
-            // ┗━┳━━━━━━░
-            //   ┃source░
-            //   ┗━━━━━━░
-            if source_rect.xmin > target_rect.xmin {
-                merged_area_key = self.split_area_by_coordinates(
-                    target_area_key,
-                    source_rect.xmin,
-                    true,
-                    ui_settings,
+                    VertPosition::BottomRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_bottom_right(),
+                    ),
                 )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_top_left(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_bottom_left(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_top_right(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_bottom_right(),
+                );
             }
-            //   ┏━━━━━━░
-            //   ┃target░
-            // ┏━┻━━━━━━░
-            // ┃        ░
-            // ┃  source░
-            // ┃        ░
-            // ┗━━━━━━━━░
-            else if (source_rect.xmin < target_rect.xmin) {
-                new_empty_areas.push(working_source_area_key.clone());
-                working_source_area_key = self.split_area_by_coordinates(
+            Adjacency::BottomToTop { bottom, top } => {
+                // ┏━━━━━━━━░
+                // ┃        ░
+                // ┃  target░
+                // ┃        ░
+                // ┗━┳━━━━━━░
+                //   ┃source░
+                //   ┗━━━━━━░
+                if bottom.xmin > top.xmin {
+                    merged_area_key = self.split_area_by_coordinates(
+                        target_area_key,
+                        bottom.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+                //   ┏━━━━━━░
+                //   ┃target░
+                // ┏━┻━━━━━━░
+                // ┃        ░
+                // ┃  source░
+                // ┃        ░
+                // ┗━━━━━━━━░
+                else if bottom.xmin < top.xmin {
+                    new_empty_areas.push(working_source_area_key.clone());
+                    working_source_area_key = self.split_area_by_coordinates(
+                        working_source_area_key,
+                        top.xmin,
+                        true,
+                        ui_settings,
+                    )?
+                }
+
+                // ░━━━━━━━━┓
+                // ░        ┃
+                // ░target  ┃
+                // ░        ┃
+                // ░━━━━━━┳━┛
+                // ░source┃
+                // ░━━━━━━┛
+                if bottom.xmax < top.xmax {
+                    self.split_area_by_coordinates(
+                        merged_area_key,
+                        bottom.xmax,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+                // ░━━━━━━┓
+                // ░target┃
+                // ░━━━━━━┻━┓
+                // ░        ┃
+                // ░source  ┃
+                // ░        ┃
+                // ░━━━━━━━━┛
+                else if bottom.xmax > top.xmax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_source_area_key,
+                        top.xmax,
+                        true,
+                        ui_settings,
+                    )?)
+                }
+
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.xmin,
-                    true,
-                    ui_settings,
-                )?
-            }
-
-            // ░━━━━━━━━┓
-            // ░        ┃
-            // ░target  ┃
-            // ░        ┃
-            // ░━━━━━━┳━┛
-            // ░source┃
-            // ░━━━━━━┛
-            if source_rect.xmax < target_rect.xmax {
-                self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.xmax,
-                    true,
-                    ui_settings,
+                    VertPosition::TopLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_top_left(),
+                    ),
                 )?;
-            }
-            // ░━━━━━━┓
-            // ░target┃
-            // ░━━━━━━┻━┓
-            // ░        ┃
-            // ░source  ┃
-            // ░        ┃
-            // ░━━━━━━━━┛
-            else if (source_rect.xmax > target_rect.xmax) {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.xmax,
-                    true,
-                    ui_settings,
-                )?)
-            }
-            // 开始合并对齐的面板
-
-            // WARN: TODO: 需要想一个可以在可变与不可变当中设置顶点的方法来统一一下
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::TopLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_top_left,
-                ),
-            );
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::TopRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_top_right,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_bottom_left,
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_top_left,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_top_right,
-                self.areas
-                    .get(working_source_area_key)
-                    .context("不存在的source_area_key")?
-                    .v_bottom_right,
-            );
-        }
-
-        // WARN: 如果前面触发,这里可以清理然后返回不执行后面了
-
-        // （左右关系）
-        // source 在左
-        if (source_rect.xmax == target_rect.xmin) && overlap_y >= MIN_AREA_SIZE {
-            //        ┏━━━━━━━━━━┓
-            // ┏━━━━━━┫          ┃
-            // ┃source┃  target  ┃
-            // ░░░░░░░░░░░░░░░░░░░
-            if source_rect.ymin > target_rect.ymin {
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.ymin,
-                    false,
-                    ui_settings,
+                    VertPosition::TopRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_top_right(),
+                    ),
                 )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_bottom_left(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_top_left(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_top_right(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context("不存在的source_area_key")?
+                        .v_bottom_right(),
+                );
             }
-            // ┏━━━━━━━━━━┓
-            // ┃          ┣━━━━━━┓
-            // ┃  source  ┃target┃
-            // ░░░░░░░░░░░░░░░░░░░
-            else if source_rect.ymin < target_rect.ymin {
-                new_empty_areas.push(working_source_area_key.clone());
-                working_source_area_key = self.split_area_by_coordinates(
+            Adjacency::LeftToRight { left, right } => {
+                //        ┏━━━━━━━━━━┓
+                // ┏━━━━━━┫          ┃
+                // ┃source┃  target  ┃
+                // ░░░░░░░░░░░░░░░░░░░
+                if left.ymin > right.ymin {
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        left.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                }
+                // ┏━━━━━━━━━━┓
+                // ┃          ┣━━━━━━┓
+                // ┃  source  ┃target┃
+                // ░░░░░░░░░░░░░░░░░░░
+                else if left.ymin < right.ymin {
+                    new_empty_areas.push(working_source_area_key.clone());
+                    working_source_area_key = self.split_area_by_coordinates(
+                        working_source_area_key,
+                        right.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                }
+
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃source┃  target  ┃
+                // ┗━━━━━━┫          ┃
+                //        ┗━━━━━━━━━━┛
+                if left.ymax < right.ymax {
+                    self.split_area_by_coordinates(merged_area_key, left.ymax, false, ui_settings)?;
+                }
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃  source  ┃target┃
+                // ┃          ┣━━━━━━┛
+                // ┗━━━━━━━━━━┛
+                else if left.ymax > right.ymax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_source_area_key,
+                        right.ymax,
+                        false,
+                        ui_settings,
+                    )?)
+                }
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.xmin,
-                    false,
-                    ui_settings,
+                    VertPosition::TopRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_top_right(),
+                    ),
                 )?;
-            }
-
-            // ░░░░░░░░░░░░░░░░░░░
-            // ┃source┃  target  ┃
-            // ┗━━━━━━┫          ┃
-            //        ┗━━━━━━━━━━┛
-            if source_rect.ymax < target_rect.ymax {
-                self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.ymax,
-                    false,
-                    ui_settings,
-                )?;
-            }
-            // ░░░░░░░░░░░░░░░░░░░
-            // ┃  source  ┃target┃
-            // ┃          ┣━━━━━━┛
-            // ┗━━━━━━━━━━┛
-            else if source_rect.ymax > target_rect.ymax {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.ymax,
-                    false,
-                    ui_settings,
-                )?)
-            }
-            // 开始合并对齐的面板
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::TopRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_top_right,
-                ),
-            );
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::BottomRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_bottom_right,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_top_left,
-                self.areas
-                    .get(working_source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_top_right,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_bottom_left,
-                self.areas
-                    .get(source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_bottom_right,
-            );
-        } else if (source_rect.xmin == target_rect.xmax) && overlap_y >= MIN_AREA_SIZE {
-            // ┏━━━━━━━━━━┓
-            // ┃          ┣━━━━━━┓
-            // ┃  target  ┃source┃
-            // ░░░░░░░░░░░░░░░░░░░
-            if source_rect.ymin > target_rect.ymin {
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.ymin,
-                    false,
-                    ui_settings,
+                    VertPosition::BottomRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_bottom_right(),
+                    ),
                 )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_top_left(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_top_right(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_bottom_left(),
+                    self.areas
+                        .get(source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_bottom_right(),
+                );
             }
-            //        ┏━━━━━━━━━━┓
-            // ┏━━━━━━┫          ┃
-            // ┃target┃  source  ┃
-            // ░░░░░░░░░░░░░░░░░░░
-            else if source_rect.ymin < target_rect.ymin {
-                new_empty_areas.push(working_source_area_key.clone());
-                working_source_area_key = self.split_area_by_coordinates(
+            Adjacency::RightToLeft { right, left } => {
+                // ┏━━━━━━━━━━┓
+                // ┃          ┣━━━━━━┓
+                // ┃  target  ┃source┃
+                // ░░░░░░░░░░░░░░░░░░░
+                if right.ymin > left.ymin {
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        right.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                }
+                //        ┏━━━━━━━━━━┓
+                // ┏━━━━━━┫          ┃
+                // ┃target┃  source  ┃
+                // ░░░░░░░░░░░░░░░░░░░
+                else if right.ymin < left.ymin {
+                    new_empty_areas.push(working_source_area_key.clone());
+                    working_source_area_key = self.split_area_by_coordinates(
+                        working_source_area_key,
+                        left.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                }
+
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃  target  ┃source┃
+                // ┃          ┣━━━━━━┛
+                // ┗━━━━━━━━━━┛
+                if right.ymax < left.ymax {
+                    self.split_area_by_coordinates(
+                        merged_area_key,
+                        right.ymax,
+                        false,
+                        ui_settings,
+                    )?;
+                }
+                // ░░░░░░░░░░░░░░░░░░░
+                // ┃target┃  source  ┃
+                // ┗━━━━━━┫          ┃
+                //        ┗━━━━━━━━━━┛
+                else if right.ymax > left.ymax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_source_area_key,
+                        left.ymax,
+                        false,
+                        ui_settings,
+                    )?)
+                }
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.ymin,
-                    false,
-                    ui_settings,
+                    VertPosition::TopLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_top_left(),
+                    ),
                 )?;
-            }
-
-            // ░░░░░░░░░░░░░░░░░░░
-            // ┃  target  ┃source┃
-            // ┃          ┣━━━━━━┛
-            // ┗━━━━━━━━━━┛
-            if source_rect.ymax < target_rect.ymax {
-                self.split_area_by_coordinates(
-                    merged_area_key,
-                    source_rect.ymax,
-                    false,
-                    ui_settings,
-                )?;
-            }
-            // ░░░░░░░░░░░░░░░░░░░
-            // ┃target┃  source  ┃
-            // ┗━━━━━━┫          ┃
-            //        ┗━━━━━━━━━━┛
-            else if source_rect.ymax > target_rect.ymax {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_source_area_key,
-                    target_rect.ymax,
-                    false,
-                    ui_settings,
-                )?)
+                    VertPosition::BottomLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_bottom_left(),
+                    ),
+                )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_top_left(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_top_right(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_bottom_right(),
+                    self.areas
+                        .get(working_source_area_key)
+                        .context(format!("源区域不存在: {:?}", working_source_area_key))?
+                        .v_bottom_left(),
+                );
             }
-            // 开始合并对齐的面板
-            println!("开始合并左右相邻的区域");
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::TopLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_top_left,
-                ),
-            );
-            self.set_area_vert(
-                working_source_area_key,
-                VertPosition::BottomLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_bottom_left,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_top_left,
-                self.areas
-                    .get(working_source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_top_right,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_bottom_right,
-                self.areas
-                    .get(working_source_area_key)
-                    .context(format!("源区域不存在: {:?}", working_source_area_key))?
-                    .v_bottom_left,
-            );
-        }
-
-        // 检查是否有任何相邻关系被检测到
-        let has_vertical_adjacency = (source_rect.ymax == target_rect.ymin
-            && overlap_x >= MIN_AREA_SIZE)
-            || (source_rect.ymin == target_rect.ymax && overlap_x >= MIN_AREA_SIZE);
-        let has_horizontal_adjacency = (source_rect.xmax == target_rect.xmin
-            && overlap_y >= MIN_AREA_SIZE)
-            || (source_rect.xmin == target_rect.xmax && overlap_y >= MIN_AREA_SIZE);
-
-        if !has_vertical_adjacency && !has_horizontal_adjacency {
-            println!("警告: 尝试合并不相邻的区域");
-            println!(
-                "source_area: {:?} - 坐标: ({}, {}) 到 ({}, {})",
-                source_area_key,
-                source_rect.xmin,
-                source_rect.ymin,
-                source_rect.xmax,
-                source_rect.ymax
-            );
-            println!(
-                "target_area: {:?} - 坐标: ({}, {}) 到 ({}, {})",
-                target_area_key,
-                target_rect.xmin,
-                target_rect.ymin,
-                target_rect.xmax,
-                target_rect.ymax
-            );
-            println!("重叠信息: x重叠={}, y重叠={}", overlap_x, overlap_y);
-            println!("条件检查:");
-            println!(
-                "  垂直相邻: source.ymax == target.ymin: {} == {} = {}",
-                source_rect.ymax,
-                target_rect.ymin,
-                source_rect.ymax == target_rect.ymin
-            );
-            println!(
-                "  垂直相邻: source.ymin == target.ymax: {} == {} = {}",
-                source_rect.ymin,
-                target_rect.ymax,
-                source_rect.ymin == target_rect.ymax
-            );
-            println!(
-                "  水平相邻: source.xmax == target.xmin: {} == {} = {}",
-                source_rect.xmax,
-                target_rect.xmin,
-                source_rect.xmax == target_rect.xmin
-            );
-            println!(
-                "  水平相邻: source.xmin == target.xmax: {} == {} = {}",
-                source_rect.xmin,
-                target_rect.xmax,
-                source_rect.xmin == target_rect.xmax
-            );
-            println!(
-                "  x重叠足够: {} >= {} = {}",
-                overlap_x,
-                MIN_AREA_SIZE,
-                overlap_x >= MIN_AREA_SIZE
-            );
-            println!(
-                "  y重叠足够: {} >= {} = {}",
-                overlap_y,
-                MIN_AREA_SIZE,
-                overlap_y >= MIN_AREA_SIZE
-            );
-
-            return Err(anyhow::anyhow!(
-                "无法合并不相邻的区域: source={:?}, target={:?}。两个区域必须共享一条边且有足够的重叠。",
-                source_area_key,
-                target_area_key
-            ));
         }
 
         // 删除目标区域
@@ -750,34 +890,37 @@ impl ScrAreaMap {
 
         // 递归清理产生的empty区域
         if !new_empty_areas.is_empty() {
-            self.recursive_fill_empty_areas(new_empty_areas, ui_settings)?;
+            self.recursive_fill_close_areas(new_empty_areas, ui_settings)?;
         }
+
+        // 重新计算所有区域的几何数据
+        self.update_all_areas_rcti(ui_settings);
 
         Ok(())
     }
 
-    fn fill_empty_area(
+    fn fill_close_area(
         &mut self,
-        empty_area_key: ScrAreaKey,
+        close_area_key: ScrAreaKey,
         ui_settings: &UISettings,
     ) -> Result<Vec<ScrAreaKey>> {
         let best_neighbor = self
-            .find_best_neighbor_for_empty_area(
-                self.areas.get(empty_area_key).context("不存在的Area")?,
+            .find_best_neighbor_for_close_area(
+                self.areas.get(close_area_key).context("不存在的Area")?,
             )
             .context(format!(
                 "竟然找不到其他任何可能的填充邻居: {:#?}",
-                empty_area_key
+                close_area_key
             ))?;
 
         // 是合并相似，但是不管大合小还是小合大分割出来的都是空白区域
-        // ===复制开始===
-        if best_neighbor == empty_area_key {
+        if best_neighbor == close_area_key {
             panic!(
-                "Error: best_neighbor cannot be the empty_area_key. INFO: {:#?}",
-                empty_area_key
+                "Error: best_neighbor cannot be the close_area_key. INFO: {:#?}",
+                close_area_key
             );
         }
+
         // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
         #[cfg(test)]
         const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
@@ -790,10 +933,10 @@ impl ScrAreaMap {
             .context(format!("源区域不存在: {:?}", best_neighbor))?
             .get_raw_geometry(&self.verts);
 
-        let empty_rect = self
+        let close_rect = self
             .areas
-            .get(empty_area_key)
-            .context(format!("目标区域不存在: {:?}", empty_area_key))?
+            .get(close_area_key)
+            .context(format!("目标区域不存在: {:?}", close_area_key))?
             .get_raw_geometry(&self.verts);
 
         println!(
@@ -802,442 +945,405 @@ impl ScrAreaMap {
         );
         println!(
             "empty区域坐标: ({}, {}) 到 ({}, {})",
-            empty_rect.xmin, empty_rect.ymin, empty_rect.xmax, empty_rect.ymax
+            close_rect.xmin, close_rect.ymin, close_rect.xmax, close_rect.ymax
         );
 
-        // 计算重叠点坐标
-        let overlap_left = std::cmp::max(empty_rect.xmin, neighbor_rect.xmin);
-        let overlap_right = std::cmp::min(empty_rect.xmax, neighbor_rect.xmax);
-        let overlap_top = std::cmp::max(empty_rect.ymin, neighbor_rect.ymin);
-        let overlap_bottom = std::cmp::min(empty_rect.ymax, neighbor_rect.ymax);
-
-        // 使用安全的减法避免溢出
-        let overlap_x = if overlap_right > overlap_left {
-            overlap_right - overlap_left
-        } else {
-            0
-        };
-        let overlap_y = if overlap_bottom > overlap_top {
-            overlap_bottom - overlap_top
-        } else {
-            0
-        };
+        // 检测相邻关系
+        let adjacency = self
+            .detect_adjacency(neighbor_rect, close_rect, MIN_AREA_SIZE)
+            .context("Area 坐标不一致：没有检测到任何相邻关系")?;
 
         // 产生的空白区域
         let mut new_empty_areas = Vec::new();
-        let mut merged_area_key: ScrAreaKey = empty_area_key;
+        let mut merged_area_key: ScrAreaKey = close_area_key;
         let mut working_neighbor_area_key: ScrAreaKey = best_neighbor;
-        let mut has_adjacency = false;
 
-        // （上下关系）
-        // neighbor 在上
-        if (neighbor_rect.ymax == empty_rect.ymin) && overlap_x >= MIN_AREA_SIZE {
-            has_adjacency = true;
-            //   ┏━━━━━━━━░
-            //   ┃neighbor░
-            // ┏━┻━━━━━━━━░
-            // ┃          ░
-            // ┃   empty  ░
-            // ┃          ░
-            // ┗━━━━━━━━━━░
-            if neighbor_rect.xmin > empty_rect.xmin {
-                // 右方的新建Area
-                // 此时 empty_area 已经被修改
-                new_empty_areas.push(merged_area_key.clone());
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.xmin,
-                    true,
-                    ui_settings,
-                )?;
-            }
-            // ┏━━━━━━━━░
-            // ┃        ░
-            // ┃neighbor░
-            // ┃        ░
-            // ┗━┳━━━━━━░
-            //   ┃ empty░
-            //   ┗━━━━━━░
-            else if neighbor_rect.xmin < empty_rect.xmin {
-                // neighbor 在左，empty 在右，需要分割 neighbor
-                new_empty_areas.push(working_neighbor_area_key.clone());
-                working_neighbor_area_key = self.split_area_by_coordinates(
+        match adjacency {
+            Adjacency::TopToBottom {
+                top: neighbor_rect,
+                bottom: close_rect,
+            } => {
+                //   ┏━━━━━━━━░
+                //   ┃neighbor░
+                // ┏━┻━━━━━━━━░
+                // ┃    close ░
+                // ┗━━━━━━━━━━░
+                if neighbor_rect.xmin > close_rect.xmin {
+                    new_empty_areas.push(merged_area_key.clone());
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+                // ┏━━━━━━━━━━░
+                // ┃ neighbor ░
+                // ┗━┳━━━━━━━━░
+                //   ┃  close ░
+                //   ┗━━━━━━━━░
+                else if neighbor_rect.xmin < close_rect.xmin {
+                    new_empty_areas.push(working_neighbor_area_key.clone());
+                    working_neighbor_area_key = self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+
+                // ░━━━━━━━━┓
+                // ░neighbor┃
+                // ░━━━━━━━━┻━┓
+                // ░ close    ┃
+                // ░━━━━━━━━━━┛
+                if neighbor_rect.xmax < close_rect.xmax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.xmax,
+                        true,
+                        ui_settings,
+                    )?);
+                }
+                // ░━━━━━━━━━━┓
+                // ░ neighbor ┃
+                // ░━━━━━━━━┳━┛
+                // ░ close  ┃
+                // ░━━━━━━━━┛
+                else if neighbor_rect.xmax > close_rect.xmax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.xmax,
+                        true,
+                        ui_settings,
+                    )?);
+                }
+
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.xmin,
-                    true,
-                    ui_settings,
+                    VertPosition::BottomLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_bottom_left(),
+                    ),
                 )?;
-                // 分割后，working_neighbor_area_key 指向 neighbor 的右半部分（与 empty 重叠的部分）
-            }
-
-            // ░━━━━━━━━┓
-            // ░neighbor┃
-            // ░━━━━━━━━┻━┓
-            // ░          ┃
-            // ░  empty   ┃
-            // ░          ┃
-            // ░━━━━━━━━━━┛
-            // 说明右边 empty 区域更大(即 empty 区域需要split, 可能已被上方代码分割过)
-            if neighbor_rect.xmax < empty_rect.xmax {
-                new_empty_areas.push(self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.xmax,
-                    true,
-                    ui_settings,
-                )?);
-            }
-            // ░━━━━━━━━┓
-            // ░        ┃
-            // ░neighbor┃
-            // ░        ┃
-            // ░━━━━━━┳━┛
-            // ░ empty┃
-            // ░━━━━━━┛
-            else if neighbor_rect.xmax > empty_rect.xmax {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.xmax,
-                    true,
-                    ui_settings,
-                )?);
-            }
-
-            // 开始合并对齐的面板
-
-            // WARN: TODO: 需要想一个可以在可变与不可变当中设置顶点的方法来统一一下
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::BottomLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_bottom_left,
-                ),
-            );
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::BottomRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_bottom_right,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_top_left,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_bottom_left,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_top_right,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_bottom_right,
-            );
-        } else if (neighbor_rect.ymin == empty_rect.ymax) && overlap_x >= MIN_AREA_SIZE {
-            has_adjacency = true;
-            // ┏━━━━━━━━━━░
-            // ┃          ░
-            // ┃   empty  ░
-            // ┃          ░
-            // ┗━┳━━━━━━━━░
-            //   ┃neighbor░
-            //   ┗━━━━━━━━░
-            if neighbor_rect.xmin > empty_rect.xmin {
-                new_empty_areas.push(merged_area_key.clone());
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.xmin,
-                    true,
-                    ui_settings,
+                    VertPosition::BottomRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_bottom_right(),
+                    ),
                 )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_top_left(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_bottom_left(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_top_right(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_bottom_right(),
+                );
             }
-            //   ┏━━━━━━░
-            //   ┃ empty░
-            // ┏━┻━━━━━━░
-            // ┃        ░
-            // ┃neighbor░
-            // ┃        ░
-            // ┗━━━━━━━━░
-            else if (neighbor_rect.xmin < empty_rect.xmin) {
-                new_empty_areas.push(working_neighbor_area_key.clone());
-                merged_area_key = self.split_area_by_coordinates(
+            Adjacency::BottomToTop {
+                bottom: neighbor_rect,
+                top: close_rect,
+            } => {
+                // ┏━━━━━━━━━━░
+                // ┃    close ░
+                // ┗━┳━━━━━━━━░
+                //   ┃neighbor░
+                //   ┗━━━━━━━━░
+                if neighbor_rect.xmin > close_rect.xmin {
+                    new_empty_areas.push(merged_area_key.clone());
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+                //   ┏━━━━━━━━░
+                //   ┃  close ░
+                // ┏━┻━━━━━━━━░
+                // ┃ neighbor ░
+                // ┗━━━━━━━━━━░
+                else if neighbor_rect.xmin < close_rect.xmin {
+                    new_empty_areas.push(working_neighbor_area_key.clone());
+                    working_neighbor_area_key = self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.xmin,
+                        true,
+                        ui_settings,
+                    )?;
+                }
+
+                // ░━━━━━━━━━━┓
+                // ░ close    ┃
+                // ░━━━━━━━━┳━┛
+                // ░neighbor┃
+                // ░━━━━━━━━┛
+                if neighbor_rect.xmax < close_rect.xmax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.xmax,
+                        true,
+                        ui_settings,
+                    )?);
+                // ░━━━━━━━━┓
+                // ░ close  ┃
+                // ░━━━━━━━━┻━┓
+                // ░ neighbor ┃
+                // ░━━━━━━━━━━┛
+                } else if neighbor_rect.xmax > close_rect.xmax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.xmax,
+                        true,
+                        ui_settings,
+                    )?);
+                }
+
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.xmin,
-                    true,
-                    ui_settings,
+                    VertPosition::TopLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_top_left(),
+                    ),
                 )?;
-            }
-
-            // ░━━━━━━━━━━┓
-            // ░          ┃
-            // ░  empty   ┃
-            // ░          ┃
-            // ░━━━━━━━━┳━┛
-            // ░neighbor┃
-            // ░━━━━━━━━┛
-            if neighbor_rect.xmax < empty_rect.xmax {
-                new_empty_areas.push(self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.xmax,
-                    true,
-                    ui_settings,
-                )?);
-            // ░━━━━━━┓
-            // ░ empty┃
-            // ░━━━━━━┻━┓
-            // ░        ┃
-            // ░neighbor┃
-            // ░        ┃
-            // ░━━━━━━━━┛
-            } else if (neighbor_rect.xmax > empty_rect.xmax) {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.xmax,
-                    true,
-                    ui_settings,
-                )?);
-            }
-            // 开始合并对齐的面板
-
-            // WARN: TODO: 需要想一个可以在可变与不可变当中设置顶点的方法来统一一下
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::TopLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_top_left,
-                ),
-            );
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::TopRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context(format!("合并区域不存在: {:?}", merged_area_key))?
-                        .v_top_right,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_bottom_left,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_top_left,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_top_right,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context("不存在的neighbor_area_key")?
-                    .v_bottom_right,
-            );
-        }
-
-        // （左右关系）
-        // neighbor 在左
-        if (neighbor_rect.xmax == empty_rect.xmin) && overlap_y >= MIN_AREA_SIZE {
-            has_adjacency = true;
-            //          ┏━━━━━━━━━┓
-            // ┏━━━━━━━━┫         ┃
-            // ┃neighbor┃  empty  ┃
-            // ░░░░░░░░░░░░░░░░░░░░
-            if neighbor_rect.ymin > empty_rect.ymin {
-                new_empty_areas.push(merged_area_key.clone());
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.ymin,
-                    false,
-                    ui_settings,
+                    VertPosition::TopRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context(format!("合并区域不存在: {:?}", merged_area_key))?
+                            .v_top_right(),
+                    ),
                 )?;
-            // ┏━━━━━━━━┓
-            // ┃        ┣━━━━━━━━━┓
-            // ┃neighbor┃  empty  ┃
-            // ░░░░░░░░░░░░░░░░░░░░
-            } else if neighbor_rect.ymin < empty_rect.ymin {
-                new_empty_areas.push(working_neighbor_area_key.clone());
-                working_neighbor_area_key = self.split_area_by_coordinates(
-                    working_neighbor_area_key,
-                    empty_rect.ymin,
-                    false,
-                    ui_settings,
-                )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_bottom_left(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_top_left(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_top_right(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context("不存在的neighbor_area_key")?
+                        .v_bottom_right(),
+                );
             }
+            Adjacency::LeftToRight {
+                left: neighbor_rect,
+                right: close_rect,
+            } => {
+                //          ┏━━━━━━━━━┓
+                // ┏━━━━━━━━┫         ┃
+                // ┃neighbor┃  close  ┃
+                // ░░░░░░░░░░░░░░░░░░░░
+                if neighbor_rect.ymin > close_rect.ymin {
+                    new_empty_areas.push(merged_area_key.clone());
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                // ┏━━━━━━━━┓
+                // ┃        ┣━━━━━━━━━┓
+                // ┃neighbor┃  close  ┃
+                // ░░░░░░░░░░░░░░░░░░░░
+                } else if neighbor_rect.ymin < close_rect.ymin {
+                    new_empty_areas.push(working_neighbor_area_key.clone());
+                    working_neighbor_area_key = self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                }
 
-            // ░░░░░░░░░░░░░░░░░░░░
-            // ┃neighbor┃  empty  ┃
-            // ┗━━━━━━━━┫         ┃
-            //          ┗━━━━━━━━━┛
-            if neighbor_rect.ymax < empty_rect.ymax {
-                new_empty_areas.push(self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.ymax,
-                    false,
-                    ui_settings,
-                )?);
-            // ░░░░░░░░░░░░░░░░░░░░
-            // ┃neighbor┃  empty  ┃
-            // ┃        ┣━━━━━━━━━┛
-            // ┗━━━━━━━━┛
-            } else if neighbor_rect.ymax > empty_rect.ymax {
-                new_empty_areas.push(self.split_area_by_coordinates(
+                // ░░░░░░░░░░░░░░░░░░░░
+                // ┃neighbor┃  close  ┃
+                // ┗━━━━━━━━┫         ┃
+                //          ┗━━━━━━━━━┛
+                if neighbor_rect.ymax < close_rect.ymax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.ymax,
+                        false,
+                        ui_settings,
+                    )?);
+                // ░░░░░░░░░░░░░░░░░░░░
+                // ┃neighbor┃  close  ┃
+                // ┃        ┣━━━━━━━━━┛
+                // ┗━━━━━━━━┛
+                } else if neighbor_rect.ymax > close_rect.ymax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.ymax,
+                        false,
+                        ui_settings,
+                    )?);
+                }
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.ymax,
-                    false,
-                    ui_settings,
-                )?);
-            }
-            // 开始合并对齐的面板
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::TopRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_top_right,
-                ),
-            );
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::BottomRight(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_bottom_right,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_top_left,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_top_right,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_bottom_left,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_bottom_right,
-            );
-        } else if (neighbor_rect.xmin == empty_rect.xmax) && overlap_y >= MIN_AREA_SIZE {
-            has_adjacency = true;
-            // ┏━━━━━━━━━━┓
-            // ┃          ┣━━━━━━━━┓
-            // ┃  empty   ┃neighbor┃
-            // ░░░░░░░░░░░░░░░░░░░░░
-            if neighbor_rect.ymin > empty_rect.ymin {
-                new_empty_areas.push(merged_area_key.clone());
-                merged_area_key = self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.ymin,
-                    false,
-                    ui_settings,
+                    VertPosition::TopRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_top_right(),
+                    ),
                 )?;
-            //        ┏━━━━━━━━━━┓
-            // ┏━━━━━━┫          ┃
-            // ┃ empty┃  neighbor┃
-            // ░░░░░░░░░░░░░░░░░░░
-            } else if neighbor_rect.ymin < empty_rect.ymin {
-                new_empty_areas.push(working_neighbor_area_key.clone());
-                working_neighbor_area_key = self.split_area_by_coordinates(
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.ymin,
-                    false,
-                    ui_settings,
+                    VertPosition::BottomRight(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_bottom_right(),
+                    ),
                 )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_top_left(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_top_right(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_bottom_left(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_bottom_right(),
+                );
             }
+            Adjacency::RightToLeft {
+                right: neighbor_rect,
+                left: close_rect,
+            } => {
+                // ┏━━━━━━━━━┓
+                // ┃         ┣━━━━━━━━┓
+                // ┃  close  ┃neighbor┃
+                // ░░░░░░░░░░░░░░░░░░░░
+                if neighbor_rect.ymin > close_rect.ymin {
+                    new_empty_areas.push(merged_area_key.clone());
+                    merged_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                //           ┏━━━━━━━━┓
+                // ┏━━━━━━━━━┫        ┃
+                // ┃  close  ┃neighbor┃
+                // ░░░░░░░░░░░░░░░░░░░░
+                } else if neighbor_rect.ymin < close_rect.ymin {
+                    new_empty_areas.push(working_neighbor_area_key.clone());
+                    working_neighbor_area_key = self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.ymin,
+                        false,
+                        ui_settings,
+                    )?;
+                }
 
-            // ░░░░░░░░░░░░░░░░░░░░░
-            // ┃  empty   ┃neighbor┃
-            // ┃          ┣━━━━━━━━┛
-            // ┗━━━━━━━━━━┛
-            if neighbor_rect.ymax < empty_rect.ymax {
-                new_empty_areas.push(self.split_area_by_coordinates(
-                    merged_area_key,
-                    neighbor_rect.ymax,
-                    false,
-                    ui_settings,
-                )?);
-            // ░░░░░░░░░░░░░░░░░░░
-            // ┃ empty┃  neighbor┃
-            // ┗━━━━━━┫          ┃
-            //        ┗━━━━━━━━━━┛
-            } else if neighbor_rect.ymax > empty_rect.ymax {
-                // empty 在下，neighbor 在上，需要分割 empty
-                new_empty_areas.push(self.split_area_by_coordinates(
+                // ░░░░░░░░░░░░░░░░░░░░
+                // ┃  close  ┃neighbor┃
+                // ┃         ┣━━━━━━━━┛
+                // ┗━━━━━━━━━┛
+                if neighbor_rect.ymax < close_rect.ymax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        merged_area_key,
+                        neighbor_rect.ymax,
+                        false,
+                        ui_settings,
+                    )?);
+                // ░░░░░░░░░░░░░░░░░░░░
+                // ┃  close  ┃neighbor┃
+                // ┗━━━━━━━━━┫        ┃
+                //           ┗━━━━━━━━┛
+                } else if neighbor_rect.ymax > close_rect.ymax {
+                    new_empty_areas.push(self.split_area_by_coordinates(
+                        working_neighbor_area_key,
+                        close_rect.ymax,
+                        false,
+                        ui_settings,
+                    )?);
+                }
+                // 开始合并对齐的面板
+                self.set_area_vert(
                     working_neighbor_area_key,
-                    empty_rect.ymax,
-                    false,
-                    ui_settings,
-                )?);
+                    VertPosition::TopLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_top_left(),
+                    ),
+                )?;
+                self.set_area_vert(
+                    working_neighbor_area_key,
+                    VertPosition::BottomLeft(
+                        self.areas
+                            .get(merged_area_key)
+                            .context("不存在合并area")?
+                            .v_bottom_left(),
+                    ),
+                )?;
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_top_left(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_top_right(),
+                );
+                self.add_edge_to_geometry(
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_bottom_right(),
+                    self.areas
+                        .get(working_neighbor_area_key)
+                        .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
+                        .v_bottom_left(),
+                );
             }
-            // 开始合并对齐的面板
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::TopLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_top_left,
-                ),
-            );
-            self.set_area_vert(
-                working_neighbor_area_key,
-                VertPosition::BottomLeft(
-                    self.areas
-                        .get(merged_area_key)
-                        .context("不存在合并area")?
-                        .v_bottom_left,
-                ),
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_top_left,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_top_right,
-            );
-            self.add_edge_to_geometry(
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_bottom_right,
-                self.areas
-                    .get(working_neighbor_area_key)
-                    .context(format!("源区域不存在: {:?}", working_neighbor_area_key))?
-                    .v_bottom_left,
-            );
-        }
-
-        // 检查是否检测到任何相邻关系
-        if !has_adjacency {
-            panic!("Area 坐标不一致：没有检测到任何相邻关系")
         }
 
         // 删除被合并的empty区域
@@ -1248,42 +1354,41 @@ impl ScrAreaMap {
         self.remove_unused_edges();
 
         Ok(new_empty_areas)
-        // ===复制结束===
     }
 
     /// 递归清理所有empty区域
-    pub fn recursive_fill_empty_areas(
+    pub fn recursive_fill_close_areas(
         &mut self,
-        empty_areas: Vec<ScrAreaKey>,
+        close_areas: Vec<ScrAreaKey>,
         ui_settings: &UISettings,
     ) -> Result<()> {
         const MAX_ITERATIONS: usize = 100;
-        let mut current_empty_areas = empty_areas;
+        let mut current_close_areas = close_areas;
         let mut iteration = 0;
 
-        while !current_empty_areas.is_empty() && iteration < MAX_ITERATIONS {
+        while !current_close_areas.is_empty() && iteration < MAX_ITERATIONS {
             iteration += 1;
 
-            let mut next_empty_areas = Vec::new();
+            let mut next_close_areas = Vec::new();
 
-            for empty_area_key in current_empty_areas {
+            for close_area_key in current_close_areas {
                 // 检查区域是否仍然存在（可能在之前的处理中被删除了）
-                if self.areas.contains_key(empty_area_key) {
-                    match self.fill_empty_area(empty_area_key, ui_settings) {
-                        Ok(mut new_empties) => {
-                            next_empty_areas.append(&mut new_empties);
+                if self.areas.contains_key(close_area_key) {
+                    match self.fill_close_area(close_area_key, ui_settings) {
+                        Ok(mut new_closes) => {
+                            next_close_areas.append(&mut new_closes);
                         }
                         Err(e) => {
-                            println!("填充empty区域 {:?} 失败: {}", empty_area_key, e);
+                            eprintln!("填充 close 区域 {:?} 失败: {}", close_area_key, e);
                             // 继续处理其他区域，不中断整个流程
                         }
                     }
                 } else {
-                    println!("Empty区域 {:?} 已不存在，跳过处理", empty_area_key);
+                    eprintln!("Close 区域 {:?} 已不存在，跳过处理", close_area_key);
                 }
             }
 
-            current_empty_areas = next_empty_areas;
+            current_close_areas = next_close_areas;
         }
 
         if iteration >= MAX_ITERATIONS {
@@ -1291,11 +1396,11 @@ impl ScrAreaMap {
                 "警告: 达到最大迭代次数 {}，可能存在无限循环",
                 MAX_ITERATIONS
             );
-            if !current_empty_areas.is_empty() {
+            if !current_close_areas.is_empty() {
                 println!(
-                    "仍有 {} 个empty区域未处理: {:?}",
-                    current_empty_areas.len(),
-                    current_empty_areas
+                    "仍有 {} 个 close 区域未处理: {:?}",
+                    current_close_areas.len(),
+                    current_close_areas
                 );
             }
         }
@@ -1304,7 +1409,7 @@ impl ScrAreaMap {
     }
 
     /// 寻找空位的最佳邻居
-    fn find_best_neighbor_for_empty_area(&self, empty_area: &ScrArea) -> Option<ScrAreaKey> {
+    fn find_best_neighbor_for_close_area(&self, empty_area: &ScrArea) -> Option<ScrAreaKey> {
         let mut best_neighbor = None;
         let mut best_alignment = 0.0f64;
 
@@ -1387,10 +1492,10 @@ impl ScrAreaMap {
             let vert_rect = area.get_raw_geometry(&self.verts);
             (
                 vert_rect,
-                area.v_top_left,
-                area.v_top_right,
-                area.v_bottom_right,
-                area.v_bottom_left,
+                area.v_top_left(),
+                area.v_top_right(),
+                area.v_bottom_right(),
+                area.v_bottom_left(),
                 area.area_type.clone(),
                 area.is_temp_window,
                 area.is_fullscreen,
@@ -1409,7 +1514,7 @@ impl ScrAreaMap {
             self.add_edge_to_geometry(new_vert_bottom, v3);
             self.add_edge_to_geometry(new_vert_top, new_vert_bottom);
 
-            let mut new_area = ScrArea::new(
+            let new_area = ScrArea::new(
                 new_vert_top,
                 v2,
                 v3,
@@ -1422,11 +1527,11 @@ impl ScrAreaMap {
             let new_area_key = self.areas.insert(new_area);
 
             // 修改原始区域
-            let source_area = self.areas.get_mut(area_key).unwrap();
-            source_area.v_top_right = new_vert_top;
-            source_area.v_bottom_right = new_vert_bottom;
+            self.set_area_vert(area_key, VertPosition::TopRight(new_vert_top))?;
+            self.set_area_vert(area_key, VertPosition::BottomRight(new_vert_bottom))?;
 
             // 重新计算两个区域的几何属性
+            let source_area = self.areas.get_mut(area_key).unwrap();
             source_area.calculate_totrct_and_size(&self.verts, ui_settings);
             let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
             new_area_mut.calculate_totrct_and_size(&self.verts, ui_settings);
@@ -1449,7 +1554,7 @@ impl ScrAreaMap {
             self.add_edge_to_geometry(new_vert_right, v3);
             self.add_edge_to_geometry(new_vert_left, new_vert_right);
 
-            let mut new_area = ScrArea::new(
+            let new_area = ScrArea::new(
                 new_vert_left,
                 new_vert_right,
                 v3,
@@ -1462,11 +1567,11 @@ impl ScrAreaMap {
             let new_area_key = self.areas.insert(new_area);
 
             // 修改原始区域
-            let source_area = self.areas.get_mut(area_key).unwrap();
-            source_area.v_bottom_left = new_vert_left;
-            source_area.v_bottom_right = new_vert_right;
+            self.set_area_vert(area_key, VertPosition::BottomLeft(new_vert_left))?;
+            self.set_area_vert(area_key, VertPosition::BottomRight(new_vert_right))?;
 
             // 重新计算两个区域的几何属性
+            let source_area = self.areas.get_mut(area_key).unwrap();
             source_area.calculate_totrct_and_size(&self.verts, ui_settings);
             let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
             new_area_mut.calculate_totrct_and_size(&self.verts, ui_settings);
@@ -1595,7 +1700,7 @@ impl ScrAreaMap {
         }
 
         if removed_count > 0 {
-            println!("清理了 {} 条重复边", removed_count);
+            // println!("清理了 {} 条重复边", removed_count);
         }
     }
 
@@ -1607,10 +1712,10 @@ impl ScrAreaMap {
         for area in self.areas.values() {
             // 检查区域的四条边
             let area_edges = [
-                (area.v_top_left, area.v_top_right),
-                (area.v_top_right, area.v_bottom_right),
-                (area.v_bottom_right, area.v_bottom_left),
-                (area.v_bottom_left, area.v_top_left),
+                (area.v_top_left(), area.v_top_right()),
+                (area.v_top_right(), area.v_bottom_right()),
+                (area.v_bottom_right(), area.v_bottom_left()),
+                (area.v_bottom_left(), area.v_top_left()),
             ];
 
             for (v1, v2) in area_edges {
@@ -1639,6 +1744,29 @@ impl ScrAreaMap {
         if removed_count > 0 {
             println!("清理了 {} 条未使用的边", removed_count);
         }
+    }
+
+    pub fn detect_adjacency_by_keys(
+        &self,
+        source_area_key: ScrAreaKey,
+        target_area_key: ScrAreaKey,
+    ) -> Option<Adjacency> {
+        // 最小重叠要求 (与 apply_join_adjacent_areas 保持一致)
+        #[cfg(test)]
+        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
+        #[cfg(not(test))]
+        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+
+        let source_rect = self
+            .areas
+            .get(source_area_key)?
+            .get_raw_geometry(&self.verts);
+        let target_rect = self
+            .areas
+            .get(target_area_key)?
+            .get_raw_geometry(&self.verts);
+
+        self.detect_adjacency(source_rect, target_rect, MIN_AREA_SIZE)
     }
 }
 
@@ -1780,33 +1908,6 @@ mod tests {
     }
 
     #[test]
-    fn test_area_size_calculation() {
-        let mut screen_map = ScrAreaMap::new();
-        let ui_settings = UISettings::default();
-
-        // 创建一个1920x1080的屏幕
-        let area_key = screen_map.create_initial_screen_with_scaling(1920, 1080, &ui_settings);
-
-        let area = screen_map.areas.get(area_key).unwrap();
-
-        // 验证几何已正确计算
-        assert!(area.is_geometry_calculated(), "区域几何应该已计算");
-
-        // 验证计算结果合理
-        let (tot_rct, winx, winy) = area.geometry();
-        assert!(winx > 0, "区域宽度应该大于0，实际值: {}", winx);
-        assert!(winy > 0, "区域高度应该大于0，实际值: {}", winy);
-        assert!(winx <= 1920, "区域宽度不应超过窗口宽度，实际值: {}", winx);
-        assert!(winy <= 1080, "区域高度不应超过窗口高度，实际值: {}", winy);
-
-        println!("测试区域大小: {}x{}", winx, winy);
-        println!(
-            "区域边界: ({}, {}) 到 ({}, {})",
-            tot_rct.xmin, tot_rct.ymin, tot_rct.xmax, tot_rct.ymax
-        );
-    }
-
-    #[test]
     fn test_duplicate_edge_removal() {
         let mut screen_map = ScrAreaMap::new();
 
@@ -1926,7 +2027,16 @@ mod tests {
         assert_eq!(small_rect.ymax, 8);
 
         // 执行合并：小区域指向大区域
-        let result = screen_map.join_adjacent_areas(small_area_key, large_area_key, &ui_settings);
+        let adjacency = screen_map
+            .detect_adjacency(small_rect, large_rect, 1)
+            .context("非相邻Area或重叠不过多")
+            .unwrap();
+        let result = screen_map.apply_join_adjacent_areas(
+            small_area_key,
+            large_area_key,
+            adjacency,
+            &ui_settings,
+        );
         assert!(result.is_ok(), "合并应该成功: {:?}", result);
 
         // 验证合并后的结果：应该有3个区域
@@ -1943,10 +2053,10 @@ mod tests {
             let height = rect.ymax - rect.ymin;
 
             // 获取区域的四个顶点坐标
-            let top_left = screen_map.verts.get(area.v_top_left).unwrap();
-            let top_right = screen_map.verts.get(area.v_top_right).unwrap();
-            let bottom_right = screen_map.verts.get(area.v_bottom_right).unwrap();
-            let bottom_left = screen_map.verts.get(area.v_bottom_left).unwrap();
+            let top_left = screen_map.verts.get(area.v_top_left()).unwrap();
+            let top_right = screen_map.verts.get(area.v_top_right()).unwrap();
+            let bottom_right = screen_map.verts.get(area.v_bottom_right()).unwrap();
+            let bottom_left = screen_map.verts.get(area.v_bottom_left()).unwrap();
 
             // 左侧区域：(0,0) 到 (2,6) - Video类型
             if rect.xmin == 0 && rect.xmax == 2 && rect.ymin == 0 && rect.ymax == 6 {
@@ -2103,7 +2213,16 @@ mod tests {
         assert_eq!(small_rect.ymax, 8);
 
         // 执行合并：小区域指向大区域
-        let result = screen_map.join_adjacent_areas(small_area_key, large_area_key, &ui_settings);
+        let adjacency = screen_map
+            .detect_adjacency(small_rect, large_rect, 1)
+            .context("非相邻Area或重叠不过多")
+            .unwrap();
+        let result = screen_map.apply_join_adjacent_areas(
+            small_area_key,
+            large_area_key,
+            adjacency,
+            &ui_settings,
+        );
         assert!(result.is_ok(), "合并应该成功: {:?}", result);
 
         // 验证合并后的结果：应该有2个区域
@@ -2119,10 +2238,10 @@ mod tests {
             let height = rect.ymax - rect.ymin;
 
             // 获取区域的四个顶点坐标
-            let top_left = screen_map.verts.get(area.v_top_left).unwrap();
-            let top_right = screen_map.verts.get(area.v_top_right).unwrap();
-            let bottom_right = screen_map.verts.get(area.v_bottom_right).unwrap();
-            let bottom_left = screen_map.verts.get(area.v_bottom_left).unwrap();
+            let top_left = screen_map.verts.get(area.v_top_left()).unwrap();
+            let top_right = screen_map.verts.get(area.v_top_right()).unwrap();
+            let bottom_right = screen_map.verts.get(area.v_bottom_right()).unwrap();
+            let bottom_left = screen_map.verts.get(area.v_bottom_left()).unwrap();
 
             // 左侧区域：(0,0) 到 (4,8) - Timeline类型（合并后的区域）
             if rect.xmin == 0 && rect.xmax == 4 && rect.ymin == 0 && rect.ymax == 8 {
@@ -2259,7 +2378,16 @@ mod tests {
         assert_eq!(small_rect.ymax, 8);
 
         // 执行合并：小区域指向大区域
-        let result = screen_map.join_adjacent_areas(small_area_key, large_area_key, &ui_settings);
+        let adjacency = screen_map
+            .detect_adjacency(small_rect, large_rect, 1)
+            .context("非相邻Area或重叠不过多")
+            .unwrap();
+        let result = screen_map.apply_join_adjacent_areas(
+            small_area_key,
+            large_area_key,
+            adjacency,
+            &ui_settings,
+        );
         assert!(result.is_ok(), "合并应该成功: {:?}", result);
 
         // 验证合并后的结果：应该有2个区域
@@ -2275,10 +2403,10 @@ mod tests {
             let height = rect.ymax - rect.ymin;
 
             // 获取区域的四个顶点坐标
-            let top_left = screen_map.verts.get(area.v_top_left).unwrap();
-            let top_right = screen_map.verts.get(area.v_top_right).unwrap();
-            let bottom_right = screen_map.verts.get(area.v_bottom_right).unwrap();
-            let bottom_left = screen_map.verts.get(area.v_bottom_left).unwrap();
+            let top_left = screen_map.verts.get(area.v_top_left()).unwrap();
+            let top_right = screen_map.verts.get(area.v_top_right()).unwrap();
+            let bottom_right = screen_map.verts.get(area.v_bottom_right()).unwrap();
+            let bottom_left = screen_map.verts.get(area.v_bottom_left()).unwrap();
 
             // 左侧区域：(0,0) 到 (4,6) - Video类型（剩余的大区域部分）
             if rect.xmin == 0 && rect.xmax == 4 && rect.ymin == 0 && rect.ymax == 6 {
@@ -2589,7 +2717,12 @@ mod tests {
         assert_eq!(area6_rect.ymax, 10);
 
         // 执行合并：Area6(source) 指向 Area2(target)
-        let result = screen_map.join_adjacent_areas(area6_key, area2_key, &ui_settings);
+        let adjacency = screen_map
+            .detect_adjacency(area6_rect, area2_rect, 1)
+            .context("非相邻Area或重叠不过多")
+            .unwrap();
+        let result =
+            screen_map.apply_join_adjacent_areas(area6_key, area2_key, adjacency, &ui_settings);
 
         println!("\n合并结果: {:?}", result);
 
@@ -2606,10 +2739,10 @@ mod tests {
             let height = rect.ymax - rect.ymin;
 
             // 获取区域的四个顶点坐标
-            let top_left = screen_map.verts.get(area.v_top_left).unwrap();
-            let top_right = screen_map.verts.get(area.v_top_right).unwrap();
-            let bottom_right = screen_map.verts.get(area.v_bottom_right).unwrap();
-            let bottom_left = screen_map.verts.get(area.v_bottom_left).unwrap();
+            let top_left = screen_map.verts.get(area.v_top_left()).unwrap();
+            let top_right = screen_map.verts.get(area.v_top_right()).unwrap();
+            let bottom_right = screen_map.verts.get(area.v_bottom_right()).unwrap();
+            let bottom_left = screen_map.verts.get(area.v_bottom_left()).unwrap();
 
             println!("区域 {:?}:", area_key);
             println!("  类型: {:?}", area.area_type);
@@ -2690,9 +2823,27 @@ mod tests {
         println!("尝试合并不相邻的区域...");
 
         // 尝试合并不相邻的区域，应该返回错误
-        let result = screen_map.join_adjacent_areas(area1_key, area2_key, &ui_settings);
+        let area1_rect = screen_map
+            .areas
+            .get(area1_key)
+            .unwrap()
+            .get_raw_geometry(&screen_map.verts);
+        let area2_rect = screen_map
+            .areas
+            .get(area2_key)
+            .unwrap()
+            .get_raw_geometry(&screen_map.verts);
+        let adjacency_result = screen_map.detect_adjacency(area1_rect, area2_rect, 1);
 
-        assert!(result.is_err(), "合并不相邻区域应该失败");
+        // 检测相邻关系应该失败，因为区域不相邻
+        assert!(adjacency_result.is_none(), "不相邻区域应该返回 None");
+
+        // 如果真的有相邻关系（不应该发生），测试合并操作
+        if let Some(adjacency) = adjacency_result {
+            let result =
+                screen_map.apply_join_adjacent_areas(area1_key, area2_key, adjacency, &ui_settings);
+            assert!(result.is_err(), "合并不相邻区域应该失败");
+        }
         println!("✓ 正确检测到不相邻区域并返回错误");
 
         // 验证区域没有被修改

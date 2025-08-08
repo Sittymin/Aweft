@@ -14,12 +14,32 @@ use slint::{
 use slotmap::{Key, KeyData};
 use types::*;
 
+/// 拖拽操作的状态信息
+#[derive(Debug, Clone)]
+pub enum DragOperation {
+    /// 无拖拽操作
+    None,
+    /// 分割操作 - 存储分割的源区域和预览数据
+    Split {
+        source_area: ScrAreaKey,
+        preview_data: SplitPreviewOverlayData,
+    },
+    /// 合并操作 - 存储源区域、目标区域和邻接关系
+    Join {
+        source_area_key: ScrAreaKey,
+        target_area_key: ScrAreaKey,
+        adjacency: Adjacency,
+    },
+}
+
 /// 应用状态和逻辑的唯一管理者
 pub struct AppState {
     pub screen_map: ScrAreaMap,
     pub ui_settings: UISettings,
     pub window_size: PhysicalSize,
     pub initialized: bool,
+    /// 当前拖拽操作状态
+    pub current_drag_operation: DragOperation,
 }
 impl AppState {
     /// 构造函数，从 Slint 窗口初始化
@@ -29,6 +49,7 @@ impl AppState {
             ui_settings: UISettings::from_slint_window(window),
             window_size: window.size(),
             initialized: false,
+            current_drag_operation: DragOperation::None,
         }
     }
 
@@ -48,8 +69,13 @@ impl AppState {
             let logical_width = winx as f64 / scale_factor;
             let logical_height = winy as f64 / scale_factor;
 
+            let key_ffi = area_key.data().as_ffi();
+            let area_key_index = (key_ffi & 0xFFFFFFFF) as i32;      // 低32位：索引
+            let area_key_version = (key_ffi >> 32) as i32;           // 高32位：版本
+            
             areas_data.push(ScrAreaData {
-                key: area_key.data().as_ffi() as i32,
+                area_key_index,
+                area_key_version,
                 x: logical_x as f32,
                 y: logical_y as f32,
                 width: logical_width as f32,
@@ -126,15 +152,24 @@ impl AppWindowManager {
         let weak_instance_for_drag = weak_instance.clone();
         let state_for_drag = Rc::clone(&self.state);
         self.instance.global::<ActionManager>().on_actionzone_drag(
-            move |area_key, corner, offset_x, offset_y| {
-                let state = state_for_drag.borrow();
+            move |area_key_index, area_key_version, corner, offset_x, offset_y| {
+                let mut state = state_for_drag.borrow_mut();
                 let scale_factor = state.ui_settings.get_scale_factor();
                 let actionzone_side_length = state.ui_settings.get_actionzone_side_length();
 
                 let physical_offset_x = offset_x as f64 * scale_factor;
                 let physical_offset_y = offset_y as f64 * scale_factor;
 
-                let source_key = ScrAreaKey::from(KeyData::from_ffi(area_key as u64));
+                // 重新组合完整的键值（版本 + 索引）
+                let area_key_ffi = ((area_key_version as u64) << 32) | (area_key_index as u64);
+                let source_key = ScrAreaKey::from(KeyData::from_ffi(area_key_ffi));
+                
+                // 防护检查：确保源区域仍然存在
+                if !state.screen_map.areas.contains_key(source_key) {
+                    println!("警告：源区域 {:?} 已不存在，忽略拖拽事件", source_key);
+                    return;
+                }
+                
                 if let Some(instance) = weak_instance_for_drag.upgrade() {
                     if let Some(target_area_key) = state.screen_map.find_area_with_actionzone(
                         source_key,
@@ -144,7 +179,7 @@ impl AppWindowManager {
                         actionzone_side_length,
                     ) {
                         if target_area_key == source_key {
-                            println!("在相同区域内 - 执行分割操作");
+                            // println!("在相同区域内 - 执行分割操作");
                             let (relative_offset_x, relative_offset_y) =
                                 state.screen_map.convert_corner_offset_to_relative_offset(
                                     target_area_key,
@@ -161,16 +196,71 @@ impl AppWindowManager {
                                     relative_offset_x,
                                     relative_offset_y,
                                 );
+                            
+                            // 更新拖拽状态
+                            state.current_drag_operation = DragOperation::Split {
+                                source_area: source_key,
+                                preview_data: split_preview_overlay_data.clone(),
+                            };
+                            
+                            // 显示分割预览，隐藏合并预览
+                            instance.set_show_join_highlight_overlay(false);
+                            instance.set_show_close_area_overlays(false);
                             instance.set_show_split_preview_overlay(true);
-                            println!("对于区域左上角偏移({relative_offset_x},{relative_offset_y})");
-                            println!("生成的分割数据: {:#?}", split_preview_overlay_data);
+                            // println!("对于区域左上角偏移({relative_offset_x},{relative_offset_y})");
+                            // println!("生成的分割数据: {:#?}", split_preview_overlay_data);
                             instance.set_split_preview_overlay_data(split_preview_overlay_data);
                         } else {
-                            println!("移动到不同区域 {:?} - 执行合并操作", target_area_key);
-                            // TODO: 调用合并逻辑
+                            // println!("移动到不同区域 {:?} - 执行合并操作", target_area_key);
+                            // 计算邻接关系
+                            if let Some(adjacency) = state
+                                .screen_map
+                                .detect_adjacency_by_keys(source_key, target_area_key)
+                            {
+                                // 更新拖拽状态
+                                state.current_drag_operation = DragOperation::Join {
+                                    source_area_key: source_key,
+                                    target_area_key: target_area_key,
+                                    adjacency,
+                                };
+                                
+                                // 生成合并高亮与即将关闭区域预览
+                                match state.screen_map.preview_join_adjacent_areas(
+                                    source_key,
+                                    adjacency,
+                                    &state.ui_settings,
+                                ) {
+                                    Ok((join_data, close_datas)) => {
+                                        // 显示合并预览，隐藏分割预览
+                                        instance.set_show_split_preview_overlay(false);
+                                        instance.set_join_highlight_overlay_data(join_data);
+                                        instance.set_show_join_highlight_overlay(true);
+                                        instance.set_close_area_overlay_datas(
+                                            close_datas.as_slice().into(),
+                                        );
+                                        instance
+                                            .set_show_close_area_overlays(!close_datas.is_empty());
+                                    }
+                                    Err(e) => {
+                                        eprintln!("生成合并预览失败: {}", e);
+                                        instance.set_show_join_highlight_overlay(false);
+                                        instance.set_show_close_area_overlays(false);
+                                    }
+                                }
+                            } else {
+                                // 非相邻：清除拖拽状态，隐藏合并预览
+                                state.current_drag_operation = DragOperation::None;
+                                instance.set_show_join_highlight_overlay(false);
+                                instance.set_show_close_area_overlays(false);
+                            }
                         }
                     } else {
-                        println!("移动到区域外 - 可能执行窗口操作");
+                        // println!("移动到区域外 - 可能执行窗口操作");
+                        // 离开任何区域，清除拖拽状态，隐藏所有预览
+                        state.current_drag_operation = DragOperation::None;
+                        instance.set_show_split_preview_overlay(false);
+                        instance.set_show_join_highlight_overlay(false);
+                        instance.set_show_close_area_overlays(false);
                     }
                 }
             },
@@ -180,46 +270,85 @@ impl AppWindowManager {
         let state_for_drag_end = Rc::clone(&self.state);
         self.instance
             .global::<ActionManager>()
-            .on_actionzone_drag_end(move |area_key, is_cancel| {
+            .on_actionzone_drag_end(move |area_key_index, area_key_version, is_cancel| {
                 println!("鼠标拖动结束, 是否是右键取消: {is_cancel}");
 
                 if !is_cancel {
-                    // 获取当前状态
-                    let mut state = state_for_drag_end.borrow_mut();
-
-                    // 获取拆分预览数据
                     if let Some(instance) = weak_instance_for_drag_end.upgrade() {
-                        let split_data = instance.get_split_preview_overlay_data();
-
-                        // 检查是否有有效的拆分数据（第二个区域不为0表示有效拆分）
-                        if split_data.width2 > 0.0 && split_data.height2 > 0.0 {
-                            println!("执行拆分操作，预览数据: {:#?}", split_data);
-                            let ui_settings = &state.ui_settings.clone();
-                            // 执行实际的拆分操作
-                            if let Err(e) = state.screen_map.split_area(
-                                ScrAreaKey::from(KeyData::from_ffi(area_key as u64)),
-                                split_data,
-                                ui_settings,
-                            ) {
-                                eprintln!("执行区域拆分失败: {}", e);
-                            } else {
-                                // 更新UI显示
-                                let slint_data = state.convert_areas_to_slint_data();
-                                instance.set_scrareas(slint_data.as_slice().into());
-                                println!("拆分完成，更新后的区域数据: {:#?}", slint_data);
+                        let mut state = state_for_drag_end.borrow_mut();
+                        
+                        // 先提取拖拽状态，避免借用冲突
+                        let drag_operation = state.current_drag_operation.clone();
+                        
+                        // 根据存储的拖拽状态执行相应操作
+                        match drag_operation {
+                            DragOperation::Split { source_area, preview_data } => {
+                                println!("执行拆分操作，源区域: {:?}, 预览数据: {:#?}", source_area, preview_data);
+                                
+                                // 验证分割数据是否有效（避免0尺寸的区域）
+                                if preview_data.width2 <= 0.0 || preview_data.height2 <= 0.0 {
+                                    println!("分割数据无效（第二个区域尺寸为0），取消分割操作");
+                                } else {
+                                    let ui_settings = &state.ui_settings.clone();
+                                    if let Err(e) = state.screen_map.split_area(
+                                        source_area,
+                                        preview_data,
+                                        ui_settings,
+                                    ) {
+                                        eprintln!("执行区域拆分失败: {}", e);
+                                    } else {
+                                        // 更新UI显示
+                                        let slint_data = state.convert_areas_to_slint_data();
+                                        instance.set_scrareas(slint_data.as_slice().into());
+                                        println!("拆分完成，更新后的区域数据: {:#?}", slint_data);
+                                    }
+                                }
                             }
-                        } else {
-                            println!("无效的拆分数据，取消拆分操作");
+                            DragOperation::Join { source_area_key, target_area_key, adjacency } => {
+                                println!("执行合并操作，源区域: {:?} -> 目标区域: {:?}", source_area_key, target_area_key);
+                                
+                                // 立即清除拖拽状态，避免后续事件使用过期的区域键
+                                state.current_drag_operation = DragOperation::None;
+                                
+                                let ui_settings = &state.ui_settings.clone();
+                                if let Err(e) = state.screen_map.apply_join_adjacent_areas(
+                                    source_area_key,
+                                    target_area_key,
+                                    adjacency,
+                                    ui_settings
+                                ) {
+                                    eprintln!("执行区域合并失败: {}", e);
+                                } else {
+                                    // 重新计算所有区域的几何数据
+                                    state.screen_map.update_all_areas_rcti(ui_settings);
+                                    
+                                    // 更新UI显示
+                                    let slint_data = state.convert_areas_to_slint_data();
+                                    instance.set_scrareas(slint_data.as_slice().into());
+                                    
+                                    println!("合并完成，更新后的区域数据: {:#?}", slint_data);
+                                }
+                            }
+                            DragOperation::None => {
+                                // println!("无有效的拖拽操作，取消操作");
+                            }
                         }
 
-                        // 清除预览
+                        // 清除拖拽状态和预览（如果还没清除的话）
+                        state.current_drag_operation = DragOperation::None;
                         instance.set_show_split_preview_overlay(false);
+                        instance.set_show_join_highlight_overlay(false);
+                        instance.set_show_close_area_overlays(false);
                     }
                 } else {
-                    println!("用户取消拆分操作");
-                    // 清除预览
+                    // println!("用户取消拖拽操作");
+                    // 清除拖拽状态和预览
                     if let Some(instance) = weak_instance_for_drag_end.upgrade() {
+                        let mut state = state_for_drag_end.borrow_mut();
+                        state.current_drag_operation = DragOperation::None;
                         instance.set_show_split_preview_overlay(false);
+                        instance.set_show_join_highlight_overlay(false);
+                        instance.set_show_close_area_overlays(false);
                     }
                 }
             });
@@ -353,34 +482,4 @@ impl AppWindowManager {
 pub fn create_window() -> Result<()> {
     let mut app = AppWindowManager::new().context("创建应用窗口管理器失败（是否nix develop?）")?;
     app.run().context("运行应用失败")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_area_size_calculation() {
-        let mut screen_map = ScrAreaMap::new();
-        let ui_settings = UISettings::default();
-
-        // 创建一个1920x1080的屏幕（物理像素）
-        let area_key = screen_map.create_initial_screen_with_scaling(1920, 1080, &ui_settings);
-
-        let area = screen_map.areas.get(area_key).unwrap();
-
-        // 使用geometry()方法获取几何信息 - 返回的是物理像素坐标和大小
-        let (_, winx, winy) = area.geometry();
-
-        // 验证计算结果
-        assert!(winx > 0);
-        assert!(winy > 0);
-        assert!(winx <= 1920);
-        assert!(winy <= 1080);
-
-        println!(
-            "测试区域大小: {}x{} (物理像素，与Blender保持一致)",
-            winx, winy
-        );
-    }
 }
