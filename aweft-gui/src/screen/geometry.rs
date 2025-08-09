@@ -1768,6 +1768,71 @@ impl ScrAreaMap {
 
         self.detect_adjacency(source_rect, target_rect, MIN_AREA_SIZE)
     }
+
+    /// 将所有顶点按窗口边缘吸附规则校正
+    pub fn enforce_window_edge_snap(&mut self, window_rect: &Rcti, ui_settings: &UISettings) {
+        let d2 = ui_settings.get_edge_filter_boundary().round() as u32; // 2x
+        let d1 = ui_settings.get_edge_snap_target().round() as u32;     // 1x
+
+        let top_line = window_rect.ymin.saturating_add(d1);
+        let bottom_line = window_rect.ymax.saturating_sub(d1);
+        let left_line = window_rect.xmin.saturating_add(d1);
+        let right_line = window_rect.xmax.saturating_sub(d1);
+
+        let top_thresh = window_rect.ymin.saturating_add(d2);
+        let bottom_thresh = window_rect.ymax.saturating_sub(d2);
+        let left_thresh = window_rect.xmin.saturating_add(d2);
+        let right_thresh = window_rect.xmax.saturating_sub(d2);
+
+        for (_, v) in &mut self.verts {
+            // 上
+            if v.vec.y < top_thresh {
+                v.vec.y = top_line;
+            }
+            // 右
+            if v.vec.x > right_thresh {
+                v.vec.x = right_line;
+            }
+            // 下
+            if v.vec.y > bottom_thresh {
+                v.vec.y = bottom_line;
+            }
+            // 左
+            if v.vec.x < left_thresh {
+                v.vec.x = left_line;
+            }
+        }
+    }
+
+    /// 收集所有"可交互"的内部边（排除窗口边缘边）。
+    pub fn collect_internal_edges(&self) -> Vec<ScrEdgeKey> {
+        let mut out = Vec::new();
+        for (ekey, e) in &self.edges {
+            if !e.border {
+                out.push(ekey);
+            }
+        }
+        out
+    }
+
+    /// 根据窗口边界标记边的 `border` 字段：靠近四周范围内的标记为 true，其余为 false。
+    pub fn mark_window_border_edges(&mut self, window_rect: &Rcti, ui_settings: &UISettings) {
+        let d2 = ui_settings.get_edge_filter_boundary().round() as u32;
+        for (_, e) in &mut self.edges {
+            let Some(v1) = self.verts.get(e.v1) else { panic!("存在无效的索引: {:#?}", e.v1); };
+            let Some(v2) = self.verts.get(e.v2) else { panic!("存在无效的索引: {:#?}", e.v2); };
+            let is_border = if v1.vec.y == v2.vec.y {
+                let y = v1.vec.y;
+                y <= window_rect.ymin.saturating_add(d2) || y >= window_rect.ymax.saturating_sub(d2)
+            } else if v1.vec.x == v2.vec.x {
+                let x = v1.vec.x;
+                x <= window_rect.xmin.saturating_add(d2) || x >= window_rect.xmax.saturating_sub(d2)
+            } else {
+                false
+            };
+            e.border = is_border;
+        }
+    }
 }
 
 #[cfg(test)]

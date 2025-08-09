@@ -70,9 +70,9 @@ impl AppState {
             let logical_height = winy as f64 / scale_factor;
 
             let key_ffi = area_key.data().as_ffi();
-            let area_key_index = (key_ffi & 0xFFFFFFFF) as i32;      // 低32位：索引
-            let area_key_version = (key_ffi >> 32) as i32;           // 高32位：版本
-            
+            let area_key_index = (key_ffi & 0xFFFFFFFF) as i32; // 低32位：索引
+            let area_key_version = (key_ffi >> 32) as i32; // 高32位：版本
+
             areas_data.push(ScrAreaData {
                 area_key_index,
                 area_key_version,
@@ -84,6 +84,76 @@ impl AppState {
             });
         }
         areas_data
+    }
+
+    // TODO: 直接处理为一条水平面相连的**整个**，并且把几条Edge的Key也传递给UI(后面这个可能有更好解决办法)
+    fn convert_edges_to_slint_data(&self) -> Vec<ScrEdgeData> {
+        self.screen_map
+            .edges
+            .iter()
+            .filter(|(_ekey, e)| !e.border)
+            .map(|(edge_key, edge)| {
+                let v1 = self.screen_map.verts.get(edge.v1).unwrap_or_else(|| {
+                    panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v1)
+                });
+                let v2 = self.screen_map.verts.get(edge.v2).unwrap_or_else(|| {
+                    panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v2)
+                });
+
+                let half_edge_width = self.ui_settings.get_half_edge_width();
+                let scale_factor = self.ui_settings.get_scale_factor();
+
+                let is_horizontal = v1.vec.y == v2.vec.y;
+                let is_vertical = v1.vec.x == v2.vec.x;
+
+                match (is_horizontal, is_vertical) {
+                    (true, false) => {
+                        // --- 水平边的逻辑 ---
+                        let (start_v, end_v) = if v1.vec.x < v2.vec.x {
+                            (v1, v2)
+                        } else {
+                            (v2, v1)
+                        };
+                        ScrEdgeData {
+                            width: ((end_v.vec.x - start_v.vec.x) as f64 / scale_factor) as f32,
+                            height: (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32,
+                            x: (start_v.vec.x as f64 / scale_factor) as f32,
+                            y: ((start_v.vec.y as f64 - half_edge_width) / scale_factor) as f32,
+                        }
+                    }
+                    (false, true) => {
+                        // --- 垂直边的逻辑 ---
+                        let (start_v, end_v) = if v1.vec.y < v2.vec.y {
+                            (v1, v2)
+                        } else {
+                            (v2, v1)
+                        };
+                        ScrEdgeData {
+                            height: ((end_v.vec.y - start_v.vec.y) as f64 / scale_factor) as f32,
+                            width: (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32,
+                            x: ((start_v.vec.x as f64 - half_edge_width) / scale_factor) as f32,
+                            y: (start_v.vec.y as f64 / scale_factor) as f32,
+                        }
+                    }
+                    (false, false) => {
+                        panic!("存在非水平或垂直 Edge 数据: edge_key={:?}", edge_key)
+                    }
+                    (true, true) => {
+                        panic!("Edge 的两个顶点重合，长度为零: edge_key={:?}", edge_key)
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// 以包含端坐标返回当前窗口的物理像素矩形 (0,0)-(w-1,h-1)
+    pub fn current_window_rect(&self) -> Rcti {
+        Rcti {
+            xmin: 0,
+            ymin: 0,
+            xmax: self.window_size.width.saturating_sub(1),
+            ymax: self.window_size.height.saturating_sub(1),
+        }
     }
 }
 
@@ -104,6 +174,7 @@ impl AppWindowManager {
             .require_wgpu_24(slint::wgpu_24::WGPUConfiguration::default())
             .select()?;
         let instance = MainWindow::new().context("创建 Slint 主窗口失败")?;
+        // FIXME: 这里获得的是未初始化的数据
         let state = Rc::new(RefCell::new(AppState::new(&instance.window())));
         Ok(Self { instance, state })
     }
@@ -163,13 +234,13 @@ impl AppWindowManager {
                 // 重新组合完整的键值（版本 + 索引）
                 let area_key_ffi = ((area_key_version as u64) << 32) | (area_key_index as u64);
                 let source_key = ScrAreaKey::from(KeyData::from_ffi(area_key_ffi));
-                
+
                 // 防护检查：确保源区域仍然存在
                 if !state.screen_map.areas.contains_key(source_key) {
                     println!("警告：源区域 {:?} 已不存在，忽略拖拽事件", source_key);
                     return;
                 }
-                
+
                 if let Some(instance) = weak_instance_for_drag.upgrade() {
                     if let Some(target_area_key) = state.screen_map.find_area_with_actionzone(
                         source_key,
@@ -196,13 +267,13 @@ impl AppWindowManager {
                                     relative_offset_x,
                                     relative_offset_y,
                                 );
-                            
+
                             // 更新拖拽状态
                             state.current_drag_operation = DragOperation::Split {
                                 source_area: source_key,
                                 preview_data: split_preview_overlay_data.clone(),
                             };
-                            
+
                             // 显示分割预览，隐藏合并预览
                             instance.set_show_join_highlight_overlay(false);
                             instance.set_show_close_area_overlays(false);
@@ -223,7 +294,7 @@ impl AppWindowManager {
                                     target_area_key: target_area_key,
                                     adjacency,
                                 };
-                                
+
                                 // 生成合并高亮与即将关闭区域预览
                                 match state.screen_map.preview_join_adjacent_areas(
                                     source_key,
@@ -276,15 +347,21 @@ impl AppWindowManager {
                 if !is_cancel {
                     if let Some(instance) = weak_instance_for_drag_end.upgrade() {
                         let mut state = state_for_drag_end.borrow_mut();
-                        
+
                         // 先提取拖拽状态，避免借用冲突
                         let drag_operation = state.current_drag_operation.clone();
-                        
+
                         // 根据存储的拖拽状态执行相应操作
                         match drag_operation {
-                            DragOperation::Split { source_area, preview_data } => {
-                                println!("执行拆分操作，源区域: {:?}, 预览数据: {:#?}", source_area, preview_data);
-                                
+                            DragOperation::Split {
+                                source_area,
+                                preview_data,
+                            } => {
+                                println!(
+                                    "执行拆分操作，源区域: {:?}, 预览数据: {:#?}",
+                                    source_area, preview_data
+                                );
+
                                 // 验证分割数据是否有效（避免0尺寸的区域）
                                 if preview_data.width2 <= 0.0 || preview_data.height2 <= 0.0 {
                                     println!("分割数据无效（第二个区域尺寸为0），取消分割操作");
@@ -297,36 +374,48 @@ impl AppWindowManager {
                                     ) {
                                         eprintln!("执行区域拆分失败: {}", e);
                                     } else {
-                                        // 更新UI显示
-                                        let slint_data = state.convert_areas_to_slint_data();
-                                        instance.set_scrareas(slint_data.as_slice().into());
-                                        println!("拆分完成，更新后的区域数据: {:#?}", slint_data);
+                                        // 更新边缘边标记与UI显示
+                                        let current_rect = state.current_window_rect();
+                                        state
+                                            .screen_map
+                                            .mark_window_border_edges(&current_rect, ui_settings);
+                                        let slint_area_data = state.convert_areas_to_slint_data();
+                                        instance.set_scrareas(slint_area_data.as_slice().into());
                                     }
                                 }
                             }
-                            DragOperation::Join { source_area_key, target_area_key, adjacency } => {
-                                println!("执行合并操作，源区域: {:?} -> 目标区域: {:?}", source_area_key, target_area_key);
-                                
+                            DragOperation::Join {
+                                source_area_key,
+                                target_area_key,
+                                adjacency,
+                            } => {
+                                println!(
+                                    "执行合并操作，源区域: {:?} -> 目标区域: {:?}",
+                                    source_area_key, target_area_key
+                                );
+
                                 // 立即清除拖拽状态，避免后续事件使用过期的区域键
                                 state.current_drag_operation = DragOperation::None;
-                                
+
                                 let ui_settings = &state.ui_settings.clone();
                                 if let Err(e) = state.screen_map.apply_join_adjacent_areas(
                                     source_area_key,
                                     target_area_key,
                                     adjacency,
-                                    ui_settings
+                                    ui_settings,
                                 ) {
                                     eprintln!("执行区域合并失败: {}", e);
                                 } else {
                                     // 重新计算所有区域的几何数据
                                     state.screen_map.update_all_areas_rcti(ui_settings);
-                                    
-                                    // 更新UI显示
-                                    let slint_data = state.convert_areas_to_slint_data();
-                                    instance.set_scrareas(slint_data.as_slice().into());
-                                    
-                                    println!("合并完成，更新后的区域数据: {:#?}", slint_data);
+
+                                    // 更新边缘边标记与UI显示
+                                    let current_rect = state.current_window_rect();
+                                    state
+                                        .screen_map
+                                        .mark_window_border_edges(&current_rect, ui_settings);
+                                    let slint_area_data = state.convert_areas_to_slint_data();
+                                    instance.set_scrareas(slint_area_data.as_slice().into());
                                 }
                             }
                             DragOperation::None => {
@@ -360,46 +449,40 @@ impl AppWindowManager {
                 match event {
                     winit::event::WindowEvent::Resized(new_size) => {
                         println!("窗口大小发生改变: {}x{}", new_size.width, new_size.height);
-                        let mut state = state_for_event.borrow_mut();
-
-                        // 调用新的、清晰的逻辑
-                        if let Err(e) = Self::handle_window_resize(&mut state, *new_size) {
-                            eprintln!("处理窗口大小变化失败: {}", e);
-                        }
-
-                        // 更新 UI
-                        let slint_data = state.convert_areas_to_slint_data();
                         if let Some(instance) = weak_instance.upgrade() {
-                            instance.set_scrareas(slint_data.as_slice().into());
+                            let mut state = state_for_event.borrow_mut();
+
+                            // 调用新的、清晰的逻辑（需要 instance）
+                            if let Err(e) = Self::handle_window_resize(&mut state, *new_size) {
+                                eprintln!("处理窗口大小变化失败: {}", e);
+                            }
+
+                            // 更新 UI
+                            let slint_area_data = state.convert_areas_to_slint_data();
+                            instance.set_scrareas(slint_area_data.as_slice().into());
+                            // 更新 Edge 位置
+                            let slint_edges_data = state.convert_edges_to_slint_data();
+                            instance.set_scredges(slint_edges_data.as_slice().into());
                         }
                     }
                     winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                         println!("检测到屏幕缩放因子变化: {:.2}", scale_factor);
-                        let mut state = state_for_event.borrow_mut();
-
-                        if let Err(e) = Self::handle_scale_change(&mut state, *scale_factor) {
-                            eprintln!("处理缩放因子变化失败: {}", e);
-                        }
-
-                        // 更新 UI
-                        let slint_data = state.convert_areas_to_slint_data();
-                        println!("更新后的传入数据: {:#?}", slint_data);
                         if let Some(instance) = weak_instance.upgrade() {
-                            instance.set_scrareas(slint_data.as_slice().into());
+                            let mut state = state_for_event.borrow_mut();
+
+                            if let Err(e) = Self::handle_scale_change(&mut state, *scale_factor) {
+                                eprintln!("处理缩放因子变化失败: {}", e);
+                            }
+
+                            // 更新 UI
+                            let slint_area_data = state.convert_areas_to_slint_data();
+                            instance.set_scrareas(slint_area_data.as_slice().into());
                         }
                     }
                     _ => {}
                 }
                 WinitWindowEventResult::Propagate
             });
-    }
-    fn update_slint_areas_data(state: &AppState, instance: &MainWindow) -> Result<()> {
-        let slint_area_data = state.convert_areas_to_slint_data();
-
-        println!("正在更新 Slint UI 数据: {:#?}", slint_area_data);
-        instance.set_scrareas(slint_area_data.as_slice().into());
-
-        Ok(())
     }
 
     fn initialize_layout(state_rc: &Rc<RefCell<AppState>>, instance: &MainWindow) -> Result<()> {
@@ -427,7 +510,16 @@ impl AppWindowManager {
             .create_three_area_layout(&width, &height, &ui_settings);
         state.initialized = true;
 
-        Self::update_slint_areas_data(&state, instance)?;
+        let slint_area_data = state.convert_areas_to_slint_data();
+        instance.set_scrareas(slint_area_data.as_slice().into());
+        let current_rect = state.current_window_rect();
+        let ui_settings = state.ui_settings;
+        state
+            .screen_map
+            .mark_window_border_edges(&current_rect, &ui_settings);
+        let slint_edges_data = state.convert_edges_to_slint_data();
+        instance.set_scredges(slint_edges_data.as_slice().into());
+
         Ok(())
     }
 
@@ -463,8 +555,12 @@ impl AppWindowManager {
             width: new_size.width,
             height: new_size.height,
         };
-        // TODO: 由于是直接缩放，如果持续有误差可能会导致窗口最边角错位
-        // 之后实现一下窗口边缘resize之后吸附靠近的顶点到最边缘
+
+        // 处理边缘顶点，避免微小错位
+        state
+            .screen_map
+            .enforce_window_edge_snap(&new_window_rect, &state.ui_settings);
+
         Ok(())
     }
     fn handle_scale_change(state: &mut AppState, new_scale_factor: f64) -> Result<()> {

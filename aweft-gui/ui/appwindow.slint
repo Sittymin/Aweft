@@ -17,6 +17,27 @@ export enum ActionZoneCorner {
     bottom-right
 }
 
+export enum EdgeOrientation {
+    horizontal,
+    vertical
+}
+
+export struct ScrEdgeData {
+    x: length,
+    y: length,
+    width: length,
+    height: length
+}
+
+export component ScrEdge inherits Rectangle {
+    in property <ScrEdgeData> data;
+    background: green;
+    x: data.x;
+    y: data.y;
+    width: data.width;
+    height: data.height;
+}
+
 export global ActionManager {
     // 定义回调 - 使用拆分的键值
     callback actionzone-drag(area-key-index: int, area-key-version: int, corner: ActionZoneCorner, x: length, y: length);
@@ -126,8 +147,11 @@ component SlintScrArea inherits Rectangle {
     }
 }
 
+
+
 export component MainWindow inherits Window {
     in property <[ScrAreaData]> scrareas: [];
+    in property <[ScrEdgeData]> scredges: [];
     in property <length> border-width: 2px;
     in property <bool> show-split-preview-overlay: true;
     in property <SplitPreviewOverlayData> split-preview-overlay-data;
@@ -144,6 +168,10 @@ export component MainWindow inherits Window {
         container-width: scrarea.width;
         container-height: scrarea.height;
         actionzone-side-length: scrarea.actionzone-side-length;
+    }
+
+    for scredge[index] in scredges: ScrEdge {
+        data: scredge;
     }
 
     if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {

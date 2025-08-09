@@ -28,6 +28,7 @@ pub struct UISettings {
     scale_factor: f64,                // 缩放因子（从Slint获取）
     base_border_width: f64,           // 基础边框宽度（物理像素）
     base_actionzone_side_length: f64, // 边角区域边长（物理像素）
+    base_half_edge_width: f64,
 }
 
 impl Default for UISettings {
@@ -36,6 +37,7 @@ impl Default for UISettings {
             scale_factor: 1.0,
             base_border_width: 1.0,
             base_actionzone_side_length: 5.0,
+            base_half_edge_width: 5.0,
         }
     }
 }
@@ -47,6 +49,7 @@ impl UISettings {
             scale_factor: window.scale_factor() as f64,
             base_border_width: 1.0, // 默认边框宽度
             base_actionzone_side_length: 10.0,
+            base_half_edge_width: 5.0,
         }
     }
 
@@ -82,6 +85,43 @@ impl UISettings {
     // }
     pub fn get_actionzone_side_length(&self) -> f64 {
         self.base_actionzone_side_length
+    }
+    pub fn get_half_edge_width(&self) -> f64 {
+        self.base_half_edge_width
+    }
+
+    /// 获取边界过滤范围（2倍base_border_width）
+    pub fn get_edge_filter_boundary(&self) -> f64 {
+        // TODO: 后续改为面板最小的常量比较好
+        self.base_border_width * 2.0 * self.scale_factor
+    }
+
+    /// 获取边缘对齐目标位置（1倍base_border_width）
+    pub fn get_edge_snap_target(&self) -> f64 {
+        self.base_border_width * self.scale_factor
+    }
+
+    /// 检查点是否在边界过滤范围内（距离窗口边缘2倍border_width以内）
+    pub fn is_in_edge_filter_boundary(&self, point: u32, window_edge: u32) -> bool {
+        let distance = if point > window_edge {
+            point - window_edge
+        } else {
+            window_edge - point
+        };
+        (distance as f64) <= self.get_edge_filter_boundary()
+    }
+
+    /// 将点对齐到边缘（1倍border_width距离）
+    pub fn snap_point_to_edge(&self, point: u32, window_min: u32, window_max: u32) -> u32 {
+        let boundary = self.get_edge_filter_boundary();
+        let target = self.get_edge_snap_target();
+        if (point as f64 - window_min as f64) < target {
+            return window_min;
+        }
+        if (window_max as f64 - point as f64) < target {
+            return window_max;
+        }
+        point
     }
 }
 
@@ -406,47 +446,6 @@ pub enum AreaData {
     Properties(PropertiesData),
 }
 
-/// 屏幕交互区域（Action Zones），用于处理如区域分割、合并等UI交互
-#[derive(Debug, Clone)]
-pub enum ActionZoneType {
-    Area, // 用于区域的分割、合并或交换
-    Region {
-        // region: RegionId,   // 关联的 Region
-        edge: EdgeDirection, // 可拖拽的边缘方向
-    },
-    Fullscreen {
-        // region: RegionId, // 退出全屏后要恢复到的 Region
-    },
-    RegionScroll {
-        // region: RegionId,       // 关联的 Region
-        direction: ScrollDirection, // 滚动方向
-    },
-}
-
-/// 可拖拽边缘的方向
-#[derive(Debug, Clone)]
-pub enum EdgeDirection {
-    RightToTopLeft,   // 对应 AE_RIGHT_TO_TOPLEFT
-    LeftToTopRight,   // 对应 AE_LEFT_TO_TOPRIGHT
-    TopToBottomRight, // 对应 AE_TOP_TO_BOTTOMRIGHT
-    BottomToTopLeft,  // 对应 AE_BOTTOM_TO_TOPLEFT
-}
-
-/// 滚动方向
-#[derive(Debug, Clone)]
-pub enum ScrollDirection {
-    Vertical,   // 对应 AZ_SCROLL_VERT
-    Horizontal, // 对应 AZ_SCROLL_HOR
-}
-
-/// 定义一个具体的操作区域
-#[derive(Debug, Clone)]
-pub struct ActionZone {
-    pub zone_type: ActionZoneType, // 包含了类型、关联区域、边缘等信息
-    pub rect: Rcti,                // 操作区域的矩形范围
-    pub alpha: f32,                // 用于淡入淡出的透明度
-}
-
 /// 屏幕区域（Screen Area），是 UI 布局的基本单元
 #[derive(Debug, Clone)]
 pub struct ScrArea {
@@ -482,11 +481,6 @@ pub struct ScrArea {
     pub is_fullscreen: bool,
     pub is_temp_window: bool,
     pub is_single_area: bool,
-
-    // region_active_win
-
-    // 改为可选的ActionZone列表，以支持多个action zone
-    pub action_zones: Option<Vec<ActionZone>>,
 }
 
 impl ScrArea {
@@ -546,7 +540,6 @@ impl ScrArea {
             is_fullscreen,
             is_temp_window,
             is_single_area,
-            action_zones: None,
         }
     }
 
