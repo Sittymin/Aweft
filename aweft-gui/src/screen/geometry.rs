@@ -44,21 +44,23 @@ impl ScrAreaMap {
         let v_mid_middle = self.create_vertex(mid_x, mid_y); // 中心点
 
         // 创建边
-        // 外围边界
-        self.create_edge(v_top_left, v_top_right); // 上边界
-        self.create_edge(v_top_right, v_bottom_right); // 右边界
-        self.create_edge(v_bottom_right, v_bottom_left); // 下边界
-        self.create_edge(v_bottom_left, v_top_left); // 左边界
+        // 左上角边界
+        self.create_edge(v_top_left, v_mid_top); // 上边界
+        self.create_edge(v_mid_top, v_mid_middle); // 右边界
+        self.create_edge(v_mid_middle, v_left_middle); // 下边界
+        self.create_edge(v_left_middle, v_top_left); // 左边界
 
-        // 内部分割线
-        self.create_edge(v_mid_top, v_mid_middle); // 垂直分割线（上半段）
-        self.create_edge(v_left_middle, v_right_middle); // 水平分割线
+        // 右上角边界
+        self.create_edge(v_mid_top, v_top_right);
+        self.create_edge(v_top_right, v_right_middle);
+        self.create_edge(v_right_middle, v_mid_middle);
+        self.create_edge(v_mid_middle, v_mid_top);
 
-        // 连接分割线到边界
-        self.create_edge(v_top_left, v_mid_top); // 上边左半段
-        self.create_edge(v_mid_top, v_top_right); // 上边右半段
-        self.create_edge(v_left_middle, v_mid_middle); // 左边下半段到中心
-        self.create_edge(v_mid_middle, v_right_middle); // 中心到右边中点
+        // 下方边界
+        self.create_edge(v_left_middle, v_right_middle);
+        self.create_edge(v_right_middle, v_bottom_right);
+        self.create_edge(v_bottom_right, v_bottom_left);
+        self.create_edge(v_bottom_left, v_left_middle);
 
         // 创建三个区域
         let mut areas = Vec::new();
@@ -250,6 +252,13 @@ impl ScrAreaMap {
             x: source_area_rcti.xmin as f32,
             y: source_area_rcti.ymin as f32,
         };
+
+        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
+        #[cfg(test)]
+        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
+        #[cfg(not(test))]
+        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+
         // 产生的 close 区域
         let mut close_areas_overlay_data: Vec<CloseAreaOverlayData> = Vec::new();
         match adjacency {
@@ -262,8 +271,16 @@ impl ScrAreaMap {
                 // ┃  target░
                 // ┃        ░
                 // ┗━━━━━━━━░
-                if top.xmin > bottom.xmin {
-                    ();
+                // 当分割出来的区域小于最小区域限制时添加到close当中
+                if top.xmin > bottom.xmin && (top.xmin - bottom.xmin) < MIN_AREA_SIZE {
+                    let close_width = top.xmin - bottom.xmin + 1;
+                    let close_height = bottom.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: bottom.xmin as f32,
+                        y: bottom.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 // ┏━━━━━━━━░
                 // ┃        ░
@@ -292,8 +309,15 @@ impl ScrAreaMap {
                 // ░target  ┃
                 // ░        ┃
                 // ░━━━━━━━━┛
-                if top.xmax < bottom.xmax {
-                    ();
+                if top.xmax < bottom.xmax && (bottom.xmax - top.xmax) < MIN_AREA_SIZE {
+                    let close_width = bottom.xmax - top.xmax + 1;
+                    let close_height = bottom.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: top.xmin as f32,
+                        y: bottom.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 // ░━━━━━━━━┓
                 // ░        ┃
@@ -324,8 +348,15 @@ impl ScrAreaMap {
                 // ┗━┳━━━━━━░
                 //   ┃source░
                 //   ┗━━━━━━░
-                if bottom.xmin > top.xmin {
-                    ();
+                if bottom.xmin > top.xmin && (bottom.xmin - top.xmin) < MIN_AREA_SIZE {
+                    let close_width = bottom.xmin - top.xmin + 1;
+                    let close_height = top.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: top.xmin as f32,
+                        y: top.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 //   ┏━━━━━━░
                 //   ┃target░
@@ -354,8 +385,15 @@ impl ScrAreaMap {
                 // ░━━━━━━┳━┛
                 // ░source┃
                 // ░━━━━━━┛
-                if bottom.xmax < top.xmax {
-                    ();
+                if bottom.xmax < top.xmax && (top.xmax - bottom.xmax) < MIN_AREA_SIZE {
+                    let close_width = top.xmax - bottom.xmax + 1;
+                    let close_height = top.height();
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: bottom.xmin as f32,
+                        y: top.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 // ░━━━━━━┓
                 // ░target┃
@@ -382,8 +420,15 @@ impl ScrAreaMap {
                 // ┏━━━━━━┫          ┃
                 // ┃source┃  target  ┃
                 // ░░░░░░░░░░░░░░░░░░░
-                if left.ymin > right.ymin {
-                    ();
+                if left.ymin > right.ymin && (left.ymin - right.ymin) < MIN_AREA_SIZE {
+                    let close_width = right.width();
+                    let close_height = left.ymin - right.ymin + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: right.xmin as f32,
+                        y: right.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 // ┏━━━━━━━━━━┓
                 // ┃          ┣━━━━━━┓
@@ -407,8 +452,15 @@ impl ScrAreaMap {
                 // ┃source┃  target  ┃
                 // ┗━━━━━━┫          ┃
                 //        ┗━━━━━━━━━━┛
-                if left.ymax < right.ymax {
-                    ();
+                if left.ymax < right.ymax && (right.ymax - left.ymax) < MIN_AREA_SIZE {
+                    let close_width = right.width();
+                    let close_height = right.ymax - left.ymax + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: right.xmin as f32,
+                        y: left.ymax as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 // ░░░░░░░░░░░░░░░░░░░
                 // ┃  source  ┃target┃
@@ -433,8 +485,15 @@ impl ScrAreaMap {
                 // ┃          ┣━━━━━━┓
                 // ┃  target  ┃source┃
                 // ░░░░░░░░░░░░░░░░░░░
-                if right.ymin > left.ymin {
-                    ();
+                if right.ymin > left.ymin && (right.ymin - left.ymin) < MIN_AREA_SIZE {
+                    let close_width = left.width();
+                    let close_height = right.ymin - left.ymin + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: left.xmin as f32,
+                        y: left.ymin as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 //        ┏━━━━━━━━━━┓
                 // ┏━━━━━━┫          ┃
@@ -457,8 +516,15 @@ impl ScrAreaMap {
                 // ┃  target  ┃source┃
                 // ┃          ┣━━━━━━┛
                 // ┗━━━━━━━━━━┛
-                if right.ymax < left.ymax {
-                    ();
+                if right.ymax < left.ymax && (left.ymax - right.ymax) < MIN_AREA_SIZE {
+                    let close_width = left.width();
+                    let close_height = left.ymax - right.ymax + 1;
+                    close_areas_overlay_data.push(CloseAreaOverlayData {
+                        x: left.xmin as f32,
+                        y: right.ymax as f32,
+                        width: close_width as f32,
+                        height: close_height as f32,
+                    });
                 }
                 // ░░░░░░░░░░░░░░░░░░░
                 // ┃target┃  source  ┃
@@ -498,6 +564,12 @@ impl ScrAreaMap {
         let mut merged_area_key: ScrAreaKey = target_area_key;
         let mut working_source_area_key: ScrAreaKey = source_area_key;
 
+        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
+        #[cfg(test)]
+        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
+        #[cfg(not(test))]
+        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+
         match adjacency {
             Adjacency::TopToBottom { top, bottom } => {
                 //   ┏━━━━━━░
@@ -508,12 +580,16 @@ impl ScrAreaMap {
                 // ┃        ░
                 // ┗━━━━━━━━░
                 if top.xmin > bottom.xmin {
+                    let temp_close_area_key = merged_area_key.clone();
                     merged_area_key = self.split_area_by_coordinates(
                         merged_area_key,
                         top.xmin,
                         true,
                         ui_settings,
                     )?;
+                    if (top.xmin - bottom.xmin) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 // ┏━━━━━━━━░
                 // ┃        ░
@@ -540,7 +616,15 @@ impl ScrAreaMap {
                 // ░        ┃
                 // ░━━━━━━━━┛
                 if top.xmax < bottom.xmax {
-                    self.split_area_by_coordinates(merged_area_key, top.xmax, true, ui_settings)?;
+                    let temp_close_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        top.xmax,
+                        true,
+                        ui_settings,
+                    )?;
+                    if (bottom.xmax - top.xmax) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 // ░━━━━━━━━┓
                 // ░        ┃
@@ -607,12 +691,16 @@ impl ScrAreaMap {
                 //   ┃source░
                 //   ┗━━━━━━░
                 if bottom.xmin > top.xmin {
+                    let temp_close_area_key = merged_area_key.clone();
                     merged_area_key = self.split_area_by_coordinates(
-                        target_area_key,
+                        merged_area_key,
                         bottom.xmin,
                         true,
                         ui_settings,
                     )?;
+                    if (bottom.xmin - top.xmin) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 //   ┏━━━━━━░
                 //   ┃target░
@@ -639,12 +727,15 @@ impl ScrAreaMap {
                 // ░source┃
                 // ░━━━━━━┛
                 if bottom.xmax < top.xmax {
-                    self.split_area_by_coordinates(
+                    let temp_close_area_key = self.split_area_by_coordinates(
                         merged_area_key,
                         bottom.xmax,
                         true,
                         ui_settings,
                     )?;
+                    if (top.xmax - bottom.xmax) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 // ░━━━━━━┓
                 // ░target┃
@@ -708,12 +799,16 @@ impl ScrAreaMap {
                 // ┃source┃  target  ┃
                 // ░░░░░░░░░░░░░░░░░░░
                 if left.ymin > right.ymin {
+                    let temp_close_area_key = merged_area_key.clone();
                     merged_area_key = self.split_area_by_coordinates(
                         merged_area_key,
                         left.ymin,
                         false,
                         ui_settings,
                     )?;
+                    if (left.ymin - right.ymin) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 // ┏━━━━━━━━━━┓
                 // ┃          ┣━━━━━━┓
@@ -734,7 +829,15 @@ impl ScrAreaMap {
                 // ┗━━━━━━┫          ┃
                 //        ┗━━━━━━━━━━┛
                 if left.ymax < right.ymax {
-                    self.split_area_by_coordinates(merged_area_key, left.ymax, false, ui_settings)?;
+                    let temp_close_area_key = self.split_area_by_coordinates(
+                        merged_area_key,
+                        left.ymax,
+                        false,
+                        ui_settings,
+                    )?;
+                    if (right.ymax - left.ymax) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 // ░░░░░░░░░░░░░░░░░░░
                 // ┃  source  ┃target┃
@@ -794,12 +897,16 @@ impl ScrAreaMap {
                 // ┃  target  ┃source┃
                 // ░░░░░░░░░░░░░░░░░░░
                 if right.ymin > left.ymin {
+                    let temp_close_area_key = merged_area_key.clone();
                     merged_area_key = self.split_area_by_coordinates(
                         merged_area_key,
                         right.ymin,
                         false,
                         ui_settings,
                     )?;
+                    if (right.ymin - left.ymin) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 //        ┏━━━━━━━━━━┓
                 // ┏━━━━━━┫          ┃
@@ -820,12 +927,15 @@ impl ScrAreaMap {
                 // ┃          ┣━━━━━━┛
                 // ┗━━━━━━━━━━┛
                 if right.ymax < left.ymax {
-                    self.split_area_by_coordinates(
+                    let temp_close_area_key = self.split_area_by_coordinates(
                         merged_area_key,
                         right.ymax,
                         false,
                         ui_settings,
                     )?;
+                    if (left.ymax - right.ymax) < MIN_AREA_SIZE {
+                        new_empty_areas.push(temp_close_area_key)
+                    }
                 }
                 // ░░░░░░░░░░░░░░░░░░░
                 // ┃target┃  source  ┃
@@ -1540,6 +1650,9 @@ impl ScrAreaMap {
             self.remove_duplicate_edges();
             self.remove_unused_edges();
 
+            // 清理重叠的顶点
+            self.merge_overlapping_vertices();
+
             println!("水平拆分完成，创建了新区域: {:?}", new_area_key);
             Ok(new_area_key)
         } else {
@@ -1579,6 +1692,9 @@ impl ScrAreaMap {
             // 清理重复的边和顶点（参考Blender的实现）
             self.remove_duplicate_edges();
             self.remove_unused_edges();
+
+            // 清理重叠的顶点
+            self.merge_overlapping_vertices();
 
             println!("垂直拆分完成，创建了新区域: {:?}", new_area_key);
             Ok(new_area_key)
@@ -1746,6 +1862,136 @@ impl ScrAreaMap {
         }
     }
 
+    /// 清理完全重叠的顶点，将它们合并为同一个顶点
+    /// 这个函数会：
+    /// 1. 找出所有位置相同的顶点
+    /// 2. 选择一个"代表"顶点保留
+    /// 3. 更新所有边和区域，将重叠顶点的引用替换为代表顶点
+    /// 4. 删除被合并的顶点
+    pub fn merge_overlapping_vertices(&mut self) {
+        use std::collections::HashMap;
+
+        // 1. 按位置分组顶点
+        let mut position_groups: HashMap<(u32, u32), Vec<ScrVertKey>> = HashMap::new();
+        for (vert_key, vert) in &self.verts {
+            let pos = (vert.vec.x, vert.vec.y);
+            position_groups.entry(pos).or_default().push(vert_key);
+        }
+
+        // 2. 找出有重叠的位置（超过1个顶点）
+        let mut vertex_replacements: HashMap<ScrVertKey, ScrVertKey> = HashMap::new();
+        let mut vertices_to_remove: Vec<ScrVertKey> = Vec::new();
+
+        for (_pos, mut vert_keys) in position_groups {
+            if vert_keys.len() > 1 {
+                // 按键排序，选择第一个作为代表顶点
+                vert_keys.sort();
+                let representative = vert_keys[0];
+
+                println!(
+                    "合并重叠顶点 {:?} 到代表顶点 {:?}",
+                    &vert_keys[1..],
+                    representative
+                );
+
+                // 记录需要替换的映射
+                for &duplicate in &vert_keys[1..] {
+                    vertex_replacements.insert(duplicate, representative);
+                    vertices_to_remove.push(duplicate);
+                }
+            }
+        }
+
+        if vertex_replacements.is_empty() {
+            return; // 没有重叠顶点，直接返回
+        }
+
+        // 3. 更新所有边的顶点引用
+        for (_edge_key, edge) in &mut self.edges {
+            if let Some(&new_v1) = vertex_replacements.get(&edge.v1) {
+                println!(
+                    "边 {:?}: v1 从 {:?} 替换为 {:?}",
+                    _edge_key, edge.v1, new_v1
+                );
+                edge.v1 = new_v1;
+            }
+            if let Some(&new_v2) = vertex_replacements.get(&edge.v2) {
+                println!(
+                    "边 {:?}: v2 从 {:?} 替换为 {:?}",
+                    _edge_key, edge.v2, new_v2
+                );
+                edge.v2 = new_v2;
+            }
+        }
+
+        // 4. 更新所有区域的顶点引用
+        let area_keys: Vec<ScrAreaKey> = self.areas.keys().collect();
+        for area_key in area_keys {
+            // 收集需要更新的顶点
+            let mut updates = Vec::new();
+            {
+                let area = &self.areas[area_key];
+
+                if let Some(&new_tl) = vertex_replacements.get(&area.v_top_left()) {
+                    println!(
+                        "区域 {:?}: v_top_left 从 {:?} 替换为 {:?}",
+                        area_key,
+                        area.v_top_left(),
+                        new_tl
+                    );
+                    updates.push(VertPosition::TopLeft(new_tl));
+                }
+                if let Some(&new_tr) = vertex_replacements.get(&area.v_top_right()) {
+                    println!(
+                        "区域 {:?}: v_top_right 从 {:?} 替换为 {:?}",
+                        area_key,
+                        area.v_top_right(),
+                        new_tr
+                    );
+                    updates.push(VertPosition::TopRight(new_tr));
+                }
+                if let Some(&new_br) = vertex_replacements.get(&area.v_bottom_right()) {
+                    println!(
+                        "区域 {:?}: v_bottom_right 从 {:?} 替换为 {:?}",
+                        area_key,
+                        area.v_bottom_right(),
+                        new_br
+                    );
+                    updates.push(VertPosition::BottomRight(new_br));
+                }
+                if let Some(&new_bl) = vertex_replacements.get(&area.v_bottom_left()) {
+                    println!(
+                        "区域 {:?}: v_bottom_left 从 {:?} 替换为 {:?}",
+                        area_key,
+                        area.v_bottom_left(),
+                        new_bl
+                    );
+                    updates.push(VertPosition::BottomLeft(new_bl));
+                }
+            }
+
+            // 应用更新
+            for update in updates {
+                let _ = self.set_area_vert(area_key, update);
+            }
+        }
+
+        // 5. 删除被合并的顶点
+        for vert_key in vertices_to_remove {
+            self.verts.remove(vert_key);
+            println!("删除重叠顶点 {:?}", vert_key);
+        }
+
+        // 6. 清理可能产生的重复边和无效边
+        self.remove_duplicate_edges();
+        self.remove_unused_edges();
+
+        println!(
+            "重叠顶点清理完成，共合并了 {} 个顶点",
+            vertex_replacements.len()
+        );
+    }
+
     pub fn detect_adjacency_by_keys(
         &self,
         source_area_key: ScrAreaKey,
@@ -1772,7 +2018,7 @@ impl ScrAreaMap {
     /// 将所有顶点按窗口边缘吸附规则校正
     pub fn enforce_window_edge_snap(&mut self, window_rect: &Rcti, ui_settings: &UISettings) {
         let d2 = ui_settings.get_edge_filter_boundary().round() as u32; // 2x
-        let d1 = ui_settings.get_edge_snap_target().round() as u32;     // 1x
+        let d1 = ui_settings.get_edge_snap_target().round() as u32; // 1x
 
         let top_line = window_rect.ymin.saturating_add(d1);
         let bottom_line = window_rect.ymax.saturating_sub(d1);
@@ -1804,6 +2050,195 @@ impl ScrAreaMap {
         }
     }
 
+    // =====================================================================
+
+    /// 从移动顶点集合中分析移动方向和原始坐标
+    /// 返回: (dir_axis_horizontal, origval)
+    /// dir_axis_horizontal: true=水平移动(改变Y坐标)，false=垂直移动(改变X坐标)
+    pub fn analyze_move_direction(&self, moving_vert_keys: &[ScrVertKey]) -> Option<(bool, u32)> {
+        if moving_vert_keys.len() < 2 {
+            return None;
+        }
+
+        // 取前两个顶点来判断移动方向
+        let v1 = self.verts.get(moving_vert_keys[0])?;
+        let v2 = self.verts.get(moving_vert_keys[1])?;
+
+        // 判断移动方向
+        let dir_axis_horizontal = if v1.vec.y == v2.vec.y {
+            true // 水平线，移动时改变Y坐标
+        } else if v1.vec.x == v2.vec.x {
+            false // 垂直线，移动时改变X坐标
+        } else {
+            return None; // 非轴对齐，不支持移动
+        };
+
+        // 获取原始轴坐标值
+        let origval = if dir_axis_horizontal {
+            v1.vec.y
+        } else {
+            v1.vec.x
+        };
+
+        Some((dir_axis_horizontal, origval))
+    }
+
+    /// 计算边移动的范围限制，确保所有区域不小于最小尺寸
+    /// 返回: (bigger, smaller) - 向正方向和负方向的最大位移
+    pub fn compute_move_limits(
+        &self,
+        dir_axis_horizontal: bool,
+        moving_vert_keys: &[ScrVertKey],
+        origval: u32,
+        min_area_size: u32,
+    ) -> (u32, u32) {
+        let mut bigger = u32::MAX;
+        let mut smaller = u32::MAX;
+
+        // 创建移动顶点的集合，便于快速查找
+        let moving_set: std::collections::HashSet<ScrVertKey> =
+            moving_vert_keys.iter().cloned().collect();
+
+        // 遍历所有边，寻找连接到移动顶点的垂直边
+        for (_, edge) in &self.edges {
+            let v1 = match self.verts.get(edge.v1) {
+                Some(v) => v,
+                None => continue,
+            };
+            let v2 = match self.verts.get(edge.v2) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            // 检查这条边是否有一个顶点在移动轴上，另一个不在
+            let v1_on_move_axis = moving_set.contains(&edge.v1);
+            let v2_on_move_axis = moving_set.contains(&edge.v2);
+
+            match (v1_on_move_axis, v2_on_move_axis) {
+                (true, false) => {
+                    // v1在移动轴上，v2不在 - 这是一条垂直于移动轴的边
+                    let constraint = self.calculate_edge_constraint(
+                        dir_axis_horizontal,
+                        origval,
+                        v2,
+                        min_area_size,
+                    );
+                    bigger = bigger.min(constraint.0);
+                    smaller = smaller.min(constraint.1);
+                }
+                (false, true) => {
+                    // v2在移动轴上，v1不在 - 这是一条垂直于移动轴的边
+                    let constraint = self.calculate_edge_constraint(
+                        dir_axis_horizontal,
+                        origval,
+                        v1,
+                        min_area_size,
+                    );
+                    bigger = bigger.min(constraint.0);
+                    smaller = smaller.min(constraint.1);
+                }
+                _ => {
+                    // 与移动轴不相关或自身是移动轴
+                    ()
+                }
+            }
+        }
+
+        (bigger, smaller)
+    }
+
+    /// 计算单条边对移动的约束
+    /// 返回: (向正方向限制, 向负方向限制)
+    fn calculate_edge_constraint(
+        &self,
+        dir_axis_horizontal: bool,
+        origval: u32,
+        fixed_vertex: &ScrVert,
+        min_area_size: u32,
+    ) -> (u32, u32) {
+        if dir_axis_horizontal {
+            // 水平轴（改变Y坐标）
+            let distance = if fixed_vertex.vec.y > origval {
+                // 固定顶点在移动轴下方，限制向下移动
+                let max_down = fixed_vertex
+                    .vec
+                    .y
+                    .saturating_sub(origval)
+                    .saturating_sub(min_area_size);
+                (max_down, u32::MAX)
+            } else if fixed_vertex.vec.y < origval {
+                // 固定顶点在移动轴上方，限制向上移动
+                let max_up = origval
+                    .saturating_sub(fixed_vertex.vec.y)
+                    .saturating_sub(min_area_size) as u32;
+                (u32::MAX, max_up)
+            } else {
+                // 在同一水平线上，无约束
+                (u32::MAX, u32::MAX)
+            };
+            distance
+        } else {
+            // 垂直轴（改变X坐标）
+            let distance = if fixed_vertex.vec.x > origval {
+                // 固定顶点在移动轴右侧，限制向右移动
+                let max_right = fixed_vertex
+                    .vec
+                    .x
+                    .saturating_sub(origval)
+                    .saturating_sub(min_area_size);
+                (max_right, u32::MAX)
+            } else if fixed_vertex.vec.x < origval {
+                // 固定顶点在移动轴左侧，限制向左移动
+                let max_left = origval
+                    .saturating_sub(fixed_vertex.vec.x)
+                    .saturating_sub(min_area_size);
+                (u32::MAX, max_left)
+            } else {
+                // 在同一垂直线上，无约束
+                (u32::MAX, u32::MAX)
+            };
+            distance
+        }
+    }
+
+    /// 应用边移动，更新顶点坐标并刷新区域几何
+    /// 返回实际应用的最终坐标
+    pub fn apply_edge_move(
+        &mut self,
+        dir_axis_horizontal: bool,
+        moving_vert_keys: &[ScrVertKey],
+        origval: u32,
+        delta: i32,
+        bigger: u32,
+        smaller: u32,
+    ) -> u32 {
+        let final_loc = if delta > 0 {
+            let move_amount = delta as u32;
+            let clamped_amount = move_amount.min(bigger);
+            origval.saturating_add(clamped_amount)
+        } else if delta < 0 {
+            let move_amount = delta.unsigned_abs();
+            let clamped_amount = move_amount.min(smaller);
+            origval.saturating_sub(clamped_amount)
+        } else {
+            origval
+        };
+
+        for &vert_key in moving_vert_keys {
+            if let Some(vert) = self.verts.get_mut(vert_key) {
+                if dir_axis_horizontal {
+                    vert.vec.y = final_loc;
+                } else {
+                    vert.vec.x = final_loc;
+                }
+            }
+        }
+
+        final_loc
+    }
+
+    // =====================================================================
+
     /// 收集所有"可交互"的内部边（排除窗口边缘边）。
     pub fn collect_internal_edges(&self) -> Vec<ScrEdgeKey> {
         let mut out = Vec::new();
@@ -1819,16 +2254,24 @@ impl ScrAreaMap {
     pub fn mark_window_border_edges(&mut self, window_rect: &Rcti, ui_settings: &UISettings) {
         let d2 = ui_settings.get_edge_filter_boundary().round() as u32;
         for (_, e) in &mut self.edges {
-            let Some(v1) = self.verts.get(e.v1) else { panic!("存在无效的索引: {:#?}", e.v1); };
-            let Some(v2) = self.verts.get(e.v2) else { panic!("存在无效的索引: {:#?}", e.v2); };
-            let is_border = if v1.vec.y == v2.vec.y {
-                let y = v1.vec.y;
-                y <= window_rect.ymin.saturating_add(d2) || y >= window_rect.ymax.saturating_sub(d2)
-            } else if v1.vec.x == v2.vec.x {
-                let x = v1.vec.x;
-                x <= window_rect.xmin.saturating_add(d2) || x >= window_rect.xmax.saturating_sub(d2)
-            } else {
-                false
+            let Some(v1) = self.verts.get(e.v1) else {
+                panic!("存在无效的索引: {:#?}", e.v1);
+            };
+            let Some(v2) = self.verts.get(e.v2) else {
+                panic!("存在无效的索引: {:#?}", e.v2);
+            };
+            let is_border = match (v1.vec.y == v2.vec.y, v1.vec.x == v2.vec.x) {
+                (true, false) => {
+                    let y = v1.vec.y;
+                    y <= window_rect.ymin.saturating_add(d2)
+                        || y >= window_rect.ymax.saturating_sub(d2)
+                }
+                (false, true) => {
+                    let x = v1.vec.x;
+                    x <= window_rect.xmin.saturating_add(d2)
+                        || x >= window_rect.xmax.saturating_sub(d2)
+                }
+                _ => false,
             };
             e.border = is_border;
         }

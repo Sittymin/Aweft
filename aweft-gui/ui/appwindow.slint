@@ -1,8 +1,13 @@
 import { SplitPreviewOverlay, SplitPreviewOverlayData, JoinHighlightOverlayData, CloseAreaOverlayData, JoinHighlightOverlay, CloseAreaOverlays } from "overlay.slint";
+export struct SlintKey {
+    // 低32位：区域索引
+    key-index: int,
+    // 高32位：区域版本
+    key-version: int,
+}
+
 struct ScrAreaData {
-    // 用于索引 ScrArea - 拆分为索引和版本
-    area_key_index: int,      // 低32位：区域索引
-    area_key_version: int,    // 高32位：区域版本
+    area_key: SlintKey,
     x: length,
     y: length,
     width: length,
@@ -17,31 +22,77 @@ export enum ActionZoneCorner {
     bottom-right
 }
 
-export enum EdgeOrientation {
-    horizontal,
-    vertical
-}
 
-export struct ScrEdgeData {
+export struct ScrEdgeDisplayData {
     x: length,
     y: length,
     width: length,
-    height: length
+    height: length,
+    active: bool,
 }
 
-export component ScrEdge inherits Rectangle {
-    in property <ScrEdgeData> data;
-    background: green;
+export struct ScrEdgeTouchAreaData {
+    // TouchArea 的稳定位置（避免频繁更新）
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    vert_keys: [SlintKey]
+}
+
+component ScrEdgeDisplay inherits Rectangle {
+    in property <ScrEdgeDisplayData> data;
+    animate background {
+        duration: 250ms;
+    }
+    background: data.active ? rgba(255,0,0,1) : rgba(0,255,0,0.5);
     x: data.x;
     y: data.y;
+    z: 100;
     width: data.width;
     height: data.height;
 }
 
-export global ActionManager {
+component ScrEdgeTouchArea inherits TouchArea {
+    in property <ScrEdgeTouchAreaData> touch-area-data;
+    property <bool> is-dragging;
+    x: touch-area-data.x;
+    y: touch-area-data.y;
+    width: touch-area-data.width;
+    height: touch-area-data.height;
+    changed has-hover => {
+        if (self.has-hover) {
+            // 指针进入区域时的回调
+            // TODO: 添加一个回调用于将对应ScrEdgeDisplayData active设置
+            debug("鼠标悬停进入");
+        } else {
+            // 指针离开区域时的回调
+            debug("鼠标悬停离开");
+        }
+    }
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            // 开始拖拽
+            self.is-dragging = true;
+        } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && root.is-dragging) {
+            // 松开时触发结束回调
+            CallbackManager.edge-drag-end(false);
+            self.is-dragging = false;
+        } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.is-dragging) {
+            CallbackManager.edge-drag-end(true);
+            self.is-dragging = false;
+        } else if (event.kind == PointerEventKind.move && root.is-dragging) {
+            CallbackManager.edge-drag(root.touch-area-data.vert_keys, self.mouse-x, self.mouse-y);
+        }
+    }
+}
+
+export global CallbackManager {
     // 定义回调 - 使用拆分的键值
-    callback actionzone-drag(area-key-index: int, area-key-version: int, corner: ActionZoneCorner, x: length, y: length);
-    callback actionzone-drag-end(area-key-index: int, area-key-version: int, is-cancel: bool);
+    callback actionzone-drag(area-key: SlintKey, corner: ActionZoneCorner, offset-x: length, offset-y: length);
+    callback actionzone-drag-end(area-key: SlintKey, is-cancel: bool);
+    callback edge-drag-end(is-cancel: bool);
+    callback edge-drag(vert-keys: [SlintKey], offset-x: length, offset-y: length);
 }
 
 component ActionZone inherits Rectangle {
@@ -72,8 +123,7 @@ component ActionZone inherits Rectangle {
 }
 
 component SlintScrArea inherits Rectangle {
-    in property <int> area-key-index;
-    in property <int> area-key-version;
+    in property <SlintKey> area-key;
     in property <length> container-x;
     in property <length> container-y;
     in property <length> container-width;
@@ -94,10 +144,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.top-left;
         border-color: #FF0080; // 亮粉色 - 左上角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            ActionManager.actionzone-drag(root.area-key-index, root.area-key-version, corner, mouse-x, mouse-y);
+            CallbackManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
         actionzone-drag-end(is-cancel) => {
-            ActionManager.actionzone-drag-end(root.area-key-index, root.area-key-version, is-cancel)
+            CallbackManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 
@@ -109,10 +159,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.top-right;
         border-color: #0080FF; // 亮蓝色 - 右上角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            ActionManager.actionzone-drag(root.area-key-index, root.area-key-version, corner, mouse-x, mouse-y);
+            CallbackManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
         actionzone-drag-end(is-cancel) => {
-            ActionManager.actionzone-drag-end(root.area-key-index, root.area-key-version, is-cancel)
+            CallbackManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 
@@ -124,10 +174,10 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.bottom-right;
         border-color: #FF8000; // 亮橙色 - 右下角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            ActionManager.actionzone-drag(root.area-key-index, root.area-key-version, corner, mouse-x, mouse-y);
+            CallbackManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
         actionzone-drag-end(is-cancel) => {
-            ActionManager.actionzone-drag-end(root.area-key-index, root.area-key-version, is-cancel)
+            CallbackManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 
@@ -139,19 +189,19 @@ component SlintScrArea inherits Rectangle {
         position: ActionZoneCorner.bottom-left;
         border-color: #FFFF00; // 亮黄色 - 左下角
         actionzone-drag(corner, mouse-x, mouse-y) => {
-            ActionManager.actionzone-drag(root.area-key-index, root.area-key-version, corner, mouse-x, mouse-y);
+            CallbackManager.actionzone-drag(root.area-key, corner, mouse-x, mouse-y);
         }
         actionzone-drag-end(is-cancel) => {
-            ActionManager.actionzone-drag-end(root.area-key-index, root.area-key-version, is-cancel)
+            CallbackManager.actionzone-drag-end(root.area-key, is-cancel)
         }
     }
 }
 
 
-
 export component MainWindow inherits Window {
     in property <[ScrAreaData]> scrareas: [];
-    in property <[ScrEdgeData]> scredges: [];
+    in property <[ScrEdgeDisplayData]> scredgedisplays: [];
+    in property <[ScrEdgeTouchAreaData]> scredgetouchareas: [];
     in property <length> border-width: 2px;
     in property <bool> show-split-preview-overlay: true;
     in property <SplitPreviewOverlayData> split-preview-overlay-data;
@@ -161,8 +211,7 @@ export component MainWindow inherits Window {
     in property <[CloseAreaOverlayData]> close-area-overlay-datas;
 
     for scrarea[index] in scrareas: SlintScrArea {
-        area-key-index: scrarea.area-key-index;
-        area-key-version: scrarea.area-key-version;
+        area-key: scrarea.area-key;
         container-x: scrarea.x;
         container-y: scrarea.y;
         container-width: scrarea.width;
@@ -170,8 +219,11 @@ export component MainWindow inherits Window {
         actionzone-side-length: scrarea.actionzone-side-length;
     }
 
-    for scredge[index] in scredges: ScrEdge {
-        data: scredge;
+    for scredgedisplay[index] in scredgedisplays: ScrEdgeDisplay {
+        data: scredgedisplay;
+    }
+    for scredgetoucharea[index] in scredgetouchareas: ScrEdgeTouchArea {
+        touch-area-data: scredgetoucharea;
     }
 
     if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {

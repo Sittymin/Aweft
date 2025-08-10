@@ -3,16 +3,54 @@ slint::include_modules!();
 mod screen;
 pub mod types;
 
+use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Context, Result};
 use screen::geometry::*;
 use slint::{
-    PhysicalSize, RenderingState,
+    Model, PhysicalSize, RenderingState,
     winit_030::{WinitWindowAccessor, WinitWindowEventResult, winit},
 };
 use slotmap::{Key, KeyData};
 use types::*;
+
+/// 通用：将 SlotMap 的 Key 拆分为 (index, version)
+fn key_to_index_version<K: Key>(key: K) -> (i32, i32) {
+    let ffi = key.data().as_ffi();
+    let index = (ffi & 0xFFFF_FFFF) as i32;
+    let version = (ffi >> 32) as i32;
+    (index, version)
+}
+
+/// 通用：由 (index, version) 组装 SlotMap 的 Key
+fn index_version_to_key<K: Key>(index: i32, version: i32) -> K {
+    let ffi = ((version as u64) << 32) | (index as u64);
+    K::from(KeyData::from_ffi(ffi))
+}
+
+/// 通用：SlotMap Key -> SlintKey
+fn key_to_slint_area_key<K: Key>(key: K) -> SlintKey {
+    let (index, version) = key_to_index_version(key);
+    SlintKey {
+        key_index: index,
+        key_version: version,
+    }
+}
+
+/// 通用：SlintKey -> SlotMap Key
+fn slint_area_key_to_key<K: Key>(area_key: &SlintKey) -> K {
+    index_version_to_key::<K>(area_key.key_index, area_key.key_version)
+}
+
+/// 内部边数据结构，包含计算出的所有信息
+struct EdgeSegmentData {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    vert_keys: Vec<SlintKey>,
+}
 
 /// 拖拽操作的状态信息
 #[derive(Debug, Clone)]
@@ -29,6 +67,19 @@ pub enum DragOperation {
         source_area_key: ScrAreaKey,
         target_area_key: ScrAreaKey,
         adjacency: Adjacency,
+    },
+    /// 边移动操作 - 存储移动状态信息
+    MoveEdge {
+        /// 轴方向：true=水平轴(改变Y坐标)，false=垂直轴(改变X坐标)
+        dir_axis_horizontal: bool,
+        /// 原始轴坐标值
+        origval: u32,
+        /// 向正方向的最大位移距离
+        bigger: u32,
+        /// 向负方向的最大位移距离
+        smaller: u32,
+        /// 参与移动的顶点键集合
+        moving_vert_keys: Vec<ScrVertKey>,
     },
 }
 
@@ -69,13 +120,8 @@ impl AppState {
             let logical_width = winx as f64 / scale_factor;
             let logical_height = winy as f64 / scale_factor;
 
-            let key_ffi = area_key.data().as_ffi();
-            let area_key_index = (key_ffi & 0xFFFFFFFF) as i32; // 低32位：索引
-            let area_key_version = (key_ffi >> 32) as i32; // 高32位：版本
-
             areas_data.push(ScrAreaData {
-                area_key_index,
-                area_key_version,
+                area_key: key_to_slint_area_key(area_key),
                 x: logical_x as f32,
                 y: logical_y as f32,
                 width: logical_width as f32,
@@ -86,64 +132,224 @@ impl AppState {
         areas_data
     }
 
-    // TODO: 直接处理为一条水平面相连的**整个**，并且把几条Edge的Key也传递给UI(后面这个可能有更好解决办法)
-    fn convert_edges_to_slint_data(&self) -> Vec<ScrEdgeData> {
-        self.screen_map
-            .edges
-            .iter()
-            .filter(|(_ekey, e)| !e.border)
-            .map(|(edge_key, edge)| {
-                let v1 = self.screen_map.verts.get(edge.v1).unwrap_or_else(|| {
+    fn convert_edges_to_slint_display_data(&self) -> Vec<ScrEdgeDisplayData> {
+        self.compute_edges_data()
+            .into_iter()
+            .map(|edge| ScrEdgeDisplayData {
+                x: edge.x,
+                y: edge.y,
+                width: edge.width,
+                height: edge.height,
+                active: false, // 默认为非激活状态，后续可通过回调更新
+            })
+            .collect()
+    }
+
+    /// 统一的边数据计算函数，避免重复计算
+    fn compute_edges_data(&self) -> Vec<EdgeSegmentData> {
+        // 1) 先将所有非边框的、轴对齐的边转换为"线段"并去重
+        // 线段键: (is_horizontal, constant_coord, start, end)
+        let mut seen_segments: HashSet<(bool, u32, u32, u32)> = HashSet::new();
+        // 分组为: 方向/常量坐标 -> [(start, end, start_vert_key, end_vert_key)]
+        let mut grouped_segments: HashMap<(bool, u32), Vec<(u32, u32, ScrVertKey, ScrVertKey)>> =
+            HashMap::new();
+
+        for (edge_key, edge) in &self.screen_map.edges {
+            if edge.border {
+                continue;
+            }
+            let v1 =
+                self.screen_map.verts.get(edge.v1).unwrap_or_else(|| {
                     panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v1)
                 });
-                let v2 = self.screen_map.verts.get(edge.v2).unwrap_or_else(|| {
+            let v2 =
+                self.screen_map.verts.get(edge.v2).unwrap_or_else(|| {
                     panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v2)
                 });
 
-                let half_edge_width = self.ui_settings.get_half_edge_width();
-                let scale_factor = self.ui_settings.get_scale_factor();
+            let is_horizontal = v1.vec.y == v2.vec.y;
+            let is_vertical = v1.vec.x == v2.vec.x;
 
-                let is_horizontal = v1.vec.y == v2.vec.y;
-                let is_vertical = v1.vec.x == v2.vec.x;
-
-                match (is_horizontal, is_vertical) {
-                    (true, false) => {
-                        // --- 水平边的逻辑 ---
-                        let (start_v, end_v) = if v1.vec.x < v2.vec.x {
-                            (v1, v2)
-                        } else {
-                            (v2, v1)
-                        };
-                        ScrEdgeData {
-                            width: ((end_v.vec.x - start_v.vec.x) as f64 / scale_factor) as f32,
-                            height: (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32,
-                            x: (start_v.vec.x as f64 / scale_factor) as f32,
-                            y: ((start_v.vec.y as f64 - half_edge_width) / scale_factor) as f32,
-                        }
-                    }
-                    (false, true) => {
-                        // --- 垂直边的逻辑 ---
-                        let (start_v, end_v) = if v1.vec.y < v2.vec.y {
-                            (v1, v2)
-                        } else {
-                            (v2, v1)
-                        };
-                        ScrEdgeData {
-                            height: ((end_v.vec.y - start_v.vec.y) as f64 / scale_factor) as f32,
-                            width: (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32,
-                            x: ((start_v.vec.x as f64 - half_edge_width) / scale_factor) as f32,
-                            y: (start_v.vec.y as f64 / scale_factor) as f32,
-                        }
-                    }
-                    (false, false) => {
-                        panic!("存在非水平或垂直 Edge 数据: edge_key={:?}", edge_key)
-                    }
-                    (true, true) => {
-                        panic!("Edge 的两个顶点重合，长度为零: edge_key={:?}", edge_key)
+            match (is_horizontal, is_vertical) {
+                (true, false) => {
+                    let y = v1.vec.y; // 恒定y
+                    let (x1, x2, ks, ke) = if v1.vec.x <= v2.vec.x {
+                        (v1.vec.x, v2.vec.x, edge.v1, edge.v2)
+                    } else {
+                        (v2.vec.x, v1.vec.x, edge.v2, edge.v1)
+                    };
+                    // 去重：完全一致的段只保留一次
+                    if seen_segments.insert((true, y, x1, x2)) {
+                        grouped_segments
+                            .entry((true, y))
+                            .or_default()
+                            .push((x1, x2, ks, ke));
                     }
                 }
+                (false, true) => {
+                    let x = v1.vec.x; // 恒定x
+                    let (y1, y2, ks, ke) = if v1.vec.y <= v2.vec.y {
+                        (v1.vec.y, v2.vec.y, edge.v1, edge.v2)
+                    } else {
+                        (v2.vec.y, v1.vec.y, edge.v2, edge.v1)
+                    };
+                    if seen_segments.insert((false, x, y1, y2)) {
+                        grouped_segments
+                            .entry((false, x))
+                            .or_default()
+                            .push((y1, y2, ks, ke));
+                    }
+                }
+                (false, false) => {
+                    println!("调试信息 - 非轴对齐边:");
+                    println!("  Edge key: {:?}", edge_key);
+                    println!(
+                        "  v1 key: {:?}, 位置: ({}, {})",
+                        edge.v1, v1.vec.x, v1.vec.y
+                    );
+                    println!(
+                        "  v2 key: {:?}, 位置: ({}, {})",
+                        edge.v2, v2.vec.x, v2.vec.y
+                    );
+                    println!("  边是否为边框: {}", edge.border);
+                    panic!(
+                        "存在非水平或垂直 Edge 数据: edge_key={:?}, v1=({}, {}), v2=({}, {})",
+                        edge_key, v1.vec.x, v1.vec.y, v2.vec.x, v2.vec.y
+                    );
+                }
+                (true, true) => {
+                    panic!("Edge 的两个顶点重合，长度为零: edge_key={:?}", edge_key);
+                }
+            }
+        }
+
+        // 2) 在每个组内按范围合并相邻/重叠的段，得到最大连续段
+        let half_edge_width = self.ui_settings.get_half_edge_width();
+        let scale_factor = self.ui_settings.get_scale_factor();
+
+        let mut result: Vec<EdgeSegmentData> = Vec::new();
+
+        for ((is_horizontal, constant), mut spans) in grouped_segments {
+            // 按起点排序，次序用终点保证稳定
+            spans.sort_by(|a, b| match a.0.cmp(&b.0) {
+                std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+                other => other,
+            });
+
+            let mut merged: Vec<(u32, u32, Vec<ScrVertKey>)> = Vec::new();
+            let mut current: Option<(u32, u32, Vec<ScrVertKey>)> = None;
+
+            for (start, end, ks, ke) in spans {
+                if let Some((cur_s, mut cur_e, mut keys)) = current {
+                    use std::cmp::Ordering;
+                    match start.cmp(&cur_e) {
+                        Ordering::Greater => {
+                            // 完全不相邻且无重叠：分开
+                            merged.push((cur_s, cur_e, keys));
+                            current = Some((start, end, vec![ks, ke]));
+                        }
+                        Ordering::Equal | Ordering::Less => {
+                            // 相邻（start == cur_e）或重叠/包含（start < cur_e）：合并
+                            if end > cur_e {
+                                cur_e = end;
+                            }
+                            keys.push(ks);
+                            keys.push(ke);
+                            current = Some((cur_s, cur_e, keys));
+                        }
+                    }
+                } else {
+                    current = Some((start, end, vec![ks, ke]));
+                }
+            }
+            if let Some(seg) = current {
+                merged.push(seg);
+            }
+
+            // 3) 生成UI矩形数据（逻辑像素坐标）
+            for (start, end, mut keys) in merged {
+                // 去重（按键），再根据几何顺序排序
+                keys.sort_by_key(|k| {
+                    let v = self.screen_map.verts.get(*k).unwrap();
+                    if is_horizontal { v.vec.x } else { v.vec.y }
+                });
+                keys.dedup();
+                let vert_keys_vec: Vec<SlintKey> =
+                    keys.into_iter().map(|k| key_to_slint_area_key(k)).collect();
+
+                if is_horizontal {
+                    let width = ((end - start) as f64 / scale_factor) as f32;
+                    let height = (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32;
+                    let x = (start as f64 / scale_factor) as f32;
+                    let y = ((constant as f64 - half_edge_width) / scale_factor) as f32;
+                    result.push(EdgeSegmentData {
+                        x,
+                        y,
+                        width,
+                        height,
+                        vert_keys: vert_keys_vec,
+                    });
+                } else {
+                    let height = ((end - start) as f64 / scale_factor) as f32;
+                    let width = (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32;
+                    let x = ((constant as f64 - half_edge_width) / scale_factor) as f32;
+                    let y = (start as f64 / scale_factor) as f32;
+                    result.push(EdgeSegmentData {
+                        x,
+                        y,
+                        width,
+                        height,
+                        vert_keys: vert_keys_vec,
+                    });
+                }
+            }
+        }
+
+        result
+    }
+
+    fn convert_edges_to_slint_touch_data(&self) -> Vec<ScrEdgeTouchAreaData> {
+        self.compute_edges_data()
+            .into_iter()
+            .map(|edge| ScrEdgeTouchAreaData {
+                x: edge.x,
+                y: edge.y,
+                width: edge.width,
+                height: edge.height,
+                vert_keys: edge.vert_keys.as_slice().into(),
             })
             .collect()
+    }
+
+    /// 统一获取边数据的方法，返回显示和触摸数据
+    fn convert_edges_to_slint_both_data(
+        &self,
+    ) -> (Vec<ScrEdgeDisplayData>, Vec<ScrEdgeTouchAreaData>) {
+        let edges_data = self.compute_edges_data();
+
+        let display_data = edges_data
+            .iter()
+            .map(|edge| ScrEdgeDisplayData {
+                x: edge.x,
+                y: edge.y,
+                width: edge.width,
+                height: edge.height,
+                active: false,
+            })
+            .collect();
+
+        let touch_data = edges_data
+            .into_iter()
+            .map(|edge| ScrEdgeTouchAreaData {
+                x: edge.x,
+                y: edge.y,
+                width: edge.width,
+                height: edge.height,
+                vert_keys: edge.vert_keys.as_slice().into(),
+            })
+            .collect();
+
+        (display_data, touch_data)
     }
 
     /// 以包含端坐标返回当前窗口的物理像素矩形 (0,0)-(w-1,h-1)
@@ -155,6 +361,43 @@ impl AppState {
             ymax: self.window_size.height.saturating_sub(1),
         }
     }
+}
+
+fn scale_split_overlay(data: SplitPreviewOverlayData, scale: f64) -> SplitPreviewOverlayData {
+    let s = scale as f32;
+    SplitPreviewOverlayData {
+        x1: data.x1 / s,
+        y1: data.y1 / s,
+        width1: data.width1 / s,
+        height1: data.height1 / s,
+        x2: data.x2 / s,
+        y2: data.y2 / s,
+        width2: data.width2 / s,
+        height2: data.height2 / s,
+    }
+}
+
+fn scale_join_overlay(data: JoinHighlightOverlayData, scale: f64) -> JoinHighlightOverlayData {
+    let s = scale as f32;
+    JoinHighlightOverlayData {
+        x: data.x / s,
+        y: data.y / s,
+        width: data.width / s,
+        height: data.height / s,
+    }
+}
+
+fn scale_close_overlays(datas: Vec<CloseAreaOverlayData>, scale: f64) -> Vec<CloseAreaOverlayData> {
+    let s = scale as f32;
+    datas
+        .into_iter()
+        .map(|d| CloseAreaOverlayData {
+            x: d.x / s,
+            y: d.y / s,
+            width: d.width / s,
+            height: d.height / s,
+        })
+        .collect()
 }
 
 /// 简化的应用窗口管理器
@@ -222,8 +465,9 @@ impl AppWindowManager {
 
         let weak_instance_for_drag = weak_instance.clone();
         let state_for_drag = Rc::clone(&self.state);
-        self.instance.global::<ActionManager>().on_actionzone_drag(
-            move |area_key_index, area_key_version, corner, offset_x, offset_y| {
+        self.instance
+            .global::<CallbackManager>()
+            .on_actionzone_drag(move |area_key, corner, offset_x, offset_y| {
                 let mut state = state_for_drag.borrow_mut();
                 let scale_factor = state.ui_settings.get_scale_factor();
                 let actionzone_side_length = state.ui_settings.get_actionzone_side_length();
@@ -231,9 +475,8 @@ impl AppWindowManager {
                 let physical_offset_x = offset_x as f64 * scale_factor;
                 let physical_offset_y = offset_y as f64 * scale_factor;
 
-                // 重新组合完整的键值（版本 + 索引）
-                let area_key_ffi = ((area_key_version as u64) << 32) | (area_key_index as u64);
-                let source_key = ScrAreaKey::from(KeyData::from_ffi(area_key_ffi));
+                // 将 SlintKey 转回 SlotMap Key
+                let source_key: ScrAreaKey = slint_area_key_to_key(&area_key);
 
                 // 防护检查：确保源区域仍然存在
                 if !state.screen_map.areas.contains_key(source_key) {
@@ -268,7 +511,7 @@ impl AppWindowManager {
                                     relative_offset_y,
                                 );
 
-                            // 更新拖拽状态
+                            // 更新拖拽状态（保持物理像素数据）
                             state.current_drag_operation = DragOperation::Split {
                                 source_area: source_key,
                                 preview_data: split_preview_overlay_data.clone(),
@@ -278,9 +521,11 @@ impl AppWindowManager {
                             instance.set_show_join_highlight_overlay(false);
                             instance.set_show_close_area_overlays(false);
                             instance.set_show_split_preview_overlay(true);
-                            // println!("对于区域左上角偏移({relative_offset_x},{relative_offset_y})");
-                            // println!("生成的分割数据: {:#?}", split_preview_overlay_data);
-                            instance.set_split_preview_overlay_data(split_preview_overlay_data);
+                            // 将数据转换为逻辑像素再发送到 Slint
+                            let split_preview_overlay_data_logical =
+                                scale_split_overlay(split_preview_overlay_data, scale_factor);
+                            instance
+                                .set_split_preview_overlay_data(split_preview_overlay_data_logical);
                         } else {
                             // println!("移动到不同区域 {:?} - 执行合并操作", target_area_key);
                             // 计算邻接关系
@@ -304,13 +549,19 @@ impl AppWindowManager {
                                     Ok((join_data, close_datas)) => {
                                         // 显示合并预览，隐藏分割预览
                                         instance.set_show_split_preview_overlay(false);
-                                        instance.set_join_highlight_overlay_data(join_data);
+                                        // 缩放到逻辑像素
+                                        let join_data_logical =
+                                            scale_join_overlay(join_data, scale_factor);
+                                        let close_datas_logical =
+                                            scale_close_overlays(close_datas, scale_factor);
+                                        instance.set_join_highlight_overlay_data(join_data_logical);
                                         instance.set_show_join_highlight_overlay(true);
                                         instance.set_close_area_overlay_datas(
-                                            close_datas.as_slice().into(),
+                                            close_datas_logical.as_slice().into(),
                                         );
-                                        instance
-                                            .set_show_close_area_overlays(!close_datas.is_empty());
+                                        instance.set_show_close_area_overlays(
+                                            !close_datas_logical.is_empty(),
+                                        );
                                     }
                                     Err(e) => {
                                         eprintln!("生成合并预览失败: {}", e);
@@ -334,14 +585,13 @@ impl AppWindowManager {
                         instance.set_show_close_area_overlays(false);
                     }
                 }
-            },
-        );
+            });
 
         let weak_instance_for_drag_end = weak_instance.clone();
         let state_for_drag_end = Rc::clone(&self.state);
         self.instance
-            .global::<ActionManager>()
-            .on_actionzone_drag_end(move |area_key_index, area_key_version, is_cancel| {
+            .global::<CallbackManager>()
+            .on_actionzone_drag_end(move |area_key, is_cancel| {
                 println!("鼠标拖动结束, 是否是右键取消: {is_cancel}");
 
                 if !is_cancel {
@@ -374,13 +624,22 @@ impl AppWindowManager {
                                     ) {
                                         eprintln!("执行区域拆分失败: {}", e);
                                     } else {
-                                        // 更新边缘边标记与UI显示
+                                        // 更新UI显示与边缘边标记
                                         let current_rect = state.current_window_rect();
+                                        let slint_area_data = state.convert_areas_to_slint_data();
+                                        instance.set_scrareas(slint_area_data.as_slice().into());
+                                        // 更新 Edge 位置
                                         state
                                             .screen_map
                                             .mark_window_border_edges(&current_rect, ui_settings);
-                                        let slint_area_data = state.convert_areas_to_slint_data();
-                                        instance.set_scrareas(slint_area_data.as_slice().into());
+                                        let (slint_edges_display_data, slint_edges_touch_data) =
+                                            state.convert_edges_to_slint_both_data();
+                                        instance.set_scredgedisplays(
+                                            slint_edges_display_data.as_slice().into(),
+                                        );
+                                        instance.set_scredgetouchareas(
+                                            slint_edges_touch_data.as_slice().into(),
+                                        );
                                     }
                                 }
                             }
@@ -398,6 +657,7 @@ impl AppWindowManager {
                                 state.current_drag_operation = DragOperation::None;
 
                                 let ui_settings = &state.ui_settings.clone();
+
                                 if let Err(e) = state.screen_map.apply_join_adjacent_areas(
                                     source_area_key,
                                     target_area_key,
@@ -409,17 +669,56 @@ impl AppWindowManager {
                                     // 重新计算所有区域的几何数据
                                     state.screen_map.update_all_areas_rcti(ui_settings);
 
-                                    // 更新边缘边标记与UI显示
+                                    println!("合并后的所有区域信息:");
+                                    for (area_key, area) in &state.screen_map.areas {
+                                        let (rect, _, _) = area.geometry();
+                                        println!(
+                                            "  区域 {:?}: 位置=({}, {}, {}, {})",
+                                            area_key, rect.xmin, rect.ymin, rect.xmax, rect.ymax
+                                        );
+                                    }
+                                    println!("合并后的所有顶点信息:");
+                                    for (vert_key, vert) in &state.screen_map.verts {
+                                        println!(
+                                            "  顶点 {:?}: 位置=({}, {})",
+                                            vert_key, vert.vec.x, vert.vec.y
+                                        );
+                                    }
+                                    println!("合并后的所有边信息:");
+                                    for (edge_key, edge) in &state.screen_map.edges {
+                                        let v1 = state.screen_map.verts.get(edge.v1).unwrap();
+                                        let v2 = state.screen_map.verts.get(edge.v2).unwrap();
+                                        println!(
+                                            "  边 {:?}: v1=({}, {}) -> v2=({}, {}), border={}",
+                                            edge_key,
+                                            v1.vec.x,
+                                            v1.vec.y,
+                                            v2.vec.x,
+                                            v2.vec.y,
+                                            edge.border
+                                        );
+                                    }
+
+                                    // 更新UI显示与边缘边标记
                                     let current_rect = state.current_window_rect();
+                                    let slint_area_data = state.convert_areas_to_slint_data();
+                                    instance.set_scrareas(slint_area_data.as_slice().into());
+                                    // 更新 Edge 位置
                                     state
                                         .screen_map
                                         .mark_window_border_edges(&current_rect, ui_settings);
-                                    let slint_area_data = state.convert_areas_to_slint_data();
-                                    instance.set_scrareas(slint_area_data.as_slice().into());
+                                    let (slint_edges_display_data, slint_edges_touch_data) =
+                                        state.convert_edges_to_slint_both_data();
+                                    instance.set_scredgedisplays(
+                                        slint_edges_display_data.as_slice().into(),
+                                    );
+                                    instance.set_scredgetouchareas(
+                                        slint_edges_touch_data.as_slice().into(),
+                                    );
                                 }
                             }
-                            DragOperation::None => {
-                                // println!("无有效的拖拽操作，取消操作");
+                            _ => {
+                                // println!("非 Action 拖动，取消操作");
                             }
                         }
 
@@ -441,6 +740,165 @@ impl AppWindowManager {
                     }
                 }
             });
+
+        // 边拖拽处理
+        let weak_instance_for_edge_drag = weak_instance.clone();
+        let state_for_edge_drag = Rc::clone(&self.state);
+        self.instance.global::<CallbackManager>().on_edge_drag(
+            move |vert_keys, offset_x, offset_y| {
+                let mut state = state_for_edge_drag.borrow_mut();
+                let scale_factor = state.ui_settings.get_scale_factor();
+
+                if let Some(instance) = weak_instance_for_edge_drag.upgrade() {
+                    // 如果当前已经在边移动状态，继续移动
+                    if let DragOperation::MoveEdge {
+                        dir_axis_horizontal,
+                        origval,
+                        bigger,
+                        smaller,
+                        moving_vert_keys,
+                    } = &state.current_drag_operation.clone()
+                    {
+                        let ui_settings = &state.ui_settings.clone();
+                        let current_offset_x = offset_x as f64 - ui_settings.get_half_edge_width();
+                        let current_offset_y = offset_y as f64 - ui_settings.get_half_edge_width();
+                        match dir_axis_horizontal {
+                            &true => {
+                                state.screen_map.apply_edge_move(
+                                    *dir_axis_horizontal,
+                                    moving_vert_keys,
+                                    *origval,
+                                    (current_offset_y * scale_factor).round() as i32,
+                                    *bigger,
+                                    *smaller,
+                                );
+                            }
+                            &false => {
+                                state.screen_map.apply_edge_move(
+                                    *dir_axis_horizontal,
+                                    moving_vert_keys,
+                                    *origval,
+                                    (current_offset_x * scale_factor).round() as i32,
+                                    *bigger,
+                                    *smaller,
+                                );
+                            }
+                        }
+                        println!("offset: {current_offset_x}, {current_offset_y}");
+                        // 更新UI
+                        state.screen_map.update_all_areas_rcti(ui_settings);
+                        let slint_area_data = state.convert_areas_to_slint_data();
+                        instance.set_scrareas(slint_area_data.as_slice().into());
+                        let slint_edges_data = state.convert_edges_to_slint_display_data();
+                        instance.set_scredgedisplays(slint_edges_data.as_slice().into());
+                        println!("边移动中...");
+                        return;
+                    }
+
+                    // 开始新的边移动操作
+                    let vert_keys_slice: Vec<SlintKey> = vert_keys.iter().collect();
+
+                    // 转换 SlintKey 到 ScrVertKey
+                    let moving_vert_keys: Vec<ScrVertKey> = vert_keys_slice
+                        .iter()
+                        .map(|k| slint_area_key_to_key(k))
+                        .collect();
+
+                    // 分析移动方向和原始坐标
+                    if let Some((dir_axis_horizontal, origval)) =
+                        state.screen_map.analyze_move_direction(&moving_vert_keys)
+                    {
+                        // 计算移动限制
+                        const MIN_AREA_SIZE: u32 = 50; // TODO: 与 types.rs 中保持一致
+                        let (bigger, smaller) = state.screen_map.compute_move_limits(
+                            dir_axis_horizontal,
+                            &moving_vert_keys,
+                            origval,
+                            MIN_AREA_SIZE,
+                        );
+
+                        // 设置拖拽状态
+                        state.current_drag_operation = DragOperation::MoveEdge {
+                            dir_axis_horizontal,
+                            origval,
+                            bigger,
+                            smaller,
+                            moving_vert_keys,
+                        };
+
+                        println!(
+                            "开始边移动操作: 方向={}, 原始值={}, 限制=({}, {})",
+                            if dir_axis_horizontal {
+                                "水平"
+                            } else {
+                                "垂直"
+                            },
+                            origval,
+                            bigger,
+                            smaller
+                        );
+                    }
+                }
+            },
+        );
+
+        let weak_instance_for_edge_drag_end = weak_instance.clone();
+        let state_for_edge_drag_end = Rc::clone(&self.state);
+        self.instance
+            .global::<CallbackManager>()
+            .on_edge_drag_end(move |is_cancel| {
+                println!("边拖动结束, 是否取消: {}", is_cancel);
+
+                if let Some(instance) = weak_instance_for_edge_drag_end.upgrade() {
+                    let mut state = state_for_edge_drag_end.borrow_mut();
+
+                    if let DragOperation::MoveEdge {
+                        dir_axis_horizontal,
+                        origval,
+                        bigger,
+                        smaller,
+                        moving_vert_keys,
+                    } = &state.current_drag_operation.clone()
+                    {
+                        let ui_settings = &state.ui_settings.clone();
+
+                        if is_cancel {
+                            // 取消：恢复到原始位置
+                            println!("取消边移动，恢复到原始位置");
+                            state.screen_map.apply_edge_move(
+                                *dir_axis_horizontal,
+                                moving_vert_keys,
+                                *origval,
+                                0, // delta = 0 恢复原位置
+                                *bigger,
+                                *smaller,
+                            );
+                            state.screen_map.update_all_areas_rcti(ui_settings);
+                        } else {
+                            // 确认：保持当前位置
+                            println!("确认边移动");
+                        }
+
+                        // 清理和更新UI
+                        let current_rect = state.current_window_rect();
+                        let slint_area_data = state.convert_areas_to_slint_data();
+                        instance.set_scrareas(slint_area_data.as_slice().into());
+                        state
+                            .screen_map
+                            .mark_window_border_edges(&current_rect, ui_settings);
+
+                        // 边拖拽结束时，同时更新显示数据和触摸数据
+                        let (slint_edges_display_data, slint_edges_touch_data) =
+                            state.convert_edges_to_slint_both_data();
+                        instance.set_scredgedisplays(slint_edges_display_data.as_slice().into());
+                        instance.set_scredgetouchareas(slint_edges_touch_data.as_slice().into());
+                    }
+
+                    // 清除拖拽状态
+                    state.current_drag_operation = DragOperation::None;
+                }
+            });
+
         // Winit 事件处理
         let state_for_event = Rc::clone(&self.state);
         self.instance
@@ -461,8 +919,12 @@ impl AppWindowManager {
                             let slint_area_data = state.convert_areas_to_slint_data();
                             instance.set_scrareas(slint_area_data.as_slice().into());
                             // 更新 Edge 位置
-                            let slint_edges_data = state.convert_edges_to_slint_data();
-                            instance.set_scredges(slint_edges_data.as_slice().into());
+                            let (slint_edges_display_data, slint_edges_touch_data) =
+                                state.convert_edges_to_slint_both_data();
+                            instance
+                                .set_scredgedisplays(slint_edges_display_data.as_slice().into());
+                            instance
+                                .set_scredgetouchareas(slint_edges_touch_data.as_slice().into());
                         }
                     }
                     winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -477,6 +939,12 @@ impl AppWindowManager {
                             // 更新 UI
                             let slint_area_data = state.convert_areas_to_slint_data();
                             instance.set_scrareas(slint_area_data.as_slice().into());
+                            let (slint_edges_display_data, slint_edges_touch_data) =
+                                state.convert_edges_to_slint_both_data();
+                            instance
+                                .set_scredgedisplays(slint_edges_display_data.as_slice().into());
+                            instance
+                                .set_scredgetouchareas(slint_edges_touch_data.as_slice().into());
                         }
                     }
                     _ => {}
@@ -517,8 +985,10 @@ impl AppWindowManager {
         state
             .screen_map
             .mark_window_border_edges(&current_rect, &ui_settings);
-        let slint_edges_data = state.convert_edges_to_slint_data();
-        instance.set_scredges(slint_edges_data.as_slice().into());
+        let (slint_edges_display_data, slint_edges_touch_data) =
+            state.convert_edges_to_slint_both_data();
+        instance.set_scredgedisplays(slint_edges_display_data.as_slice().into());
+        instance.set_scredgetouchareas(slint_edges_touch_data.as_slice().into());
 
         Ok(())
     }

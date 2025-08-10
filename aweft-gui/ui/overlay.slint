@@ -20,7 +20,7 @@ export component SplitPreviewOverlay inherits Rectangle {
         border-width: parent.border-width;
         // background: rgba(1.0, 1.0, 1.0, 0.10);
         background: red;
-        z: 100;
+        z: 200;
     }
 
     Rectangle {
@@ -31,7 +31,7 @@ export component SplitPreviewOverlay inherits Rectangle {
         border-color: blue;
         border-width: parent.border-width;
         background: rgba(1.0, 1.0, 1.0, 0.10);
-        z: 100;
+        z: 200;
     }
 }
 
@@ -48,7 +48,7 @@ export component JoinHighlightOverlay inherits Rectangle {
     background: red;
     x: data.x;
     y: data.y;
-    z: 100;
+    z: 200;
     width: data.width;
     height: data.height;
 }
@@ -65,7 +65,7 @@ export component CloseAreaOverlay inherits Rectangle {
     background: blue;
     x: data.x;
     y: data.y;
-    z: 99;
+    z: 199;
     width: data.width;
     height: data.height;
 }
