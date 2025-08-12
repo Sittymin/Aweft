@@ -1,47 +1,19 @@
-slint::include_modules!();
-
-mod screen;
+pub mod screen;
 pub mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::{Context, Result};
-use screen::geometry::*;
+use screen::area::ScrAreaKey;
+use screen::map::ScrAreaMap;
+use screen::primitives::{Adjacency, Rcti};
+use screen::vertex::ScrVertKey;
 use slint::{
     Model, PhysicalSize, RenderingState,
     winit_030::{WinitWindowAccessor, WinitWindowEventResult, winit},
 };
-use slotmap::{Key, KeyData};
 use types::*;
-
-/// 通用：将 SlotMap 的 Key 拆分为 (index, version)
-fn key_to_index_version<K: Key>(key: K) -> (i32, i32) {
-    let ffi = key.data().as_ffi();
-    let index = (ffi & 0xFFFF_FFFF) as i32;
-    let version = (ffi >> 32) as i32;
-    (index, version)
-}
-
-/// 通用：由 (index, version) 组装 SlotMap 的 Key
-fn index_version_to_key<K: Key>(index: i32, version: i32) -> K {
-    let ffi = ((version as u64) << 32) | (index as u64);
-    K::from(KeyData::from_ffi(ffi))
-}
-
-/// 通用：SlotMap Key -> SlintKey
-fn key_to_slint_area_key<K: Key>(key: K) -> SlintKey {
-    let (index, version) = key_to_index_version(key);
-    SlintKey {
-        key_index: index,
-        key_version: version,
-    }
-}
-
-/// 通用：SlintKey -> SlotMap Key
-fn slint_area_key_to_key<K: Key>(area_key: &SlintKey) -> K {
-    index_version_to_key::<K>(area_key.key_index, area_key.key_version)
-}
 
 /// 内部边数据结构，包含计算出的所有信息
 struct EdgeSegmentData {
@@ -362,44 +334,6 @@ impl AppState {
         }
     }
 }
-
-fn scale_split_overlay(data: SplitPreviewOverlayData, scale: f64) -> SplitPreviewOverlayData {
-    let s = scale as f32;
-    SplitPreviewOverlayData {
-        x1: data.x1 / s,
-        y1: data.y1 / s,
-        width1: data.width1 / s,
-        height1: data.height1 / s,
-        x2: data.x2 / s,
-        y2: data.y2 / s,
-        width2: data.width2 / s,
-        height2: data.height2 / s,
-    }
-}
-
-fn scale_join_overlay(data: JoinHighlightOverlayData, scale: f64) -> JoinHighlightOverlayData {
-    let s = scale as f32;
-    JoinHighlightOverlayData {
-        x: data.x / s,
-        y: data.y / s,
-        width: data.width / s,
-        height: data.height / s,
-    }
-}
-
-fn scale_close_overlays(datas: Vec<CloseAreaOverlayData>, scale: f64) -> Vec<CloseAreaOverlayData> {
-    let s = scale as f32;
-    datas
-        .into_iter()
-        .map(|d| CloseAreaOverlayData {
-            x: d.x / s,
-            y: d.y / s,
-            width: d.width / s,
-            height: d.height / s,
-        })
-        .collect()
-}
-
 /// 简化的应用窗口管理器
 pub struct AppWindowManager {
     instance: MainWindow,
@@ -476,23 +410,23 @@ impl AppWindowManager {
                 let physical_offset_y = offset_y as f64 * scale_factor;
 
                 // 将 SlintKey 转回 SlotMap Key
-                let source_key: ScrAreaKey = slint_area_key_to_key(&area_key);
+                let source_area_key: ScrAreaKey = slint_area_key_to_key(&area_key);
 
                 // 防护检查：确保源区域仍然存在
-                if !state.screen_map.areas.contains_key(source_key) {
-                    println!("警告：源区域 {:?} 已不存在，忽略拖拽事件", source_key);
+                if !state.screen_map.areas.contains_key(source_area_key) {
+                    println!("警告：源区域 {:?} 已不存在，忽略拖拽事件", source_area_key);
                     return;
                 }
 
                 if let Some(instance) = weak_instance_for_drag.upgrade() {
                     if let Some(target_area_key) = state.screen_map.find_area_with_actionzone(
-                        source_key,
+                        source_area_key,
                         corner,
                         physical_offset_x,
                         physical_offset_y,
                         actionzone_side_length,
                     ) {
-                        if target_area_key == source_key {
+                        if target_area_key == source_area_key {
                             // println!("在相同区域内 - 执行分割操作");
                             let (relative_offset_x, relative_offset_y) =
                                 state.screen_map.convert_corner_offset_to_relative_offset(
@@ -513,7 +447,7 @@ impl AppWindowManager {
 
                             // 更新拖拽状态（保持物理像素数据）
                             state.current_drag_operation = DragOperation::Split {
-                                source_area: source_key,
+                                source_area: source_area_key,
                                 preview_data: split_preview_overlay_data.clone(),
                             };
 
@@ -531,18 +465,18 @@ impl AppWindowManager {
                             // 计算邻接关系
                             if let Some(adjacency) = state
                                 .screen_map
-                                .detect_adjacency_by_keys(source_key, target_area_key)
+                                .detect_adjacency_by_keys(source_area_key, target_area_key)
                             {
                                 // 更新拖拽状态
                                 state.current_drag_operation = DragOperation::Join {
-                                    source_area_key: source_key,
-                                    target_area_key: target_area_key,
+                                    source_area_key,
+                                    target_area_key,
                                     adjacency,
                                 };
 
                                 // 生成合并高亮与即将关闭区域预览
                                 match state.screen_map.preview_join_adjacent_areas(
-                                    source_key,
+                                    source_area_key,
                                     adjacency,
                                     &state.ui_settings,
                                 ) {
@@ -877,6 +811,7 @@ impl AppWindowManager {
                         } else {
                             // 确认：保持当前位置
                             println!("确认边移动");
+                            state.screen_map.remove_duplicate_vertices();
                         }
 
                         // 清理和更新UI
