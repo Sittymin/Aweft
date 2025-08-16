@@ -1,18 +1,24 @@
 pub mod screen;
+pub mod slint_video_sink;
 pub mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
+use futures::StreamExt;
+
 use anyhow::{Context, Result};
+use gstreamer::prelude::*;
+use gstreamer_video::prelude::*;
 use screen::area::ScrAreaKey;
 use screen::map::ScrAreaMap;
 use screen::primitives::{Adjacency, Rcti};
 use screen::vertex::ScrVertKey;
 use slint::{
-    Model, PhysicalSize, RenderingState,
+    Model, PhysicalSize, RenderingState, 
     winit_030::{WinitWindowAccessor, WinitWindowEventResult, winit},
 };
+use slint::wgpu_24::{WGPUConfiguration, WGPUSettings};
 use types::*;
 
 /// 内部边数据结构，包含计算出的所有信息
@@ -63,6 +69,12 @@ pub struct AppState {
     pub initialized: bool,
     /// 当前拖拽操作状态
     pub current_drag_operation: DragOperation,
+    /// 保持 GStreamer 管道生命周期，防止被提前释放
+    pub video_pipeline: Option<gstreamer::Pipeline>,
+    /// 保持 Sink 生命周期
+    pub video_sink: Option<gstreamer::Element>,
+    /// WGPU 视频 Sink 实例
+    pub wgpu_sink: Option<slint_video_sink::SlintWGPUSink>,
 }
 impl AppState {
     /// 构造函数，从 Slint 窗口初始化
@@ -73,6 +85,9 @@ impl AppState {
             window_size: window.size(),
             initialized: false,
             current_drag_operation: DragOperation::None,
+            video_pipeline: None,
+            video_sink: None,
+            wgpu_sink: None,
         }
     }
 
@@ -345,11 +360,21 @@ impl AppWindowManager {
     pub fn new() -> Result<Self> {
         use slint::BackendSelector;
         // 强制选择winit后端
-        BackendSelector::new()
-            .backend_name("winit".into())
-            // 使用 WGPU 渲染
-            .require_wgpu_24(slint::wgpu_24::WGPUConfiguration::default())
-            .select()?;
+        {
+            let mut sel = BackendSelector::new();
+            let res = sel
+                .backend_name("winit".into())
+                // 使用 WGPU 渲染以支持视频显示
+                .require_wgpu_24(WGPUConfiguration::Automatic(WGPUSettings::default()))
+                .select();
+            if let Err(e) = res {
+                eprintln!("Slint 后端选择失败: {:?}", e);
+                eprintln!(
+                    "提示: 需要可用的 WGPU 环境与驱动，且请在 nix develop 中运行"
+                );
+                return Err(e.into());
+            }
+        }
         let instance = MainWindow::new().context("创建 Slint 主窗口失败")?;
         // FIXME: 这里获得的是未初始化的数据
         let state = Rc::new(RefCell::new(AppState::new(&instance.window())));
@@ -373,6 +398,20 @@ impl AppWindowManager {
         let weak_instance = self.instance.as_weak();
         let window = self.instance.window();
 
+        // 初始化 GStreamer 与播放管线（WGPU 路径）
+        gstreamer::init().unwrap();
+        let pipeline = gstreamer::ElementFactory::make("playbin")
+            .property("uri", "file:///home/Sittymin/Downloads/IMG_0161.MP4")
+            .build()
+            .unwrap()
+            .downcast::<gstreamer::Pipeline>()
+            .unwrap();
+        
+        {
+            let mut state = self.state.borrow_mut();
+            state.video_pipeline = Some(pipeline.clone());
+        }
+
         let weak_instance_for_init = weak_instance.clone();
         let state_for_init = Rc::clone(&self.state);
         if let Err(e) = window.set_rendering_notifier(move |rendering_state, graphics_api| {
@@ -388,6 +427,82 @@ impl AppWindowManager {
                             AppWindowManager::initialize_layout(&state_for_init, &instance)
                         {
                             panic!("布局初始化失败: {e}")
+                        }
+
+                        // 连接 WGPU Sink 并启动播放
+                        let mut state = state_for_init.borrow_mut();
+                        if let Some(pipeline) = state.video_pipeline.clone() {
+                            // 创建消息通道处理 GStreamer 总线消息
+                            let (bus_sender, mut bus_receiver) = futures::channel::mpsc::unbounded::<gstreamer::Message>();
+                            
+                            // 启动异步任务处理总线消息
+                            std::thread::spawn(move || {
+                                let rt = tokio::runtime::Runtime::new().unwrap();
+                                rt.block_on(async {
+                                    while let Some(msg) = futures::StreamExt::next(&mut bus_receiver).await {
+                                        match msg.view() {
+                                            gstreamer::MessageView::Error(err) => {
+                                                eprintln!("GStreamer 错误: {}", err.error());
+                                            }
+                                            gstreamer::MessageView::Eos(_) => {
+                                                println!("视频播放结束");
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                });
+                            });
+                            
+                            // 创建 WGPU Sink
+                            let (sink_element, mut wgpu_sink) = crate::slint_video_sink::create_sink(&pipeline);
+                            
+                            // 连接 WGPU 上下文
+                            wgpu_sink.connect(
+                                graphics_api,
+                                &pipeline.bus().unwrap(),
+                                bus_sender,
+                                Box::new({
+                                    let weak_instance = instance.as_weak();
+                                    move || {
+                                        weak_instance
+                                            .upgrade_in_event_loop(|ui| {
+                                                ui.window().request_redraw()
+                                            })
+                                            .ok();
+                                    }
+                                }),
+                            );
+                            
+                            // 启动播放
+                            if let Err(err) = pipeline.set_state(gstreamer::State::Playing) {
+                                eprintln!("设置播放状态失败: {err:?}");
+                            }
+                            
+                            state.video_sink = Some(sink_element);
+                            state.wgpu_sink = Some(wgpu_sink);
+                        }
+                    }
+                    RenderingState::BeforeRendering => {
+                        // 获取新的视频帧并设置到 UI
+                        let mut image_opt = None;
+                        {
+                            let state = state_for_init.borrow();
+                            if let Some(wgpu_sink) = &state.wgpu_sink {
+                                image_opt = wgpu_sink.fetch_next_frame();
+                            }
+                        }
+                        if let Some(image) = image_opt {
+                            println!("收到新视频帧，设置到 UI");
+                            instance
+                                .global::<crate::types::VideoState>()
+                                .set_current_video_frame(image);
+                        }
+                    }
+                    RenderingState::RenderingTeardown => {
+                        // 清理 WGPU sink
+                        let state = state_for_init.borrow();
+                        if let Some(wgpu_sink) = &state.wgpu_sink {
+                            wgpu_sink.deactivate_and_pause();
                         }
                     }
                     _ => (),
@@ -836,13 +951,14 @@ impl AppWindowManager {
 
         // Winit 事件处理
         let state_for_event = Rc::clone(&self.state);
+        let weak_instance_for_event = weak_instance.clone();
         self.instance
             .window()
             .on_winit_window_event(move |_slint_window, event| {
                 match event {
                     winit::event::WindowEvent::Resized(new_size) => {
                         println!("窗口大小发生改变: {}x{}", new_size.width, new_size.height);
-                        if let Some(instance) = weak_instance.upgrade() {
+                        if let Some(instance) = weak_instance_for_event.upgrade() {
                             let mut state = state_for_event.borrow_mut();
 
                             // 调用新的、清晰的逻辑（需要 instance）
@@ -864,7 +980,7 @@ impl AppWindowManager {
                     }
                     winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                         println!("检测到屏幕缩放因子变化: {:.2}", scale_factor);
-                        if let Some(instance) = weak_instance.upgrade() {
+                        if let Some(instance) = weak_instance_for_event.upgrade() {
                             let mut state = state_for_event.borrow_mut();
 
                             if let Err(e) = Self::handle_scale_change(&mut state, *scale_factor) {

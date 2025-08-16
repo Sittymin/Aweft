@@ -1,4 +1,6 @@
 import { SplitPreviewOverlay, SplitPreviewOverlayData, JoinHighlightOverlayData, CloseAreaOverlayData, JoinHighlightOverlay, CloseAreaOverlays } from "overlay.slint";
+import { VideoPlayer } from "video.slint";
+
 export struct SlintKey {
     // 低32位：区域索引
     key-index: int,
@@ -42,9 +44,7 @@ export struct ScrEdgeTouchAreaData {
 
 component ScrEdgeDisplay inherits Rectangle {
     in property <ScrEdgeDisplayData> data;
-    animate background {
-        duration: 250ms;
-    }
+    animate background { duration: 250ms; }
     background: data.active ? rgba(255,0,0,1) : rgba(0,255,0,0.5);
     x: data.x;
     y: data.y;
@@ -122,6 +122,10 @@ component ActionZone inherits Rectangle {
     }
 }
 
+export global VideoState {
+    in property <image> current-video-frame;
+}
+
 component SlintScrArea inherits Rectangle {
     in property <SlintKey> area-key;
     in property <length> container-x;
@@ -136,6 +140,15 @@ component SlintScrArea inherits Rectangle {
     height: container-height;
     border-width: 2px;
     border-color: #00FFFF; // 青色 - 区域边框
+    VideoPlayer {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        video-frame: VideoState.current-video-frame;
+        // video-frame: @image-url("/home/Sittymin/Pictures/[VCB-Studio] To LOVE-Ru Darkness [02][Ma10p_1080p][x265_flac]-00:05:03.png");
+    }
+
     ActionZone {
         x: 0;
         y: 0;
@@ -197,13 +210,12 @@ component SlintScrArea inherits Rectangle {
     }
 }
 
-
 export component MainWindow inherits Window {
     in property <[ScrAreaData]> scrareas: [];
     in property <[ScrEdgeDisplayData]> scredgedisplays: [];
     in property <[ScrEdgeTouchAreaData]> scredgetouchareas: [];
     in property <length> border-width: 2px;
-    in property <bool> show-split-preview-overlay: true;
+    in property <bool> show-split-preview-overlay: false;
     in property <SplitPreviewOverlayData> split-preview-overlay-data;
     in property <bool> show-join-highlight-overlay: false;
     in property <JoinHighlightOverlayData> join-highlight-overlay-data;

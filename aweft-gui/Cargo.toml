@@ -5,10 +5,18 @@ edition = "2024"
 
 [dependencies]
 bitflags = "2.9.1"
-slint = { version = "1.12.1", features = ["unstable-winit-030", "unstable-wgpu-24"] }
+slint = { version = "1.12.1", features = ["backend-winit", "renderer-femtovg", "unstable-winit-030", "unstable-wgpu-24"] }
 slotmap = "1.0.7"
 tokio = { version = "1.47.0", features = ["full"] }
 anyhow = "1.0"
+gstreamer = { version = "0.23", package = "gstreamer" }
+gstreamer-app = { version = "0.23", package = "gstreamer-app" }
+gstreamer-video = { version = "0.23", package = "gstreamer-video" }
+gstreamer-gl = { version = "0.23", package = "gstreamer-gl" }
+gstreamer-gl-egl = { version = "0.23", package = "gstreamer-gl-egl" }
+glutin_egl_sys = "0.7.1"
+url = "2.5"
+futures = "0.3.31"
 
 [build-dependencies]
 slint-build = "1.12.1"
