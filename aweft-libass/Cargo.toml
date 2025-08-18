@@ -1,0 +1,15 @@
+[package]
+name = "aweft-libass"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libc = "0.2.175"
+image = "0.25"
+png = "0.17.16"
+
+[build-dependencies]
+bindgen = "0.72.0"
+cc = "1.2.33"
+autotools = "0.2.7"
+pkg-config = "0.3.32"

@@ -5,7 +5,7 @@ edition = "2021"
 
 [workspace]
 members = [
-    "aweft-gui", "aweft-ass", "aweft-collab", "aweft-convert",
+    "aweft-gui", "aweft-ass", "aweft-collab", "aweft-convert", "aweft-libass",
 ]
 
 [dependencies]
