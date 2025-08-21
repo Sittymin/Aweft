@@ -316,7 +316,10 @@ impl Track {
             let id = EventId(event_id);
             Ok(EventHandle { track: self, id }
                 .set_text(text)?
-                .set_style(style_id))
+                .set_style(style_id)
+                // 由于 aweft 每次仅用 libass 渲染当前 event
+                // 并不会将全部 event 传递，所以这里设置必然的时间范围
+                .set_timing(0, i64::MAX))
         }
     }
 
@@ -550,19 +553,45 @@ impl<'a> StyleHandle<'a> {
     /// 初始化样式为 libass 的默认值
     /// 这个方法应该在创建新样式后立即调用
     pub fn initialize_defaults(mut self) -> Self {
+        let style_ptr = self.as_mut_ptr();
         unsafe {
-            let style_ptr = self.as_mut_ptr();
-
             // 设置默认的 Name（如果还没有设置）
             if (*style_ptr).Name.is_null() {
                 let default_name = CString::new("Default").unwrap();
-                (*style_ptr).Name = default_name.into_raw();
+                let default_name_bytes = default_name.as_bytes_with_nul();
+                if !(*style_ptr).FontName.is_null() {
+                    ffi::ass_free((*style_ptr).FontName as *mut c_void);
+                }
+                let p = ffi::ass_malloc(default_name_bytes.len() as size_t);
+                if p.is_null() {
+                    panic!("默认样式名分配内存失败");
+                }
+                ptr::copy_nonoverlapping(
+                    default_name_bytes.as_ptr(),
+                    p as *mut u8,
+                    default_name_bytes.len(),
+                );
+                (*style_ptr).Name = p as *mut c_char;
             }
 
             // 设置默认的 FontName（如果还没有设置）
             if (*style_ptr).FontName.is_null() {
                 let default_font = CString::new("Arial").unwrap();
-                (*style_ptr).FontName = default_font.into_raw();
+                let default_font_bytes = default_font.as_bytes_with_nul();
+
+                if !(*style_ptr).FontName.is_null() {
+                    ffi::ass_free((*style_ptr).FontName as *mut c_void);
+                }
+                let p = ffi::ass_malloc(default_font_bytes.len() as size_t);
+                if p.is_null() {
+                    panic!("默认样式字体名分配内存失败");
+                }
+                ptr::copy_nonoverlapping(
+                    default_font_bytes.as_ptr(),
+                    p as *mut u8,
+                    default_font_bytes.len(),
+                );
+                (*style_ptr).FontName = p as *mut c_char;
             }
 
             // 设置其他默认值（基于 libass 的 set_default_style 函数）

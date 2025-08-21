@@ -7,7 +7,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 mod ffi;
-mod image;
 mod library;
 mod renderer;
 mod track;
@@ -24,6 +23,9 @@ pub fn version() -> i32 {
 pub struct SubtitleRenderer {
     library: Arc<Library>,
     renderer: Renderer,
+    // NOTE: 由于 aweft 仅会传递单个 event 渲染，不会有多轨道的情况
+    // 所以仅有一个
+    track: Track,
 }
 
 impl SubtitleRenderer {
@@ -36,7 +38,12 @@ impl SubtitleRenderer {
         renderer.set_storage_size(width, height);
         renderer.set_frame_size(width, height);
         renderer.set_fonts(None, None, DefaultFontProvider::AutoDetect, None)?;
-        Ok(Self { library, renderer })
+        let track = Track::new(Arc::clone(&library))?;
+        Ok(Self {
+            library,
+            renderer,
+            track,
+        })
     }
 
     // NOTE: 这里之前也要应用一下缩放，切换视频源应该不常见
@@ -58,12 +65,22 @@ impl SubtitleRenderer {
         Ok(self)
     }
 
-    pub fn create_track(&self) -> Result<Track> {
-        Track::new(Arc::clone(&self.library))
+    // 可能在未来改变使用 libass 的方式时有用
+    // pub fn create_track(&self) -> Result<Track> {
+    //     Track::new(Arc::clone(&self.library))
+    // }
+
+    pub fn create_event_with_default_style(&mut self, text: &str) -> Result<&mut Self> {
+        let style_id = self.track.default_style_mut()?.id();
+        self.track.create_event(text, style_id)?;
+        Ok(self)
     }
 
-    pub fn render_frame(&mut self, track: &Track, timestamp: i64) -> Result<RenderResult> {
-        self.renderer.render_frame(track, timestamp)
+    pub fn render_frame(&mut self, timestamp: i64) -> Result<RenderResult> {
+        let render_result = self.renderer.render_frame(&self.track, timestamp)?;
+        // 由于是单次渲染，所以直接重建 Track ，避免复杂的 event 增删管理
+        self.track = Track::new(Arc::clone(&self.library))?;
+        Ok(render_result)
     }
 
     /// 设置消息回调函数的便利方法
@@ -339,13 +356,12 @@ pub mod examples {
         renderer.set_frame_size(1280, 720);
 
         // 创建轨道
-        let mut track = renderer.create_track()?;
-        track.set_play_resolution(1280, 720);
-        track.set_track_type(TrackType::Ass);
+        renderer.track.set_play_resolution(1280, 720);
+        renderer.track.set_track_type(TrackType::Ass);
 
         // 创建自定义样式
         let custom_style_id = {
-            let style = track.create_style("CustomStyle", "Arial")?;
+            let style = renderer.track.create_style("CustomStyle", "Arial")?;
             let style = style
                 .set_font_size(48.0)
                 .set_primary_color(Color::new(255, 255, 0, 255)) // 黄色
@@ -358,18 +374,18 @@ pub mod examples {
 
         // 创建事件
         let _event1 = {
-            let event1 = track.create_event("第一行字幕", custom_style_id)?;
+            let event1 = renderer.track.create_event("第一行字幕", custom_style_id)?;
             event1.set_timing(0, 3000) // 0-3秒
         };
 
         let _event2 = {
-            let event2 = track.create_event("第二行字幕", custom_style_id)?;
+            let event2 = renderer.track.create_event("第二行字幕", custom_style_id)?;
             event2.set_timing(3000, 3000) // 3-6秒
         };
 
         // 渲染不同时间点的帧
         for timestamp in [1500, 4500] {
-            let result = renderer.render_frame(&track, timestamp)?;
+            let result = renderer.render_frame(timestamp)?;
             println!(
                 "时间戳 {}ms: 渲染了 {} 个图层，变化: {}",
                 timestamp,
@@ -389,8 +405,7 @@ pub mod examples {
         renderer.set_frame_size(1280, 720);
 
         // 创建轨道
-        let mut track = renderer.create_track()?;
-        track.set_track_type(TrackType::Ass);
+        renderer.track.set_track_type(TrackType::Ass);
 
         // 使用完整的 ASS 脚本
         let ass_script = r#"[Script Info]
@@ -407,16 +422,16 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,ASS 脚本工作流程测试
 Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,第二行字幕"#;
 
         // 处理 ASS 脚本
-        track.process_data(ass_script)?;
+        renderer.track.process_data(ass_script)?;
 
         // 检查解析结果（基本统计信息）
         println!("解析后的轨道信息:");
         // 解析完成后可以直接渲染，无需检查内部状态
-        println!("  样式数量: {}", track.style_count());
-        println!("  事件数量: {}", track.event_count());
+        println!("  样式数量: {}", renderer.track.style_count());
+        println!("  事件数量: {}", renderer.track.event_count());
 
         // 渲染 - 这是这个绑定的主要目的
-        let result = renderer.render_frame(&track, 2500)?;
+        let result = renderer.render_frame(2500)?;
         println!("渲染结果: {} 个图层", result.iter().count());
 
         println!("✅ ASS 脚本工作流程示例完成");
@@ -426,13 +441,12 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,第二行字幕"#;
     /// 样式管理示例
     pub fn style_management_example() -> Result<()> {
         let mut renderer = SubtitleRenderer::new(1920, 1080)?;
-        let mut track = renderer.create_track()?;
-        track.set_play_resolution(1280, 720);
-        track.set_track_type(TrackType::Ass);
+        renderer.track.set_play_resolution(1280, 720);
+        renderer.track.set_track_type(TrackType::Ass);
 
         // 创建多个样式
         let (title_style_id, subtitle_style_id) = {
-            let title_style = track.create_style("Title", "Arial")?;
+            let title_style = renderer.track.create_style("Title", "Arial")?;
             let title_style = title_style
                 .set_font_size(64.0)
                 .set_primary_color(Color::new(255, 255, 255, 255)) // 白色
@@ -442,7 +456,7 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,第二行字幕"#;
                 .set_alignment(Alignment::BottomCenter); // 底部居中
             let title_id = title_style.id();
 
-            let subtitle_style = track.create_style("Subtitle", "Arial")?;
+            let subtitle_style = renderer.track.create_style("Subtitle", "Arial")?;
             let subtitle_style = subtitle_style
                 .set_font_size(36.0)
                 .set_primary_color(Color::new(255, 255, 0, 255)) // 黄色
@@ -456,23 +470,25 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,第二行字幕"#;
 
         // 创建使用不同样式的事件
         let _title_event = {
-            let title_event = track.create_event("电影标题", title_style_id)?;
+            let title_event = renderer.track.create_event("电影标题", title_style_id)?;
             title_event.set_timing(0, 5000)
         };
 
         let _subtitle_event = {
-            let subtitle_event = track.create_event("这是字幕文本", subtitle_style_id)?;
+            let subtitle_event = renderer
+                .track
+                .create_event("这是字幕文本", subtitle_style_id)?;
             subtitle_event.set_timing(1000, 4000)
         };
 
         println!(
             "创建了 {} 个样式和 {} 个事件",
-            track.style_count(),
-            track.event_count()
+            renderer.track.style_count(),
+            renderer.track.event_count()
         );
 
         // 渲染并检查结果
-        let result = renderer.render_frame(&track, 2500)?;
+        let result = renderer.render_frame(2500)?;
         println!("渲染了 {} 个图层", result.iter().count());
 
         println!("✅ 样式管理示例完成");

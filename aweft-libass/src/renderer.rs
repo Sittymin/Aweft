@@ -1,19 +1,15 @@
 use crate::ffi;
-use crate::image::ImageIterator;
 use crate::library::Library;
 use crate::track::Track;
-use anyhow::{anyhow, Result as Result};
+use crate::types::ImageIterator;
+use anyhow::{Result, anyhow};
 use bitflags::bitflags;
-use ::image::RgbaImage;
 use libc::{c_char, c_double, c_int};
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-// ============================================================================
-// Renderer 封装
-// ============================================================================
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ShapingLevel {
@@ -398,14 +394,11 @@ impl Renderer {
 
                 // Path -> &str
                 let path_str = absolute_path.to_str().ok_or_else(|| {
-                    anyhow!(
-                        "默认字体路径包含无效UTF-8字符: {}",
-                        absolute_path.display()
-                    )
+                    anyhow!("默认字体路径包含无效UTF-8字符: {}", absolute_path.display())
                 })?;
                 // &str -> CString
-                default_font_cstring = CString::new(path_str)
-                    .map_err(|e| anyhow!("默认字体路径包含空字符: {}", e))?;
+                default_font_cstring =
+                    CString::new(path_str).map_err(|e| anyhow!("默认字体路径包含空字符: {}", e))?;
                 default_font_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -416,8 +409,8 @@ impl Renderer {
         let default_family_ptr = match default_family {
             Some(s) => {
                 // [修复] 使用 map_err 将 NulError 转换为 anyhow
-                default_family_cstring = CString::new(s)
-                    .map_err(|e| anyhow!("默认字体族包含空字符: {}", e))?;
+                default_family_cstring =
+                    CString::new(s).map_err(|e| anyhow!("默认字体族包含空字符: {}", e))?;
                 default_family_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -438,14 +431,11 @@ impl Renderer {
 
                 // Path -> &str
                 let path_str = absolute_path.to_str().ok_or_else(|| {
-                    anyhow!(
-                        "配置文件路径包含无效UTF-8字符: {}",
-                        absolute_path.display()
-                    )
+                    anyhow!("配置文件路径包含无效UTF-8字符: {}", absolute_path.display())
                 })?;
                 // &str -> CString
-                config_cstring = CString::new(path_str)
-                    .map_err(|e| anyhow!("配置文件路径包含空字符: {}", e))?;
+                config_cstring =
+                    CString::new(path_str).map_err(|e| anyhow!("配置文件路径包含空字符: {}", e))?;
                 config_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -488,7 +478,6 @@ impl Renderer {
         unsafe {
             let mut change = 0i32;
             let images = ffi::ass_render_frame(self.ptr, track.as_ptr(), timestamp, &mut change);
-            // TODO: 可能有更好的输出定义方式
             Ok(RenderResult::new(images, change != 0))
         }
     }
@@ -528,45 +517,5 @@ impl RenderResult {
 
     pub fn iter(&self) -> ImageIterator {
         ImageIterator::new(self.images)
-    }
-
-    /// 将所有图层合成到一个 RGBA 图像中
-    pub fn compose_to_rgba(&self, width: u32, height: u32) -> RgbaImage {
-        let mut result = RgbaImage::new(width, height);
-
-        for image in self.iter() {
-            image.blend_into(&mut result);
-        }
-
-        result
-    }
-
-    /// 保存每个图层为单独的PNG文件
-    pub fn save_layers_to_png(&self, width: u32, height: u32) -> Result<usize> {
-        let mut layer_count = 0;
-
-        for (index, image) in self.iter().enumerate() {
-            let mut layer_img = RgbaImage::new(width, height);
-            image.draw_into(&mut layer_img);
-
-            let filename = format!(
-                "layer_{:02}_size_{}x{}_pos_{}_{}_color_{:08x}.png",
-                index + 1,
-                image.width(),
-                image.height(),
-                image.dst_x(),
-                image.dst_y(),
-                image.color().to_libass_format()
-            );
-
-            layer_img
-                .save(&filename)
-                .map_err(|e| anyhow!("保存图片失败: {}", e))?;
-
-            println!("  图层 #{} 已保存到: {}", index + 1, filename);
-            layer_count += 1;
-        }
-
-        Ok(layer_count)
     }
 }

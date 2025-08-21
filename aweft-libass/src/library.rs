@@ -1,16 +1,12 @@
 use crate::ffi;
 use crate::renderer::DefaultFontProvider;
-use anyhow::{anyhow, Result as Result};
+use anyhow::{Result, anyhow};
 use libc::{c_char, c_int, c_void};
 use std::collections::HashMap;
-use std::ffi::{CString};
+use std::ffi::CString;
 use std::ptr;
 use std::slice;
 use std::sync::{Arc, LazyLock, Mutex};
-
-// ============================================================================
-// 消息回调类型定义
-// ============================================================================
 
 /// 消息级别枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,10 +72,6 @@ pub extern "C" fn rust_handle_message_callback(
     }
 }
 
-// ============================================================================
-// Library 封装
-// ============================================================================
-
 pub struct Library {
     ptr: *mut ffi::ASS_Library,
 }
@@ -100,8 +92,8 @@ impl Library {
     }
 
     pub fn set_fonts_dir(&mut self, fonts_dir: &str) -> Result<()> {
-        let c_fonts_dir = CString::new(fonts_dir)
-            .map_err(|e| anyhow!("字体目录包含无效字符: {}", e))?;
+        let c_fonts_dir =
+            CString::new(fonts_dir).map_err(|e| anyhow!("字体目录包含无效字符: {}", e))?;
         unsafe {
             ffi::ass_set_fonts_dir(self.ptr, c_fonts_dir.as_ptr());
         }
@@ -212,8 +204,7 @@ impl Library {
     }
 
     pub fn add_font(&mut self, name: &str, data: &[u8]) -> Result<()> {
-        let c_name = CString::new(name)
-            .map_err(|e| anyhow!("字体名包含无效字符: {}", e))?;
+        let c_name = CString::new(name).map_err(|e| anyhow!("字体名包含无效字符: {}", e))?;
 
         unsafe {
             ffi::ass_add_font(

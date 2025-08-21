@@ -6,8 +6,6 @@ edition = "2024"
 [dependencies]
 libc = "0.2.175"
 bitflags = "2.9.2"
-image = "0.25"
-png = "0.17.16"
 anyhow = "1.0"
 
 [build-dependencies]
