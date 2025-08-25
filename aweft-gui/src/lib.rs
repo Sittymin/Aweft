@@ -1,24 +1,24 @@
 pub mod screen;
 pub mod slint_video_sink;
 pub mod types;
+mod wgpu_subtitle_renderer;
 
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
-use futures::StreamExt;
+
 
 use anyhow::{Context, Result};
 use gstreamer::prelude::*;
-use gstreamer_video::prelude::*;
 use screen::area::ScrAreaKey;
 use screen::map::ScrAreaMap;
 use screen::primitives::{Adjacency, Rcti};
 use screen::vertex::ScrVertKey;
+use slint::wgpu_24::{WGPUConfiguration, WGPUSettings};
 use slint::{
-    Model, PhysicalSize, RenderingState, 
+    Model, PhysicalSize, RenderingState,
     winit_030::{WinitWindowAccessor, WinitWindowEventResult, winit},
 };
-use slint::wgpu_24::{WGPUConfiguration, WGPUSettings};
 use types::*;
 
 /// 内部边数据结构，包含计算出的所有信息
@@ -75,6 +75,10 @@ pub struct AppState {
     pub video_sink: Option<gstreamer::Element>,
     /// WGPU 视频 Sink 实例
     pub wgpu_sink: Option<slint_video_sink::SlintWGPUSink>,
+    /// 字幕渲染器
+    pub subtitle_renderer: Option<wgpu_subtitle_renderer::SubtitleRenderer>,
+    /// libass 字幕渲染器
+    pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
 }
 impl AppState {
     /// 构造函数，从 Slint 窗口初始化
@@ -88,6 +92,8 @@ impl AppState {
             video_pipeline: None,
             video_sink: None,
             wgpu_sink: None,
+            subtitle_renderer: None,
+            libass_renderer: None,
         }
     }
 
@@ -369,9 +375,7 @@ impl AppWindowManager {
                 .select();
             if let Err(e) = res {
                 eprintln!("Slint 后端选择失败: {:?}", e);
-                eprintln!(
-                    "提示: 需要可用的 WGPU 环境与驱动，且请在 nix develop 中运行"
-                );
+                eprintln!("提示: 需要可用的 WGPU 环境与驱动，且请在 nix develop 中运行");
                 return Err(e.into());
             }
         }
@@ -406,7 +410,7 @@ impl AppWindowManager {
             .unwrap()
             .downcast::<gstreamer::Pipeline>()
             .unwrap();
-        
+
         {
             let mut state = self.state.borrow_mut();
             state.video_pipeline = Some(pipeline.clone());
@@ -433,13 +437,16 @@ impl AppWindowManager {
                         let mut state = state_for_init.borrow_mut();
                         if let Some(pipeline) = state.video_pipeline.clone() {
                             // 创建消息通道处理 GStreamer 总线消息
-                            let (bus_sender, mut bus_receiver) = futures::channel::mpsc::unbounded::<gstreamer::Message>();
-                            
+                            let (bus_sender, mut bus_receiver) =
+                                futures::channel::mpsc::unbounded::<gstreamer::Message>();
+
                             // 启动异步任务处理总线消息
                             std::thread::spawn(move || {
                                 let rt = tokio::runtime::Runtime::new().unwrap();
                                 rt.block_on(async {
-                                    while let Some(msg) = futures::StreamExt::next(&mut bus_receiver).await {
+                                    while let Some(msg) =
+                                        futures::StreamExt::next(&mut bus_receiver).await
+                                    {
                                         match msg.view() {
                                             gstreamer::MessageView::Error(err) => {
                                                 eprintln!("GStreamer 错误: {}", err.error());
@@ -452,10 +459,11 @@ impl AppWindowManager {
                                     }
                                 });
                             });
-                            
+
                             // 创建 WGPU Sink
-                            let (sink_element, mut wgpu_sink) = crate::slint_video_sink::create_sink(&pipeline);
-                            
+                            let (sink_element, mut wgpu_sink) =
+                                crate::slint_video_sink::create_sink(&pipeline);
+
                             // 连接 WGPU 上下文
                             wgpu_sink.connect(
                                 graphics_api,
@@ -472,14 +480,30 @@ impl AppWindowManager {
                                     }
                                 }),
                             );
-                            
+
                             // 启动播放
                             if let Err(err) = pipeline.set_state(gstreamer::State::Playing) {
                                 eprintln!("设置播放状态失败: {err:?}");
                             }
-                            
+
                             state.video_sink = Some(sink_element);
                             state.wgpu_sink = Some(wgpu_sink);
+
+                            // 初始化字幕渲染器
+                            let subtitle_renderer = crate::wgpu_subtitle_renderer::SubtitleRenderer::new(graphics_api);
+                            state.subtitle_renderer = Some(subtitle_renderer);
+
+                            // 初始化 libass 字幕渲染器 (使用实际窗口大小)
+                            let window_size = instance.window().size();
+                            match aweft_libass::SubtitleRenderer::new(window_size.width as i32, window_size.height as i32) {
+                                Ok(libass_renderer) => {
+                                    state.libass_renderer = Some(libass_renderer);
+                                    println!("字幕渲染器初始化成功");
+                                }
+                                Err(e) => {
+                                    eprintln!("字幕渲染器初始化失败: {}", e);
+                                }
+                            }
                         }
                     }
                     RenderingState::BeforeRendering => {
@@ -492,10 +516,23 @@ impl AppWindowManager {
                             }
                         }
                         if let Some(image) = image_opt {
-                            println!("收到新视频帧，设置到 UI");
+                            // println!("收到新视频帧，设置到 UI");
                             instance
                                 .global::<crate::types::VideoState>()
                                 .set_current_video_frame(image);
+                        }
+
+                        // WARN: TODO: 需要处理此函数执行时机
+                        // 生成并显示字幕（只在第一次渲染时执行）
+                        static SUBTITLE_RENDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                        if !SUBTITLE_RENDERED.load(std::sync::atomic::Ordering::Relaxed) {
+                            let subtitle_image_opt = Self::render_hello_world_subtitle(&state_for_init, &instance);
+                            if let Some(subtitle_image) = subtitle_image_opt {
+                                instance
+                                    .global::<SubtitleState>()
+                                    .set_current_subtitle_frame(subtitle_image);
+                                SUBTITLE_RENDERED.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                         }
                     }
                     RenderingState::RenderingTeardown => {
@@ -1093,6 +1130,99 @@ impl AppWindowManager {
         );
         Ok(())
     }
+
+    // TODO: WARN: 修改为通用转换函数，或修改 WGPU 直接输出 Slint Image
+    /// 渲染 "Hello World!" 字幕
+    fn render_hello_world_subtitle(state_rc: &Rc<RefCell<AppState>>, instance: &MainWindow) -> Option<slint::Image> {
+        // 分别获取渲染器的引用，避免借用冲突
+        let subtitle_renderer = {
+            let state = state_rc.borrow();
+            state.subtitle_renderer.as_ref().map(|renderer| renderer.clone())
+        };
+
+        let subtitle_renderer = match subtitle_renderer {
+            Some(renderer) => renderer,
+            None => {
+                // 字幕渲染器未初始化，跳过
+                return None;
+            }
+        };
+
+        // 获取当前窗口大小
+        let window_size = instance.window().size();
+
+
+        // 获取 libass 渲染器的可变引用
+        let render_result = {
+            let mut state = state_rc.borrow_mut();
+            match &mut state.libass_renderer {
+                Some(libass_renderer) => {
+
+                    
+                    // 设置播放分辨率为实际窗口大小
+                    libass_renderer.set_play_resolution(window_size.width as i32, window_size.height as i32);
+                    
+
+                    
+                    // 修改默认样式，将字幕放在中间位置
+                    if let Err(e) = libass_renderer.set_default_style_alignment(aweft_libass::Alignment::MiddleCenter) {
+                        eprintln!("❌ [ERROR] 设置字幕对齐方式失败: {}", e);
+                        return None;
+                    }
+                    
+                    // 使用 libass 创建 "Hello World!" 字幕事件
+                    if let Err(e) = libass_renderer.create_event_with_default_style("Hello World!") {
+                        eprintln!("❌ [ERROR] 创建字幕事件失败: {}", e);
+                        return None;
+                    }
+
+
+                    
+                    // 渲染字幕 (时间戳设为 1000ms，确保字幕显示)
+                    match libass_renderer.render_frame(1000) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            eprintln!("❌ [ERROR] 渲染字幕失败: {}", e);
+                            return None;
+                        }
+                    }
+                }
+                None => {
+                    eprintln!("❌ [ERROR] libass 渲染器未初始化，跳过");
+                    return None;
+                }
+            }
+        };
+
+        // 检查是否有渲染结果
+        if render_result.is_empty() {
+            return None;
+        }
+
+
+
+        // 使用 WGPU 渲染器将 libass 结果转换为纹理
+        match subtitle_renderer.render_subtitles_gpu(render_result.iter()) {
+            Ok(rendered_texture) => {
+                // 将 WGPU 纹理转换为 Slint Image
+                match slint::Image::try_from(rendered_texture.texture) {
+                    Ok(image) => Some(image),
+                    Err(e) => {
+                        eprintln!("❌ [ERROR] 转换字幕纹理为 Slint Image 失败: {:?}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ [ERROR] WGPU 字幕渲染失败: {}", e);
+                None
+            }
+        }
+    }
+
+
+
+
 }
 
 // 导出一个公共函数，用于创建和运行窗口

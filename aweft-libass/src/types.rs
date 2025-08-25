@@ -38,6 +38,16 @@ impl Color {
         Self::new(0, 0, 0, 0)
     }
 
+    // 转换成归一化的 f32
+    pub fn to_f32_array(&self) -> [f32; 4] {
+        [
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+            self.a as f32 / 255.0,
+        ]
+    }
+
     /// 转换为 libass 的 RGBA 格式 (Red在最高位，Alpha在最低位)
     pub fn to_libass_format(&self) -> u32 {
         ((self.r as u32) << 24) | ((self.g as u32) << 16) | ((self.b as u32) << 8) | (self.a as u32)

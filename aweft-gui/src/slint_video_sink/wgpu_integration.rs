@@ -116,12 +116,12 @@ impl SlintWGPUSink {
             if let Some((info, buffer)) = next_frame_guard.take() {
                 drop(next_frame_guard); // 立即释放锁，减少锁定时间
 
-                println!(
-                    "处理新的视频帧: {}x{}, 格式: {:?}",
-                    info.width(),
-                    info.height(),
-                    info.format()
-                );
+                // println!(
+                //     "处理新的视频帧: {}x{}, 格式: {:?}",
+                //     info.width(),
+                //     info.height(),
+                //     info.format()
+                // );
 
                 if let Some(texture) =
                     self.create_wgpu_texture_from_buffer(device, queue, &info, &buffer)

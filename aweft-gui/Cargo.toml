@@ -17,6 +17,8 @@ gstreamer-gl-egl = { version = "0.23", package = "gstreamer-gl-egl" }
 glutin_egl_sys = "0.7.1"
 url = "2.5"
 futures = "0.3.31"
+aweft-libass = { path = "../aweft-libass" }
+bytemuck = "1.23.2"
 
 [build-dependencies]
 slint-build = "1.12.1"

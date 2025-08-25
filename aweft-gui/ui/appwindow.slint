@@ -1,5 +1,6 @@
 import { SplitPreviewOverlay, SplitPreviewOverlayData, JoinHighlightOverlayData, CloseAreaOverlayData, JoinHighlightOverlay, CloseAreaOverlays } from "overlay.slint";
 import { VideoPlayer } from "video.slint";
+import { SubtitleOverlay } from "subtitle.slint";
 
 export struct SlintKey {
     // 低32位：区域索引
@@ -126,6 +127,10 @@ export global VideoState {
     in property <image> current-video-frame;
 }
 
+export global SubtitleState {
+    in property <image> current-subtitle-frame;
+}
+
 component SlintScrArea inherits Rectangle {
     in property <SlintKey> area-key;
     in property <length> container-x;
@@ -249,5 +254,13 @@ export component MainWindow inherits Window {
         x: 0px;
         y: 0px;
         datas: close-area-overlay-datas;
+    }
+
+    // 字幕覆盖层，显示在所有内容之上
+    // WANR: TODO: 这里位置计算是否正确还未 Review
+    subtitle-overlay := SubtitleOverlay {
+        subtitle-frame: SubtitleState.current-subtitle-frame;
+        subtitle-x: root.width / 2 - SubtitleState.current-subtitle-frame.width * 1px / 2;
+        subtitle-y: root.height / 2 - SubtitleState.current-subtitle-frame.height * 1px / 2;
     }
 }

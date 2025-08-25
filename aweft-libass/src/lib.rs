@@ -5,12 +5,13 @@ use crate::types::Color;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
+pub use crate::track::Alignment;
 
 mod ffi;
 mod library;
 mod renderer;
 mod track;
-mod types;
+pub mod types;
 
 /// 获取 libass 版本（保持向后兼容）
 pub fn version() -> i32 {
@@ -48,9 +49,24 @@ impl SubtitleRenderer {
 
     // NOTE: 这里之前也要应用一下缩放，切换视频源应该不常见
     pub fn set_frame_size(&mut self, width: i32, height: i32) -> &mut Self {
+        // 处理视频源信息
         self.renderer.set_storage_size(width, height);
+        // 处理渲染输出
         self.renderer.set_frame_size(width, height);
+        // 处理字幕布局
+        self.track.set_play_resolution(width, height);
         self
+    }
+
+    pub fn set_play_resolution(&mut self, width: i32, height: i32) -> &mut Self {
+        self.track.set_play_resolution(width, height);
+        self
+    }
+
+    pub fn set_default_style_alignment(&mut self, alignment: Alignment) -> Result<&mut Self> {
+        let style = self.track.default_style_mut()?;
+        style.set_alignment(alignment);
+        Ok(self)
     }
 
     pub fn set_fonts(
@@ -82,6 +98,8 @@ impl SubtitleRenderer {
         self.track = Track::new(Arc::clone(&self.library))?;
         Ok(render_result)
     }
+
+
 
     /// 设置消息回调函数的便利方法
     pub fn set_message_callback<F>(&mut self, callback: F) -> Result<()>
