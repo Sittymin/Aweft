@@ -257,10 +257,15 @@ export component MainWindow inherits Window {
     }
 
     // 字幕覆盖层，显示在所有内容之上
-    // WANR: TODO: 这里位置计算是否正确还未 Review
+    in property <length> subtitle-x: 0px;
+    in property <length> subtitle-y: 0px;
     subtitle-overlay := SubtitleOverlay {
+        x: subtitle-x;
+        y: subtitle-y;
+        width: SubtitleState.current-subtitle-frame.width * 1px;
+        height: SubtitleState.current-subtitle-frame.height * 1px;
+        border-width: 1px;
+        border-color: lightslategray;
         subtitle-frame: SubtitleState.current-subtitle-frame;
-        subtitle-x: root.width / 2 - SubtitleState.current-subtitle-frame.width * 1px / 2;
-        subtitle-y: root.height / 2 - SubtitleState.current-subtitle-frame.height * 1px / 2;
     }
 }

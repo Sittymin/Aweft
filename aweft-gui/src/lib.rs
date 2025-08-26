@@ -6,8 +6,6 @@ mod wgpu_subtitle_renderer;
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
-
-
 use anyhow::{Context, Result};
 use gstreamer::prelude::*;
 use screen::area::ScrAreaKey;
@@ -367,7 +365,7 @@ impl AppWindowManager {
         use slint::BackendSelector;
         // 强制选择winit后端
         {
-            let mut sel = BackendSelector::new();
+            let sel = BackendSelector::new();
             let res = sel
                 .backend_name("winit".into())
                 // 使用 WGPU 渲染以支持视频显示
@@ -490,12 +488,16 @@ impl AppWindowManager {
                             state.wgpu_sink = Some(wgpu_sink);
 
                             // 初始化字幕渲染器
-                            let subtitle_renderer = crate::wgpu_subtitle_renderer::SubtitleRenderer::new(graphics_api);
+                            let subtitle_renderer =
+                                crate::wgpu_subtitle_renderer::SubtitleRenderer::new(graphics_api);
                             state.subtitle_renderer = Some(subtitle_renderer);
 
                             // 初始化 libass 字幕渲染器 (使用实际窗口大小)
                             let window_size = instance.window().size();
-                            match aweft_libass::SubtitleRenderer::new(window_size.width as i32, window_size.height as i32) {
+                            match aweft_libass::SubtitleRenderer::new(
+                                window_size.width as i32,
+                                window_size.height as i32,
+                            ) {
                                 Ok(libass_renderer) => {
                                     state.libass_renderer = Some(libass_renderer);
                                     println!("字幕渲染器初始化成功");
@@ -504,13 +506,30 @@ impl AppWindowManager {
                                     eprintln!("字幕渲染器初始化失败: {}", e);
                                 }
                             }
+
+                            // FIXME: 需要处理此函数执行时机
+                            // 生成并显示字幕（只在第一次渲染时执行）
+                            // HACK: 可能是原子操作，之后需要移动位置或改变类型
+                            let subtitle_image_opt = Self::render_hello_world_subtitle(
+                                &mut state,
+                                &instance,
+                                window_size.width as i32,
+                                window_size.height as i32,
+                            );
+                            if let Some((subtitle_image, x, y)) = subtitle_image_opt {
+                                instance
+                                    .global::<SubtitleState>()
+                                    .set_current_subtitle_frame(subtitle_image);
+                                instance.set_subtitle_x(x as f32);
+                                instance.set_subtitle_y(y as f32);
+                            }
                         }
                     }
                     RenderingState::BeforeRendering => {
                         // 获取新的视频帧并设置到 UI
                         let mut image_opt = None;
                         {
-                            let state = state_for_init.borrow();
+                            let mut state = state_for_init.borrow_mut();
                             if let Some(wgpu_sink) = &state.wgpu_sink {
                                 image_opt = wgpu_sink.fetch_next_frame();
                             }
@@ -520,19 +539,6 @@ impl AppWindowManager {
                             instance
                                 .global::<crate::types::VideoState>()
                                 .set_current_video_frame(image);
-                        }
-
-                        // WARN: TODO: 需要处理此函数执行时机
-                        // 生成并显示字幕（只在第一次渲染时执行）
-                        static SUBTITLE_RENDERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                        if !SUBTITLE_RENDERED.load(std::sync::atomic::Ordering::Relaxed) {
-                            let subtitle_image_opt = Self::render_hello_world_subtitle(&state_for_init, &instance);
-                            if let Some(subtitle_image) = subtitle_image_opt {
-                                instance
-                                    .global::<SubtitleState>()
-                                    .set_current_subtitle_frame(subtitle_image);
-                                SUBTITLE_RENDERED.store(true, std::sync::atomic::Ordering::Relaxed);
-                            }
                         }
                     }
                     RenderingState::RenderingTeardown => {
@@ -1013,6 +1019,22 @@ impl AppWindowManager {
                                 .set_scredgedisplays(slint_edges_display_data.as_slice().into());
                             instance
                                 .set_scredgetouchareas(slint_edges_touch_data.as_slice().into());
+
+                            // HACK: 更新字幕
+                            // FIXME: 需要使用动态参数的数据
+                            let subtitle_image_opt = Self::render_hello_world_subtitle(
+                                &mut state,
+                                &instance,
+                                new_size.width as i32,
+                                new_size.height as i32,
+                            );
+                            if let Some((subtitle_image, x, y)) = subtitle_image_opt {
+                                instance
+                                    .global::<SubtitleState>()
+                                    .set_current_subtitle_frame(subtitle_image);
+                                instance.set_subtitle_x(x as f32);
+                                instance.set_subtitle_y(y as f32);
+                            }
                         }
                     }
                     winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -1133,51 +1155,49 @@ impl AppWindowManager {
 
     // TODO: WARN: 修改为通用转换函数，或修改 WGPU 直接输出 Slint Image
     /// 渲染 "Hello World!" 字幕
-    fn render_hello_world_subtitle(state_rc: &Rc<RefCell<AppState>>, instance: &MainWindow) -> Option<slint::Image> {
+    fn render_hello_world_subtitle(
+        state: &mut AppState,
+        instance: &MainWindow,
+        window_width: i32,
+        window_height: i32,
+    ) -> Option<(slint::Image, i32, i32)> {
         // 分别获取渲染器的引用，避免借用冲突
         let subtitle_renderer = {
-            let state = state_rc.borrow();
-            state.subtitle_renderer.as_ref().map(|renderer| renderer.clone())
+            state
+                .subtitle_renderer
+                .as_ref()
+                .map(|renderer| renderer.clone())
         };
 
-        let subtitle_renderer = match subtitle_renderer {
+        let mut subtitle_renderer = match subtitle_renderer {
             Some(renderer) => renderer,
-            None => {
+            Option::None => {
                 // 字幕渲染器未初始化，跳过
                 return None;
             }
         };
 
-        // 获取当前窗口大小
-        let window_size = instance.window().size();
-
-
         // 获取 libass 渲染器的可变引用
         let render_result = {
-            let mut state = state_rc.borrow_mut();
             match &mut state.libass_renderer {
                 Some(libass_renderer) => {
-
-                    
                     // 设置播放分辨率为实际窗口大小
-                    libass_renderer.set_play_resolution(window_size.width as i32, window_size.height as i32);
-                    
+                    libass_renderer.set_frame_size(window_width, window_height as i32);
 
-                    
-                    // 修改默认样式，将字幕放在中间位置
-                    if let Err(e) = libass_renderer.set_default_style_alignment(aweft_libass::Alignment::MiddleCenter) {
+                    if let Err(e) = libass_renderer
+                        .set_default_style_alignment(aweft_libass::Alignment::BottomCenter)
+                    {
                         eprintln!("❌ [ERROR] 设置字幕对齐方式失败: {}", e);
                         return None;
                     }
-                    
+
                     // 使用 libass 创建 "Hello World!" 字幕事件
-                    if let Err(e) = libass_renderer.create_event_with_default_style("Hello World!") {
+                    if let Err(e) = libass_renderer.create_event_with_default_style("Hello World!")
+                    {
                         eprintln!("❌ [ERROR] 创建字幕事件失败: {}", e);
                         return None;
                     }
 
-
-                    
                     // 渲染字幕 (时间戳设为 1000ms，确保字幕显示)
                     match libass_renderer.render_frame(1000) {
                         Ok(result) => result,
@@ -1187,7 +1207,7 @@ impl AppWindowManager {
                         }
                     }
                 }
-                None => {
+                Option::None => {
                     eprintln!("❌ [ERROR] libass 渲染器未初始化，跳过");
                     return None;
                 }
@@ -1199,14 +1219,19 @@ impl AppWindowManager {
             return None;
         }
 
-
-
         // 使用 WGPU 渲染器将 libass 结果转换为纹理
         match subtitle_renderer.render_subtitles_gpu(render_result.iter()) {
             Ok(rendered_texture) => {
+                println!(
+                    "width: {:?}, height: {:?}, x: {:?}, y: {:?}",
+                    rendered_texture.width,
+                    rendered_texture.height,
+                    rendered_texture.x,
+                    rendered_texture.y
+                );
                 // 将 WGPU 纹理转换为 Slint Image
-                match slint::Image::try_from(rendered_texture.texture) {
-                    Ok(image) => Some(image),
+                match slint::Image::try_from(rendered_texture.texture.clone()) {
+                    Ok(image) => Some((image, rendered_texture.x, rendered_texture.y)),
                     Err(e) => {
                         eprintln!("❌ [ERROR] 转换字幕纹理为 Slint Image 失败: {:?}", e);
                         None
@@ -1219,10 +1244,6 @@ impl AppWindowManager {
             }
         }
     }
-
-
-
-
 }
 
 // 导出一个公共函数，用于创建和运行窗口

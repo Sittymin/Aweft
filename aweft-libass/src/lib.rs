@@ -1,11 +1,11 @@
 use crate::library::{Library, MessageLevel};
 use crate::renderer::{DefaultFontProvider, RenderResult, Renderer};
+pub use crate::track::Alignment;
 use crate::track::{Track, TrackType};
 use crate::types::Color;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
-pub use crate::track::Alignment;
 
 mod ffi;
 mod library;
@@ -39,7 +39,8 @@ impl SubtitleRenderer {
         renderer.set_storage_size(width, height);
         renderer.set_frame_size(width, height);
         renderer.set_fonts(None, None, DefaultFontProvider::AutoDetect, None)?;
-        let track = Track::new(Arc::clone(&library))?;
+        let mut track = Track::new(Arc::clone(&library))?;
+        track.set_play_resolution(width, height);
         Ok(Self {
             library,
             renderer,
@@ -49,16 +50,12 @@ impl SubtitleRenderer {
 
     // NOTE: 这里之前也要应用一下缩放，切换视频源应该不常见
     pub fn set_frame_size(&mut self, width: i32, height: i32) -> &mut Self {
+        println!("修改渲染视图分辨率: {width} {height}");
         // 处理视频源信息
         self.renderer.set_storage_size(width, height);
         // 处理渲染输出
         self.renderer.set_frame_size(width, height);
         // 处理字幕布局
-        self.track.set_play_resolution(width, height);
-        self
-    }
-
-    pub fn set_play_resolution(&mut self, width: i32, height: i32) -> &mut Self {
         self.track.set_play_resolution(width, height);
         self
     }
@@ -98,8 +95,6 @@ impl SubtitleRenderer {
         self.track = Track::new(Arc::clone(&self.library))?;
         Ok(render_result)
     }
-
-
 
     /// 设置消息回调函数的便利方法
     pub fn set_message_callback<F>(&mut self, callback: F) -> Result<()>

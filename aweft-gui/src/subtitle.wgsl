@@ -84,7 +84,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // 2. 将"形状"透明度与图层的"整体"透明度相乘
     // 注意：对于 color.a = 0 的图层，我们使用 1.0 作为默认透明度
     // WARN: 这里是否是正确运算不明!
-    // WARN: TODO: 检查是否是因为libass当中的默认样式是半透明？
+    // FIXME: 检查是否是因为libass当中的默认样式是半透明？
     let layer_alpha = max(in.color.a, 1.0);
     let final_alpha = shape_alpha * layer_alpha;
     // let final_alpha = shape_alpha * in.color.a;
