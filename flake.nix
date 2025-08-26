@@ -43,6 +43,8 @@
           # bindgen
           libclang.lib
 
+          # gStreamer dependencies
+          glib
           # gstreamer
           gst_all_1.gstreamer
           gst_all_1.gst-plugins-base
