@@ -1,10 +1,11 @@
 use super::types::*;
+use anyhow::Result;
 use core::panic;
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, BufRead, BufReader, BufWriter, Write},
-    path::PathBuf,
+    io::{BufRead, BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -23,7 +24,7 @@ impl ASSFile {
             events: other.events.clone(),
         }
     }
-    pub fn parse_from_file(path: &PathBuf) -> io::Result<Self> {
+    pub fn parse_from_file(path: impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 

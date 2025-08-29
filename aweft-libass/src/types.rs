@@ -1,10 +1,17 @@
 use crate::ffi;
+use anyhow::{Result, anyhow};
+use bitflags::bitflags;
 use palette::{Srgb, Srgba, WithAlpha};
+use std::ffi::CString;
+use std::fmt;
+use std::fmt::Display;
 use std::ops::{Deref, DerefMut};
 use std::slice;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AssColorRgb(pub Srgb<u8>);
+
 impl Deref for AssColorRgb {
     type Target = Srgb<u8>;
 
@@ -110,6 +117,129 @@ impl AssColorRgba {
         )
     }
 }
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(transparent)]
+    pub struct LibassAlignment: i32 {
+        const VALIGN_TOP    = 4;
+        const VALIGN_CENTER = 8;
+        const VALIGN_SUB    = 0;
+        const HALIGN_LEFT   = 1;
+        const HALIGN_CENTER = 2;
+        const HALIGN_RIGHT  = 3;
+    }
+}
+
+// 定义一个只包含有效组合的枚举
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alignment {
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    MiddleLeft,
+    MiddleCenter,
+    MiddleRight,
+    TopLeft,
+    TopCenter,
+    TopRight,
+}
+
+impl From<Alignment> for LibassAlignment {
+    fn from(align: Alignment) -> Self {
+        match align {
+            Alignment::BottomLeft => Self::from_bits_retain(0 | 1),
+            Alignment::BottomCenter => Self::from_bits_retain(0 | 2),
+            Alignment::BottomRight => Self::from_bits_retain(0 | 3),
+            Alignment::TopLeft => Self::from_bits_retain(4 | 1),
+            Alignment::TopCenter => Self::from_bits_retain(4 | 2),
+            Alignment::TopRight => Self::from_bits_retain(4 | 3),
+            Alignment::MiddleLeft => Self::from_bits_retain(8 | 1),
+            Alignment::MiddleCenter => Self::from_bits_retain(8 | 2),
+            Alignment::MiddleRight => Self::from_bits_retain(8 | 3),
+        }
+    }
+}
+
+impl TryFrom<LibassAlignment> for Alignment {
+    type Error = &'static str;
+
+    fn try_from(value: LibassAlignment) -> Result<Self, Self::Error> {
+        // 使用 `bits()` 进行匹配
+        match value.bits() {
+            1 => Ok(Alignment::BottomLeft),
+            2 => Ok(Alignment::BottomCenter),
+            3 => Ok(Alignment::BottomRight),
+            5 => Ok(Alignment::TopLeft),
+            6 => Ok(Alignment::TopCenter),
+            7 => Ok(Alignment::TopRight),
+            9 => Ok(Alignment::MiddleLeft),
+            10 => Ok(Alignment::MiddleCenter),
+            11 => Ok(Alignment::MiddleRight),
+            _ => Err("Invalid libass alignment value"),
+        }
+    }
+}
+
+// INFO: ASS 规范当中是使用小键盘布局
+impl FromStr for Alignment {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "1" => Ok(Alignment::BottomLeft),
+            "2" => Ok(Alignment::BottomCenter),
+            "3" => Ok(Alignment::BottomRight),
+            "4" => Ok(Alignment::MiddleLeft),
+            "5" => Ok(Alignment::MiddleCenter),
+            "6" => Ok(Alignment::MiddleRight),
+            "7" => Ok(Alignment::TopLeft),
+            "8" => Ok(Alignment::TopCenter),
+            "9" => Ok(Alignment::TopRight),
+            _ => Err(format!("Invalid value for Alignment: {}", s)),
+        }
+    }
+}
+impl Display for Alignment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Alignment::BottomLeft => "1",
+            Alignment::BottomCenter => "2",
+            Alignment::BottomRight => "3",
+            Alignment::MiddleLeft => "4",
+            Alignment::MiddleCenter => "5",
+            Alignment::MiddleRight => "6",
+            Alignment::TopLeft => "7",
+            Alignment::TopCenter => "8",
+            Alignment::TopRight => "9",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Banner,
+    ScrollUp,
+    ScrollDown,
+}
+
+// 2. 实现转换逻辑
+impl Effect {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Effect::Banner => "Banner;",
+            Effect::ScrollUp => "Scroll up;",
+            Effect::ScrollDown => "Scroll down;",
+        }
+    }
+
+    pub fn to_cstring(&self) -> Result<CString> {
+        CString::new(self.as_str())
+            .map_err(|e| anyhow!("Effect '{}' 包含无效的NUL字符: {}", self.as_str(), e))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ImageType {
     Character = 0,

@@ -1,100 +1,11 @@
 use crate::ffi;
 use crate::library::Library;
-use crate::types::Color;
+use crate::types::{Alignment, AssAlignment, AssColorRgba, Effect};
 use anyhow::{Result, anyhow};
 use libc::{c_char, c_void, size_t};
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
-
-use bitflags::bitflags;
-
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    #[repr(transparent)]
-    pub struct AssAlignment: i32 {
-        const VALIGN_TOP    = 4;
-        const VALIGN_CENTER = 8;
-        const VALIGN_SUB    = 0;
-        const HALIGN_LEFT   = 1;
-        const HALIGN_CENTER = 2;
-        const HALIGN_RIGHT  = 3;
-    }
-}
-
-// 定义一个只包含有效组合的枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Alignment {
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-    TopLeft,
-    TopCenter,
-    TopRight,
-    MiddleLeft,
-    MiddleCenter,
-    MiddleRight,
-}
-
-impl From<Alignment> for AssAlignment {
-    fn from(align: Alignment) -> Self {
-        match align {
-            Alignment::BottomLeft => Self::from_bits_retain(0 | 1),
-            Alignment::BottomCenter => Self::from_bits_retain(0 | 2),
-            Alignment::BottomRight => Self::from_bits_retain(0 | 3),
-            Alignment::TopLeft => Self::from_bits_retain(4 | 1),
-            Alignment::TopCenter => Self::from_bits_retain(4 | 2),
-            Alignment::TopRight => Self::from_bits_retain(4 | 3),
-            Alignment::MiddleLeft => Self::from_bits_retain(8 | 1),
-            Alignment::MiddleCenter => Self::from_bits_retain(8 | 2),
-            Alignment::MiddleRight => Self::from_bits_retain(8 | 3),
-        }
-    }
-}
-
-impl TryFrom<AssAlignment> for Alignment {
-    type Error = &'static str;
-
-    fn try_from(value: AssAlignment) -> Result<Self, Self::Error> {
-        // 使用 `bits()` 进行匹配
-        match value.bits() {
-            1 => Ok(Alignment::BottomLeft),
-            2 => Ok(Alignment::BottomCenter),
-            3 => Ok(Alignment::BottomRight),
-            5 => Ok(Alignment::TopLeft),
-            6 => Ok(Alignment::TopCenter),
-            7 => Ok(Alignment::TopRight),
-            9 => Ok(Alignment::MiddleLeft),
-            10 => Ok(Alignment::MiddleCenter),
-            11 => Ok(Alignment::MiddleRight),
-            _ => Err("Invalid libass alignment value"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Effect {
-    Banner,
-    ScrollUp,
-    ScrollDown,
-}
-
-// 2. 实现转换逻辑
-impl Effect {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Effect::Banner => "Banner;",
-            Effect::ScrollUp => "Scroll up;",
-            Effect::ScrollDown => "Scroll down;",
-        }
-    }
-
-    pub fn to_cstring(&self) -> Result<CString> {
-        CString::new(self.as_str())
-            .map_err(|e| anyhow!("Effect '{}' 包含无效的NUL字符: {}", self.as_str(), e))
-    }
-}
-
 // ============================================================================
 // Track 封装
 // ============================================================================
@@ -452,34 +363,34 @@ impl<'a> StyleHandle<'a> {
         self
     }
 
-    pub fn set_primary_color(mut self, color: Color) -> Self {
+    pub fn set_primary_color(mut self, color: AssColorRgba) -> Self {
         unsafe {
             let style_ptr = self.as_mut_ptr();
-            (*style_ptr).PrimaryColour = color.to_libass_format();
+            (*style_ptr).PrimaryColour = color.to_libass_u32();
         }
         self
     }
 
-    pub fn set_secondary_color(mut self, color: Color) -> Self {
+    pub fn set_secondary_color(mut self, color: AssColorRgba) -> Self {
         unsafe {
             let style_ptr = self.as_mut_ptr();
-            (*style_ptr).SecondaryColour = color.to_libass_format();
+            (*style_ptr).SecondaryColour = color.to_libass_u32();
         }
         self
     }
 
-    pub fn set_outline_color(mut self, color: Color) -> Self {
+    pub fn set_outline_color(mut self, color: AssColorRgba) -> Self {
         unsafe {
             let style_ptr = self.as_mut_ptr();
-            (*style_ptr).OutlineColour = color.to_libass_format();
+            (*style_ptr).OutlineColour = color.to_libass_u32();
         }
         self
     }
 
-    pub fn set_back_color(mut self, color: Color) -> Self {
+    pub fn set_back_color(mut self, color: AssColorRgba) -> Self {
         unsafe {
             let style_ptr = self.as_mut_ptr();
-            (*style_ptr).BackColour = color.to_libass_format();
+            (*style_ptr).BackColour = color.to_libass_u32();
         }
         self
     }

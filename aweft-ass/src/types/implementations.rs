@@ -354,41 +354,6 @@ impl Display for StyleBool {
     }
 }
 
-impl FromStr for Alignment {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "1" => Ok(Alignment::BottomLeft),
-            "2" => Ok(Alignment::BottomCenter),
-            "3" => Ok(Alignment::BottomRight),
-            "4" => Ok(Alignment::MiddleLeft),
-            "5" => Ok(Alignment::MiddleCenter),
-            "6" => Ok(Alignment::MiddleRight),
-            "7" => Ok(Alignment::TopLeft),
-            "8" => Ok(Alignment::TopCenter),
-            "9" => Ok(Alignment::TopRight),
-            _ => Err(format!("Invalid value for Alignment: {}", s)),
-        }
-    }
-}
-impl Display for Alignment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Alignment::BottomLeft => "1",
-            Alignment::BottomCenter => "2",
-            Alignment::BottomRight => "3",
-            Alignment::MiddleLeft => "4",
-            Alignment::MiddleCenter => "5",
-            Alignment::MiddleRight => "6",
-            Alignment::TopLeft => "7",
-            Alignment::TopCenter => "8",
-            Alignment::TopRight => "9",
-        };
-        write!(f, "{}", s)
-    }
-}
-
 impl FromStr for BorderStyle {
     type Err = String;
 
