@@ -1185,7 +1185,7 @@ impl AppWindowManager {
                     libass_renderer.set_frame_size(window_width, window_height as i32);
 
                     if let Err(e) = libass_renderer
-                        .set_default_style_alignment(aweft_libass::Alignment::BottomCenter)
+                        .set_default_style_alignment(aweft_libass::types::Alignment::BottomCenter)
                     {
                         eprintln!("❌ [ERROR] 设置字幕对齐方式失败: {}", e);
                         return None;

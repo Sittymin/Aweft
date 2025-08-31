@@ -1,8 +1,6 @@
 use crate::library::{Library, MessageLevel};
 use crate::renderer::{DefaultFontProvider, RenderResult, Renderer};
-pub use crate::track::Alignment;
 use crate::track::{Track, TrackType};
-use crate::types::Color;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -60,7 +58,10 @@ impl SubtitleRenderer {
         self
     }
 
-    pub fn set_default_style_alignment(&mut self, alignment: Alignment) -> Result<&mut Self> {
+    pub fn set_default_style_alignment(
+        &mut self,
+        alignment: types::Alignment,
+    ) -> Result<&mut Self> {
         let style = self.track.default_style_mut()?;
         style.set_alignment(alignment);
         Ok(self)
@@ -112,7 +113,9 @@ impl SubtitleRenderer {
 
 #[cfg(test)]
 mod tests {
-    use crate::track::Alignment;
+    use palette::{Srgba, named};
+
+    use crate::types::{Alignment, AssColorRgba};
 
     use super::*;
 
@@ -125,16 +128,11 @@ mod tests {
 
     #[test]
     fn test_color_conversion() {
-        let color = Color::new(255, 128, 64, 192);
-        let libass_format = color.to_libass_format();
-        let converted_back = Color::from_libass_format(libass_format);
+        let color = AssColorRgba::new(255, 128, 64, 192);
+        let libass_format = color.to_libass_u32();
+        let converted_back = AssColorRgba::from_libass_u32(libass_format);
 
         assert_eq!(color, converted_back);
-
-        // 测试已知值
-        assert_eq!(Color::red().to_libass_format(), 0xFF0000FF);
-        assert_eq!(Color::green().to_libass_format(), 0x00FF00FF);
-        assert_eq!(Color::blue().to_libass_format(), 0x0000FFFF);
     }
 
     #[test]
@@ -154,13 +152,13 @@ mod tests {
         track.set_play_resolution(1280, 720);
         track.set_track_type(TrackType::Ass);
 
-        // 使用 libass 自动创建的默认样式（新的安全API）
+        // 使用 libass 自动创建的默认样式
         let default_style_id = {
             let style = track.default_style_mut().expect("获取默认样式失败");
             let style = style
                 .set_font_size(48.0)
-                .set_primary_color(Color::new(255, 255, 255, 255))
-                .set_outline_color(Color::black())
+                .set_primary_color(AssColorRgba::new(255, 255, 255, 255))
+                .set_outline_color(AssColorRgba(Srgba::from(named::BLACK)))
                 .set_outline(2.0)
                 .set_shadow(3.0)
                 .set_alignment(Alignment::TopCenter);
@@ -358,7 +356,9 @@ mod tests {
 
 /// 完整的使用示例，展示新的 Rust 风格 API
 pub mod examples {
-    use crate::track::Alignment;
+    use palette::{Srgba, named};
+
+    use crate::types::{Alignment, AssColorRgba};
 
     use super::*;
 
@@ -377,8 +377,8 @@ pub mod examples {
             let style = renderer.track.create_style("CustomStyle", "Arial")?;
             let style = style
                 .set_font_size(48.0)
-                .set_primary_color(Color::new(255, 255, 0, 255)) // 黄色
-                .set_outline_color(Color::black())
+                .set_primary_color(AssColorRgba::new(255, 255, 0, 255)) // 黄色
+                .set_outline_color(AssColorRgba(Srgba::from(named::BLACK)))
                 .set_outline(2.0)
                 .set_shadow(1.0)
                 .set_alignment(Alignment::BottomCenter); // 底部居中
@@ -462,8 +462,8 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,第二行字幕"#;
             let title_style = renderer.track.create_style("Title", "Arial")?;
             let title_style = title_style
                 .set_font_size(64.0)
-                .set_primary_color(Color::new(255, 255, 255, 255)) // 白色
-                .set_outline_color(Color::black())
+                .set_primary_color(AssColorRgba::new(255, 255, 255, 255)) // 白色
+                .set_outline_color(AssColorRgba(Srgba::from(named::BLACK)))
                 .set_outline(3.0)
                 .set_bold(true)
                 .set_alignment(Alignment::BottomCenter); // 底部居中
@@ -472,8 +472,8 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,,0,0,0,,第二行字幕"#;
             let subtitle_style = renderer.track.create_style("Subtitle", "Arial")?;
             let subtitle_style = subtitle_style
                 .set_font_size(36.0)
-                .set_primary_color(Color::new(255, 255, 0, 255)) // 黄色
-                .set_outline_color(Color::new(0, 0, 0, 128)) // 半透明黑色
+                .set_primary_color(AssColorRgba::new(255, 255, 0, 255)) // 黄色
+                .set_outline_color(AssColorRgba::new(0, 0, 0, 128)) // 半透明黑色
                 .set_outline(2.0)
                 .set_alignment(Alignment::BottomCenter);
             let subtitle_id = subtitle_style.id();

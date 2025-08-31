@@ -1,69 +1,74 @@
 use nom::{
     branch::alt,
-    character::complete::{char, multispace0, multispace1},
+    character::complete::{char, digit1, multispace0, multispace1},
+    combinator::map_res,
     multi::{many0, many1},
-    sequence::{preceded, tuple},
-    IResult,
+    number::complete::double,
+    sequence::{preceded, separated_pair},
+    IResult, Parser,
 };
 
-use crate::utils::*;
+use super::{drawing::DrawingCommand, PointF64};
 
-use super::DrawingCommand;
-
-fn parse_point(input: &str) -> IResult<&str, (u32, u32)> {
-    // 先解析一个整数，然后至少一个空格，再解析另一个整数
-    let (input, x) = preceded(multispace0, parse_u32)(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, y) = preceded(multispace0, parse_u32)(input)?;
-    Ok((input, (x, y)))
+fn parse_point_u32(input: &str) -> IResult<&str, (u32, u32)> {
+    separated_pair(
+        map_res(digit1, |s: &str| s.parse::<u32>()),
+        multispace1,
+        map_res(digit1, |s: &str| s.parse::<u32>()),
+    )
+    .parse(input)
 }
 
 fn parse_move_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('m'))(input)?;
+    let (input, _) = preceded(multispace0, char('m')).parse(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, (x, y)) = parse_point(input)?;
-    let cmds = vec![DrawingCommand::MoveTo { x, y }];
+    let (input, (x, y)) = separated_pair(double, multispace1, double).parse(input)?;
+    let cmds = vec![DrawingCommand::MoveTo(PointF64 { x, y })];
     Ok((input, cmds))
 }
 
 fn parse_line_to_multiple(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('l'))(input)?;
+    let (input, _) = preceded(multispace0, char('l')).parse(input)?;
     let (input, _) = multispace1(input)?;
     // many1(parse_point) 表示至少要有一对 (x, y)
-    let (input, points) = many1(parse_point)(input)?;
+    let (input, points) = many1(separated_pair(double, multispace1, double)).parse(input)?;
 
     // 依次将每对坐标转换成单独的 DrawingCommand::LineTo
     let cmds = points
         .into_iter()
-        .map(|(x, y)| DrawingCommand::LineTo { x, y })
+        .map(|(x, y)| DrawingCommand::LineTo(PointF64 { x, y }))
         .collect::<Vec<DrawingCommand>>();
 
     Ok((input, cmds))
 }
 
 fn parse_move_to_no_close(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('n'))(input)?;
+    let (input, _) = preceded(multispace0, char('n')).parse(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, (x, y)) = parse_point(input)?;
-    let cmds = vec![DrawingCommand::MoveToNoClose { x, y }];
+    let (input, (x, y)) = separated_pair(double, multispace1, double).parse(input)?;
+    let cmds = vec![DrawingCommand::MoveToNoClose(PointF64 { x, y })];
     Ok((input, cmds))
 }
 
 fn parse_bezier_curve_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('b'))(input)?;
-    let (input, (control_point1, control_point2, end_point)) =
-        tuple((parse_point, parse_point, parse_point))(input)?;
+    let (input, _) = preceded(multispace0, char('b')).parse(input)?;
+    let (input, (control_point1, control_point2, end_point)) = (
+        separated_pair(double, multispace1, double),
+        separated_pair(double, multispace1, double),
+        separated_pair(double, multispace1, double),
+    )
+        .parse(input)?;
     let cmd = vec![DrawingCommand::BezierCurveTo {
-        control_point1,
-        control_point2,
-        end_point,
+        control_point1: control_point1.into(),
+        control_point2: control_point2.into(),
+        end_point: end_point.into(),
     }];
     Ok((input, cmd))
 }
 
 fn parse_bspline_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('s'))(input)?;
-    let (input, points) = many1(parse_point)(input)?;
+    let (input, _) = preceded(multispace0, char('s')).parse(input)?;
+    let (input, points) = many1(separated_pair(double, multispace1, double)).parse(input)?;
     if points.len() < 3 {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
@@ -71,20 +76,22 @@ fn parse_bspline_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
         )));
     }
 
-    let cmd = vec![DrawingCommand::BSplineTo { points }];
+    let cmd = vec![DrawingCommand::BSplineTo {
+        points: points.into_iter().map(PointF64::from).collect(),
+    }];
     Ok((input, cmd))
 }
 
 fn parse_extend_bspline_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('p'))(input)?;
+    let (input, _) = preceded(multispace0, char('p')).parse(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, (x, y)) = parse_point(input)?;
-    let cmd = vec![DrawingCommand::ExtendBSplineTo { x, y }];
+    let (input, (x, y)) = separated_pair(double, multispace1, double).parse(input)?;
+    let cmd = vec![DrawingCommand::ExtendBSplineTo(PointF64 { x, y })];
     Ok((input, cmd))
 }
 
 fn parse_close_bspline(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, _) = preceded(multispace0, char('c'))(input)?;
+    let (input, _) = preceded(multispace0, char('c')).parse(input)?;
     let cmd = vec![DrawingCommand::CloseBSpline];
     Ok((input, cmd))
 }
@@ -98,30 +105,33 @@ fn parse_single_command(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
         parse_bspline_to,
         parse_extend_bspline_to,
         parse_close_bspline,
-    ))(input)
+    ))
+    .parse(input)
 }
 
 pub fn parse_drawing_commands(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
-    let (input, all_cmds) = many0(parse_single_command)(input)?;
+    let (input, all_cmds) = many0(parse_single_command).parse(input)?;
     // Vec<Vec<DrawingCommand>> -> Vec<DrawingCommand>
     let mut result = Vec::new();
-    let mut current_bspline: Option<Vec<(u32, u32)>> = None;
-    let mut spline_start: Option<Vec<(u32, u32)>> = None;
+    let mut current_bspline: Option<Vec<PointF64>> = None;
+    let mut spline_start: Option<Vec<PointF64>> = None;
     for cmd in all_cmds.into_iter().flatten() {
         match cmd {
             DrawingCommand::BSplineTo { points } => {
                 // start new b-spline
                 if let Some(points) = current_bspline.take() {
-                    result.push(DrawingCommand::BSplineTo { points });
+                    result.push(DrawingCommand::BSplineTo {
+                        points: points.into_iter().map(PointF64::from).collect(),
+                    });
                 }
                 // add 3 points
                 // https://github.com/libass/libass/blob/4d6e9ef3077fb279cab051cc00b216c5f08efb34/libass/ass_drawing.c#L235-L242
                 spline_start = Some(points[..3].to_vec());
                 current_bspline = Some(points);
             }
-            DrawingCommand::ExtendBSplineTo { x, y } => {
+            DrawingCommand::ExtendBSplineTo(p) => {
                 if let Some(ref mut points) = current_bspline {
-                    points.push((x, y));
+                    points.push(p);
                 }
             }
             DrawingCommand::CloseBSpline => {
@@ -159,10 +169,10 @@ mod tests {
         assert_eq!(
             commands,
             vec![
-                DrawingCommand::MoveTo { x: 0, y: 0 },
-                DrawingCommand::LineTo { x: 100, y: 0 },
-                DrawingCommand::LineTo { x: 100, y: 100 },
-                DrawingCommand::LineTo { x: 0, y: 100 },
+                DrawingCommand::MoveTo(PointF64 { x: 0.0, y: 0.0 }),
+                DrawingCommand::LineTo(PointF64 { x: 100.0, y: 0.0 }),
+                DrawingCommand::LineTo(PointF64 { x: 100.0, y: 100.0 }),
+                DrawingCommand::LineTo(PointF64 { x: 0.0, y: 100.0 }),
             ]
         );
 
@@ -174,11 +184,11 @@ mod tests {
         assert_eq!(
             commands2,
             vec![
-                DrawingCommand::MoveToNoClose { x: 10, y: 20 },
+                DrawingCommand::MoveToNoClose(PointF64 { x: 10.0, y: 20.0 }),
                 DrawingCommand::BezierCurveTo {
-                    control_point1: (30, 40),
-                    control_point2: (50, 60),
-                    end_point: (70, 80),
+                    control_point1: PointF64 { x: 30.0, y: 40.0 },
+                    control_point2: PointF64 { x: 50.0, y: 60.0 },
+                    end_point: PointF64 { x: 70.0, y: 80.0 },
                 },
             ]
         );
@@ -191,16 +201,16 @@ mod tests {
         assert_eq!(
             commands3,
             vec![
-                DrawingCommand::MoveTo { x: 0, y: 0 },
+                DrawingCommand::MoveTo(PointF64 { x: 0.0, y: 0.0 }),
                 DrawingCommand::BSplineTo {
                     points: vec![
-                        (100, 0),
-                        (100, 100),
-                        (0, 100),
-                        (50, 150),
-                        (100, 0),
-                        (100, 100),
-                        (0, 100)
+                        PointF64 { x: 100.0, y: 0.0 },
+                        PointF64 { x: 100.0, y: 100.0 },
+                        PointF64 { x: 0.0, y: 100.0 },
+                        PointF64 { x: 50.0, y: 150.0 },
+                        PointF64 { x: 100.0, y: 0.0 },
+                        PointF64 { x: 100.0, y: 100.0 },
+                        PointF64 { x: 0.0, y: 100.0 }
                     ],
                 },
             ]

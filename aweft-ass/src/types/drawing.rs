@@ -1,3 +1,5 @@
+use std::fmt::{self, Display};
+
 // WARN: 渲染时注意
 // 在ASS文件当中使用的是浮点数，但是在 libass 当中它会被转换为 26.6 定点(用int来表示小数)
 use super::PointF64;
@@ -28,4 +30,44 @@ pub enum DrawingCommand {
 
     // WARN: Only used in parse
     CloseBSpline, // 'c'
+}
+impl Display for DrawingCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DrawingCommand::MoveTo(p) => {
+                write!(f, "m {:.3} {:.3}", p.x, p.y)
+            }
+            DrawingCommand::MoveToNoClose(p) => {
+                write!(f, "n {:.3} {:.3}", p.x, p.y)
+            }
+            DrawingCommand::LineTo(p) => {
+                write!(f, "l {:.3} {:.3}", p.x, p.y)
+            }
+            DrawingCommand::BezierCurveTo {
+                control_point1: p1,
+                control_point2: p2,
+                end_point: p3,
+            } => {
+                write!(
+                    f,
+                    "b {:.3} {:.3} {:.3} {:.3} {:.3} {:.3}",
+                    p1.x, p1.y, p2.x, p2.y, p3.x, p3.y
+                )
+            }
+            DrawingCommand::BSplineTo { points } => {
+                write!(f, "s")?;
+                for p in points {
+                    write!(f, " {:.3} {:.3}", p.x, p.y)?;
+                }
+                Ok(())
+            }
+            DrawingCommand::ExtendBSplineTo { .. } => {
+                unreachable!("Invalid drawingcommand combination: ExtendBSplineTo")
+            }
+
+            DrawingCommand::CloseBSpline => {
+                unreachable!("Invalid drawingcommand combination: CloseBSpline")
+            }
+        }
+    }
 }

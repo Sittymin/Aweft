@@ -1,6 +1,6 @@
 use crate::ffi;
 use crate::library::Library;
-use crate::types::{Alignment, AssAlignment, AssColorRgba, Effect};
+use crate::types::{Alignment, AssColorRgba, Effect, LibassAlignment};
 use anyhow::{Result, anyhow};
 use libc::{c_char, c_void, size_t};
 use std::ffi::CString;
@@ -437,7 +437,7 @@ impl<'a> StyleHandle<'a> {
     }
 
     pub fn set_alignment(mut self, alignment: Alignment) -> Self {
-        let ffi_alignment: AssAlignment = alignment.into();
+        let ffi_alignment: LibassAlignment = alignment.into();
         let ffi_value: i32 = ffi_alignment.bits();
         unsafe {
             let style_ptr = self.as_mut_ptr();

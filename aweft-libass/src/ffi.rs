@@ -24,17 +24,13 @@ pub use self::raw::{
     ass_clear_fonts,
 
     ass_configure_prune,
-    ass_event,
     ass_flush_events,
 
     ass_free,
 
-    ass_free_event,
-    ass_free_style,
     ass_free_track,
     // 字体函数
     ass_get_available_font_providers,
-    ass_image,
 
     ass_library_done,
     // 库函数
@@ -70,7 +66,6 @@ pub use self::raw::{
     ass_set_style_overrides,
     ass_set_use_margins,
     ass_style,
-    ass_track,
     // 包装器函数
     clear_message_callback,
     set_rust_message_callback,

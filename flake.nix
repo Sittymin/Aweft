@@ -16,6 +16,13 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+            "clippy"
+          ];
+        };
         slintRuntimeDeps = with pkgs; [
           wayland
           libxkbcommon
@@ -30,8 +37,6 @@
         ];
 
         buildToolsAndDevLibs = with pkgs; [
-          rustc
-          cargo
           pkg-config
 
           # libass build

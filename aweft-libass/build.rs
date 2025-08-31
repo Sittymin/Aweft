@@ -36,7 +36,7 @@ fn main() {
     // Compile our C wrapper file.
     cc::Build::new()
         .file("wrapper.c")
-        .include(&format!("{}/include", dst.display()))
+        .include(format!("{}/include", dst.display()))
         .compile("wrapper");
 
     // Linker instructions for Cargo.
