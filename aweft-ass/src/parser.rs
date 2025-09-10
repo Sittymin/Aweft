@@ -300,3 +300,254 @@ impl ASSFile {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use isolang::languages;
+    use proptest::prelude::*;
+
+    use crate::parser::process_script_info_chunk;
+    use crate::types::{
+        script::{ScriptType, YCbCrMatrix},
+        WrapStyle,
+    };
+
+    const SCRIPTTYPES: &[&str] = &[
+        "v4.00", "v4.00+", "v4.00++"
+    ];
+
+    const YCBCRMATRIXS: &[&str] = &[
+        "None", "TV.601", "PC.601", "TV.709", "PC.709", "TV.240m", "PC.240m", "TV.fcc", "PC.fcc",
+    ];
+
+    fn comment_lines_strategy() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::vec("[^\r\n]*".prop_map(|s| format!("; {}", s)), 0..=3)
+    }
+
+    fn other_fields_strategy() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::vec(
+            ("[^:\r\n]*", "[^\r\n]*").prop_map(|(s1, s2)| format!("!: {}: {}", s1, s2)),
+            0..=5,
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn test_script_info_all_fields_valid_prop(
+            comment_lines in comment_lines_strategy(),
+            script_type in prop::sample::select(SCRIPTTYPES).prop_map(|s| s.to_string()),
+            layout_res_x in any::<u32>(),
+            layout_res_y in any::<u32>(),
+            wrap_style in prop::sample::select(vec![0, 1, 2]),
+            timer in any::<f64>(),
+            scaled in prop_oneof![
+                Just("yes".to_string()),
+                Just("no".to_string()),
+                any::<i32>().prop_map(|n| n.to_string()),
+            ],
+            kerning in prop_oneof![
+                Just("yes".to_string()),
+                Just("no".to_string()),
+                any::<i32>().prop_map(|n| n.to_string()),
+            ],
+            language in prop::sample::select(
+                languages().filter_map(|l| l.to_639_1()).collect::<Vec<&str>>()
+            ),
+            ycbcr in prop::sample::select(YCBCRMATRIXS).prop_map(|s| s.to_string()),
+            title in "[^\r\n]*",
+            original_script in "[^\r\n]*",
+            original_translation in "[^\r\n]*",
+            original_editing in "[^\r\n]*",
+            original_timing in "[^\r\n]*",
+            script_updated_by in "[^\r\n]*",
+            update_details in "[^\r\n]*",
+            other_fields in other_fields_strategy()
+        ) {
+            let mut lines = Vec::new();
+            lines.extend(comment_lines);
+            lines.push(format!("ScriptType: {}", script_type));
+            lines.push(format!("LayoutResX: {}", layout_res_x));
+            lines.push(format!("LayoutResY: {}", layout_res_y));
+            // 同步 PlayRes，避免覆盖造成歧义
+            lines.push(format!("PlayResX: {}", layout_res_x));
+            lines.push(format!("PlayResY: {}", layout_res_y));
+            lines.push(format!("WrapStyle: {}", wrap_style));
+            lines.push(format!("Timer: {}", timer));
+            lines.push(format!("ScaledBorderAndShadow: {}", scaled));
+            lines.push(format!("Kerning: {}", kerning));
+            lines.push(format!("Language: {}", language));
+            lines.push(format!("YCbCr Matrix: {}", ycbcr));
+            lines.push(format!("Title: {}", title));
+            lines.push(format!("Original Script: {}", original_script));
+            lines.push(format!("Original Translation: {}", original_translation));
+            lines.push(format!("Original Editing: {}", original_editing));
+            lines.push(format!("Original Timing: {}", original_timing));
+            lines.push(format!("Script Updated By: {}", script_updated_by));
+            lines.push(format!("Update Details: {}", update_details));
+            lines.extend(other_fields);
+
+            match process_script_info_chunk(lines) {
+                super::ParsedSection::ScriptInfo(si) => {
+                    // 基本断言
+                    let expected_script_type = match script_type.as_str() {
+                        "v4.00" => ScriptType::SSAv4,
+                        "v4.00+" => ScriptType::ASS,
+                        "v4.00++" => ScriptType::ASS2,
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(si.script_type, expected_script_type);
+                    assert_eq!(si.layout_res_x, layout_res_x);
+                    assert_eq!(si.layout_res_y, layout_res_y);
+                    assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
+                    // YCbCr 映射
+                    let expected_ycbcr = match ycbcr.as_str() {
+                        "None" => YCbCrMatrix::None,
+                        "TV.601" => YCbCrMatrix::BT601TV,
+                        "PC.601" => YCbCrMatrix::BT601PC,
+                        "TV.709" => YCbCrMatrix::BT709TV,
+                        "PC.709" => YCbCrMatrix::BT709PC,
+                        "TV.240m" => YCbCrMatrix::SMPTE240MTV,
+                        "PC.240m" => YCbCrMatrix::SMPTE240MPC,
+                        "TV.fcc" => YCbCrMatrix::FCCTV,
+                        "PC.fcc" => YCbCrMatrix::FCCPC,
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(si.ycbcr_matrix, expected_ycbcr);
+                    // Timer
+                    assert_eq!(si.timer, Some(timer));
+                    // 验证 yes 或非0整数 => true；no 或 0 => false；其他 => false
+                    let expected_scaled = {
+                        let t = scaled.trim().to_ascii_lowercase();
+                        if t == "yes" { true }
+                        else if let Ok(n) = t.parse::<i64>() { n != 0 }
+                        else { false }
+                    };
+                    let expected_kerning = {
+                        let t = kerning.trim().to_ascii_lowercase();
+                        if t == "yes" { true }
+                        else if let Ok(n) = t.parse::<i64>() { n != 0 }
+                        else { false }
+                    };
+                    assert_eq!(si.scaled_border_and_shadow, expected_scaled);
+                    assert_eq!(si.kerning, Some(expected_kerning));
+                    // Language
+                    assert_eq!(si.language.unwrap().to_639_1(), Some(language));
+                }
+                other => panic!("Expected ScriptInfo, got: {:?}", other),
+            }
+        }
+
+        #[test]
+        fn test_script_info_all_fields_error_tolerant_prop(
+            comment_lines in comment_lines_strategy(),
+            layout_res_x in any::<u32>(),
+            layout_res_y in any::<u32>(),
+            wrap_style in prop::sample::select(vec![0, 1, 2]),
+            timer in any::<f64>(),
+            // 非法 ScriptType（将被映射为 ASS）
+            bad_script_type in "[^\r\n]*".prop_filter("必须是非法 ScriptType 值", |s| !SCRIPTTYPES.contains(&s.as_str())),
+            // 非法但可容错的布尔类
+            bad_bool1 in "[^\r\n]*".prop_filter("trim 后既非 yes/no 也非整数", |s| {
+                let t = s.trim();
+                let lower = t.to_ascii_lowercase();
+                if lower == "yes" || lower == "no" { return false; }
+                t.parse::<i64>().is_err()
+            }),
+            bad_bool2 in "[^\r\n]*".prop_filter("trim 后既非 yes/no 也非整数", |s| {
+                let t = s.trim();
+                let lower = t.to_ascii_lowercase();
+                if lower == "yes" || lower == "no" { return false; }
+                t.parse::<i64>().is_err()
+            }),
+            language in prop::sample::select(
+                languages().filter_map(|l| l.to_639_1()).collect::<Vec<&str>>()
+            ),
+            // 非法 YCbCr（将被映射为 Unknown）
+            bad_ycbcr in "[^\r\n]*".prop_filter("必须是非法 YCbCr 值", |s| !YCBCRMATRIXS.contains(&s.as_str())),
+            title in "[^\r\n]*",
+            original_script in "[^\r\n]*",
+            original_translation in "[^\r\n]*",
+            original_editing in "[^\r\n]*",
+            original_timing in "[^\r\n]*",
+            script_updated_by in "[^\r\n]*",
+            update_details in "[^\r\n]*",
+            other_fields in other_fields_strategy()
+        ) {
+            let mut lines = Vec::new();
+            lines.extend(comment_lines);
+            lines.push(format!("ScriptType: {}", bad_script_type));
+            lines.push(format!("LayoutResX: {}", layout_res_x));
+            lines.push(format!("LayoutResY: {}", layout_res_y));
+            lines.push(format!("PlayResX: {}", layout_res_x));
+            lines.push(format!("PlayResY: {}", layout_res_y));
+            lines.push(format!("WrapStyle: {}", wrap_style));
+            lines.push(format!("Timer: {}", timer));
+            // 错误但可容错的值（不触发 panic，不导致缺失）
+            lines.push(format!("ScaledBorderAndShadow: {}", bad_bool1));
+            lines.push(format!("Kerning: {}", bad_bool2));
+            lines.push(format!("Language: {}", language));
+            lines.push(format!("YCbCr Matrix: {}", bad_ycbcr));
+            lines.push(format!("Title: {}", title));
+            lines.push(format!("Original Script: {}", original_script));
+            lines.push(format!("Original Translation: {}", original_translation));
+            lines.push(format!("Original Editing: {}", original_editing));
+            lines.push(format!("Original Timing: {}", original_timing));
+            lines.push(format!("Script Updated By: {}", script_updated_by));
+            lines.push(format!("Update Details: {}", update_details));
+            lines.extend(other_fields);
+
+            match process_script_info_chunk(lines) {
+                super::ParsedSection::ScriptInfo(si) => {
+                    assert_eq!(si.script_type, ScriptType::ASS);
+                    assert_eq!(si.layout_res_x, layout_res_x);
+                    assert_eq!(si.layout_res_y, layout_res_y);
+                    assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
+                    // 非法 YCbCr 应被映射为 Unknown
+                    assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
+                    // 非法布尔应容错为 false
+                    assert_eq!(si.scaled_border_and_shadow, false);
+                    assert_eq!(si.kerning, Some(false));
+                    // 其他关键字段存在
+                    assert!(si.timer.is_some());
+                    assert_eq!(si.language.unwrap().to_639_1(), Some(language));
+                }
+                other => panic!("Expected ScriptInfo, got: {:?}", other),
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_script_info_missing_fields_defaults_prop(
+            // 生成不包含换行的非法 YCbCr 值
+            bad_ycbcr in "[^\r\n]*".prop_filter(
+                "必须是非法 YCbCr 值",
+                |s| !YCBCRMATRIXS.contains(&s.as_str())
+            ),
+            // ScaledBorderAndShadow 支持 yes/no 或整数
+            scaled in prop_oneof![
+                Just("yes".to_string()),
+                Just("no".to_string()),
+                any::<i32>().prop_map(|n| n.to_string()),
+            ],
+        ) {
+            let lines = vec![
+                format!("ScaledBorderAndShadow: {}", scaled),
+                format!("YCbCr Matrix: {}", bad_ycbcr),
+            ];
+            let result = process_script_info_chunk(lines);
+            match result {
+                super::ParsedSection::ScriptInfo(si) => {
+                    assert_eq!(si.script_type, ScriptType::ASS);
+                    // 非法 YCbCr 应被折叠为 Unknown
+                    assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
+                    // 未提供分辨率与 WrapStyle，应回退到默认
+                    assert_eq!(si.layout_res_x, 1920);
+                    assert_eq!(si.layout_res_y, 1080);
+                    assert_eq!(si.wrap_style, WrapStyle::Smart);
+                }
+                other => panic!("Expected ScriptInfo, got: {:?}", other),
+            }
+        }
+    }
+}
