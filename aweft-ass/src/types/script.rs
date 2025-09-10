@@ -276,6 +276,10 @@ impl Display for ScriptInfo {
             writeln!(f, "Kerning: {}", if *kerning { "yes" } else { "no" })?;
         }
 
+        if let Some(language) = &self.language {
+            writeln!(f, "Language: {}", language.to_639_1().unwrap())?;
+        }
+
         if let Some(title) = &self.title {
             writeln!(f, "Title: {}", title)?;
         }
