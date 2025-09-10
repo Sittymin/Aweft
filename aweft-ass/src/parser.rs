@@ -303,250 +303,669 @@ impl ASSFile {
 
 #[cfg(test)]
 mod tests {
-    use isolang::languages;
-    use proptest::prelude::*;
+    mod support {
+        use proptest::prelude::*;
 
-    use crate::parser::process_script_info_chunk;
-    use crate::types::{
-        script::{ScriptType, YCbCrMatrix},
-        WrapStyle,
-    };
+        use crate::types::style::{BorderStyle, StyleWithoutName};
+        use crate::types::BoldType;
+        use aweft_libass::types::{Alignment, AssColorRgba};
+        pub const SCRIPTTYPES: &[&str] = &["v4.00", "v4.00+", "v4.00++"];
 
-    const SCRIPTTYPES: &[&str] = &[
-        "v4.00", "v4.00+", "v4.00++"
-    ];
+        pub const YCBCRMATRIXS: &[&str] = &[
+            "None", "TV.601", "PC.601", "TV.709", "PC.709", "TV.240m", "PC.240m", "TV.fcc",
+            "PC.fcc",
+        ];
 
-    const YCBCRMATRIXS: &[&str] = &[
-        "None", "TV.601", "PC.601", "TV.709", "PC.709", "TV.240m", "PC.240m", "TV.fcc", "PC.fcc",
-    ];
+        pub const STYLEFIELDS: &[&str] = &[
+            "Name",
+            "Fontname",
+            "Fontsize",
+            "PrimaryColour",
+            "SecondaryColour",
+            "OutlineColour",
+            "BackColour",
+            "Bold",
+            "Italic",
+            "Underline",
+            "StrikeOut",
+            "ScaleX",
+            "ScaleY",
+            "Spacing",
+            "Angle",
+            "BorderStyle",
+            "Outline",
+            "Shadow",
+            "Alignment",
+            "MarginL",
+            "MarginR",
+            "MarginV",
+            "Encoding",
+        ];
 
-    fn comment_lines_strategy() -> impl Strategy<Value = Vec<String>> {
-        prop::collection::vec("[^\r\n]*".prop_map(|s| format!("; {}", s)), 0..=3)
-    }
+        // 生成随机的 Format 字段顺序（可为空）与其字符串化形式
+        #[derive(Clone, Debug)]
+        pub struct StyleFormatSpec {
+            pub fields: Vec<&'static str>,
+        }
 
-    fn other_fields_strategy() -> impl Strategy<Value = Vec<String>> {
-        prop::collection::vec(
-            ("[^:\r\n]*", "[^\r\n]*").prop_map(|(s1, s2)| format!("!: {}: {}", s1, s2)),
-            0..=5,
-        )
-    }
-
-    proptest! {
-        #[test]
-        fn test_script_info_all_fields_valid_prop(
-            comment_lines in comment_lines_strategy(),
-            script_type in prop::sample::select(SCRIPTTYPES).prop_map(|s| s.to_string()),
-            layout_res_x in any::<u32>(),
-            layout_res_y in any::<u32>(),
-            wrap_style in prop::sample::select(vec![0, 1, 2]),
-            timer in any::<f64>(),
-            scaled in prop_oneof![
-                Just("yes".to_string()),
-                Just("no".to_string()),
-                any::<i32>().prop_map(|n| n.to_string()),
-            ],
-            kerning in prop_oneof![
-                Just("yes".to_string()),
-                Just("no".to_string()),
-                any::<i32>().prop_map(|n| n.to_string()),
-            ],
-            language in prop::sample::select(
-                languages().filter_map(|l| l.to_639_1()).collect::<Vec<&str>>()
-            ),
-            ycbcr in prop::sample::select(YCBCRMATRIXS).prop_map(|s| s.to_string()),
-            title in "[^\r\n]*",
-            original_script in "[^\r\n]*",
-            original_translation in "[^\r\n]*",
-            original_editing in "[^\r\n]*",
-            original_timing in "[^\r\n]*",
-            script_updated_by in "[^\r\n]*",
-            update_details in "[^\r\n]*",
-            other_fields in other_fields_strategy()
-        ) {
-            let mut lines = Vec::new();
-            lines.extend(comment_lines);
-            lines.push(format!("ScriptType: {}", script_type));
-            lines.push(format!("LayoutResX: {}", layout_res_x));
-            lines.push(format!("LayoutResY: {}", layout_res_y));
-            // 同步 PlayRes，避免覆盖造成歧义
-            lines.push(format!("PlayResX: {}", layout_res_x));
-            lines.push(format!("PlayResY: {}", layout_res_y));
-            lines.push(format!("WrapStyle: {}", wrap_style));
-            lines.push(format!("Timer: {}", timer));
-            lines.push(format!("ScaledBorderAndShadow: {}", scaled));
-            lines.push(format!("Kerning: {}", kerning));
-            lines.push(format!("Language: {}", language));
-            lines.push(format!("YCbCr Matrix: {}", ycbcr));
-            lines.push(format!("Title: {}", title));
-            lines.push(format!("Original Script: {}", original_script));
-            lines.push(format!("Original Translation: {}", original_translation));
-            lines.push(format!("Original Editing: {}", original_editing));
-            lines.push(format!("Original Timing: {}", original_timing));
-            lines.push(format!("Script Updated By: {}", script_updated_by));
-            lines.push(format!("Update Details: {}", update_details));
-            lines.extend(other_fields);
-
-            match process_script_info_chunk(lines) {
-                super::ParsedSection::ScriptInfo(si) => {
-                    // 基本断言
-                    let expected_script_type = match script_type.as_str() {
-                        "v4.00" => ScriptType::SSAv4,
-                        "v4.00+" => ScriptType::ASS,
-                        "v4.00++" => ScriptType::ASS2,
-                        _ => unreachable!(),
-                    };
-                    assert_eq!(si.script_type, expected_script_type);
-                    assert_eq!(si.layout_res_x, layout_res_x);
-                    assert_eq!(si.layout_res_y, layout_res_y);
-                    assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
-                    // YCbCr 映射
-                    let expected_ycbcr = match ycbcr.as_str() {
-                        "None" => YCbCrMatrix::None,
-                        "TV.601" => YCbCrMatrix::BT601TV,
-                        "PC.601" => YCbCrMatrix::BT601PC,
-                        "TV.709" => YCbCrMatrix::BT709TV,
-                        "PC.709" => YCbCrMatrix::BT709PC,
-                        "TV.240m" => YCbCrMatrix::SMPTE240MTV,
-                        "PC.240m" => YCbCrMatrix::SMPTE240MPC,
-                        "TV.fcc" => YCbCrMatrix::FCCTV,
-                        "PC.fcc" => YCbCrMatrix::FCCPC,
-                        _ => unreachable!(),
-                    };
-                    assert_eq!(si.ycbcr_matrix, expected_ycbcr);
-                    // Timer
-                    assert_eq!(si.timer, Some(timer));
-                    // 验证 yes 或非0整数 => true；no 或 0 => false；其他 => false
-                    let expected_scaled = {
-                        let t = scaled.trim().to_ascii_lowercase();
-                        if t == "yes" { true }
-                        else if let Ok(n) = t.parse::<i64>() { n != 0 }
-                        else { false }
-                    };
-                    let expected_kerning = {
-                        let t = kerning.trim().to_ascii_lowercase();
-                        if t == "yes" { true }
-                        else if let Ok(n) = t.parse::<i64>() { n != 0 }
-                        else { false }
-                    };
-                    assert_eq!(si.scaled_border_and_shadow, expected_scaled);
-                    assert_eq!(si.kerning, Some(expected_kerning));
-                    // Language
-                    assert_eq!(si.language.unwrap().to_639_1(), Some(language));
+        impl StyleFormatSpec {
+            pub fn to_format_line(&self) -> String {
+                match self.fields.is_empty() {
+                    true => "Format:".to_string(),
+                    false => ["Format: ", &self.fields.join(", ")].concat(),
                 }
-                other => panic!("Expected ScriptInfo, got: {:?}", other),
             }
         }
 
-        #[test]
-        fn test_script_info_all_fields_error_tolerant_prop(
-            comment_lines in comment_lines_strategy(),
-            layout_res_x in any::<u32>(),
-            layout_res_y in any::<u32>(),
-            wrap_style in prop::sample::select(vec![0, 1, 2]),
-            timer in any::<f64>(),
-            // 非法 ScriptType（将被映射为 ASS）
-            bad_script_type in "[^\r\n]*".prop_filter("必须是非法 ScriptType 值", |s| !SCRIPTTYPES.contains(&s.as_str())),
-            // 非法但可容错的布尔类
-            bad_bool1 in "[^\r\n]*".prop_filter("trim 后既非 yes/no 也非整数", |s| {
-                let t = s.trim();
-                let lower = t.to_ascii_lowercase();
-                if lower == "yes" || lower == "no" { return false; }
-                t.parse::<i64>().is_err()
-            }),
-            bad_bool2 in "[^\r\n]*".prop_filter("trim 后既非 yes/no 也非整数", |s| {
-                let t = s.trim();
-                let lower = t.to_ascii_lowercase();
-                if lower == "yes" || lower == "no" { return false; }
-                t.parse::<i64>().is_err()
-            }),
-            language in prop::sample::select(
-                languages().filter_map(|l| l.to_639_1()).collect::<Vec<&str>>()
-            ),
-            // 非法 YCbCr（将被映射为 Unknown）
-            bad_ycbcr in "[^\r\n]*".prop_filter("必须是非法 YCbCr 值", |s| !YCBCRMATRIXS.contains(&s.as_str())),
-            title in "[^\r\n]*",
-            original_script in "[^\r\n]*",
-            original_translation in "[^\r\n]*",
-            original_editing in "[^\r\n]*",
-            original_timing in "[^\r\n]*",
-            script_updated_by in "[^\r\n]*",
-            update_details in "[^\r\n]*",
-            other_fields in other_fields_strategy()
-        ) {
-            let mut lines = Vec::new();
-            lines.extend(comment_lines);
-            lines.push(format!("ScriptType: {}", bad_script_type));
-            lines.push(format!("LayoutResX: {}", layout_res_x));
-            lines.push(format!("LayoutResY: {}", layout_res_y));
-            lines.push(format!("PlayResX: {}", layout_res_x));
-            lines.push(format!("PlayResY: {}", layout_res_y));
-            lines.push(format!("WrapStyle: {}", wrap_style));
-            lines.push(format!("Timer: {}", timer));
-            // 错误但可容错的值（不触发 panic，不导致缺失）
-            lines.push(format!("ScaledBorderAndShadow: {}", bad_bool1));
-            lines.push(format!("Kerning: {}", bad_bool2));
-            lines.push(format!("Language: {}", language));
-            lines.push(format!("YCbCr Matrix: {}", bad_ycbcr));
-            lines.push(format!("Title: {}", title));
-            lines.push(format!("Original Script: {}", original_script));
-            lines.push(format!("Original Translation: {}", original_translation));
-            lines.push(format!("Original Editing: {}", original_editing));
-            lines.push(format!("Original Timing: {}", original_timing));
-            lines.push(format!("Script Updated By: {}", script_updated_by));
-            lines.push(format!("Update Details: {}", update_details));
-            lines.extend(other_fields);
+        // 返回结构化对象，便于基于字段顺序生成对应的 Style 行并做断言
+        // 为贴近实际，增加 Name 出现的概率：在空或缺 Name 时，50% 概率插入 Name
+        pub fn style_format_spec_strategy() -> impl Strategy<Value = StyleFormatSpec> {
+            prop::sample::subsequence(STYLEFIELDS, 0..=STYLEFIELDS.len())
+                .prop_shuffle()
+                .prop_flat_map(|mut fields: Vec<&'static str>| {
+                    let has_name = fields.iter().any(|&f| f == "Name");
+                    let should_insert = !has_name || fields.is_empty();
+                    prop_oneof![
+                        Just(fields.clone()),
+                        Just({
+                            if should_insert {
+                                fields.insert(0, "Name");
+                            }
+                            fields
+                        })
+                    ]
+                })
+                .prop_map(|fields| StyleFormatSpec { fields })
+        }
 
-            match process_script_info_chunk(lines) {
-                super::ParsedSection::ScriptInfo(si) => {
-                    assert_eq!(si.script_type, ScriptType::ASS);
-                    assert_eq!(si.layout_res_x, layout_res_x);
-                    assert_eq!(si.layout_res_y, layout_res_y);
-                    assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
-                    // 非法 YCbCr 应被映射为 Unknown
-                    assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
-                    // 非法布尔应容错为 false
-                    assert_eq!(si.scaled_border_and_shadow, false);
-                    assert_eq!(si.kerning, Some(false));
-                    // 其他关键字段存在
-                    assert!(si.timer.is_some());
-                    assert_eq!(si.language.unwrap().to_639_1(), Some(language));
+        pub fn comment_lines_strategy() -> impl Strategy<Value = Vec<String>> {
+            prop::collection::vec("[^\r\n]*".prop_map(|s| format!("; {}", s)), 0..=3)
+        }
+
+        pub fn other_fields_strategy() -> impl Strategy<Value = Vec<String>> {
+            prop::collection::vec(
+                ("[^:\r\n]*", "[^\r\n]*").prop_map(|(s1, s2)| format!("!: {}: {}", s1, s2)),
+                0..=5,
+            )
+        }
+        // 构建期望的 StyleWithoutName，按照解析器的默认值与字段解析规则
+        pub fn build_expected_style(
+            name_str: &str,
+            fields: &[&'static str],
+            values: &[String],
+        ) -> (String, StyleWithoutName) {
+            // 解析辅助
+            let mut fontname = "Arial".to_string();
+            let mut fontsize: f64 = 18.0;
+            let mut primary = AssColorRgba::new(255, 255, 255, 255);
+            let mut secondary = AssColorRgba::new(0, 255, 255, 255);
+            let mut outline_color = AssColorRgba::new(0, 0, 0, 0);
+            let mut back_color = AssColorRgba::new(0, 0, 0, 128);
+            let mut bold = BoldType::NonBold;
+            let mut italic = false;
+            let mut underline = false;
+            let mut strikeout = false;
+            let mut scale_x: f64 = 100.0;
+            let mut scale_y: f64 = 100.0;
+            let mut spacing: f64 = 0.0;
+            let mut angle: f64 = 0.0;
+            let mut border_style = BorderStyle::OutlineAndDropShadow;
+            let mut outline: f64 = 2.0;
+            let mut shadow: f64 = 2.0;
+            let mut alignment = Alignment::BottomCenter;
+            let mut margin_l: i32 = 10;
+            let mut margin_r: i32 = 10;
+            let mut margin_v: i32 = 10;
+            let mut encoding: i32 = 1;
+
+            for (idx, field) in fields.iter().enumerate() {
+                let v = &values[idx];
+                match *field {
+                    "Fontname" => fontname = v.trim().to_string(),
+                    "Fontsize" => {
+                        // 如果解析成功，则更新值；否则，什么也不做，保留默认值
+                        if let Ok(val) = v.parse::<f64>() {
+                            fontsize = val;
+                        }
+                    }
+                    "PrimaryColour" => {
+                        if let Ok(val) = u32::from_str_radix(&v.trim_start_matches("&H"), 16) {
+                            primary = AssColorRgba::from_ass_style_u32(val);
+                        }
+                    }
+                    "SecondaryColour" => {
+                        if let Ok(val) = u32::from_str_radix(&v.trim_start_matches("&H"), 16) {
+                            secondary = AssColorRgba::from_ass_style_u32(val);
+                        }
+                    }
+                    "OutlineColour" => {
+                        if let Ok(val) = u32::from_str_radix(&v.trim_start_matches("&H"), 16) {
+                            outline_color = AssColorRgba::from_ass_style_u32(val);
+                        }
+                    }
+                    "BackColour" => {
+                        if let Ok(val) = u32::from_str_radix(&v.trim_start_matches("&H"), 16) {
+                            back_color = AssColorRgba::from_ass_style_u32(val);
+                        }
+                    }
+                    "Bold" => {
+                        bold = if v.trim() == "0" {
+                            BoldType::NonBold
+                        } else {
+                            BoldType::Bold
+                        }
+                    }
+                    "Italic" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            italic = val != 0;
+                        }
+                    }
+                    "Underline" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            underline = val != 0;
+                        }
+                    }
+                    "StrikeOut" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            strikeout = val != 0;
+                        }
+                    }
+                    "ScaleX" => {
+                        if let Ok(val) = v.parse::<f64>() {
+                            scale_x = val;
+                        }
+                    }
+                    "ScaleY" => {
+                        if let Ok(val) = v.parse::<f64>() {
+                            scale_y = val;
+                        }
+                    }
+                    "Spacing" => {
+                        if let Ok(val) = v.parse::<f64>() {
+                            spacing = val;
+                        }
+                    }
+                    "Angle" => {
+                        if let Ok(val) = v.parse::<f64>() {
+                            angle = val;
+                        }
+                    }
+                    "BorderStyle" => {
+                        if let Ok(val) = v.parse::<BorderStyle>() {
+                            border_style = val;
+                        }
+                    }
+                    "Outline" => {
+                        if let Ok(val) = v.parse::<f64>() {
+                            outline = val;
+                        }
+                    }
+                    "Shadow" => {
+                        if let Ok(val) = v.parse::<f64>() {
+                            shadow = val;
+                        }
+                    }
+                    "Alignment" => {
+                        if let Ok(val) = v.parse::<Alignment>() {
+                            alignment = val;
+                        }
+                    }
+                    "MarginL" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            margin_l = val;
+                        }
+                    }
+                    "MarginR" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            margin_r = val;
+                        }
+                    }
+                    "MarginV" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            margin_v = val;
+                        }
+                    }
+                    "Encoding" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            encoding = val;
+                        }
+                    }
+                    // Name 在样式外层作为 key，不进入 StyleWithoutName
+                    "Name" => {}
+                    other => panic!("unexpected field in build_expected_style: {}", other),
                 }
-                other => panic!("Expected ScriptInfo, got: {:?}", other),
+            }
+
+            let style = StyleWithoutName {
+                fontname,
+                fontsize,
+                primary_color: primary,
+                secondary_color: secondary,
+                outline_color,
+                back_color,
+                bold,
+                italic,
+                underline,
+                strikeout,
+                scale_x,
+                scale_y,
+                spacing,
+                angle,
+                border_style,
+                outline,
+                shadow,
+                alignment,
+                margin_l,
+                margin_r,
+                margin_v,
+                encoding,
+            };
+            (name_str.to_string(), style)
+        }
+    }
+
+    mod script_info_prop {
+        use super::support::*;
+        use crate::parser::process_script_info_chunk;
+        use crate::parser::ParsedSection;
+        use crate::types::{
+            script::{ScriptType, YCbCrMatrix},
+            WrapStyle,
+        };
+        use isolang::languages;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn test_script_info_all_fields_valid_prop(
+                comment_lines in comment_lines_strategy(),
+                script_type in prop::sample::select(SCRIPTTYPES).prop_map(|s| s.to_string()),
+                layout_res_x in any::<u32>(),
+                layout_res_y in any::<u32>(),
+                wrap_style in prop::sample::select(vec![0, 1, 2]),
+                timer in any::<f64>(),
+                scaled in prop_oneof![
+                    Just("yes".to_string()),
+                    Just("no".to_string()),
+                    any::<i32>().prop_map(|n| n.to_string()),
+                ],
+                kerning in prop_oneof![
+                    Just("yes".to_string()),
+                    Just("no".to_string()),
+                    any::<i32>().prop_map(|n| n.to_string()),
+                ],
+                language in prop::sample::select(
+                    languages().filter_map(|l| l.to_639_1()).collect::<Vec<&str>>()
+                ),
+                ycbcr in prop::sample::select(YCBCRMATRIXS).prop_map(|s| s.to_string()),
+                title in "[^\r\n]*",
+                original_script in "[^\r\n]*",
+                original_translation in "[^\r\n]*",
+                original_editing in "[^\r\n]*",
+                original_timing in "[^\r\n]*",
+                script_updated_by in "[^\r\n]*",
+                update_details in "[^\r\n]*",
+                other_fields in other_fields_strategy()
+            ) {
+                let mut lines = Vec::new();
+                lines.extend(comment_lines);
+                lines.push(format!("ScriptType: {}", script_type));
+                lines.push(format!("LayoutResX: {}", layout_res_x));
+                lines.push(format!("LayoutResY: {}", layout_res_y));
+                // 同步 PlayRes，避免覆盖造成歧义
+                lines.push(format!("PlayResX: {}", layout_res_x));
+                lines.push(format!("PlayResY: {}", layout_res_y));
+                lines.push(format!("WrapStyle: {}", wrap_style));
+                lines.push(format!("Timer: {}", timer));
+                lines.push(format!("ScaledBorderAndShadow: {}", scaled));
+                lines.push(format!("Kerning: {}", kerning));
+                lines.push(format!("Language: {}", language));
+                lines.push(format!("YCbCr Matrix: {}", ycbcr));
+                lines.push(format!("Title: {}", title));
+                lines.push(format!("Original Script: {}", original_script));
+                lines.push(format!("Original Translation: {}", original_translation));
+                lines.push(format!("Original Editing: {}", original_editing));
+                lines.push(format!("Original Timing: {}", original_timing));
+                lines.push(format!("Script Updated By: {}", script_updated_by));
+                lines.push(format!("Update Details: {}", update_details));
+                lines.extend(other_fields);
+
+                match process_script_info_chunk(lines) {
+                    ParsedSection::ScriptInfo(si) => {
+                        // 基本断言
+                        let expected_script_type = match script_type.as_str() {
+                            "v4.00" => ScriptType::SSAv4,
+                            "v4.00+" => ScriptType::ASS,
+                            "v4.00++" => ScriptType::ASS2,
+                            _ => unreachable!(),
+                        };
+                        assert_eq!(si.script_type, expected_script_type);
+                        assert_eq!(si.layout_res_x, layout_res_x);
+                        assert_eq!(si.layout_res_y, layout_res_y);
+                        assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
+                        // YCbCr 映射
+                        let expected_ycbcr = match ycbcr.as_str() {
+                            "None" => YCbCrMatrix::None,
+                            "TV.601" => YCbCrMatrix::BT601TV,
+                            "PC.601" => YCbCrMatrix::BT601PC,
+                            "TV.709" => YCbCrMatrix::BT709TV,
+                            "PC.709" => YCbCrMatrix::BT709PC,
+                            "TV.240m" => YCbCrMatrix::SMPTE240MTV,
+                            "PC.240m" => YCbCrMatrix::SMPTE240MPC,
+                            "TV.fcc" => YCbCrMatrix::FCCTV,
+                            "PC.fcc" => YCbCrMatrix::FCCPC,
+                            _ => unreachable!(),
+                        };
+                        assert_eq!(si.ycbcr_matrix, expected_ycbcr);
+                        // Timer
+                        assert_eq!(si.timer, Some(timer));
+                        // 验证 yes 或非0整数 => true；no 或 0 => false；其他 => false
+                        let expected_scaled = {
+                            let t = scaled.trim().to_ascii_lowercase();
+                            if t == "yes" { true }
+                            else if let Ok(n) = t.parse::<i64>() { n != 0 }
+                            else { false }
+                        };
+                        let expected_kerning = {
+                            let t = kerning.trim().to_ascii_lowercase();
+                            if t == "yes" { true }
+                            else if let Ok(n) = t.parse::<i64>() { n != 0 }
+                            else { false }
+                        };
+                        assert_eq!(si.scaled_border_and_shadow, expected_scaled);
+                        assert_eq!(si.kerning, Some(expected_kerning));
+                        // Language
+                        assert_eq!(si.language.unwrap().to_639_1(), Some(language));
+                    }
+                    other => panic!("Expected ScriptInfo, got: {:?}", other),
+                }
+            }
+
+            #[test]
+            fn test_script_info_all_fields_error_tolerant_prop(
+                comment_lines in comment_lines_strategy(),
+                layout_res_x in any::<u32>(),
+                layout_res_y in any::<u32>(),
+                wrap_style in prop::sample::select(vec![0, 1, 2]),
+                timer in any::<f64>(),
+                // 非法 ScriptType（将被映射为 ASS）
+                bad_script_type in "[^\r\n]*".prop_filter("必须是非法 ScriptType 值", |s| !SCRIPTTYPES.contains(&s.as_str())),
+                // 非法但可容错的布尔类
+                bad_bool1 in "[^\r\n]*".prop_filter("trim 后既非 yes/no 也非整数", |s| {
+                    let t = s.trim();
+                    let lower = t.to_ascii_lowercase();
+                    if lower == "yes" || lower == "no" { return false; }
+                    t.parse::<i64>().is_err()
+                }),
+                bad_bool2 in "[^\r\n]*".prop_filter("trim 后既非 yes/no 也非整数", |s| {
+                    let t = s.trim();
+                    let lower = t.to_ascii_lowercase();
+                    if lower == "yes" || lower == "no" { return false; }
+                    t.parse::<i64>().is_err()
+                }),
+                language in prop::sample::select(
+                    languages().filter_map(|l| l.to_639_1()).collect::<Vec<&str>>()
+                ),
+                // 非法 YCbCr（将被映射为 Unknown）
+                bad_ycbcr in "[^\r\n]*".prop_filter("必须是非法 YCbCr 值", |s| !YCBCRMATRIXS.contains(&s.as_str())),
+                title in "[^\r\n]*",
+                original_script in "[^\r\n]*",
+                original_translation in "[^\r\n]*",
+                original_editing in "[^\r\n]*",
+                original_timing in "[^\r\n]*",
+                script_updated_by in "[^\r\n]*",
+                update_details in "[^\r\n]*",
+                other_fields in other_fields_strategy()
+            ) {
+                let mut lines = Vec::new();
+                lines.extend(comment_lines);
+                lines.push(format!("ScriptType: {}", bad_script_type));
+                lines.push(format!("LayoutResX: {}", layout_res_x));
+                lines.push(format!("LayoutResY: {}", layout_res_y));
+                lines.push(format!("PlayResX: {}", layout_res_x));
+                lines.push(format!("PlayResY: {}", layout_res_y));
+                lines.push(format!("WrapStyle: {}", wrap_style));
+                lines.push(format!("Timer: {}", timer));
+                // 错误但可容错的值（不触发 panic，不导致缺失）
+                lines.push(format!("ScaledBorderAndShadow: {}", bad_bool1));
+                lines.push(format!("Kerning: {}", bad_bool2));
+                lines.push(format!("Language: {}", language));
+                lines.push(format!("YCbCr Matrix: {}", bad_ycbcr));
+                lines.push(format!("Title: {}", title));
+                lines.push(format!("Original Script: {}", original_script));
+                lines.push(format!("Original Translation: {}", original_translation));
+                lines.push(format!("Original Editing: {}", original_editing));
+                lines.push(format!("Original Timing: {}", original_timing));
+                lines.push(format!("Script Updated By: {}", script_updated_by));
+                lines.push(format!("Update Details: {}", update_details));
+                lines.extend(other_fields);
+
+                match process_script_info_chunk(lines) {
+                    ParsedSection::ScriptInfo(si) => {
+                        assert_eq!(si.script_type, ScriptType::ASS);
+                        assert_eq!(si.layout_res_x, layout_res_x);
+                        assert_eq!(si.layout_res_y, layout_res_y);
+                        assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
+                        // 非法 YCbCr 应被映射为 Unknown
+                        assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
+                        // 非法布尔应容错为 false
+                        assert_eq!(si.scaled_border_and_shadow, false);
+                        assert_eq!(si.kerning, Some(false));
+                        // 其他关键字段存在
+                        assert!(si.timer.is_some());
+                        assert_eq!(si.language.unwrap().to_639_1(), Some(language));
+                    }
+                    other => panic!("Expected ScriptInfo, got: {:?}", other),
+                }
+            }
+        }
+        proptest! {
+            #[test]
+            fn test_script_info_missing_fields_defaults_prop(
+                // 生成不包含换行的非法 YCbCr 值
+                bad_ycbcr in "[^\r\n]*".prop_filter(
+                    "必须是非法 YCbCr 值",
+                    |s| !YCBCRMATRIXS.contains(&s.as_str())
+                ),
+                // ScaledBorderAndShadow 支持 yes/no 或整数
+                scaled in prop_oneof![
+                    Just("yes".to_string()),
+                    Just("no".to_string()),
+                    any::<i32>().prop_map(|n| n.to_string()),
+                ],
+            ) {
+                let lines = vec![
+                    format!("ScaledBorderAndShadow: {}", scaled),
+                    format!("YCbCr Matrix: {}", bad_ycbcr),
+                ];
+                let result = process_script_info_chunk(lines);
+                match result {
+                    ParsedSection::ScriptInfo(si) => {
+                        assert_eq!(si.script_type, ScriptType::ASS);
+                        // 非法 YCbCr 应被折叠为 Unknown
+                        assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
+                        // 未提供分辨率与 WrapStyle，应回退到默认
+                        assert_eq!(si.layout_res_x, 1920);
+                        assert_eq!(si.layout_res_y, 1080);
+                        assert_eq!(si.wrap_style, WrapStyle::Smart);
+                    }
+                    other => panic!("Expected ScriptInfo, got: {:?}", other),
+                }
             }
         }
     }
 
-    proptest! {
+    mod styles_prop {
+        use super::support::*;
+        use crate::parser::{process_styles_chunk, ParsedSection};
+        use crate::types::style::StyleWithoutName;
+        use proptest::prelude::*;
+
         #[test]
-        fn test_script_info_missing_fields_defaults_prop(
-            // 生成不包含换行的非法 YCbCr 值
-            bad_ycbcr in "[^\r\n]*".prop_filter(
-                "必须是非法 YCbCr 值",
-                |s| !YCBCRMATRIXS.contains(&s.as_str())
-            ),
-            // ScaledBorderAndShadow 支持 yes/no 或整数
-            scaled in prop_oneof![
-                Just("yes".to_string()),
-                Just("no".to_string()),
-                any::<i32>().prop_map(|n| n.to_string()),
-            ],
-        ) {
-            let lines = vec![
-                format!("ScaledBorderAndShadow: {}", scaled),
-                format!("YCbCr Matrix: {}", bad_ycbcr),
-            ];
-            let result = process_script_info_chunk(lines);
-            match result {
-                super::ParsedSection::ScriptInfo(si) => {
-                    assert_eq!(si.script_type, ScriptType::ASS);
-                    // 非法 YCbCr 应被折叠为 Unknown
-                    assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
-                    // 未提供分辨率与 WrapStyle，应回退到默认
-                    assert_eq!(si.layout_res_x, 1920);
-                    assert_eq!(si.layout_res_y, 1080);
-                    assert_eq!(si.wrap_style, WrapStyle::Smart);
+        fn test_style_format_absent_ok() {
+            // 完全没有 Format 行与 Style 行，应当回退并成功（得到空样式）
+            let lines: Vec<String> = vec![];
+            match process_styles_chunk(lines) {
+                ParsedSection::Styles(styles) => assert!(styles.is_empty()),
+                other => panic!("Expected Styles, got: {:?}", other),
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn test_style_format_random_subset_and_order_prop(
+                spec in style_format_spec_strategy()
+            ) {
+                // 仅包含一个随机 Format 行（可为空）的样本 [V4+ Styles] 内容
+                let lines = vec![spec.to_format_line()];
+                match process_styles_chunk(lines) {
+                    ParsedSection::Styles(styles) => {
+                        // 没有 Style: 行，解析应成功且样式表为空
+                        assert!(styles.is_empty());
+                    }
+                    other => panic!("Expected Styles, got: {:?}", other),
                 }
-                other => panic!("Expected ScriptInfo, got: {:?}", other),
+            }
+        }
+
+        // 当 Format 含 Name 或为空（默认顺序含 Name），生成 Style 并断言字段映射
+        proptest! {
+            #[test]
+            fn test_style_line_matches_format_and_values_prop(
+                spec in style_format_spec_strategy(),
+                // 字符串：不含换行与逗号
+                name in "[^,\r\n]*",
+                fontname in "[^,\r\n]*",
+                // 浮点
+                fsz in any::<f64>(),
+                // 颜色：使用 &H 十六进制
+                c1 in any::<u32>(), c2 in any::<u32>(), c3 in any::<u32>(), c4 in any::<u32>(),
+                // 布尔类（整数）
+                bold in any::<i32>(), italic in any::<i32>(), underline in any::<i32>(), strike in any::<i32>(),
+                // 比例/间距/角度
+                sx in any::<f64>(), sy in any::<f64>(),
+                sp in any::<f64>(), ang in any::<f64>(),
+                // 边框样式、描边、阴影
+                bstyle in prop::sample::select(vec![1,3]), out in any::<f64>(), sh in any::<f64>(),
+                // 对齐与边距、编码
+                align in 1i32..=9, ml in any::<i32>(), mr in any::<i32>(), mv in any::<i32>(), enc in any::<i32>(),
+                // 随机数量（u8），限制为 0..=8 避免过大
+                count_u8 in any::<u8>()
+            ) {
+                let effective_fields: Vec<&'static str> = if spec.fields.is_empty() { STYLEFIELDS.to_vec() } else { spec.fields.clone() };
+                prop_assume!(effective_fields.iter().any(|&f| f == "Name"));
+                let name_idx = effective_fields.iter().position(|&f| f == "Name").unwrap();
+                let format_line = StyleFormatSpec { fields: spec.fields.clone() }.to_format_line();
+                let mut lines = vec![format_line];
+                let mut expected: Vec<(String, StyleWithoutName)> = Vec::new();
+                let count: usize = (count_u8 % 9) as usize; // 0..=8
+
+                for i in 0..count {
+                    let name_i = format!("{}-{}", name.trim(), i);
+                    let fontname_i = format!("{}-{}", fontname, i);
+                    let fsz_i = fsz + i as f64 ;
+                    let sx_i = sx + i as f64;
+                    let sy_i = sy - i as f64;
+                    let sp_i = sp.abs() + i as f64;
+                    let ang_i = ang - i as f64;
+                    let out_i = out.abs() + i as f64;
+                    let sh_i = sh.abs() + i as f64;
+                    let c1_i = c1.wrapping_add(i as u32);
+                    let c2_i = c2.wrapping_add(i as u32);
+                    let c3_i = c3.wrapping_add(i as u32);
+                    let c4_i = c4.wrapping_add(i as u32);
+                    let bold_i = bold.wrapping_add(i as i32) as i32;
+                    let italic_i = italic + i as i32;
+                    let underline_i = underline + i as i32;
+                    let strike_i = strike + i as i32;
+                    let bstyle_i = if i % 2 == 0 { bstyle } else { if bstyle == 1 { 3 } else { 1 } };
+                    let align_i = ((align + i as i32) % 9) + 1;
+                    let ml_i = ml.wrapping_add(i as i32);
+                    let mr_i = mr.wrapping_add(i as i32);
+                    let mv_i = mv.wrapping_add(i as i32);
+                    let enc_i = enc.wrapping_add(i as i32);
+
+                    let values = effective_fields.iter().map(|&f| match f {
+                        "Name" => name_i.clone(),
+                        "Fontname" => fontname_i.clone(),
+                        "Fontsize" => format!("{:.3}", fsz_i),
+                        "PrimaryColour" => format!("&H{:08X}", c1_i),
+                        "SecondaryColour" => format!("&H{:08X}", c2_i),
+                        "OutlineColour" => format!("&H{:08X}", c3_i),
+                        "BackColour" => format!("&H{:08X}", c4_i),
+                        "Bold" => bold_i.to_string(),
+                        "Italic" => italic_i.to_string(),
+                        "Underline" => underline_i.to_string(),
+                        "StrikeOut" => strike_i.to_string(),
+                        "ScaleX" => format!("{:.3}", sx_i),
+                        "ScaleY" => format!("{:.3}", sy_i),
+                        "Spacing" => format!("{:.3}", sp_i),
+                        "Angle" => format!("{:.3}", ang_i),
+                        "BorderStyle" => bstyle_i.to_string(),
+                        "Outline" => format!("{:.3}", out_i),
+                        "Shadow" => format!("{:.3}", sh_i),
+                        "Alignment" => align_i.to_string(),
+                        "MarginL" => ml_i.to_string(),
+                        "MarginR" => mr_i.to_string(),
+                        "MarginV" => mv_i.to_string(),
+                        "Encoding" => enc_i.to_string(),
+                        other => panic!("unexpected field {}", other),
+                    }).collect::<Vec<_>>();
+
+                    lines.push(["Style: ", &values.join(",")].concat());
+                    let (exp_name, exp_style) = build_expected_style(&values[name_idx], &effective_fields, &values);
+                    expected.push((exp_name, exp_style));
+                }
+
+                match process_styles_chunk(lines) {
+                    ParsedSection::Styles(styles) => {
+                        assert_eq!(styles.len(), expected.len());
+                        for (n, s) in expected { assert_eq!(styles.get(&n), Some(&s)); }
+                    }
+                    other => panic!("Expected Styles, got: {:?}", other),
+                }
+            }
+        }
+
+        // 当 Format 不含 Name：应将样式名视为 "Default"，且后定义覆盖先定义
+        proptest! {
+            #[test]
+            fn test_style_line_ignored_without_name_field_prop(
+                spec in style_format_spec_strategy()
+            ) {
+                prop_assume!(!spec.fields.is_empty());
+                prop_assume!(!spec.fields.iter().any(|&f| f == "Name"));
+
+                // 为各字段生成占位值（不重要，因为应被忽略）
+                let values: Vec<String> = spec.fields.iter().map(|&f| {
+                    // 使用简单可解析的占位值
+                    match f {
+                        "Fontname" | "Name" => "x".to_string(),
+                        "PrimaryColour" | "SecondaryColour" | "OutlineColour" | "BackColour" => "&H00000000".to_string(),
+                        "Alignment" => "3".to_string(),
+                        "BorderStyle" => "1".to_string(),
+                        _ => "0".to_string(),
+                    }
+                }).collect();
+
+                let format_line = StyleFormatSpec { fields: spec.fields.clone() }.to_format_line();
+                // 生成多条，验证覆盖
+                let style_line1 = ["Style: ", &values.join(",")].concat();
+                let style_line2 = ["Style: ", &values.join(",")].concat();
+                let lines = vec![format_line, style_line1, style_line2];
+                match process_styles_chunk(lines) {
+                    ParsedSection::Styles(styles) => {
+                        assert_eq!(styles.len(), 1);
+                        let (exp_name, exp_style) = build_expected_style(
+                            "Default",
+                            &spec.fields,
+                            &values,
+                        );
+                        let got = styles.get(&exp_name).expect("Default style not found");
+                        assert_eq!(got, &exp_style);
+                    }
+                    other => panic!("Expected Styles, got: {:?}", other),
+                }
             }
         }
     }

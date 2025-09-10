@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use aweft_libass::types::{Alignment, AssColorRgba};
+use log::warn;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -247,6 +248,33 @@ impl fmt::Display for StyleField {
     }
 }
 
+// 默认的 Style Format 顺序（与 libass 一致）
+const DEFAULT_STYLE_FORMAT: &[StyleField] = &[
+    StyleField::Name,
+    StyleField::Fontname,
+    StyleField::Fontsize,
+    StyleField::PrimaryColour,
+    StyleField::SecondaryColour,
+    StyleField::OutlineColour,
+    StyleField::BackColour,
+    StyleField::Bold,
+    StyleField::Italic,
+    StyleField::Underline,
+    StyleField::StrikeOut,
+    StyleField::ScaleX,
+    StyleField::ScaleY,
+    StyleField::Spacing,
+    StyleField::Angle,
+    StyleField::BorderStyle,
+    StyleField::Outline,
+    StyleField::Shadow,
+    StyleField::Alignment,
+    StyleField::MarginL,
+    StyleField::MarginR,
+    StyleField::MarginV,
+    StyleField::Encoding,
+];
+
 #[derive(Default)]
 pub struct StyleParser {
     format_map: HashMap<StyleField, usize>,
@@ -254,11 +282,20 @@ pub struct StyleParser {
 
 impl StyleParser {
     pub fn learn_format(&mut self, format_data: &str) -> Result<()> {
-        self.format_map = format_data
+        // 允许空 Format 行或包含空标记的行：过滤空白后若无字段，则保持空映射
+        let mut fields: Vec<StyleField> = format_data
             .split(',')
             .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
             .map(|s| s.parse::<StyleField>())
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>>>()?;
+
+        if fields.is_empty() {
+            // 使用默认顺序
+            fields = DEFAULT_STYLE_FORMAT.to_vec();
+        }
+
+        self.format_map = fields
             .into_iter()
             .enumerate()
             .map(|(i, field)| (field, i))
@@ -291,14 +328,24 @@ impl StyleParser {
             values: &values,
         };
 
+        // Name 字段：允许缺失或为空，缺失/为空时使用 "Default"
         let name = p
             .get_str(&StyleField::Name)
-            .context("Required field 'Name' not found in Format line")?
+            .map(|s| {
+                let s2 = s.trim();
+                if s2.is_empty() {
+                    warn!("Style 不存在 Name 字段，默认填充 Default");
+                    "Default"
+                } else { s2 }
+            })
+            .unwrap_or("Default")
             .to_string();
 
         let style = StyleWithoutName {
             fontname: p
                 .get_str(&StyleField::Fontname)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
                 .unwrap_or("Arial")
                 .to_string(),
             fontsize: p.parse_num(&StyleField::Fontsize, 18.0)?,
@@ -369,15 +416,16 @@ impl<'a> FieldParser<'a> {
 
     fn parse_ass_bold(&self, name: &StyleField, default: BoldType) -> Result<BoldType> {
         match self.get_str(name) {
-            Some(val) => BoldType::from_str(val)
-                // HACK: 需要为 BoldType 实现错误类型
-                .map_err(|e| anyhow!(e))
-                .with_context(|| {
+            Some(val) => {
+                let parsed = i32::from_str(val.trim()).with_context(|| {
                     format!(
                         "Failed to parse bold for field '{}' from value '{}'",
                         name, val
                     )
-                }),
+                })?;
+                // INFO: 在 Style 部分当中不可以定义权重
+                Ok(if parsed != 0 { BoldType::Bold } else { BoldType::NonBold })
+            }
             None => Ok(default),
         }
     }
