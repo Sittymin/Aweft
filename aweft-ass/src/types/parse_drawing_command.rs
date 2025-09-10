@@ -30,8 +30,10 @@ fn parse_move_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
 fn parse_line_to_multiple(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
     let (input, _) = preceded(multispace0, char('l')).parse(input)?;
     let (input, _) = multispace1(input)?;
-    // many1(parse_point) 表示至少要有一对 (x, y)
-    let (input, points) = many1(separated_pair(double, multispace1, double)).parse(input)?;
+    // many1(parse_point) 表示至少要有一对 (x, y)。
+    // 每对之间可能存在空白，需要在每对前消费可选空白。
+    let (input, points) =
+        many1(preceded(multispace0, separated_pair(double, multispace1, double))).parse(input)?;
 
     // 依次将每对坐标转换成单独的 DrawingCommand::LineTo
     let cmds = points
@@ -52,10 +54,11 @@ fn parse_move_to_no_close(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
 
 fn parse_bezier_curve_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
     let (input, _) = preceded(multispace0, char('b')).parse(input)?;
+    let (input, _) = multispace1(input)?;
     let (input, (control_point1, control_point2, end_point)) = (
-        separated_pair(double, multispace1, double),
-        separated_pair(double, multispace1, double),
-        separated_pair(double, multispace1, double),
+        preceded(multispace0, separated_pair(double, multispace1, double)),
+        preceded(multispace0, separated_pair(double, multispace1, double)),
+        preceded(multispace0, separated_pair(double, multispace1, double)),
     )
         .parse(input)?;
     let cmd = vec![DrawingCommand::BezierCurveTo {
@@ -68,7 +71,9 @@ fn parse_bezier_curve_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
 
 fn parse_bspline_to(input: &str) -> IResult<&str, Vec<DrawingCommand>> {
     let (input, _) = preceded(multispace0, char('s')).parse(input)?;
-    let (input, points) = many1(separated_pair(double, multispace1, double)).parse(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, points) =
+        many1(preceded(multispace0, separated_pair(double, multispace1, double))).parse(input)?;
     if points.len() < 3 {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,

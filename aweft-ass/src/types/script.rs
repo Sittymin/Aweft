@@ -448,9 +448,18 @@ pub fn parse_script_info_line(input: &str) -> IResult<&str, ScriptInfoEntry> {
             separated_pair(
                 tag("WrapStyle"),
                 preceded(char::<&str, _>(':'), space0),
-                not_line_ending,
+                map_res(not_line_ending, |s: &str| {
+                    let trimmed = s.trim();
+                    match WrapStyle::from_str(trimmed) {
+                        Ok(ws) => Ok(ws),
+                        Err(_) => {
+                            warn!("未知的 WrapStyle: {}，回退到默认 Smart", trimmed);
+                            Err("invalid WrapStyle".to_string())
+                        }
+                    }
+                }),
             ),
-            |(_, v)| ScriptInfoEntry::WrapStyle(WrapStyle::from_str(v.trim()).unwrap()),
+            |(_, v)| ScriptInfoEntry::WrapStyle(v),
         ),
         map(
             separated_pair(
@@ -508,9 +517,18 @@ pub fn parse_script_info_line(input: &str) -> IResult<&str, ScriptInfoEntry> {
             separated_pair(
                 tag("ScriptType"),
                 preceded(char::<&str, _>(':'), space0),
-                not_line_ending,
+                map_res(not_line_ending, |s: &str| {
+                    let trimmed = s.trim();
+                    match ScriptType::from_str(trimmed) {
+                        Ok(st) => Ok(st),
+                        Err(_) => {
+                            warn!("未知的 ScriptType: {}，回退到默认 ASS", trimmed);
+                            Err("invalid ScriptType".to_string())
+                        }
+                    }
+                }),
             ),
-            |(_, v)| ScriptInfoEntry::ScriptType(ScriptType::from_str(v.trim()).unwrap()),
+            |(_, v)| ScriptInfoEntry::ScriptType(v),
         ),
         map(
             separated_pair(
