@@ -1,5 +1,6 @@
 use super::WrapStyle;
 use isolang::Language;
+use log::{debug, warn};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_until},
@@ -174,19 +175,60 @@ impl ScriptInfoBuilder {
         }
     }
 
-    pub fn build(self) -> Result<ScriptInfo, String> {
-        Ok(ScriptInfo {
-            script_type: self.script_type.ok_or("Missing field: ScriptType")?,
-            // 丢失时默认使用
-            scaled_border_and_shadow: self.scaled_border_and_shadow.unwrap_or(true),
-            ycbcr_matrix: self.ycbcr_matrix.ok_or("Missing field: YCbCr Matrix")?,
-            layout_res_x: self
-                .layout_res_x
-                .ok_or("Missing field: LayoutResX or PlayResX")?,
-            layout_res_y: self
-                .layout_res_y
-                .ok_or("Missing field: LayoutResY or PlayResY")?,
-            wrap_style: self.wrap_style.ok_or("Missing field: WrapStyle")?,
+    pub fn build(self) -> ScriptInfo {
+        let script_type = match self.script_type {
+            Some(st) => st,
+            None => {
+                warn!("未知的 ASS 版本, 使用默认值(ASS)");
+                ScriptType::ASS
+            }
+        };
+
+        let scaled_border_and_shadow = match self.scaled_border_and_shadow {
+            Some(sbas) => sbas,
+            None => {
+                debug!("未知的 ScaledBorderAndShadow 属性值，默认开启");
+                true
+            }
+        };
+
+        let ycbcr_matrix = match self.ycbcr_matrix {
+            Some(ym) => ym,
+            None => {
+                debug!("未知的 YCbCrMatrix 属性值，默认不使用转换");
+                YCbCrMatrix::None
+            }
+        };
+
+        let layout_res_x = match self.layout_res_x {
+            Some(lrx) => lrx,
+            None => {
+                warn!("未知的 LayoutResX 属性值，默认 1920");
+                1920
+            }
+        };
+        let layout_res_y = match self.layout_res_y {
+            Some(lry) => lry,
+            None => {
+                warn!("未知的 LayoutResy 属性值，默认 1080");
+                1080
+            }
+        };
+
+        let wrap_style = match self.wrap_style {
+            Some(ws) => ws,
+            None => {
+                debug!("未知的 WrapStyle 属性值，默认使用智能换行");
+                WrapStyle::Smart
+            }
+        };
+        ScriptInfo {
+            script_type,
+            scaled_border_and_shadow,
+            ycbcr_matrix,
+            layout_res_x,
+            layout_res_y,
+            wrap_style,
             timer: self.timer,
             kerning: self.kerning,
             language: self.language,
@@ -198,7 +240,7 @@ impl ScriptInfoBuilder {
             script_updated_by: self.script_updated_by,
             update_details: self.update_details,
             other_fields: self.other_fields,
-        })
+        }
     }
 }
 
