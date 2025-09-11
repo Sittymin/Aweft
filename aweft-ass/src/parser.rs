@@ -860,9 +860,8 @@ mod tests {
                 let format_line = StyleFormatSpec { fields: spec.fields.clone() }.to_format_line();
                 let mut lines = vec![format_line];
                 let mut expected: Vec<(String, StyleWithoutName)> = Vec::new();
-                let count: usize = (count_u8 % 9) as usize; // 0..=8
 
-                for i in 0..count {
+                for i in 0..count_u8 {
                     let name_i = format!("{}-{}", name.trim(), i);
                     let fontname_i = format!("{}-{}", fontname, i);
                     let fsz_i = fsz + i as f64 ;

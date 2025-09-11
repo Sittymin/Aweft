@@ -75,12 +75,19 @@ pub struct EventParser {
 }
 
 fn parse_event_line_prefix(line: &str) -> Option<(&str, bool)> {
-    if let Some(data) = line.strip_prefix("Dialogue:") {
-        return Some((data.trim(), true));
+    if let Some(data) = line
+        .strip_prefix("Dialogue:")
+        .map(|s| s.strip_prefix(" ").unwrap_or(""))
+    {
+        // NOTE: 后方 Text 应该保留手动添加的空白
+        return Some((data, true));
     }
 
-    if let Some(data) = line.strip_prefix("Comment:") {
-        return Some((data.trim(), false));
+    if let Some(data) = line
+        .strip_prefix("Comment:")
+        .map(|s| s.strip_prefix(" ").unwrap_or(""))
+    {
+        return Some((data, false));
     }
 
     // It's neither, so return None.
@@ -131,9 +138,17 @@ impl EventParser {
                 end: p.parse_ass_time(&EventField::End, AssTime::from_centiseconds(0))?,
                 style: p
                     .get_str(&EventField::Style)
+                    .map(|s| s.trim())
                     .unwrap_or("Default")
                     .to_string(),
-                name: p.get_str(&EventField::Name).map(str::to_string),
+                name: p.get_str(&EventField::Name).and_then(|s| {
+                    let val = s.trim();
+                    if !val.is_empty() {
+                        Some(val.to_string())
+                    } else {
+                        None
+                    }
+                }),
                 margin_l: p.parse_num(&EventField::MarginL, 0i32)?,
                 margin_r: p.parse_num(&EventField::MarginR, 0i32)?,
                 margin_v: p.parse_num(&EventField::MarginV, 0i32)?,
@@ -149,14 +164,22 @@ impl EventParser {
                 end: p.parse_ass_time(&EventField::End, AssTime::from_centiseconds(0))?,
                 style: p
                     .get_str(&EventField::Style)
+                    .map(|s| s.trim())
                     .unwrap_or("Default")
                     .to_string(),
-                name: p.get_str(&EventField::Name).map(str::to_string),
+                name: p.get_str(&EventField::Name).and_then(|s| {
+                    let val = s.trim();
+                    if !val.is_empty() {
+                        Some(val.to_string())
+                    } else {
+                        None
+                    }
+                }),
                 margin_l: p.parse_num(&EventField::MarginL, 0i32)?,
                 margin_r: p.parse_num(&EventField::MarginR, 0i32)?,
                 margin_v: p.parse_num(&EventField::MarginV, 0i32)?,
                 effect: p.parse_effect(&EventField::Effect, None)?,
-                text: p.get_str(&EventField::Style).unwrap_or("").to_string(),
+                text: p.get_str(&EventField::Text).unwrap_or("").to_string(),
             };
 
             Ok(Event::Comment(comment))
@@ -250,13 +273,16 @@ impl<'a> FieldParser<'a> {
     }
 }
 
-fn parse_dialogue_line(input: &str) -> IResult<&str, Vec<TextSegment>> {
+// HACK: 可能这个不需要pub，但是测试解析期望 Text 的时候需要它
+pub fn parse_dialogue_line(input: &str) -> IResult<&str, Vec<TextSegment>> {
     many0(alt((
-        // 选项1: 解析样式覆盖块
+        // 选项1: 解析样式覆盖块（仅当存在成对的花括号时）
         map(parse_multiple_overrides, |tags| {
             TextSegment::Overrides(tags)
         }),
-        // 选项2: 解析普通文本
+        // 选项2: 单个左花括号视为普通文本
+        map(tag("{"), |_| TextSegment::Text("{".to_string())),
+        // 选项3: 解析普通文本，直到下一个 '{'
         map(take_while1(|c| c != '{'), |s: &str| {
             TextSegment::Text(s.to_string())
         }),
