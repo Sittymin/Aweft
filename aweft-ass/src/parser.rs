@@ -564,6 +564,153 @@ mod tests {
             };
             (name_str.to_string(), style)
         }
+
+        pub const EVENTFIELDS: &[&str] = &[
+            // NOTE: 对于旧版 Marked 字段需要直接忽略
+            "Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV", "Effect",
+            "Text",
+        ];
+
+        #[derive(Clone, Debug)]
+        pub struct EventFormatSpec {
+            pub fields: Vec<&'static str>,
+        }
+
+        impl EventFormatSpec {
+            pub fn to_format_line(&self) -> String {
+                match self.fields.is_empty() {
+                    true => "Format:".to_string(),
+                    false => ["Format: ", &self.fields.join(", ")].concat(),
+                }
+            }
+        }
+
+        pub fn eventfields_format_spec_strategy() -> impl Strategy<Value = EventFormatSpec> {
+            prop::sample::subsequence(EVENTFIELDS, 0..=EVENTFIELDS.len())
+                .prop_shuffle()
+                .prop_flat_map(|mut fields: Vec<&'static str>| {
+                    // 确保至少有一个 "Text"
+                    if !fields.iter().any(|&f| f == "Text") {
+                        fields.push("Text");
+                    }
+                    // 将 "Text" 移动到末尾
+                    if let Some(pos) = fields.iter().position(|&f| f == "Text") {
+                        let text = fields.remove(pos);
+                        fields.push(text);
+                    }
+                    Just(fields).boxed()
+                })
+                .prop_map(|fields| EventFormatSpec { fields })
+        }
+        pub fn build_expected_event(
+            is_comment: bool,
+            fields: &[&'static str],
+            values: &[String],
+        ) -> Event {
+            use crate::types::event::{Dialogue, Effect, Event, TextSegment};
+            use crate::types::time::AssTime;
+
+            let mut layer = 0;
+            let mut start = AssTime::from_centiseconds(0);
+            let mut end = AssTime::from_centiseconds(0);
+            let mut style = ("Default").to_string();
+            let mut name = None;
+            let mut margin_l = 0;
+            let mut margin_r = 0;
+            let mut margin_v = 0;
+            let mut effect = None;
+            let mut content = vec![TextSegment::Text("".to_string())];
+            let mut text = String::new();
+
+            for (idx, field) in fields.iter().enumerate() {
+                let v = &values[idx];
+                match *field {
+                    "Layer" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            layer = val
+                        }
+                    }
+                    "Start" => {
+                        if let Ok(val) = v.parse::<AssTime>() {
+                            start = val
+                        }
+                    }
+                    "End" => {
+                        if let Ok(val) = v.parse::<AssTime>() {
+                            end = val
+                        }
+                    }
+                    "Style" => style = v.trim().to_string(),
+                    "Name" => {
+                        let val = v.trim();
+                        if !val.is_empty() {
+                            name = Some(val.to_string())
+                        }
+                    }
+                    "MarginL" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            margin_l = val
+                        }
+                    }
+                    "MarginR" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            margin_r = val
+                        }
+                    }
+                    "MarginV" => {
+                        if let Ok(val) = v.parse::<i32>() {
+                            margin_v = val
+                        }
+                    }
+                    "Effect" => {
+                        if let Ok(val) = v.parse::<Effect>() {
+                            effect = Some(val)
+                        }
+                    }
+                    "Text" => {
+                        if is_comment {
+                            text = v.to_string()
+                        } else {
+                            if let Ok((rest, val)) = parse_dialogue_line(v) {
+                                if !rest.is_empty() {
+                                    warn!("未完全解析 Text，剩余: {rest}")
+                                }
+                                content = val
+                            }
+                        }
+                    }
+                    other => panic!("unexpected field in build_expected_event: {}", other),
+                }
+            }
+
+            if is_comment {
+                Event::Comment(Comment {
+                    layer,
+                    start,
+                    end,
+                    style,
+                    name,
+                    margin_l,
+                    margin_r,
+                    margin_v,
+                    effect,
+                    text,
+                })
+            } else {
+                Event::Dialogue(Dialogue {
+                    layer,
+                    start,
+                    end,
+                    style,
+                    name,
+                    margin_l,
+                    margin_r,
+                    margin_v,
+                    effect,
+                    content,
+                })
+            }
+        }
     }
 
     mod script_info_prop {
@@ -966,6 +1113,120 @@ mod tests {
                         assert_eq!(got, &exp_style);
                     }
                     other => panic!("Expected Styles, got: {:?}", other),
+                }
+            }
+        }
+    }
+    mod events_prop {
+        use crate::{
+            parser::{
+                parse_events_section,
+                tests::support::{build_expected_event, eventfields_format_spec_strategy},
+                ParsedSection,
+            },
+            types::event::Event,
+        };
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn test_event_all_fields_valid_prop(
+                format in eventfields_format_spec_strategy(),
+                layer in any::<i32>(),
+                // INFO: libass 支持负数时间
+                start_time in any::<i32>(),
+                end_time in any::<i32>(),
+                style in "[^,\r\n]*",
+                name in "[^,\r\n]*",
+                ml in any::<i32>(),
+                mr in any::<i32>(),
+                mv in any::<i32>(),
+                effect_y1 in any::<i32>(),
+                effect_y2 in any::<i32>(),
+                effect_delay in any::<i32>(),
+                effect_direction in any::<i32>(),
+                effect_type in 0u8..3,
+                text in "[^\r\n]*",
+                // 随机数量
+                count_u32 in any::<u8>()
+            ) {
+
+                // HACK: 没有测试完全没有 Format 的可能性
+                let format_fields: Vec<&'static str> = format.fields.clone();
+                let format_line = format.to_format_line();
+                let mut lines = vec![format_line];
+                let mut expected: Vec<Event> = Vec::new();
+
+
+                for i in 0..count_u32 {
+                    let start_hour = start_time.saturating_sub(i as i32);
+                    let start_minu = start_time.saturating_add(i as i32 * 60);
+                    let start_sec = start_time.saturating_sub(i as i32);
+                    let start_csec = start_time.saturating_sub(i as i32);
+                    let end_hour = end_time.saturating_sub(i as i32);
+                    let end_minu = end_time.saturating_add(i as i32 * 60);
+                    let end_sec = end_time.saturating_add(i as i32);
+                    let end_csec = end_time.saturating_add(i as i32);
+
+                    let is_comment_i = i % 10 == 0;
+                    let layer_i = layer.wrapping_add(i as i32);
+                    let style_i = format!("{}-{}", style, i);
+                    let name_i = format!("{}-{}", name, i);
+                    let ml_i = ml.wrapping_add(i as i32);
+                    let mr_i = mr.wrapping_add(i as i32);
+                    let mv_i = mv.wrapping_add(i as i32);
+                    let effect_str = match effect_type {
+                        0 => {
+                            let delay_i = effect_delay.wrapping_add(i as i32);
+                            let direction_i = effect_direction.wrapping_add(i as i32);
+                            format!("Banner;{};{}", delay_i, direction_i)
+
+                        },
+                        1 => {
+                            let y1_i = effect_y1.wrapping_add(i as i32);
+                            let y2_i = effect_y2.wrapping_add(i as i32);
+                            let delay_i = effect_delay.wrapping_add(i as i32);
+                            format!("Scroll up;{};{};{}", y1_i, y2_i, delay_i)
+                        },
+                        2 => {
+
+                            let y1_i = effect_y1.wrapping_add(i as i32);
+                            let y2_i = effect_y2.wrapping_add(i as i32);
+                            let delay_i = effect_delay.wrapping_add(i as i32);
+                            format!("Scroll down;{};{};{}", y1_i, y2_i, delay_i)
+                        },
+                        _ => unreachable!("范围错误")
+                    };
+                    let text_1 = format!("{}-{}", text, i);
+
+                    let values = format_fields.iter().map(|&f| match f {
+                        "Layer" => layer_i.to_string(),
+                        "Start" => format!("{start_hour}:{start_minu:02}:{start_sec:02}.{start_csec:02}"),
+                        "End" => format!("{end_hour}:{end_minu:02}:{end_sec:02}.{end_csec:02}"),
+                        "Style" => style_i.to_string(),
+                        "Name" => name_i.to_string(),
+                        "MarginL" => ml_i.to_string(),
+                        "MarginR" => mr_i.to_string(),
+                        "MarginV" => mv_i.to_string(),
+                        "Effect" => effect_str.to_string(),
+                        "Text" => text_1.to_string(),
+                        other => panic!("unexpected field {}", other),
+                    }).collect::<Vec<_>>();
+
+                    if is_comment_i {
+                        lines.push(["Comment: ", &values.join(",")].concat());
+                    } else {
+                        lines.push(["Dialogue: ", &values.join(",")].concat());
+                    }
+                    expected.push(build_expected_event(is_comment_i, &format_fields, &values))
+                }
+                match parse_events_section(lines) {
+                    ParsedSection::Events(events) => {
+                        assert_eq!(events.len(), expected.len());
+                        assert_eq!(events, expected);
+                    },
+
+                    other => panic!("Expected Events, got: {:?}", other),
                 }
             }
         }
