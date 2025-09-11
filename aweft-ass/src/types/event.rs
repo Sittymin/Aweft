@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
-    character::complete::{char, digit1},
-    combinator::{all_consuming, map, map_res, opt},
+    character::complete::{self, char},
+    combinator::{all_consuming, map, opt},
     multi::many0,
     sequence::preceded,
     IResult, Parser,
@@ -264,48 +264,42 @@ fn parse_dialogue_line(input: &str) -> IResult<&str, Vec<TextSegment>> {
     .parse(input)
 }
 
-// ===================================================================
-
 // 解析 "Scroll up;y1;y2;delay"
 fn parse_scroll_up(input: &str) -> IResult<&str, Effect> {
-    // 描述格式： "Scroll up" 后面跟着 ";y1", ";y2", ";delay"
     let (input, (_, y1, y2, delay)) = (
         tag("Scroll up"),
-        preceded(char(';'), map_res(digit1, str::parse::<u16>)),
-        preceded(char(';'), map_res(digit1, str::parse::<u16>)),
-        preceded(char(';'), map_res(digit1, str::parse::<u16>)),
+        preceded(char(';'), complete::i32),
+        preceded(char(';'), complete::i32),
+        preceded(char(';'), complete::i32),
     )
-        .parse(input)?; // 直接用元组作为解析器！
+        .parse(input)?;
 
     Ok((input, Effect::ScrollUp { y1, y2, delay }))
 }
 
 // 解析 "Scroll down;y1;y2;delay"
 fn parse_scroll_down(input: &str) -> IResult<&str, Effect> {
-    let (rest, (_, y1, y2, delay)) = (
-        // 使用元组顺序解析
-        (
-            tag("Scroll down"),
-            preceded(char(';'), map_res(digit1, str::parse::<u16>)),
-            preceded(char(';'), map_res(digit1, str::parse::<u16>)),
-            preceded(char(';'), map_res(digit1, str::parse::<u16>)),
-        )
+    let (input, (_, y1, y2, delay)) = (
+        tag("Scroll down"),
+        preceded(char(';'), complete::i32),
+        preceded(char(';'), complete::i32),
+        preceded(char(';'), complete::i32),
     )
         .parse(input)?;
-    Ok((rest, Effect::ScrollDown { y1, y2, delay }))
+    Ok((input, Effect::ScrollDown { y1, y2, delay }))
 }
 
 // 解析 "Banner;delay;direction?"
 fn parse_banner(input: &str) -> IResult<&str, Effect> {
-    let (rest, (_, delay, direction_opt)) = (
+    let (input, (_, delay, direction_opt)) = (
         tag("Banner"),
-        preceded(char(';'), map_res(digit1, str::parse::<u8>)),
-        // opt 表示这部分是可选的：一个分号和 u8
-        opt(preceded(char(';'), map_res(digit1, str::parse::<u8>))),
+        preceded(char(';'), complete::i32),
+        opt(preceded(char(';'), complete::i32)),
     )
         .parse(input)?;
+
     Ok((
-        rest,
+        input,
         Effect::Banner {
             delay,
             left_to_right: direction_opt.map(|d| d != 0),
@@ -316,18 +310,22 @@ fn parse_banner(input: &str) -> IResult<&str, Effect> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     ScrollUp {
+        // WARN: 存储时自行处理大小顺序
         // y1 < y2
-        y1: u16,
-        y2: u16,
-        delay: u16,
+        y1: i32,
+        y2: i32,
+        // WARN: 最小钳制到1，存储时注意处理
+        delay: i32,
     },
     ScrollDown {
-        y1: u16,
-        y2: u16,
-        delay: u16,
+        y1: i32,
+        y2: i32,
+        // WARN: 最小钳制到1，存储时注意处理
+        delay: i32,
     },
     Banner {
-        delay: u8, // [0,100]
+        // WARN: 最小钳制到1，存储时注意处理
+        delay: i32,
         left_to_right: Option<bool>,
     },
     // WARN: 还有 Karaoke Effect 在覆盖样式当中
@@ -442,16 +440,16 @@ impl Display for Event {
                 for text_segment in &d.content {
                     match text_segment {
                         TextSegment::Text(s) => {
-                            write!(f, "{}", s);
+                            write!(f, "{}", s)?;
                         }
                         TextSegment::Overrides(style_tags) => {
                             for st in style_tags {
-                                write!(f, "{}", st);
+                                write!(f, "{}", st)?;
                             }
                         }
                         TextSegment::Drawing(drawing_commands) => {
                             for dc in drawing_commands {
-                                write!(f, "{}", dc);
+                                write!(f, "{}", dc)?;
                             }
                         }
                     }

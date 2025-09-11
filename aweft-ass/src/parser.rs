@@ -304,8 +304,10 @@ impl ASSFile {
 #[cfg(test)]
 mod tests {
     mod support {
+        use log::warn;
         use proptest::prelude::*;
 
+        use crate::types::event::{parse_dialogue_line, Comment, Event};
         use crate::types::style::{BorderStyle, StyleWithoutName};
         use crate::types::BoldType;
         use aweft_libass::types::{Alignment, AssColorRgba};
