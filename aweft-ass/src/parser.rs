@@ -791,7 +791,7 @@ mod tests {
                         assert_eq!(si.script_type, expected_script_type);
                         assert_eq!(si.layout_res_x, layout_res_x);
                         assert_eq!(si.layout_res_y, layout_res_y);
-                        assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
+                        assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndOfWord, 2 => WrapStyle::NoWrap, 3 => WrapStyle::Smart, _ => WrapStyle::Smart });
                         // YCbCr 映射
                         let expected_ycbcr = match ycbcr.as_str() {
                             "None" => YCbCrMatrix::None,
@@ -894,7 +894,7 @@ mod tests {
                         assert_eq!(si.script_type, ScriptType::ASS);
                         assert_eq!(si.layout_res_x, layout_res_x);
                         assert_eq!(si.layout_res_y, layout_res_y);
-                        assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndWord, _ => WrapStyle::NoWrap });
+                        assert_eq!(si.wrap_style, match wrap_style { 0 => WrapStyle::Smart, 1 => WrapStyle::EndOfWord, 2 => WrapStyle::NoWrap, 3 => WrapStyle::Smart, _ => WrapStyle::Smart });
                         // 非法 YCbCr 应被映射为 Unknown
                         assert!(matches!(si.ycbcr_matrix, YCbCrMatrix::Unknown));
                         // 非法布尔应容错为 false

@@ -1,7 +1,6 @@
 mod parser;
 mod processor;
 pub mod types;
-mod utils;
 
 use anyhow::Result;
 use std::path::Path;

@@ -14,7 +14,6 @@ pub enum KaraokeKind {
 }
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BlurEdgesTypes {
-    BlurEdges,
     NonBlurEdges,
     Weight(u32),
 }
@@ -84,6 +83,7 @@ pub enum StyleTag {
     Blur(f64),
     FontName(String),
     FontSize(f64),
+    FontSizeReset,
     // \t 的情况使用 \fsc \fscx \fscy 改变字形 而不是 \fs
     FontScaleX(f64),
     FontScaleY(f64),
@@ -164,7 +164,7 @@ pub enum StyleTag {
     },
     ClipDrawing {
         // 相当于 /p<scale> 所以直接开启绘图模式
-        scale: u32,
+        scale: i32,
         // 绘画矢量
         drawing: Vec<DrawingCommand>,
         is_display: bool,
@@ -200,6 +200,7 @@ impl Display for StyleTag {
             StyleTag::FontScaleReset => write!(f, "\\fsc"),
             StyleTag::FontSpacing(val) => write!(f, "\\fsp{}", val),
             StyleTag::FontSize(val) => write!(f, "\\fs{}", val),
+            StyleTag::FontSizeReset => Ok(()),
             StyleTag::Bord(val) => write!(f, "\\bord{}", val),
             StyleTag::XBord(val) => write!(f, "\\xbord{}", val),
             StyleTag::YBord(val) => write!(f, "\\ybord{}", val),
@@ -343,7 +344,6 @@ impl Display for StyleTag {
             StyleTag::Reset(Some(style_name)) => write!(f, "\\r{}", style_name),
             StyleTag::BlurEdges(be) => match be {
                 BlurEdgesTypes::NonBlurEdges => write!(f, "\\be0"),
-                BlurEdgesTypes::BlurEdges => write!(f, "\\be1"),
                 BlurEdgesTypes::Weight(val) => write!(f, "\\be{}", val),
             },
             StyleTag::Bold(b) => match b {
@@ -410,7 +410,7 @@ pub enum AnimatedStyleTag {
     },
     ClipDrawing {
         // 相当于 /p<scale> 所以直接开启绘图模式
-        scale: u32,
+        scale: i32,
         // 绘画矢量
         drawing: Vec<DrawingCommand>,
         is_display: bool,
@@ -485,7 +485,6 @@ impl Display for AnimatedStyleTag {
             }
             AnimatedStyleTag::BlurEdges(be) => match be {
                 BlurEdgesTypes::NonBlurEdges => write!(f, "\\be0"),
-                BlurEdgesTypes::BlurEdges => write!(f, "\\be1"),
                 BlurEdgesTypes::Weight(val) => write!(f, "\\be{}", val),
             },
             AnimatedStyleTag::Blur(val) => write!(f, "\\blur{}", val),

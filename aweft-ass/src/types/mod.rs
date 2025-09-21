@@ -34,17 +34,18 @@ pub struct PointI32 {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WrapStyle {
-    /// 默认值 (当头部信息不存在时)
-    /// 溢出的行会在 ASCII 空格(U+0020)或\n处自动断行
-    /// 尝试保持每行长度大致相等
+    /// 默认值 (libass默认为0)
+    /// 智能换行：溢出的行会在 ASCII 空格或\n处自动断行
+    /// 会重新平衡行长度，尽可能使各行长度相等
+    /// 注：libass中值3与值0行为完全相同
     Smart = 0,
 
-    /// 溢出的行会在 ASCII 空格或\n处在造成溢出的单词之前精确断行
-    /// 不会尝试使行长度均匀
-    EndWord = 1,
+    /// 在单词边界换行，但不重新平衡行长度
+    /// 溢出的行会在 ASCII 空格或\n处断行，但不会调整行长度使其均匀
+    EndOfWord = 1,
 
-    /// 永不自动断行
-    /// 但\N和\n都被视为强制换行
+    /// 不自动换行
+    /// 只有\N和\n会强制换行，文本可能会超出屏幕边界
     NoWrap = 2,
 }
 impl FromStr for WrapStyle {
@@ -53,8 +54,9 @@ impl FromStr for WrapStyle {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "0" => Ok(WrapStyle::Smart),
-            "1" => Ok(WrapStyle::EndWord),
+            "1" => Ok(WrapStyle::EndOfWord),
             "2" => Ok(WrapStyle::NoWrap),
+            "3" => Ok(WrapStyle::Smart), // libass中值3与值0行为相同
             _ => Err(format!("Invalid value for WrapStyle: {}", s)),
         }
     }
@@ -65,8 +67,9 @@ impl TryFrom<u32> for WrapStyle {
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(WrapStyle::Smart),
-            1 => Ok(WrapStyle::EndWord),
+            1 => Ok(WrapStyle::EndOfWord),
             2 => Ok(WrapStyle::NoWrap),
+            3 => Ok(WrapStyle::Smart), // libass中值3与值0行为相同
             _ => Err(format!("Invalid value for WrapStyle: {}", value)),
         }
     }
@@ -76,7 +79,7 @@ impl Display for WrapStyle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             WrapStyle::Smart => "0",
-            WrapStyle::EndWord => "1",
+            WrapStyle::EndOfWord => "1",
             WrapStyle::NoWrap => "2",
         };
         write!(f, "{}", s)

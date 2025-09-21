@@ -20,44 +20,37 @@ use std::str::FromStr;
 
 // TODO: REFECTOR: 小于中等复杂度的解析使用函数式组合子(即逻辑上的一行)，否则使用 let 分段处理
 fn parse_xshad(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\xshad")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::XShadow(val)))
+    preceded(tag(r"\xshad"), map(double, StyleTag::XShadow)).parse(input)
 }
 fn parse_yshad(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\yshad")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::YShadow(val)))
+    preceded(tag(r"\yshad"), map(double, StyleTag::YShadow)).parse(input)
+}
+
+fn parse_shad(input: &str) -> IResult<&str, StyleTag> {
+    let (input, depth) = preceded(tag(r"\shad"), double).parse(input)?;
+    // https://github.com/libass/libass/blob/534a5f8299c5ab3c2782856fcb843bfea47b7afc/libass/ass_parse.c#L875-L877
+    Ok((input, StyleTag::Shadow(depth.max(0.0))))
 }
 
 fn parse_fax(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\fax")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::FactorX(val)))
+    preceded(tag(r"\fax"), map(double, StyleTag::FactorX)).parse(input)
 }
 fn parse_fay(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\fay")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::FactorY(val)))
+    preceded(tag(r"\fay"), map(double, StyleTag::FactorY)).parse(input)
 }
 
 fn parse_blur(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\blur")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::Blur(val)))
+    let (input, val) = preceded(tag(r"\blur"), double).parse(input)?;
+    Ok((input, StyleTag::Blur(val.max(0.0).min(100.0))))
 }
 
 fn parse_fscx<'a>(input: &'a str) -> IResult<&'a str, StyleTag> {
-    let (input, _) = tag(r"\fscx")(input)?;
-    let (input, x) = double(input)?;
-
-    Ok((input, StyleTag::FontScaleX(x)))
+    let (input, x) = preceded(tag(r"\fscx"), double).parse(input)?;
+    Ok((input, StyleTag::FontScaleX(x.max(0.0))))
 }
 fn parse_fscy<'a>(input: &'a str) -> IResult<&'a str, StyleTag> {
-    let (input, _) = tag(r"\fscy")(input)?;
-    let (input, y) = double(input)?;
-
-    Ok((input, StyleTag::FontScaleY(y)))
+    let (input, y) = preceded(tag(r"\fscy"), double).parse(input)?;
+    Ok((input, StyleTag::FontScaleY(y.max(0.0))))
 }
 
 // \fsc 应该将字体缩放重置为样式的缩放
@@ -68,50 +61,60 @@ fn parse_fsc(input: &str) -> IResult<&str, StyleTag> {
 }
 
 fn parse_fsp(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\fsp")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::FontSpacing(val)))
+    preceded(tag(r"\fsp"), map(double, StyleTag::FontSpacing)).parse(input)
 }
+
 fn parse_fs(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\fs")(input)?;
-    let (input, val) = double(input)?;
-    // WARN: 如果为负数应该重置为样式的字体大小
+    let (input, val) = preceded(tag(r"\fs"), double).parse(input)?;
     // https://github.com/libass/libass/blob/7d8e335b094f00c57fb557b01e93b60a17e63434/libass/ass_parse.c#L474-L475
+    if val <= 0.0 {
+        return Ok((input, StyleTag::FontSizeReset));
+    }
     Ok((input, StyleTag::FontSize(val)))
 }
 
 fn parse_bord(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\bord")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::Bord(val)))
+    let (input, val) = preceded(tag(r"\bord"), double).parse(input)?;
+    Ok((input, StyleTag::Bord(val.max(0.0))))
 }
 fn parse_xbord(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\xbord")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::XBord(val)))
+    let (input, val) = preceded(tag(r"\xbord"), double).parse(input)?;
+    Ok((input, StyleTag::XBord(val.max(0.0))))
 }
 fn parse_ybord(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\ybord")(input)?;
-    let (input, val) = double(input)?;
-    Ok((input, StyleTag::YBord(val)))
+    let (input, val) = preceded(tag(r"\ybord"), double).parse(input)?;
+    Ok((input, StyleTag::YBord(val.max(0.0))))
 }
 
-/// 演示解析“\move(...)”标签，如“\move(10,20,30,40,500,1000)”。
+// 忽略前后空格的逗号解析器
+fn comma<'a, E: ParseError<&'a str>>(input: &'a str) -> IResult<&'a str, char, E> {
+    delimited(multispace0, char(','), multispace0).parse(input)
+}
+
 fn parse_move(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = tag(r"\move")(input)?;
-    let (input, (x1, y1, x2, y2, t1, t2)) = delimited(
-        char('('),
-        (
-            terminated(double, char(',')),
-            terminated(double, char(',')),
-            terminated(double, char(',')),
-            terminated(double, opt(char(','))),
-            opt(complete::i64),
-            opt(preceded(char(','), complete::i64)),
-        ),
-        char(')'),
-    )
-    .parse(input)?;
+
+    // 坐标部分：严格为 4 个 double，中间以逗号分隔
+    let coords = (
+        terminated(double, comma),
+        terminated(double, comma),
+        terminated(double, comma),
+        double,
+    );
+
+    // 时间部分：严格为“,+i64,+i64”，要么两个都给，要么都不给
+    let times = (
+        preceded(comma, complete::i64),
+        preceded(comma, complete::i64),
+    );
+
+    let (input, ((x1, y1, x2, y2), opt_times)) =
+        delimited(char('('), (coords, opt(times)), char(')')).parse(input)?;
+
+    let (t1, t2) = match opt_times {
+        Some((t1, t2)) => (Some(t1), Some(t2)),
+        None => (None, None),
+    };
 
     Ok((
         input,
@@ -141,7 +144,7 @@ fn parse_frz(input: &str) -> IResult<&str, StyleTag> {
 fn parse_fn(input: &str) -> IResult<&str, StyleTag> {
     preceded(
         tag(r"\fn"),
-        map(is_not(r"\}"), |font_name: &str| {
+        map(take_while(|s| s != '\\'), |font_name: &str| {
             StyleTag::FontName(font_name.to_string())
         }),
     )
@@ -149,85 +152,94 @@ fn parse_fn(input: &str) -> IResult<&str, StyleTag> {
 }
 
 fn parse_all_alpha(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\alpha"),
-        map(
-            map_res(
-                context(
-                    "alpha hex code must be 2 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 2),
-                ),
-                |s: &str| u8::from_str_radix(s, 16).map(|val| 255u8.saturating_sub(val)),
-            ),
-            // 如果一切顺利，将 u8 包装成 StyleTag
-            StyleTag::AllAlpha,
-        ),
+    let (input, _) = tag(r"\alpha").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "alpha hex code must be 2 digits",
+        verify(hex_digit1, |s: &str| s.len() == 2),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let alpha_val = u8::from_str_radix(hex_str, 16)
+        .map(|val| 255u8.saturating_sub(val))
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::AllAlpha(alpha_val)))
 }
 fn parse_1a(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\1a"),
-        map(
-            map_res(
-                context(
-                    "1a hex code must be 2 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 2),
-                ),
-                |s: &str| u8::from_str_radix(s, 16).map(|val| 255u8.saturating_sub(val)),
-            ),
-            StyleTag::PrimaryAlpha,
-        ),
+    let (input, _) = tag(r"\1a").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "1a hex code must be 2 digits",
+        verify(hex_digit1, |s: &str| s.len() == 2),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let alpha_val = u8::from_str_radix(hex_str, 16)
+        .map(|val| 255u8.saturating_sub(val))
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::PrimaryAlpha(alpha_val)))
 }
 fn parse_2a(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\2a"),
-        map(
-            map_res(
-                context(
-                    "2a hex code must be 2 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 2),
-                ),
-                |s: &str| u8::from_str_radix(s, 16).map(|val| 255u8.saturating_sub(val)),
-            ),
-            StyleTag::SecondaryAlpha,
-        ),
+    let (input, _) = tag(r"\2a").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "2a hex code must be 2 digits",
+        verify(hex_digit1, |s: &str| s.len() == 2),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let alpha_val = u8::from_str_radix(hex_str, 16)
+        .map(|val| 255u8.saturating_sub(val))
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::SecondaryAlpha(alpha_val)))
 }
 fn parse_3a(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\3a"),
-        map(
-            map_res(
-                context(
-                    "3a hex code must be 2 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 2),
-                ),
-                |s: &str| u8::from_str_radix(s, 16).map(|val| 255u8.saturating_sub(val)),
-            ),
-            StyleTag::OutlineAlpha,
-        ),
+    let (input, _) = tag(r"\3a").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "3a hex code must be 2 digits",
+        verify(hex_digit1, |s: &str| s.len() == 2),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let alpha_val = u8::from_str_radix(hex_str, 16)
+        .map(|val| 255u8.saturating_sub(val))
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::OutlineAlpha(alpha_val)))
 }
 fn parse_4a(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\4a"),
-        map(
-            map_res(
-                context(
-                    "4a hex code must be 2 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 2),
-                ),
-                |s: &str| u8::from_str_radix(s, 16).map(|val| 255u8.saturating_sub(val)),
-            ),
-            StyleTag::BackAlpha,
-        ),
+    let (input, _) = tag(r"\4a").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "4a hex code must be 2 digits",
+        verify(hex_digit1, |s: &str| s.len() == 2),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let alpha_val = u8::from_str_radix(hex_str, 16)
+        .map(|val| 255u8.saturating_sub(val))
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::BackAlpha(alpha_val)))
 }
 
 fn parse_an(input: &str) -> IResult<&str, StyleTag> {
@@ -239,6 +251,7 @@ fn parse_an(input: &str) -> IResult<&str, StyleTag> {
         StyleTag::Alignment(Alignment::from_str(val).unwrap_or(Alignment::BottomCenter)),
     ))
 }
+
 fn parse_a(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = tag(r"\a")(input)?;
     let (input, _) = alt((
@@ -248,6 +261,7 @@ fn parse_a(input: &str) -> IResult<&str, StyleTag> {
         recognize(one_of("123456789")),
     ))
     .parse(input)?;
+    warn!("忽略 a 覆盖标签");
     Ok((
         input,
         // NOTE: if use \a with \an will override \an
@@ -257,12 +271,8 @@ fn parse_a(input: &str) -> IResult<&str, StyleTag> {
 
 fn parse_pos(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = tag(r"\pos")(input)?;
-    let (input, (x, y)) = delimited(
-        char('('),
-        separated_pair(double, char(','), double),
-        char(')'),
-    )
-    .parse(input)?;
+    let (input, (x, y)) =
+        delimited(char('('), separated_pair(double, comma, double), char(')')).parse(input)?;
     Ok((input, StyleTag::Position(PointF64 { x, y })))
 }
 
@@ -271,7 +281,7 @@ fn parse_fade(input: &str) -> IResult<&str, StyleTag> {
     if tag == r"\fad" {
         let (input, (time1, time2)) = delimited(
             char('('),
-            separated_pair(complete::i64, char(','), complete::i64),
+            separated_pair(complete::i64, comma, complete::i64),
             char(')'),
         )
         .parse(input)?;
@@ -287,12 +297,12 @@ fn parse_fade(input: &str) -> IResult<&str, StyleTag> {
             char('('),
             (
                 complete::u8,
-                preceded(char(','), complete::u8),
-                preceded(char(','), complete::u8),
-                preceded(char(','), complete::i64),
-                preceded(char(','), complete::i64),
-                preceded(char(','), complete::i64),
-                preceded(char(','), complete::i64),
+                preceded(comma, complete::u8),
+                preceded(comma, complete::u8),
+                preceded(comma, complete::i64),
+                preceded(comma, complete::i64),
+                preceded(comma, complete::i64),
+                preceded(comma, complete::i64),
             ),
             char(')'),
         )
@@ -319,12 +329,8 @@ fn parse_fade(input: &str) -> IResult<&str, StyleTag> {
 
 fn parse_org(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = tag(r"\org")(input)?;
-    let (input, (x, y)) = delimited(
-        char('('),
-        separated_pair(double, char(','), double),
-        char(')'),
-    )
-    .parse(input)?;
+    let (input, (x, y)) =
+        delimited(char('('), separated_pair(double, comma, double), char(')')).parse(input)?;
     Ok((input, StyleTag::Origin(PointF64 { x, y })))
 }
 
@@ -336,9 +342,9 @@ fn parse_t(input: &str) -> IResult<&str, StyleTag> {
         map(
             (
                 double,
-                preceded(char(','), double),
-                preceded(char(','), double),
-                preceded(char(','), many1(parse_animated_style_tag)),
+                preceded(comma, double),
+                preceded(comma, double),
+                preceded(comma, many1(parse_animated_style_tag)),
             ),
             |(t1, t2, acc, tags)| StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds((t1 * 1_000_000.0) as i64)),
@@ -351,8 +357,8 @@ fn parse_t(input: &str) -> IResult<&str, StyleTag> {
         map(
             (
                 double,
-                preceded(char(','), double),
-                preceded(char(','), many1(parse_animated_style_tag)),
+                preceded(comma, double),
+                preceded(comma, many1(parse_animated_style_tag)),
             ),
             |(t1, t2, tags)| StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds((t1 * 1_000_000.0) as i64)),
@@ -363,7 +369,7 @@ fn parse_t(input: &str) -> IResult<&str, StyleTag> {
         ),
         // 格式2: (accel, tags)
         map(
-            (double, preceded(char(','), many1(parse_animated_style_tag))),
+            (double, preceded(comma, many1(parse_animated_style_tag))),
             |(acc, tags)| StyleTag::Transform {
                 start_time: None,
                 end_time: None,
@@ -387,150 +393,156 @@ fn parse_t(input: &str) -> IResult<&str, StyleTag> {
 fn parse_clip(input: &str) -> IResult<&str, StyleTag> {
     let (input, tag) = alt((tag(r"\clip"), tag(r"\iclip"))).parse(input)?;
     let is_display = tag == r"\clip";
-    let (input, params) = delimited(
+
+    let (input, style_tag) = delimited(
         char('('),
-        separated_list1(char(','), not_line_ending),
+        alt((
+            // --- 分支 1: 解析矩形格式 "x1,y1,x2,y2" ---
+            map(
+                (
+                    complete::i32,
+                    preceded(comma, complete::i32),
+                    preceded(comma, complete::i32),
+                    preceded(comma, complete::i32),
+                ),
+                |(x1, y1, x2, y2)| StyleTag::ClipRectangle {
+                    p1: PointI32 { x: x1, y: y1 },
+                    p2: PointI32 { x: x2, y: y2 },
+                    is_display,
+                },
+            ),
+            // --- 分支 2: 解析绘图格式 "scale,drawing" 或 "drawing" ---
+            map_res(
+                alt((
+                    separated_pair(complete::i32, &comma, is_not(")")),
+                    map(is_not(")"), |s| (1, s)), // 如果只有一个参数，scale默认为1
+                )),
+                |(scale, drawing_str)| {
+                    match parse_drawing_commands(drawing_str) {
+                        // 必须完全消耗 drawing_str 才算成功
+                        Ok(("", drawing)) => Ok(StyleTag::ClipDrawing {
+                            scale,
+                            drawing,
+                            is_display,
+                        }),
+                        // 如果解析失败或有剩余，则整个分支匹配失败
+                        _ => Err(nom::error::Error::new(
+                            drawing_str,
+                            nom::error::ErrorKind::Verify,
+                        )),
+                    }
+                },
+            ),
+        )),
         char(')'),
     )
     .parse(input)?;
-    if params.len() == 4 {
-        Ok((
-            input,
-            StyleTag::ClipRectangle {
-                p1: PointI32 {
-                    x: params[0].parse::<i32>().unwrap_or(0),
-                    y: params[1].parse::<i32>().unwrap_or(0),
-                },
-                p2: PointI32 {
-                    x: params[2].parse::<i32>().unwrap_or(0),
-                    y: params[3].parse::<i32>().unwrap_or(0),
-                },
-                is_display,
-            },
-        ))
-    } else {
-        let mut scale = 1;
-        let rest;
-        let drawing;
-        if params.len() == 2 {
-            scale = params[0].parse::<u32>().unwrap_or(1);
-            (rest, drawing) = parse_drawing_commands(params[1])?;
-            debug_assert!(
-                rest.is_empty(),
-                "Parsing error: Drawing commands weren't fully parsed. Remaining input: '{}'",
-                rest
-            );
-            Ok((
-                input,
-                StyleTag::ClipDrawing {
-                    scale,
-                    drawing,
-                    is_display,
-                },
-            ))
-        } else {
-            (rest, drawing) = parse_drawing_commands(params[0])?;
-            debug_assert!(
-                rest.is_empty(),
-                "Parsing error: Drawing commands weren't fully parsed. Remaining input: '{}'",
-                rest
-            );
-            Ok((
-                input,
-                StyleTag::ClipDrawing {
-                    scale,
-                    drawing,
-                    is_display,
-                },
-            ))
-        }
-    }
+
+    Ok((input, style_tag))
 }
 
 fn parse_c(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        alt((tag(r"\c"), tag(r"\1c"))),
-        map(
-            map_res(
-                context(
-                    "c hex code must be 6 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 6),
-                ),
-                |s: &str| u32::from_str_radix(s, 16).map(AssColorRgb::from_ass_override_u32),
-            ),
-            StyleTag::PrimaryColor,
-        ),
+    let (input, _) = alt((tag(r"\c"), tag(r"\1c"))).parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "c hex code must be 6 digits",
+        verify(hex_digit1, |s: &str| s.len() == 6),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let color = u32::from_str_radix(hex_str, 16)
+        .map(AssColorRgb::from_ass_override_u32)
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::PrimaryColor(color)))
 }
 fn parse_2c(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\2c"),
-        map(
-            map_res(
-                context(
-                    "2c hex code must be 6 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 6),
-                ),
-                |s: &str| u32::from_str_radix(s, 16).map(AssColorRgb::from_ass_override_u32),
-            ),
-            StyleTag::SecondaryColor,
-        ),
+    let (input, _) = tag(r"\2c").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "2c hex code must be 6 digits",
+        verify(hex_digit1, |s: &str| s.len() == 6),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let color = u32::from_str_radix(hex_str, 16)
+        .map(AssColorRgb::from_ass_override_u32)
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::SecondaryColor(color)))
 }
 
 fn parse_3c(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\3c"),
-        map(
-            map_res(
-                context(
-                    "3c hex code must be 6 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 6),
-                ),
-                |s: &str| u32::from_str_radix(s, 16).map(AssColorRgb::from_ass_override_u32),
-            ),
-            StyleTag::OutlineColor,
-        ),
+    let (input, _) = tag(r"\3c").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "3c hex code must be 6 digits",
+        verify(hex_digit1, |s: &str| s.len() == 6),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let color = u32::from_str_radix(hex_str, 16)
+        .map(AssColorRgb::from_ass_override_u32)
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::OutlineColor(color)))
 }
 
 fn parse_4c(input: &str) -> IResult<&str, StyleTag> {
-    preceded(
-        tag(r"\4c"),
-        map(
-            map_res(
-                context(
-                    "4c hex code must be 6 digits",
-                    verify(hex_digit1, |s: &str| s.len() == 6),
-                ),
-                |s: &str| u32::from_str_radix(s, 16).map(AssColorRgb::from_ass_override_u32),
-            ),
-            StyleTag::BackColor,
-        ),
+    let (input, _) = tag(r"\4c").parse(input)?;
+    // Skip optional &H or & prefix
+    let (input, _) = opt(alt((tag("&H"), tag("&")))).parse(input)?;
+    let (input, hex_str) = context(
+        "4c hex code must be 6 digits",
+        verify(hex_digit1, |s: &str| s.len() == 6),
     )
-    .parse(input)
+    .parse(input)?;
+
+    let color = u32::from_str_radix(hex_str, 16)
+        .map(AssColorRgb::from_ass_override_u32)
+        .map_err(|_| {
+            nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::MapRes))
+        })?;
+
+    Ok((input, StyleTag::BackColor(color)))
 }
 
 fn parse_r(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\r")(input)?;
-    if input.starts_with(r"\") {
+    let (input, _) = tag(r"\r").parse(input)?;
+    if input.is_empty() || input.starts_with(r"\") {
+        return Ok((input, StyleTag::Reset(None)));
+    }
+    let (input, style_name) = take_while1(|c: char| c != '\\').parse(input)?;
+    let trimmed_name = style_name.trim();
+
+    if trimmed_name.is_empty() {
         Ok((input, StyleTag::Reset(None)))
     } else {
-        let (input, style_name) = take_while1(|c: char| c != '\\' && c != '}')(input)?;
-        Ok((input, StyleTag::Reset(Some(style_name.to_string()))))
+        Ok((input, StyleTag::Reset(Some(trimmed_name.to_string()))))
     }
 }
 
 fn parse_be(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = tag(r"\be")(input)?;
-    let (input, val) = complete::u32(input)?;
-    match val {
+    let (input, val) = double(input)?;
+    // https://github.com/libass/libass/blob/534a5f8299c5ab3c2782856fcb843bfea47b7afc/libass/ass_parse.c#L817-L821
+    let adjusted_val = val + 0.5;
+    let clamped_val = adjusted_val.max(0.0).min(127.0) as u32;
+    match clamped_val {
         0 => Ok((input, StyleTag::BlurEdges(BlurEdgesTypes::NonBlurEdges))),
-        1 => Ok((input, StyleTag::BlurEdges(BlurEdgesTypes::BlurEdges))),
-        _ => Ok((input, StyleTag::BlurEdges(BlurEdgesTypes::Weight(val)))),
+        _ => Ok((
+            input,
+            StyleTag::BlurEdges(BlurEdgesTypes::Weight(clamped_val)),
+        )),
     }
 }
 
@@ -540,7 +552,12 @@ fn parse_b(input: &str) -> IResult<&str, StyleTag> {
     match val {
         0 => Ok((input, StyleTag::Bold(BoldType::NonBold))),
         1 => Ok((input, StyleTag::Bold(BoldType::Bold))),
-        _ => Ok((input, StyleTag::Bold(BoldType::Weight(val)))),
+        // https://github.com/libass/libass/blob/534a5f8299c5ab3c2782856fcb843bfea47b7afc/libass/ass_parse.c#L827
+        v if v >= 100 => Ok((input, StyleTag::Bold(BoldType::Weight(v)))),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
     }
 }
 
@@ -562,7 +579,7 @@ fn parse_i(input: &str) -> IResult<&str, StyleTag> {
 
 fn parse_kf(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = alt((tag(r"\kf"), tag(r"\K"))).parse(input)?;
-    let (input, centiseconds) = double(input)?;
+    let (input, centiseconds) = double.parse(input)?;
     let milliseconds = (centiseconds * 10.0) as i64;
     Ok((
         input,
@@ -595,12 +612,6 @@ fn parse_k(input: &str) -> IResult<&str, StyleTag> {
             kind: KaraokeKind::Karaoke,
         },
     ))
-}
-
-fn parse_shad(input: &str) -> IResult<&str, StyleTag> {
-    let (input, _) = tag(r"\shad")(input)?;
-    let (input, depth) = double(input)?;
-    Ok((input, StyleTag::Shadow(depth)))
 }
 
 fn parse_s(input: &str) -> IResult<&str, StyleTag> {
@@ -646,10 +657,18 @@ pub fn parse_p(input: &str) -> IResult<&str, StyleTag> {
 fn parse_q(input: &str) -> IResult<&str, StyleTag> {
     let (input, _) = tag(r"\q")(input)?;
     let (input, val) = complete::u32(input)?;
-    Ok((
-        input,
-        StyleTag::WrapStyle(WrapStyle::try_from(val).unwrap_or(WrapStyle::Smart)),
-    ))
+    match val {
+        0 | 1 | 2 | 3 => {
+            return Ok((
+                input,
+                StyleTag::WrapStyle(WrapStyle::try_from(val).unwrap()),
+            ))
+        }
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
+    }
 }
 
 // 在 libass 当中支持的编码有限
