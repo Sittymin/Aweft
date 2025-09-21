@@ -1,4 +1,7 @@
-use aweft_ass::types::{ASSTime, Event, EventMargin, EventType};
+use aweft_ass::types::{
+    event::{Event, Dialogue, TextSegment},
+    time::AssTime,
+};
 use nom::{
     bytes::complete::tag,
     character::complete::{char, digit1, line_ending, not_line_ending},
@@ -74,30 +77,28 @@ fn parse_srt(input: &str) -> IResult<&str, Event> {
     if !subtitle_lines.is_empty() {
         return Ok((
             rest,
-            Event {
-                event_type: EventType::Dialogue,
+            Event::Dialogue(Dialogue {
                 layer: 0,
-                start: ASSTime {
-                    hours: start_hours,
-                    minutes: start_minutes,
-                    seconds: start_seconds,
-                    centiseconds: (start_milliseconds / 10) as u8,
-                },
-                end: ASSTime {
-                    hours: end_hours,
-                    minutes: end_minutes,
-                    seconds: end_seconds,
-                    centiseconds: (end_milliseconds / 10) as u8,
-                },
+                start: AssTime::from_hms_cs(
+                    start_hours as i64,
+                    start_minutes as i64,
+                    start_seconds as i64,
+                    (start_milliseconds / 10) as i64,
+                ),
+                end: AssTime::from_hms_cs(
+                    end_hours as i64,
+                    end_minutes as i64,
+                    end_seconds as i64,
+                    (end_milliseconds / 10) as i64,
+                ),
                 style: "Default".to_string(),
                 name: None,
-                margin_l: EventMargin(20),
-                margin_r: EventMargin(20),
-                margin_v: EventMargin(20),
+                margin_l: 20,
+                margin_r: 20,
+                margin_v: 20,
                 effect: None,
-                raw_text: subtitle_lines.join("\n"),
-                parsed_text: None,
-            },
+                content: vec![TextSegment::Text(subtitle_lines.join("\n"))],
+            }),
         ));
     }
 
@@ -131,16 +132,24 @@ This is a test subtitle
         let (_, events) = parse_srt_file(test_srt_content).unwrap();
         let first_event = &events[0];
         let second_event = &events[1];
-        assert_eq!(first_event.start.hours, 0);
-        assert_eq!(first_event.start.minutes, 0);
-        assert_eq!(first_event.start.seconds, 1);
-        assert_eq!(first_event.start.centiseconds, 60);
-        assert_eq!(first_event.end.centiseconds, 20);
-        assert_eq!(
-            first_event.raw_text,
-            "English subtitle line 1\n中文字幕行 2"
-        );
-        assert_eq!(second_event.end.centiseconds, 99);
+        
+        if let Event::Dialogue(dialogue) = first_event {
+            assert_eq!(dialogue.start.as_centiseconds(), 160); // 1.6 seconds = 160 centiseconds
+            assert_eq!(dialogue.end.as_centiseconds(), 420); // 4.2 seconds = 420 centiseconds
+            if let TextSegment::Text(text) = &dialogue.content[0] {
+                assert_eq!(text, "English subtitle line 1\n中文字幕行 2");
+            } else {
+                panic!("Expected TextSegment::Text");
+            }
+        } else {
+            panic!("Expected Event::Dialogue");
+        }
+        
+        if let Event::Dialogue(dialogue) = second_event {
+            assert_eq!(dialogue.end.as_centiseconds(), 799); // 7.999 seconds = 799.9 centiseconds
+        } else {
+            panic!("Expected Event::Dialogue");
+        }
     }
 
     #[test]
@@ -161,11 +170,17 @@ This is a test subtitle
         assert!(result.is_ok());
         let (rest, event) = result.unwrap();
         assert!(rest.is_empty());
-        assert_eq!(event.raw_text, "Test subtitle");
-        assert_eq!(event.start.hours, 0);
-        assert_eq!(event.start.minutes, 0);
-        assert_eq!(event.start.seconds, 1);
-        assert_eq!(event.start.centiseconds, 60);
+        
+        if let Event::Dialogue(dialogue) = event {
+            if let TextSegment::Text(text) = &dialogue.content[0] {
+                assert_eq!(text, "Test subtitle");
+            } else {
+                panic!("Expected TextSegment::Text");
+            }
+            assert_eq!(dialogue.start.as_centiseconds(), 160); // 1.6 seconds = 160 centiseconds
+        } else {
+            panic!("Expected Event::Dialogue");
+        }
     }
 
     #[test]
@@ -174,6 +189,15 @@ This is a test subtitle
         assert!(result.is_ok());
         let (rest, event) = result.unwrap();
         assert!(rest.is_empty());
-        assert_eq!(event.raw_text, "Line 1\nLine 2");
+        
+        if let Event::Dialogue(dialogue) = event {
+            if let TextSegment::Text(text) = &dialogue.content[0] {
+                assert_eq!(text, "Line 1\nLine 2");
+            } else {
+                panic!("Expected TextSegment::Text");
+            }
+        } else {
+            panic!("Expected Event::Dialogue");
+        }
     }
 }
