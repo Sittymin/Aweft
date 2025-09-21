@@ -2,3 +2,5 @@
 
 # 忽略备份文件
 *~
+
+*/proptest-regressions/
