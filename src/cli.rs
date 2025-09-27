@@ -1,4 +1,4 @@
-use aweft_ass::merge_ass_files;
+// use aweft_ass::merge_ass_files;
 use aweft_ass::save_ass;
 use std::io::{self, Error, ErrorKind};
 use std::path::PathBuf;
@@ -36,27 +36,28 @@ pub fn parse_cli_commands(mut args: impl Iterator<Item = String>) -> io::Result<
         }
     }
 
-    if !files_with_offsets.is_empty() && output_path.is_some() {
-        match merge_ass_files(
-            files_with_offsets
-                .iter()
-                .map(|&(ref path, h, m, s, cs)| (path.as_path(), h, m, s, cs))
-                .collect(),
-            index,
-        ) {
-            Ok(ass_file) => {
-                println!("文件合并成功: {:#?}", output_path);
-                save_ass(&ass_file, output_path.as_ref().unwrap())?;
-            }
-            Err(e) => eprintln!("合并文件时出错: {}", e),
-        }
-    } else {
-        eprintln!("错误：'-m' 或 '--merge' 需要跟随至少一个文件路径、时间偏移量和一个输出路径");
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "缺少 '-m' 或 '--merge' 的参数",
-        ));
-    }
+    // HACK: 合并还未重构好
+    // if !files_with_offsets.is_empty() && output_path.is_some() {
+    //     match merge_ass_files(
+    //         files_with_offsets
+    //             .iter()
+    //             .map(|&(ref path, h, m, s, cs)| (path.as_path(), h, m, s, cs))
+    //             .collect(),
+    //         index,
+    //     ) {
+    //         Ok(ass_file) => {
+    //             println!("文件合并成功: {:#?}", output_path);
+    //             save_ass(&ass_file, output_path.as_ref().unwrap())?;
+    //         }
+    //         Err(e) => eprintln!("合并文件时出错: {}", e),
+    //     }
+    // } else {
+    //     eprintln!("错误：'-m' 或 '--merge' 需要跟随至少一个文件路径、时间偏移量和一个输出路径");
+    //     return Err(Error::new(
+    //         ErrorKind::InvalidInput,
+    //         "缺少 '-m' 或 '--merge' 的参数",
+    //     ));
+    // }
 
     Ok(())
 }
