@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use crate::error::{EffectParseError, EventFieldParseError, ParseError, Result};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while1},
@@ -30,9 +30,9 @@ pub enum EventField {
     Text,
 }
 impl FromStr for EventField {
-    type Err = anyhow::Error;
+    type Err = EventFieldParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "Layer" => Ok(EventField::Layer),
             "Start" => Ok(EventField::Start),
@@ -44,7 +44,9 @@ impl FromStr for EventField {
             "MarginV" => Ok(EventField::MarginV),
             "Effect" => Ok(EventField::Effect),
             "Text" => Ok(EventField::Text),
-            _ => bail!("未知的 Event 格式字段: '{}'", s),
+            _ => Err(EventFieldParseError::UnknownField {
+                field: s.to_string(),
+            }),
         }
     }
 }
@@ -90,7 +92,7 @@ fn parse_event_line_prefix(line: &str) -> Option<(&str, bool)> {
         return Some((data, false));
     }
 
-    // It's neither, so return None.
+    // 其他类型目前不实现
     None
 }
 
@@ -99,7 +101,7 @@ impl EventParser {
         self.format_map = format_data
             .split(',')
             .map(|s| s.trim())
-            .map(|s| s.parse::<EventField>())
+            .map(|s| s.parse::<EventField>().map_err(ParseError::from))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .enumerate()
@@ -110,20 +112,27 @@ impl EventParser {
 
     pub fn parse_event_line(&self, event_data: &str) -> Result<Event> {
         if self.format_map.is_empty() {
-            bail!("Cannot parse 'Event:' line because 'Format:' line has not been seen yet");
+            return Err(ParseError::Format {
+                message: "Cannot parse 'Event:' line because 'Format:' line has not been seen yet"
+                    .to_string(),
+            });
         }
 
         let (event_value, is_dialogue) =
-            parse_event_line_prefix(event_data).context(anyhow!("不存在 Event 前缀"))?;
+            parse_event_line_prefix(event_data).ok_or_else(|| ParseError::Format {
+                message: format!("不存在 Event 前缀: {}", event_data),
+            })?;
 
         let values: Vec<&str> = event_value.splitn(self.format_map.len(), ',').collect();
 
         if values.len() != self.format_map.len() {
-            bail!(
-                "Style line has mismatched field count: expected {}, found {}",
-                self.format_map.len(),
-                values.len()
-            );
+            return Err(ParseError::Format {
+                message: format!(
+                    "Event line has mismatched field count: expected {}, found {}",
+                    self.format_map.len(),
+                    values.len()
+                ),
+            });
         }
 
         let p = FieldParser {
@@ -206,11 +215,10 @@ impl<'a> FieldParser<'a> {
         T::Err: Error + Send + Sync + 'static,
     {
         match self.get_str(name) {
-            Some(val) => T::from_str(val).with_context(|| {
-                format!(
-                    "Failed to parse number for field '{}' from value '{}'",
-                    name, val
-                )
+            Some(val) => T::from_str(val).map_err(|e| ParseError::InvalidFieldValue {
+                field: name.to_string(),
+                value: val.to_string(),
+                reason: e.to_string(),
             }),
             None => Ok(default),
         }
@@ -218,30 +226,32 @@ impl<'a> FieldParser<'a> {
 
     fn parse_ass_time(&self, name: &EventField, default: AssTime) -> Result<AssTime> {
         match self.get_str(name) {
-            Some(val) => AssTime::from_str(val)
-                // HACK: 需要为 AssTime 实现错误类型
-                .map_err(|e| anyhow!(e))
-                .with_context(|| {
-                    format!(
-                        "Failed to parse ass_time for field '{}' from value '{}'",
-                        name, val
-                    )
-                }),
+            Some(val) => AssTime::from_str(val).map_err(|e| ParseError::InvalidFieldValue {
+                field: name.to_string(),
+                value: val.to_string(),
+                reason: e.to_string(),
+            }),
             None => Ok(default),
         }
     }
+
     fn parse_effect(&self, name: &EventField, default: Option<Effect>) -> Result<Option<Effect>> {
         match self.get_str(name) {
-            Some(val) => Effect::from_str(val)
-                .map(Some)
-                // HACK: 需要为 Effect 实现错误类型
-                .map_err(|e| anyhow!(e))
-                .with_context(|| {
-                    format!(
-                        "Failed to parse effect for field '{}' from value '{}'",
-                        name, val
-                    )
-                }),
+            Some(val) => {
+                let trimmed = val.trim();
+                if trimmed.is_empty() {
+                    // 空字符串视为无效果
+                    Ok(default)
+                } else {
+                    Effect::from_str(trimmed)
+                        .map(Some)
+                        .map_err(|e| ParseError::InvalidFieldValue {
+                            field: name.to_string(),
+                            value: val.to_string(),
+                            reason: e.to_string(),
+                        })
+                }
+            }
             None => Ok(default),
         }
     }
@@ -255,17 +265,13 @@ impl<'a> FieldParser<'a> {
             Some(val) => {
                 // 直接调用独立的解析函数
                 match parse_dialogue_line(val) {
-                    // Ok((remaining, segments)) 表示解析成功
-                    // 我们通常期望整个字符串都被解析完，所以 remaining 应该是空的 ""
                     Ok(("", segments)) => Ok(segments),
-
-                    // 如果 remaining 不是空的，说明有部分字符串没能解析，这可能是一个错误
-                    Ok((remaining, _)) => {
-                        Err(anyhow!("未能完全解析内容，剩余部分: '{}'", remaining))
-                    }
-
-                    // 如果解析直接失败
-                    Err(e) => Err(anyhow!("解析内容失败: {}", e.to_string())),
+                    Ok((remaining, _)) => Err(ParseError::DialogueLine {
+                        message: format!("未能完全解析内容，剩余部分: '{}'", remaining),
+                    }),
+                    Err(e) => Err(ParseError::DialogueLine {
+                        message: format!("解析内容失败: {}", e),
+                    }),
                 }
             }
             None => Ok(default),
@@ -273,7 +279,10 @@ impl<'a> FieldParser<'a> {
     }
 }
 
-// HACK: 可能这个不需要pub，但是测试解析期望 Text 的时候需要它
+/// 解析对话行的文本内容
+///
+/// 解析包含普通文本和样式覆盖标签的混合内容。
+/// 该函数被标记为 pub 是因为测试代码需要访问它来验证解析行为。
 pub fn parse_dialogue_line(input: &str) -> IResult<&str, Vec<TextSegment>> {
     many0(alt((
         // 选项1: 解析样式覆盖块（仅当存在成对的花括号时）
@@ -358,13 +367,33 @@ pub enum Effect {
 }
 
 impl FromStr for Effect {
-    type Err = String;
+    type Err = EffectParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match all_consuming(alt((parse_scroll_up, parse_scroll_down, parse_banner))).parse(s.trim())
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let trimmed = s.trim();
+
+        match all_consuming(alt((parse_scroll_up, parse_scroll_down, parse_banner))).parse(trimmed)
         {
             Ok((_, effect)) => Ok(effect),
-            Err(e) => Err(e.to_string()),
+            Err(_) => {
+                // 尝试识别效果类型以提供更好的错误信息
+                if trimmed.starts_with("Scroll up") {
+                    Err(EffectParseError::InvalidScrollParameters)
+                } else if trimmed.starts_with("Scroll down") {
+                    Err(EffectParseError::InvalidScrollParameters)
+                } else if trimmed.starts_with("Banner") {
+                    Err(EffectParseError::InvalidBannerParameters)
+                } else if trimmed.is_empty() {
+                    // HACK: 空字符串不应该被解析为错误，应该在调用方处理
+                    Err(EffectParseError::InvalidFormat {
+                        input: trimmed.to_string(),
+                    })
+                } else {
+                    Err(EffectParseError::UnknownEffect {
+                        effect_type: trimmed.to_string(),
+                    })
+                }
+            }
         }
     }
 }

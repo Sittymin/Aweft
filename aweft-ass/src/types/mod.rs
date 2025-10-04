@@ -1,3 +1,4 @@
+use crate::error::{BoldTypeParseError, WrapStyleParseError};
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::str::FromStr;
@@ -49,20 +50,22 @@ pub enum WrapStyle {
     NoWrap = 2,
 }
 impl FromStr for WrapStyle {
-    type Err = String;
+    type Err = WrapStyleParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "0" => Ok(WrapStyle::Smart),
             "1" => Ok(WrapStyle::EndOfWord),
             "2" => Ok(WrapStyle::NoWrap),
             "3" => Ok(WrapStyle::Smart), // libass中值3与值0行为相同
-            _ => Err(format!("Invalid value for WrapStyle: {}", s)),
+            _ => Err(WrapStyleParseError::InvalidValue {
+                value: s.to_string(),
+            }),
         }
     }
 }
 impl TryFrom<u32> for WrapStyle {
-    type Error = String;
+    type Error = WrapStyleParseError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
@@ -70,7 +73,9 @@ impl TryFrom<u32> for WrapStyle {
             1 => Ok(WrapStyle::EndOfWord),
             2 => Ok(WrapStyle::NoWrap),
             3 => Ok(WrapStyle::Smart), // libass中值3与值0行为相同
-            _ => Err(format!("Invalid value for WrapStyle: {}", value)),
+            _ => Err(WrapStyleParseError::InvalidValue {
+                value: value.to_string(),
+            }),
         }
     }
 }
@@ -95,17 +100,19 @@ pub enum BoldType {
     Weight(u32),
 }
 impl FromStr for BoldType {
-    type Err = String;
+    type Err = BoldTypeParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let num = s
             .parse::<i32>()
-            .map_err(|_| format!("Invalid value for BoldType: {}", s))?;
+            .map_err(|_| BoldTypeParseError::ParseIntError {
+                input: s.to_string(),
+            })?;
         match num {
             -1 => Ok(BoldType::Bold),
             0 => Ok(BoldType::NonBold),
             n if n > 0 => Ok(BoldType::Weight(n.try_into().unwrap())),
-            other => Err(format!("Invalid BoldType integer: {}", other)),
+            other => Err(BoldTypeParseError::InvalidWeight { value: other }),
         }
     }
 }

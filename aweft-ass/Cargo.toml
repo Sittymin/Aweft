@@ -17,3 +17,4 @@ rayon = "1.11.0"
 aweft-libass = { path = "../aweft-libass" }
 proptest = "1.7.0"
 log = "0.4.27"
+thiserror = "2.0.17"

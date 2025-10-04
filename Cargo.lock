@@ -529,6 +529,7 @@ dependencies = [
  "num_cpus",
  "proptest",
  "rayon",
+ "thiserror 2.0.17",
 ]
 
 [[package]]

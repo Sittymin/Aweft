@@ -1,6 +1,7 @@
 use super::WrapStyle;
+use crate::error::{ScriptTypeParseError, YCbCrMatrixParseError};
 use isolang::Language;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_until},
@@ -23,20 +24,24 @@ pub enum ScriptType {
     Unknown(String),
 }
 impl FromStr for ScriptType {
-    type Err = String;
+    type Err = ScriptTypeParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "v4.00" => {
-                eprintln!("Now is only implementation ASS");
+                info!("检测到 SSA v4.00 格式，当前实现主要针对 ASS (v4.00+)，某些功能可能受限");
                 Ok(ScriptType::SSAv4)
             }
             "v4.00+" => Ok(ScriptType::ASS),
             "v4.00++" => {
-                eprintln!("Now is only implementation ASS");
+                info!(
+                    "检测到 ASS2 (v4.00++) 格式，当前实现主要针对 ASS (v4.00+)，某些功能可能受限"
+                );
                 Ok(ScriptType::ASS2)
             }
-            _ => Err(format!("Invalid value for ScriptType: {}", s)),
+            _ => Err(ScriptTypeParseError::InvalidValue {
+                value: s.to_string(),
+            }),
         }
     }
 }
@@ -67,9 +72,9 @@ pub enum YCbCrMatrix {
     FCCPC,       // PC.fcc
 }
 impl FromStr for YCbCrMatrix {
-    type Err = String;
+    type Err = YCbCrMatrixParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "none" => Ok(Self::None),
             "tv.601" => Ok(Self::BT601TV),
@@ -80,6 +85,7 @@ impl FromStr for YCbCrMatrix {
             "pc.240m" => Ok(Self::SMPTE240MPC),
             "tv.fcc" => Ok(Self::FCCTV),
             "pc.fcc" => Ok(Self::FCCPC),
+            // YCbCr Matrix 的特殊之处：未知值不算错误，而是返回 Unknown 变体
             _ => Ok(Self::Unknown),
         }
     }
@@ -319,7 +325,11 @@ impl Display for ScriptInfo {
         }
 
         if let Some(language) = &self.language {
-            writeln!(f, "Language: {}", language.to_639_1().unwrap())?;
+            if let Some(code) = language.to_639_1() {
+                writeln!(f, "Language: {}", code)?;
+            } else {
+                warn!("语言字段写入失败：无法转换为对应代码")
+            }
         }
 
         if let Some(title) = &self.title {
@@ -421,12 +431,14 @@ impl ScriptInfo {
             other_fields,
         }
     }
-    pub fn add_or_update_other_fields(&mut self, key: String, value: String) -> Result<(), String> {
+    /// 添加或更新自定义字段
+    ///
+    /// 此函数总是成功，因为它只是更新内部的 HashMap
+    pub fn add_or_update_other_fields(&mut self, key: String, value: String) {
         self.other_fields
             .entry(key)
             .and_modify(|e| *e = value.clone())
             .or_insert(value);
-        Ok(())
     }
 }
 
@@ -545,7 +557,12 @@ pub fn parse_script_info_line(input: &str) -> IResult<&str, ScriptInfoEntry> {
                 preceded(char::<&str, _>(':'), space0),
                 not_line_ending,
             ),
-            |(_, v)| ScriptInfoEntry::YCbCrMatrix(YCbCrMatrix::from_str(v.trim()).unwrap()),
+            |(_, v)| {
+                // 解析失败时使用 Unknown，因为这不是致命错误
+                ScriptInfoEntry::YCbCrMatrix(
+                    YCbCrMatrix::from_str(v.trim()).unwrap_or(YCbCrMatrix::Unknown),
+                )
+            },
         ),
         map(
             separated_pair(

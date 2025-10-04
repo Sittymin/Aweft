@@ -1,12 +1,12 @@
+use crate::error::{ParseError, Result};
 use crate::types::{
     event::{Event, EventParser},
     script::{parse_script_info_line, ScriptInfo, ScriptInfoBuilder},
     style::{StyleParser, StyleWithoutName},
     *,
 };
-use anyhow::{anyhow, Result};
-use core::panic;
 use crossbeam_channel::bounded;
+use log::{error, warn};
 use rayon::prelude::*;
 use std::{
     collections::HashMap,
@@ -45,7 +45,8 @@ fn process_script_info_chunk(lines: Vec<String>) -> ParsedSection {
 fn process_styles_chunk(lines: Vec<String>) -> ParsedSection {
     let mut parser = StyleParser::default();
     if let Some(format_line) = lines.iter().find(|l| l.starts_with("Format:")) {
-        if let Err(e) = parser.learn_format(format_line.strip_prefix("Format:").unwrap().trim()) {
+        let format_data = format_line.strip_prefix("Format:").unwrap().trim();
+        if let Err(e) = parser.learn_format(format_data) {
             return ParsedSection::Error(e.to_string());
         }
     }
@@ -60,7 +61,8 @@ fn process_styles_chunk(lines: Vec<String>) -> ParsedSection {
 fn parse_events_section(lines: Vec<String>) -> ParsedSection {
     let mut parser = EventParser::default();
     if let Some(format_line) = lines.iter().find(|l| l.starts_with("Format:")) {
-        if let Err(e) = parser.learn_format(format_line.strip_prefix("Format:").unwrap().trim()) {
+        let format_data = format_line.strip_prefix("Format:").unwrap().trim();
+        if let Err(e) = parser.learn_format(format_data) {
             return ParsedSection::Error(e.to_string());
         }
     }
@@ -97,7 +99,7 @@ impl<I> Iterator for SectionIterator<I>
 where
     I: Iterator<Item = std::io::Result<String>>,
 {
-    type Item = anyhow::Result<SectionContent>;
+    type Item = Result<SectionContent>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -173,19 +175,23 @@ impl ASSFile {
         let section_iterator = SectionIterator::new(reader.lines());
 
         // `work_channel`: 主线程 -> 消费者，发送要处理的工作块
-        let (work_sender, work_receiver) =
-            bounded::<anyhow::Result<SectionContent>>(num_cpus::get() * 2);
+        let (work_sender, work_receiver) = bounded::<Result<SectionContent>>(num_cpus::get() * 2);
 
         // `result_channel`: 消费者 -> 主线程，发送处理完的结果
         let (result_sender, result_receiver) = bounded::<ParsedSection>(num_cpus::get() * 2);
 
+        // 用于收集解析过程中的错误
+        let (error_sender, error_receiver) = bounded::<String>(10);
+
         // 使用 Rayon 的 `scope` 可以更安全地处理线程和错误
         rayon::scope(|s| {
             // 在 Rayon scope 内启动一个生产者
+            let error_sender_clone = error_sender.clone();
             s.spawn(move |_| {
                 for section_result in section_iterator {
                     if work_sender.send(section_result).is_err() {
-                        break; // 消费者已关闭
+                        let _ = error_sender_clone.send("工作接收器已关闭".to_string());
+                        break;
                     }
                 }
             });
@@ -199,7 +205,8 @@ impl ASSFile {
                     let chunk = match chunk_result {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!("Producer IO Error: {:?}", e);
+                            error!("读取文件时发生 IO 错误: {:?}", e);
+                            let _ = error_sender.send(format!("IO 错误: {}", e));
                             return;
                         }
                     };
@@ -213,16 +220,23 @@ impl ASSFile {
 
                     match parsed_chunk {
                         ParsedSection::Error(e) => {
-                            eprintln!("Parsing Error: {}", e);
+                            warn!("解析区块时出现错误: {}", e);
+                            let _ = error_sender.send(e);
                         }
                         parsed => {
                             if result_sender.send(parsed).is_err() {
-                                eprintln!("Result receiver hung up, could not send parsed chunk.");
+                                error!("结果接收器已关闭，无法发送解析结果");
                             }
                         }
                     }
                 });
         });
+
+        // 关闭错误发送器，以便后续可以迭代错误
+        drop(error_sender);
+
+        // 收集所有错误信息
+        let errors: Vec<String> = error_receiver.into_iter().collect();
 
         let mut script_info = None;
         let mut styles = None;
@@ -233,13 +247,34 @@ impl ASSFile {
                 ParsedSection::ScriptInfo(si) => script_info = Some(si),
                 ParsedSection::Styles(s) => styles = Some(s),
                 ParsedSection::Events(e) => events = Some(e),
-                ParsedSection::Error(_) => unreachable!("不会发送错误到最终输出"),
+                ParsedSection::Error(_) => {
+                    // 错误已经记录到 errors 向量中
+                }
+            }
+        }
+
+        // 如果有严重错误且缺少必要的 section，返回错误
+        if !errors.is_empty() && script_info.is_none() {
+            return Err(ParseError::Section {
+                message: format!(
+                    "解析失败，遇到 {} 个错误。首个错误: {}",
+                    errors.len(),
+                    errors.first().unwrap_or(&"未知错误".to_string())
+                ),
+            });
+        }
+
+        // 如果有非致命错误，记录警告
+        if !errors.is_empty() {
+            warn!("解析过程中遇到 {} 个非致命错误", errors.len());
+            for (i, err) in errors.iter().enumerate().take(5) {
+                warn!("  错误 {}: {}", i + 1, err);
             }
         }
 
         Ok(ASSFile {
-            script_info: script_info.ok_or_else(|| {
-                anyhow!("Parsing failed: [Script Info] section not found or failed to parse")
+            script_info: script_info.ok_or_else(|| ParseError::Section {
+                message: "[Script Info] 区块未找到或解析失败".to_string(),
             })?,
 
             styles: styles.unwrap_or_default(),
@@ -272,7 +307,13 @@ impl ASSFile {
                 writeln!(writer, "Style: {},{}", key, value)?;
             }
         } else {
-            panic!("No script type other than ASS has been implemented")
+            return Err(ParseError::Generic {
+                message: format!(
+                    "不支持的脚本类型: {:?}，当前仅支持 ASS (v4.00+)",
+                    self.script_info.script_type
+                ),
+            }
+            .into());
         }
 
         writeln!(writer, "\n[Events]")?;
@@ -287,6 +328,7 @@ impl ASSFile {
             }
         }
 
+        writer.flush()?;
         Ok(())
     }
     fn merge_events_with(mut self, other: &ASSFile) {

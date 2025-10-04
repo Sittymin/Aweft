@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use crate::error::{BorderStyleParseError, ParseError, Result, StyleFieldParseError};
 use aweft_libass::types::{Alignment, AssColorRgba};
 use log::warn;
 use std::collections::HashMap;
@@ -16,13 +16,15 @@ pub enum BorderStyle {
     OpaqueBox = 3, // 矩形框
 }
 impl FromStr for BorderStyle {
-    type Err = String;
+    type Err = BorderStyleParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "1" => Ok(BorderStyle::OutlineAndDropShadow),
             "3" => Ok(BorderStyle::OpaqueBox),
-            _ => Err(format!("Invalid value for BorderStyle: {}", s)),
+            _ => Err(BorderStyleParseError::InvalidValue {
+                value: s.to_string(),
+            }),
         }
     }
 }
@@ -182,9 +184,9 @@ pub enum StyleField {
     Encoding,
 }
 impl FromStr for StyleField {
-    type Err = anyhow::Error;
+    type Err = StyleFieldParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "Name" => Ok(StyleField::Name),
             "Fontname" => Ok(StyleField::Fontname),
@@ -209,7 +211,9 @@ impl FromStr for StyleField {
             "MarginR" => Ok(StyleField::MarginR),
             "MarginV" => Ok(StyleField::MarginV),
             "Encoding" => Ok(StyleField::Encoding),
-            _ => bail!("Unknown or unsupported style format field: '{}'", s),
+            _ => Err(StyleFieldParseError::UnknownField {
+                field: s.to_string(),
+            }),
         }
     }
 }
@@ -287,7 +291,7 @@ impl StyleParser {
             .split(',')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-            .map(|s| s.parse::<StyleField>())
+            .map(|s| s.parse::<StyleField>().map_err(ParseError::from))
             .collect::<Result<Vec<_>>>()?;
 
         if fields.is_empty() {
@@ -305,22 +309,29 @@ impl StyleParser {
 
     pub fn parse_style_line(&self, style_data: &str) -> Result<(String, StyleWithoutName)> {
         if self.format_map.is_empty() {
-            bail!("Cannot parse 'Style:' line because 'Format:' line has not been seen yet");
+            return Err(ParseError::Format {
+                message: "Cannot parse 'Style:' line because 'Format:' line has not been seen yet"
+                    .to_string(),
+            });
         }
 
         let style_values = style_data
             .strip_prefix("Style:")
-            .context(anyhow!("不存在 Style 前缀"))?
+            .ok_or_else(|| ParseError::Format {
+                message: format!("不存在 Style 前缀: {}", style_data),
+            })?
             .trim();
 
         let values: Vec<&str> = style_values.splitn(self.format_map.len(), ',').collect();
 
         if values.len() != self.format_map.len() {
-            bail!(
-                "Style line has mismatched field count: expected {}, found {}",
-                self.format_map.len(),
-                values.len()
-            );
+            return Err(ParseError::Format {
+                message: format!(
+                    "Style line has mismatched field count: expected {}, found {}",
+                    self.format_map.len(),
+                    values.len()
+                ),
+            });
         }
 
         let p = FieldParser {
@@ -336,7 +347,9 @@ impl StyleParser {
                 if s2.is_empty() {
                     warn!("Style 不存在 Name 字段，默认填充 Default");
                     "Default"
-                } else { s2 }
+                } else {
+                    s2
+                }
             })
             .unwrap_or("Default")
             .to_string();
@@ -404,11 +417,10 @@ impl<'a> FieldParser<'a> {
         T::Err: Error + Send + Sync + 'static,
     {
         match self.get_str(name) {
-            Some(val) => T::from_str(val).with_context(|| {
-                format!(
-                    "Failed to parse number for field '{}' from value '{}'",
-                    name, val
-                )
+            Some(val) => T::from_str(val).map_err(|e| ParseError::InvalidFieldValue {
+                field: name.to_string(),
+                value: val.to_string(),
+                reason: e.to_string(),
             }),
             None => Ok(default),
         }
@@ -417,47 +429,44 @@ impl<'a> FieldParser<'a> {
     fn parse_ass_bold(&self, name: &StyleField, default: BoldType) -> Result<BoldType> {
         match self.get_str(name) {
             Some(val) => {
-                let parsed = i32::from_str(val.trim()).with_context(|| {
-                    format!(
-                        "Failed to parse bold for field '{}' from value '{}'",
-                        name, val
-                    )
-                })?;
+                let parsed =
+                    i32::from_str(val.trim()).map_err(|e| ParseError::InvalidFieldValue {
+                        field: name.to_string(),
+                        value: val.to_string(),
+                        reason: e.to_string(),
+                    })?;
                 // INFO: 在 Style 部分当中不可以定义权重
-                Ok(if parsed != 0 { BoldType::Bold } else { BoldType::NonBold })
+                Ok(if parsed != 0 {
+                    BoldType::Bold
+                } else {
+                    BoldType::NonBold
+                })
             }
             None => Ok(default),
         }
     }
+
     fn parse_ass_border_style(
         &self,
         name: &StyleField,
         default: BorderStyle,
     ) -> Result<BorderStyle> {
         match self.get_str(name) {
-            Some(val) => BorderStyle::from_str(val)
-                // HACK: 需要为 BorderStyle 实现错误类型
-                .map_err(|e| anyhow!(e))
-                .with_context(|| {
-                    format!(
-                        "Failed to parse border style for field '{}' from value '{}'",
-                        name, val
-                    )
-                }),
+            Some(val) => BorderStyle::from_str(val).map_err(|e| ParseError::InvalidFieldValue {
+                field: name.to_string(),
+                value: val.to_string(),
+                reason: e.to_string(),
+            }),
             None => Ok(default),
         }
     }
+
     fn parse_ass_alignment(&self, name: &StyleField, default: Alignment) -> Result<Alignment> {
         match self.get_str(name) {
-            Some(val) => Alignment::from_str(val)
-                // HACK: 需要为 Alignment 实现错误类型
-                .map_err(|e| anyhow!(e))
-                .with_context(|| {
-                    format!(
-                        "Failed to parse alignment for field '{}' from value '{}'",
-                        name, val
-                    )
-                }),
+            Some(val) => {
+                // aweft-libass 的 AlignmentParseError 会自动通过 #[from] 转换为 ParseError
+                Ok(Alignment::from_str(val)?)
+            }
             None => Ok(default),
         }
     }
@@ -473,12 +482,10 @@ impl<'a> FieldParser<'a> {
                 .strip_prefix("&H")
                 .and_then(|hex_str| u32::from_str_radix(hex_str, 16).ok())
                 .map(AssColorRgba::from_ass_style_u32)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Invalid color format for field '{}': expected '&H<AABBGGRR>', got '{}'",
-                        name,
-                        val
-                    )
+                .ok_or_else(|| ParseError::InvalidFieldValue {
+                    field: name.to_string(),
+                    value: val.to_string(),
+                    reason: "Invalid color format: expected '&H<AABBGGRR>'".to_string(),
                 }),
             None => Ok(default),
         }

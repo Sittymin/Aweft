@@ -1,11 +1,12 @@
+pub mod error;
 mod parser;
 mod processor;
 pub mod types;
 
-use anyhow::Result;
 use std::path::Path;
 
 // use crate::processor::{merge_ass_files_with_offsets, FileWithOffset};
+pub use crate::error::{ParseError, Result};
 pub use crate::types::ASSFile;
 
 pub fn load_ass(path: impl AsRef<Path>) -> Result<ASSFile> {
