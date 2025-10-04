@@ -1,8 +1,8 @@
+use crate::error::{LibassError, Result};
 use crate::ffi;
 use crate::library::Library;
 use crate::track::Track;
 use crate::types::ImageIterator;
-use anyhow::{Result, anyhow};
 use bitflags::bitflags;
 use libc::{c_char, c_double, c_int};
 use std::ffi::{CStr, CString};
@@ -19,7 +19,7 @@ pub enum ShapingLevel {
 impl TryFrom<u32> for ShapingLevel {
     type Error = ();
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(ShapingLevel::Simple),
             1 => Ok(ShapingLevel::Complex),
@@ -38,7 +38,7 @@ pub enum HintingType {
 impl TryFrom<u32> for HintingType {
     type Error = ();
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(HintingType::None),
             1 => Ok(HintingType::Light),
@@ -157,9 +157,9 @@ impl AssStyle {
 }
 
 impl TryFrom<*const ffi::ass_style> for AssStyle {
-    type Error = anyhow::Error;
+    type Error = LibassError;
 
-    fn try_from(raw_style_ptr: *const ffi::ass_style) -> Result<Self, Self::Error> {
+    fn try_from(raw_style_ptr: *const ffi::ass_style) -> Result<Self> {
         assert!(
             !raw_style_ptr.is_null(),
             "Received a null pointer for ffi::ass_style"
@@ -292,7 +292,9 @@ impl Renderer {
         unsafe {
             let ptr = ffi::ass_renderer_init(library.as_ptr());
             if ptr.is_null() {
-                return Err(anyhow!("ass_renderer_init 失败"));
+                return Err(LibassError::RendererInit {
+                    context: "ass_renderer_init 返回空指针".to_string(),
+                });
             }
             Ok(Self {
                 ptr,
@@ -383,22 +385,20 @@ impl Renderer {
         let default_font_cstring;
         let default_font_ptr = match default_font {
             Some(path) => {
-                // [修改] 将路径转换为绝对路径
-                let absolute_path = fs::canonicalize(path).map_err(|e| {
-                    anyhow!(
-                        "无法将默认字体路径 '{}' 转换为绝对路径: {}",
-                        path.display(),
-                        e
-                    )
-                })?;
+                // 将路径转换为绝对路径
+                let absolute_path = fs::canonicalize(path)?;
 
                 // Path -> &str
                 let path_str = absolute_path.to_str().ok_or_else(|| {
-                    anyhow!("默认字体路径包含无效UTF-8字符: {}", absolute_path.display())
+                    LibassError::InvalidParameter {
+                        context: format!(
+                            "默认字体路径包含无效UTF-8字符: {}",
+                            absolute_path.display()
+                        ),
+                    }
                 })?;
                 // &str -> CString
-                default_font_cstring =
-                    CString::new(path_str).map_err(|e| anyhow!("默认字体路径包含空字符: {}", e))?;
+                default_font_cstring = CString::new(path_str)?;
                 default_font_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -408,9 +408,7 @@ impl Renderer {
         let default_family_cstring;
         let default_family_ptr = match default_family {
             Some(s) => {
-                // [修复] 使用 map_err 将 NulError 转换为 anyhow
-                default_family_cstring =
-                    CString::new(s).map_err(|e| anyhow!("默认字体族包含空字符: {}", e))?;
+                default_family_cstring = CString::new(s)?;
                 default_family_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -420,22 +418,20 @@ impl Renderer {
         let config_cstring;
         let config_ptr = match config {
             Some(path) => {
-                // [修改] 将路径转换为绝对路径
-                let absolute_path = fs::canonicalize(path).map_err(|e| {
-                    anyhow!(
-                        "无法将配置文件路径 '{}' 转换为绝对路径: {}",
-                        path.display(),
-                        e
-                    )
-                })?;
+                // 将路径转换为绝对路径
+                let absolute_path = fs::canonicalize(path)?;
 
                 // Path -> &str
                 let path_str = absolute_path.to_str().ok_or_else(|| {
-                    anyhow!("配置文件路径包含无效UTF-8字符: {}", absolute_path.display())
+                    LibassError::InvalidParameter {
+                        context: format!(
+                            "配置文件路径包含无效UTF-8字符: {}",
+                            absolute_path.display()
+                        ),
+                    }
                 })?;
                 // &str -> CString
-                config_cstring =
-                    CString::new(path_str).map_err(|e| anyhow!("配置文件路径包含空字符: {}", e))?;
+                config_cstring = CString::new(path_str)?;
                 config_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),

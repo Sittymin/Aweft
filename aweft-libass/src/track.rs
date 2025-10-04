@@ -1,7 +1,7 @@
+use crate::error::{LibassError, Result};
 use crate::ffi;
 use crate::library::Library;
 use crate::types::{Alignment, AssColorRgba, Effect, LibassAlignment};
-use anyhow::{Result, anyhow};
 use libc::{c_char, c_void, size_t};
 use std::ffi::CString;
 use std::ptr;
@@ -35,7 +35,9 @@ impl Track {
             // 这里已经创建了一个默认样式
             let ptr = ffi::ass_new_track(library.as_ptr());
             if ptr.is_null() {
-                return Err(anyhow!("ass_new_track 失败"));
+                return Err(LibassError::TrackInit {
+                    context: "ass_new_track 返回空指针".to_string(),
+                });
             }
             Ok(Self { ptr, library })
         }
@@ -97,9 +99,7 @@ impl Track {
     pub fn process_override_style(&mut self, list: &[&str]) -> Result<()> {
         let c_strings: Vec<CString> = list
             .iter()
-            .map(|&s| {
-                CString::new(s).map_err(|e| anyhow!("样式覆盖 '{}' 包含无效的NUL字符: {}", s, e))
-            })
+            .map(|&s| CString::new(s).map_err(Into::into))
             .collect::<Result<Vec<_>>>()?;
 
         let mut c_pointers: Vec<*mut c_char> = c_strings
@@ -139,7 +139,9 @@ impl Track {
         unsafe {
             let style_id = ffi::ass_alloc_style(self.ptr);
             if style_id < 0 {
-                return Err(anyhow!("分配样式失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "ass_alloc_style 分配样式失败".to_string(),
+                });
             }
 
             Ok(StyleHandle {
@@ -169,12 +171,17 @@ impl Track {
     pub fn default_style_mut(&mut self) -> Result<StyleHandle> {
         unsafe {
             if (*self.ptr).styles.is_null() || (*self.ptr).n_styles == 0 {
-                return Err(anyhow!("没有可用的样式"));
+                return Err(LibassError::ResourceUnavailable {
+                    context: "没有可用的样式".to_string(),
+                });
             }
             // 使用 libass 自动创建的默认样式（default_style 字段）
             let default_style_id = (*self.ptr).default_style;
             if default_style_id < 0 || default_style_id >= (*self.ptr).n_styles {
-                return Err(anyhow!("默认样式索引无效"));
+                return Err(LibassError::InvalidId {
+                    resource_type: "样式".to_string(),
+                    id: default_style_id,
+                });
             }
             let id = StyleId(default_style_id);
             Ok(StyleHandle { track: self, id })
@@ -183,7 +190,10 @@ impl Track {
 
     pub fn style_mut(&mut self, id: StyleId) -> Result<StyleHandle> {
         if id.0 < 0 || id.0 >= self.style_count() {
-            return Err(anyhow!("无效的样式ID: {}", id.0));
+            return Err(LibassError::InvalidId {
+                resource_type: "样式".to_string(),
+                id: id.0,
+            });
         }
         Ok(StyleHandle { track: self, id })
     }
@@ -205,7 +215,7 @@ impl Track {
     ///
     /// ⚠️ **重要**: 不要在使用手动创建样式/事件后调用此方法！libass 不支持混合使用。
     pub fn process_data(&mut self, data: &str) -> Result<()> {
-        let c_data = CString::new(data).map_err(|_| anyhow!("ASS数据包含无效字符"))?;
+        let c_data = CString::new(data)?;
         unsafe {
             ffi::ass_process_data(self.ptr, c_data.as_ptr(), data.len() as i32);
         }
@@ -221,7 +231,9 @@ impl Track {
         unsafe {
             let event_id = ffi::ass_alloc_event(self.ptr);
             if event_id < 0 {
-                return Err(anyhow!("分配事件失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "ass_alloc_event 分配事件失败".to_string(),
+                });
             }
 
             let id = EventId(event_id);
@@ -315,7 +327,7 @@ impl<'a> StyleHandle<'a> {
 
     pub fn set_name(mut self, name: &str) -> Result<Self> {
         // C 侧虽然不会修改，但是它会 free 它，so can't direct use CString
-        let c_name = CString::new(name).map_err(|_| anyhow!("样式名包含无效字符"))?;
+        let c_name = CString::new(name)?;
         let c_name_bytes = c_name.as_bytes_with_nul();
 
         unsafe {
@@ -325,7 +337,9 @@ impl<'a> StyleHandle<'a> {
             }
             let p = ffi::ass_malloc(c_name_bytes.len() as size_t);
             if p.is_null() {
-                return Err(anyhow!("分配内存失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "为样式名分配内存失败".to_string(),
+                });
             }
             ptr::copy_nonoverlapping(c_name_bytes.as_ptr(), p as *mut u8, c_name_bytes.len());
             (*style_ptr).Name = p as *mut c_char;
@@ -334,7 +348,7 @@ impl<'a> StyleHandle<'a> {
     }
 
     pub fn set_font_name(mut self, font_name: &str) -> Result<Self> {
-        let c_font_name = CString::new(font_name).map_err(|_| anyhow!("字体名包含无效字符"))?;
+        let c_font_name = CString::new(font_name)?;
         let c_font_name_bytes = c_font_name.as_bytes_with_nul();
         unsafe {
             let style_ptr = self.as_mut_ptr();
@@ -343,7 +357,9 @@ impl<'a> StyleHandle<'a> {
             }
             let p = ffi::ass_malloc(c_font_name_bytes.len() as size_t);
             if p.is_null() {
-                return Err(anyhow!("分配内存失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "为字体名分配内存失败".to_string(),
+                });
             }
             ptr::copy_nonoverlapping(
                 c_font_name_bytes.as_ptr(),
@@ -570,7 +586,7 @@ impl<'a> EventHandle<'a> {
     }
 
     pub fn set_text(mut self, text: &str) -> Result<Self> {
-        let c_text = CString::new(text).map_err(|_| anyhow!("事件文本包含无效字符"))?;
+        let c_text = CString::new(text)?;
         let c_text_bytes = c_text.as_bytes_with_nul();
         unsafe {
             let event_ptr = self.as_mut_ptr();
@@ -579,7 +595,9 @@ impl<'a> EventHandle<'a> {
             }
             let p = ffi::ass_malloc(c_text_bytes.len() as size_t);
             if p.is_null() {
-                return Err(anyhow!("分配内存失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "为事件文本分配内存失败".to_string(),
+                });
             }
             ptr::copy_nonoverlapping(c_text_bytes.as_ptr(), p as *mut u8, c_text_bytes.len());
             (*event_ptr).Text = p as *mut c_char;
@@ -632,7 +650,9 @@ impl<'a> EventHandle<'a> {
             }
             let p = ffi::ass_malloc(c_effect_bytes.len() as size_t);
             if p.is_null() {
-                return Err(anyhow!("分配内存失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "为效果分配内存失败".to_string(),
+                });
             }
             ptr::copy_nonoverlapping(c_effect_bytes.as_ptr(), p as *mut u8, c_effect_bytes.len());
             (*event_ptr).Effect = p as *mut c_char;
@@ -640,7 +660,7 @@ impl<'a> EventHandle<'a> {
         Ok(self)
     }
     pub fn set_name(mut self, name: &str) -> Result<Self> {
-        let c_name = CString::new(name).map_err(|_| anyhow!("事件人物名包含无效字符"))?;
+        let c_name = CString::new(name)?;
         let c_name_bytes = c_name.as_bytes_with_nul();
         unsafe {
             let event_ptr = self.as_mut_ptr();
@@ -649,7 +669,9 @@ impl<'a> EventHandle<'a> {
             }
             let p = ffi::ass_malloc(c_name_bytes.len() as size_t);
             if p.is_null() {
-                return Err(anyhow!("分配内存失败"));
+                return Err(LibassError::MemoryAllocation {
+                    context: "为事件人物名分配内存失败".to_string(),
+                });
             }
             ptr::copy_nonoverlapping(c_name_bytes.as_ptr(), p as *mut u8, c_name_bytes.len());
             (*event_ptr).Name = p as *mut c_char;

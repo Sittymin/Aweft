@@ -1,5 +1,5 @@
+use crate::error::{AlignmentParseError, LibassError, Result};
 use crate::ffi;
-use anyhow::{Result, anyhow};
 use bitflags::bitflags;
 use palette::{Srgb, Srgba, WithAlpha};
 use std::ffi::CString;
@@ -162,9 +162,9 @@ impl From<Alignment> for LibassAlignment {
 }
 
 impl TryFrom<LibassAlignment> for Alignment {
-    type Error = &'static str;
+    type Error = AlignmentParseError;
 
-    fn try_from(value: LibassAlignment) -> Result<Self, Self::Error> {
+    fn try_from(value: LibassAlignment) -> std::result::Result<Self, Self::Error> {
         // 使用 `bits()` 进行匹配
         match value.bits() {
             1 => Ok(Alignment::BottomLeft),
@@ -176,16 +176,16 @@ impl TryFrom<LibassAlignment> for Alignment {
             9 => Ok(Alignment::MiddleLeft),
             10 => Ok(Alignment::MiddleCenter),
             11 => Ok(Alignment::MiddleRight),
-            _ => Err("Invalid libass alignment value"),
+            _ => Err(AlignmentParseError::InvalidLibassBits { bits: value.bits() }),
         }
     }
 }
 
 // INFO: ASS 规范当中是使用小键盘布局
 impl FromStr for Alignment {
-    type Err = String;
+    type Err = AlignmentParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "1" => Ok(Alignment::BottomLeft),
             "2" => Ok(Alignment::BottomCenter),
@@ -196,7 +196,9 @@ impl FromStr for Alignment {
             "7" => Ok(Alignment::TopLeft),
             "8" => Ok(Alignment::TopCenter),
             "9" => Ok(Alignment::TopRight),
-            _ => Err(format!("Invalid value for Alignment: {}", s)),
+            _ => Err(AlignmentParseError::InvalidValue {
+                value: s.to_string(),
+            }),
         }
     }
 }
@@ -235,8 +237,7 @@ impl Effect {
     }
 
     pub fn to_cstring(&self) -> Result<CString> {
-        CString::new(self.as_str())
-            .map_err(|e| anyhow!("Effect '{}' 包含无效的NUL字符: {}", self.as_str(), e))
+        Ok(CString::new(self.as_str())?)
     }
 }
 

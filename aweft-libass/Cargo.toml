@@ -8,6 +8,7 @@ libc = "0.2.175"
 bitflags = "2.9.2"
 anyhow = "1.0"
 palette = "0.7.6"
+thiserror = "2.0.17"
 
 [build-dependencies]
 bindgen = "0.72.0"

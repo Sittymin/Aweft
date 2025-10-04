@@ -1,6 +1,6 @@
+use crate::error::{LibassError, Result};
 use crate::ffi;
 use crate::renderer::DefaultFontProvider;
-use anyhow::{Result, anyhow};
 use libc::{c_char, c_int, c_void};
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -81,7 +81,9 @@ impl Library {
         unsafe {
             let ptr = ffi::ass_library_init();
             if ptr.is_null() {
-                return Err(anyhow!("ass_library_init 失败"));
+                return Err(LibassError::LibraryInit {
+                    context: "ass_library_init 返回空指针".to_string(),
+                });
             }
             Ok(Self { ptr })
         }
@@ -92,8 +94,7 @@ impl Library {
     }
 
     pub fn set_fonts_dir(&mut self, fonts_dir: &str) -> Result<()> {
-        let c_fonts_dir =
-            CString::new(fonts_dir).map_err(|e| anyhow!("字体目录包含无效字符: {}", e))?;
+        let c_fonts_dir = CString::new(fonts_dir)?;
         unsafe {
             ffi::ass_set_fonts_dir(self.ptr, c_fonts_dir.as_ptr());
         }
@@ -142,9 +143,9 @@ impl Library {
 
         // 存储回调到全局映射中
         {
-            let mut callbacks = GLOBAL_CALLBACKS
-                .lock()
-                .map_err(|_| anyhow!("无法获取回调锁"))?;
+            let mut callbacks = GLOBAL_CALLBACKS.lock().map_err(|_| LibassError::Internal {
+                context: "无法获取回调锁".to_string(),
+            })?;
             callbacks.insert(library_ptr, callback_arc);
         }
 
@@ -162,9 +163,9 @@ impl Library {
 
         // 从全局映射中移除回调
         {
-            let mut callbacks = GLOBAL_CALLBACKS
-                .lock()
-                .map_err(|_| anyhow!("无法获取回调锁"))?;
+            let mut callbacks = GLOBAL_CALLBACKS.lock().map_err(|_| LibassError::Internal {
+                context: "无法获取回调锁".to_string(),
+            })?;
             callbacks.remove(&library_ptr);
         }
 
@@ -204,7 +205,7 @@ impl Library {
     }
 
     pub fn add_font(&mut self, name: &str, data: &[u8]) -> Result<()> {
-        let c_name = CString::new(name).map_err(|e| anyhow!("字体名包含无效字符: {}", e))?;
+        let c_name = CString::new(name)?;
 
         unsafe {
             ffi::ass_add_font(

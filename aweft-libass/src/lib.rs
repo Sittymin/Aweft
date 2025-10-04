@@ -1,15 +1,19 @@
+use crate::error::Result;
 use crate::library::{Library, MessageLevel};
 use crate::renderer::{DefaultFontProvider, RenderResult, Renderer};
 use crate::track::{Track, TrackType};
-use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
 
+pub mod error;
 mod ffi;
 mod library;
 mod renderer;
 mod track;
 pub mod types;
+
+// 重新导出核心类型
+pub use crate::error::{AlignmentParseError, LibassError};
 
 /// 获取 libass 版本（保持向后兼容）
 pub fn version() -> i32 {
