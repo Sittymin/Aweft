@@ -1,10 +1,12 @@
 use crate::error::{BorderStyleParseError, ParseError, Result, StyleFieldParseError};
+use crate::types::event::{Event, Events};
 use aweft_libass::types::{Alignment, AssColorRgba};
 use log::warn;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Display;
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
 use super::BoldType;
@@ -35,6 +37,129 @@ impl Display for BorderStyle {
             BorderStyle::OpaqueBox => "3",
         };
         write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Default)]
+pub struct Styles {
+    map: HashMap<String, StyleWithoutName>,
+}
+
+impl Deref for Styles {
+    type Target = HashMap<String, StyleWithoutName>;
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl DerefMut for Styles {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.map
+    }
+}
+
+impl From<HashMap<String, StyleWithoutName>> for Styles {
+    fn from(map: HashMap<String, StyleWithoutName>) -> Self {
+        Self { map }
+    }
+}
+
+impl From<Styles> for HashMap<String, StyleWithoutName> {
+    fn from(styles: Styles) -> Self {
+        styles.map
+    }
+}
+
+impl Extend<(String, StyleWithoutName)> for Styles {
+    fn extend<T: IntoIterator<Item = (String, StyleWithoutName)>>(&mut self, iter: T) {
+        self.map.extend(iter);
+    }
+}
+
+impl FromIterator<(String, StyleWithoutName)> for Styles {
+    fn from_iter<T: IntoIterator<Item = (String, StyleWithoutName)>>(iter: T) -> Self {
+        Self {
+            map: HashMap::from_iter(iter),
+        }
+    }
+}
+
+impl IntoIterator for Styles {
+    type Item = (String, StyleWithoutName);
+    type IntoIter = std::collections::hash_map::IntoIter<String, StyleWithoutName>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Styles {
+    type Item = (&'a String, &'a StyleWithoutName);
+    type IntoIter = std::collections::hash_map::Iter<'a, String, StyleWithoutName>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Styles {
+    type Item = (&'a String, &'a mut StyleWithoutName);
+    type IntoIter = std::collections::hash_map::IterMut<'a, String, StyleWithoutName>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.iter_mut()
+    }
+}
+
+impl Styles {
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: HashMap::with_capacity(capacity),
+        }
+    }
+
+    pub fn rename(
+        &mut self,
+        old_name: &str,
+        new_name: impl Into<String>,
+        events: Events,
+    ) -> Result<()> {
+        let new_name = new_name.into();
+        if let Some(style_without_name) = self.remove(old_name) {
+            self.insert(new_name.clone(), style_without_name);
+
+            for event in events {
+                match event {
+                    Event::Dialogue(mut d) => {
+                        if d.style == old_name {
+                            d.style = new_name.clone()
+                        }
+                    }
+                    Event::Comment(mut c) => {
+                        if c.style == old_name {
+                            c.style = new_name.clone();
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn duplicate(&mut self, source: &str, new_name: impl Into<String>) -> Result<()> {
+        let value = self
+            .get(source)
+            .ok_or_else(|| ParseError::Format {
+                message: format!("源样式 '{}' 不存在", source),
+            })?
+            .clone();
+
+        self.insert(new_name.into(), value.clone());
+        Ok(())
     }
 }
 

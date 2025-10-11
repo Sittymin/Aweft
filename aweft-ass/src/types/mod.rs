@@ -1,11 +1,12 @@
 use crate::error::{BoldTypeParseError, WrapStyleParseError};
-use std::collections::HashMap;
+use crate::types::event::Events;
+use crate::types::style::Styles;
+use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use event::Event;
 use script::ScriptInfo;
-use style::StyleWithoutName;
 pub mod drawing;
 pub mod event;
 pub mod parse_drawing_command;
@@ -136,7 +137,42 @@ pub enum Section {
 #[derive(Debug)]
 pub struct ASSFile {
     pub script_info: ScriptInfo,
-    pub styles: HashMap<String, StyleWithoutName>,
-    pub events: Vec<Event>,
+    pub styles: Styles,
+    pub events: Events,
     // TODO: 嵌入字体
+}
+
+impl ASSFile {
+    pub fn new() -> Self {
+        ASSFile {
+            script_info: ScriptInfo::default(),
+            styles: Styles::new(),
+            events: Events::new(),
+        }
+    }
+    pub fn is_style_used(&self, style_name: &str) -> bool {
+        self.events.iter().any(|e| match e {
+            Event::Dialogue(d) => d.style == style_name,
+            Event::Comment(c) => c.style == style_name,
+        })
+    }
+
+    pub fn get_used_styles(&self) -> HashSet<String> {
+        self.events
+            .iter()
+            .map(|e| match e {
+                Event::Dialogue(d) => &d.style,
+                Event::Comment(c) => &c.style,
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn remove_unused_styles(&mut self) -> usize {
+        let used: HashSet<_> = self.get_used_styles();
+
+        let before = self.styles.len();
+        self.styles.retain(|name, _| used.contains(name.as_str()));
+        before - self.styles.len()
+    }
 }

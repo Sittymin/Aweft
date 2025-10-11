@@ -10,11 +10,117 @@ use nom::{
 };
 
 use crate::types::drawing::DrawingCommand;
-use std::str::FromStr;
-use std::{collections::HashMap, fmt};
+use rayon::iter::{FromParallelIterator, IntoParallelIterator};
+use std::{
+    borrow::{Borrow, BorrowMut},
+    collections::HashMap,
+    fmt,
+    ops::DerefMut,
+};
 use std::{error::Error, fmt::Display};
+use std::{ops::Deref, str::FromStr};
 
 use super::{parse_style_override::parse_multiple_overrides, tags::StyleTag, time::AssTime};
+
+#[derive(Debug, PartialEq, Clone, Default)]
+pub struct Events {
+    vec: Vec<Event>,
+}
+
+impl Deref for Events {
+    type Target = Vec<Event>;
+    fn deref(&self) -> &Self::Target {
+        &self.vec
+    }
+}
+
+impl DerefMut for Events {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.vec
+    }
+}
+
+impl AsMut<Vec<Event>> for Events {
+    fn as_mut(&mut self) -> &mut Vec<Event> {
+        &mut self.vec
+    }
+}
+impl AsRef<Vec<Event>> for Events {
+    fn as_ref(&self) -> &Vec<Event> {
+        &self.vec
+    }
+}
+impl Borrow<Vec<Event>> for Events {
+    fn borrow(&self) -> &Vec<Event> {
+        &self.vec
+    }
+}
+
+impl BorrowMut<Vec<Event>> for Events {
+    fn borrow_mut(&mut self) -> &mut Vec<Event> {
+        &mut self.vec
+    }
+}
+impl IntoIterator for Events {
+    type Item = Event;
+    type IntoIter = std::vec::IntoIter<Event>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.vec.into_iter()
+    }
+}
+impl From<Vec<Event>> for Events {
+    fn from(vec: Vec<Event>) -> Self {
+        Events { vec }
+    }
+}
+impl FromIterator<Event> for Events {
+    fn from_iter<T: IntoIterator<Item = Event>>(iter: T) -> Self {
+        Events {
+            vec: Vec::from_iter(iter),
+        }
+    }
+}
+
+impl FromParallelIterator<Event> for Events {
+    fn from_par_iter<I>(par_iter: I) -> Self
+    where
+        I: IntoParallelIterator<Item = Event>,
+    {
+        Events {
+            vec: Vec::from_par_iter(par_iter),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Events {
+    type Item = &'a Event;
+    type IntoIter = std::slice::Iter<'a, Event>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.vec.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Events {
+    type Item = &'a mut Event;
+    type IntoIter = std::slice::IterMut<'a, Event>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.vec.iter_mut()
+    }
+}
+
+impl Events {
+    pub fn new() -> Self {
+        Self { vec: Vec::new() }
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            vec: Vec::with_capacity(capacity),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventField {
@@ -441,6 +547,21 @@ pub struct Dialogue {
     pub effect: Option<Effect>,
     /// 对话文本，已解析为文本片段和样式标签的序列。
     pub content: Vec<TextSegment>,
+}
+
+impl Dialogue {
+    pub fn plain_text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|ts| {
+                if let TextSegment::Text(t) = ts {
+                    Some(t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 /// 注释行，渲染时会被忽略。

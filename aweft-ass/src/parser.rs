@@ -1,15 +1,16 @@
 use crate::error::{ParseError, Result};
+use crate::types::event::Events;
+use crate::types::style::Styles;
 use crate::types::{
-    event::{Event, EventParser},
+    event::EventParser,
     script::{parse_script_info_line, ScriptInfo, ScriptInfoBuilder},
-    style::{StyleParser, StyleWithoutName},
+    style::StyleParser,
     *,
 };
 use crossbeam_channel::bounded;
 use log::{error, warn};
 use rayon::prelude::*;
 use std::{
-    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
@@ -26,8 +27,8 @@ enum SectionContent {
 #[derive(Debug)]
 enum ParsedSection {
     ScriptInfo(ScriptInfo),
-    Styles(HashMap<String, StyleWithoutName>),
-    Events(Vec<Event>),
+    Styles(Styles),
+    Events(Events),
     // NOTE: 仅有Event的时间与文本字段可能存在不可自动修复的错误
     Error(String),
 }
@@ -160,13 +161,6 @@ where
 }
 
 impl ASSFile {
-    pub fn new() -> Self {
-        Self {
-            script_info: script::ScriptInfo::default(),
-            styles: HashMap::new(),
-            events: Vec::new(),
-        }
-    }
     pub fn parse_from_file(path: impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -183,6 +177,7 @@ impl ASSFile {
         // 用于收集解析过程中的错误
         let (error_sender, error_receiver) = bounded::<String>(10);
 
+        // HACK: 多线程是有开销的，后续需要测试多少数据时收益超过开销
         // 使用 Rayon 的 `scope` 可以更安全地处理线程和错误
         rayon::scope(|s| {
             // 在 Rayon scope 内启动一个生产者
@@ -331,9 +326,11 @@ impl ASSFile {
         writer.flush()?;
         Ok(())
     }
+    #[allow(dead_code)]
     fn merge_events_with(mut self, other: &ASSFile) {
-        self.events = [&self.events[..], &other.events[..]].concat();
+        self.events.extend(other.events.iter().cloned());
     }
+    #[allow(dead_code)]
     fn merge_styles_with(mut self, other: &ASSFile) {
         for (key, value) in other.styles.clone() {
             if !self.styles.contains_key(&key) {
@@ -1265,7 +1262,7 @@ mod tests {
                 match parse_events_section(lines) {
                     ParsedSection::Events(events) => {
                         assert_eq!(events.len(), expected.len());
-                        assert_eq!(events, expected);
+                        assert_eq!(*events, expected);
                     },
 
                     other => panic!("Expected Events, got: {:?}", other),
