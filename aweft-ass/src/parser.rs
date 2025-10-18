@@ -326,18 +326,6 @@ impl ASSFile {
         writer.flush()?;
         Ok(())
     }
-    #[allow(dead_code)]
-    fn merge_events_with(mut self, other: &ASSFile) {
-        self.events.extend(other.events.iter().cloned());
-    }
-    #[allow(dead_code)]
-    fn merge_styles_with(mut self, other: &ASSFile) {
-        for (key, value) in other.styles.clone() {
-            if !self.styles.contains_key(&key) {
-                self.styles.insert(key, value);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1262,7 +1250,7 @@ mod tests {
                 match parse_events_section(lines) {
                     ParsedSection::Events(events) => {
                         assert_eq!(events.len(), expected.len());
-                        assert_eq!(*events, expected);
+                        assert_eq!(events, expected);
                     },
 
                     other => panic!("Expected Events, got: {:?}", other),

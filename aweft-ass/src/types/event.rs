@@ -8,77 +8,213 @@ use nom::{
     sequence::preceded,
     IResult, Parser,
 };
+use slotmap::{new_key_type, SlotMap};
 
 use crate::types::drawing::DrawingCommand;
-use rayon::iter::{FromParallelIterator, IntoParallelIterator};
-use std::{
-    borrow::{Borrow, BorrowMut},
-    collections::HashMap,
-    fmt,
-    ops::DerefMut,
-};
+use rayon::iter::{FromParallelIterator, IntoParallelIterator, ParallelIterator};
+use std::{collections::HashMap, fmt, ops::RangeBounds};
 use std::{error::Error, fmt::Display};
-use std::{ops::Deref, str::FromStr};
+use std::{slice, str::FromStr};
 
 use super::{parse_style_override::parse_multiple_overrides, tags::StyleTag, time::AssTime};
 
-#[derive(Debug, PartialEq, Clone, Default)]
+new_key_type! {
+    pub struct EventKey;
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct Events {
-    vec: Vec<Event>,
+    map: SlotMap<EventKey, Event>,
+    order: Vec<EventKey>,
 }
 
-impl Deref for Events {
-    type Target = Vec<Event>;
-    fn deref(&self) -> &Self::Target {
-        &self.vec
+pub struct EventsIterMut<'a> {
+    map: &'a mut SlotMap<EventKey, Event>,
+    order_iter: slice::Iter<'a, EventKey>,
+}
+impl<'a> Iterator for EventsIterMut<'a> {
+    type Item = &'a mut Event;
+    fn next(&mut self) -> Option<Self::Item> {
+        let id = self.order_iter.next()?;
+        let event_ref_option = self.map.get_mut(*id);
+        // 内部指向 Event 的指针肯定是不会重复的
+        unsafe { event_ref_option.map(|e| &mut *(e as *mut Event)) }
+    }
+}
+pub struct EventsDrain<'a> {
+    events: &'a mut Events,
+    drained_keys: std::vec::IntoIter<EventKey>,
+}
+impl<'a> Iterator for EventsDrain<'a> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let key = self.drained_keys.next()?;
+        self.events.map.remove(key)
+    }
+}
+impl<'a> Drop for EventsDrain<'a> {
+    fn drop(&mut self) {
+        for &key in self.drained_keys.as_ref() {
+            self.events.map.remove(key);
+        }
     }
 }
 
-impl DerefMut for Events {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.vec
+impl Events {
+    pub fn new() -> Self {
+        Self {
+            map: SlotMap::with_key(),
+            order: Vec::new(),
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &Event> {
+        self.order.iter().filter_map(|key| self.map.get(*key))
+    }
+    pub fn iter_mut(&mut self) -> EventsIterMut<'_> {
+        EventsIterMut {
+            map: &mut self.map,
+            order_iter: self.order.iter(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+    pub fn insert(&mut self, index: usize, event: Event) {
+        let key = self.map.insert(event);
+        self.order.insert(index, key);
+    }
+    pub fn remove(&mut self, index: usize) -> Event {
+        let key = self.order.remove(index);
+        self.map.remove(key).unwrap()
+    }
+
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&Event) -> bool,
+    {
+        self.order.retain(|&key| {
+            let event = self.map.get(key).unwrap();
+
+            if f(event) {
+                true
+            } else {
+                self.map.remove(key);
+                false
+            }
+        });
+    }
+    pub fn retain_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Event) -> bool,
+    {
+        self.order.retain(|&key| {
+            let event = self.map.get_mut(key).unwrap();
+
+            if f(event) {
+                true
+            } else {
+                self.map.remove(key);
+                false
+            }
+        });
+    }
+
+    pub fn push(&mut self, event: Event) {
+        let key = self.map.insert(event);
+        self.order.push(key);
+    }
+    pub fn pop(&mut self) -> Option<Event> {
+        if let Some(key) = self.order.pop() {
+            return self.map.remove(key);
+        }
+        None
+    }
+    pub fn pop_if(&mut self, predicate: impl FnOnce(&mut Event) -> bool) -> Option<Event> {
+        if let Some(&last_key) = self.order.last() {
+            let event = self.map.get_mut(last_key).unwrap();
+            if predicate(event) {
+                self.order.pop();
+                return self.map.remove(last_key);
+            }
+        }
+        None
+    }
+    pub fn append(&mut self, other: &mut Vec<Event>) {
+        self.order.reserve(other.len());
+        self.map.reserve(other.len());
+        for event in other.drain(..) {
+            let key = self.map.insert(event);
+            self.order.push(key);
+        }
+    }
+
+    pub fn drain<R>(&mut self, range: R) -> EventsDrain<'_>
+    where
+        R: RangeBounds<usize>,
+    {
+        // 直接被消耗了
+        let drained_keys_vec: Vec<EventKey> = self.order.drain(range).collect();
+
+        EventsDrain {
+            events: self,
+            drained_keys: drained_keys_vec.into_iter(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.order.clear();
+        self.map.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
     }
 }
 
-impl AsMut<Vec<Event>> for Events {
-    fn as_mut(&mut self) -> &mut Vec<Event> {
-        &mut self.vec
-    }
-}
-impl AsRef<Vec<Event>> for Events {
-    fn as_ref(&self) -> &Vec<Event> {
-        &self.vec
-    }
-}
-impl Borrow<Vec<Event>> for Events {
-    fn borrow(&self) -> &Vec<Event> {
-        &self.vec
-    }
-}
-
-impl BorrowMut<Vec<Event>> for Events {
-    fn borrow_mut(&mut self) -> &mut Vec<Event> {
-        &mut self.vec
-    }
-}
 impl IntoIterator for Events {
     type Item = Event;
     type IntoIter = std::vec::IntoIter<Event>;
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.vec.into_iter()
+    fn into_iter(mut self) -> Self::IntoIter {
+        let mut ordered_events = Vec::with_capacity(self.order.len());
+
+        for key in self.order {
+            if let Some(event) = self.map.remove(key) {
+                ordered_events.push(event);
+            }
+        }
+
+        ordered_events.into_iter()
     }
 }
+
 impl From<Vec<Event>> for Events {
     fn from(vec: Vec<Event>) -> Self {
-        Events { vec }
+        let capacity = vec.len();
+        let mut map = SlotMap::with_capacity_and_key(capacity);
+        let mut order = Vec::with_capacity(capacity);
+
+        for event in vec {
+            let key = map.insert(event);
+            order.push(key);
+        }
+
+        Self { map, order }
     }
 }
 impl FromIterator<Event> for Events {
     fn from_iter<T: IntoIterator<Item = Event>>(iter: T) -> Self {
-        Events {
-            vec: Vec::from_iter(iter),
+        let mut map = SlotMap::with_key();
+        let mut order = Vec::new();
+
+        for event in iter {
+            let key = map.insert(event);
+            order.push(key);
         }
+
+        Self { map, order }
     }
 }
 
@@ -87,38 +223,18 @@ impl FromParallelIterator<Event> for Events {
     where
         I: IntoParallelIterator<Item = Event>,
     {
-        Events {
-            vec: Vec::from_par_iter(par_iter),
+        let events_vec: Vec<Event> = par_iter.into_par_iter().collect();
+        events_vec.into()
+    }
+}
+
+impl PartialEq<Vec<Event>> for Events {
+    fn eq(&self, other: &Vec<Event>) -> bool {
+        if self.len() != other.len() {
+            return false;
         }
-    }
-}
 
-impl<'a> IntoIterator for &'a Events {
-    type Item = &'a Event;
-    type IntoIter = std::slice::Iter<'a, Event>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.vec.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut Events {
-    type Item = &'a mut Event;
-    type IntoIter = std::slice::IterMut<'a, Event>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.vec.iter_mut()
-    }
-}
-
-impl Events {
-    pub fn new() -> Self {
-        Self { vec: Vec::new() }
-    }
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            vec: Vec::with_capacity(capacity),
-        }
+        self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
 }
 
