@@ -46,18 +46,20 @@ bitflags! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AreaType {
     Empty,
-    // The main timeline view with audio waveform and subtitle events.
+    // 和 Aegisub 一样差不多的所有字幕行预览，不过如果开始编辑当行将会放大并显示一些当行细节（即聚焦于当行，上下仅有几行简要预览）
+    LineEditor,
+    // 实际渲染并可以使用交互式工具的地方(也是视频播放的地方)
+    Viewport,
+    // 像视频轨道一样使用长方形填充占用的时间部分
     Timeline,
-    Video,
-    SubtitleEditor,
-    StyleManager,
-    FileBrowser,
+    // StyleManager,
+    // FileBrowser,
 
-    // Displays original script or notes to aid in translation.
-    TranslationAssistant,
+    // // Displays original script or notes to aid in translation.
+    // TranslationAssistant,
 
-    // A panel with tools for advanced timing adjustments (e.g., shift, stretch).
-    TimingProcessor,
+    // // A panel with tools for advanced timing adjustments (e.g., shift, stretch).
+    // TimingProcessor,
 
     // Shows properties of the video, audio, or subtitle file.
     Properties,

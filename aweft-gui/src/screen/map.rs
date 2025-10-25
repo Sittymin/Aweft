@@ -70,7 +70,7 @@ impl ScrAreaMap {
             v_mid_top,     // 右上（上边中点）
             v_mid_middle,  // 右下（中心点）
             v_left_middle, // 左下（左边中点）
-            AreaType::Timeline,
+            AreaType::Viewport,
             false,
             false,
             false,
@@ -86,7 +86,7 @@ impl ScrAreaMap {
             v_top_right,    // 右上
             v_right_middle, // 右下（右边中点）
             v_mid_middle,   // 左下（中心点）
-            AreaType::Video,
+            AreaType::Properties,
             false,
             false,
             false,
@@ -102,7 +102,7 @@ impl ScrAreaMap {
             v_right_middle, // 右上（右边中点）
             v_bottom_right, // 右下
             v_bottom_left,  // 左下
-            AreaType::SubtitleEditor,
+            AreaType::LineEditor,
             false,
             false,
             false,

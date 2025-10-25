@@ -1,0 +1,119 @@
+import { AreaTypeMetadata} from "../core/area_type_metadata.slint";
+import { IconAndText} from "../core/types.slint";
+export component IconComboBox inherits Rectangle {
+    in-out property <int> current-index: -1;
+    in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
+
+    // 当选择改变时触发的回调
+    callback selected(/* new-index: */ int);
+
+    width: 45px;
+    height: 20px;
+    background: #282828;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: #3d3d3d;
+
+    TouchArea {
+        clicked => {
+            popup.show();
+        }
+
+        HorizontalLayout {
+            padding-left: 5px;
+            padding-right: 5px;
+            // 居中排列
+            alignment: center;
+
+            // 当前 AreaType 类型图标
+            if root.current-index >= 0: Image {
+                source: AreaTypeMetadata.items[root.current-index].icon;
+                // 垂直居中
+                y: (parent.height - self.height) / 2;
+                // 需要宽高比1:1
+                width: parent.height;
+                height: parent.height;
+            }
+
+            // 下箭头图标
+            Image {
+                source: root.drop-down-arrow;
+                y: (parent.height - self.height) / 2;
+                // 垂直居中
+                width: 15px;
+                height: 15px;
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: parent.height;
+        width: layout.preferred-width;
+        height: layout.preferred-height;
+
+        property <color> popup-background: #181818;
+        property <color> highlight-color: rgba(255, 255, 255, 0.1);
+
+        Rectangle {
+            background: popup-background;
+            border-radius: 4px;
+            border-width: 2px;
+            border-color: #242424;
+
+            layout := VerticalLayout {
+                padding: 5px;
+                spacing: 5px;
+
+                for item[i] in AreaTypeMetadata.items: item_touch_area := TouchArea {
+                    clicked => {
+                        if root.current-index != i {
+                            root.current-index = i;
+                            root.selected(i);
+                        }
+                        // WARN: 不可以提前，不然之后的代码不会执行
+                        popup.close();
+                    }
+
+                        // 负责视觉表现
+                         
+                        item_background := Rectangle {
+                        background: i == root.current-index ? #4772b3 : popup-background;
+                        border-radius: 4px;
+
+                        // 内容
+                        
+                            HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            min-height: 28px;
+                            spacing: 5px;
+                            alignment: start;
+
+                            Image {
+                                source: item.icon;
+                                width: 20px;
+                                height: 20px;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                vertical-alignment: center;
+                                text: item.text;
+                                color: #e5e5e5;
+                            }
+                        }
+
+                        // 高亮叠加层
+
+                            Rectangle {
+                            visible: item_touch_area.has-hover && i != root.current-index;
+                            background: highlight-color;
+                            border-radius: item_background.border-radius;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

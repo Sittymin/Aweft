@@ -1444,9 +1444,12 @@ impl ScrAreaMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context;
-    use crate::screen::{area::{AreaType, ScrArea}, map::ScrAreaMap};
+    use crate::screen::{
+        area::{AreaType, ScrArea},
+        map::ScrAreaMap,
+    };
     use crate::types::UISettings;
+    use anyhow::Context;
 
     #[test]
     fn test_join_adjacent_areas_small_to_large() {
@@ -1480,7 +1483,7 @@ mod tests {
         screen_map.add_edge_to_geometry(v8, v5); // 左边
 
         // 创建两个区域
-        let mut large_area = ScrArea::new(v1, v2, v3, v4, AreaType::Video, true, false, false);
+        let mut large_area = ScrArea::new(v1, v2, v3, v4, AreaType::Empty, true, false, false);
         large_area.calculate_totrct_and_size(&screen_map.verts, &ui_settings);
         let large_area_key = screen_map.areas.insert(large_area);
 
@@ -1545,8 +1548,8 @@ mod tests {
             // 左侧区域：(0,0) 到 (2,6) - Video类型
             if rect.xmin == 0 && rect.xmax == 2 && rect.ymin == 0 && rect.ymax == 6 {
                 assert!(
-                    matches!(area.area_type, AreaType::Video),
-                    "左侧区域应该是Video类型"
+                    matches!(area.area_type, AreaType::Empty),
+                    "左侧区域应该是Empty类型"
                 );
                 assert_eq!(width, 2, "左侧区域宽度应该是2");
                 assert_eq!(height, 6, "左侧区域高度应该是6");
@@ -1587,8 +1590,8 @@ mod tests {
             // 右侧区域：(6,0) 到 (8,6) - Video类型
             else if rect.xmin == 6 && rect.xmax == 8 && rect.ymin == 0 && rect.ymax == 6 {
                 assert!(
-                    matches!(area.area_type, AreaType::Video),
-                    "右侧区域应该是Video类型"
+                    matches!(area.area_type, AreaType::Empty),
+                    "右侧区域应该是Empty类型"
                 );
                 assert_eq!(width, 2, "右侧区域宽度应该是2");
                 assert_eq!(height, 6, "右侧区域高度应该是6");
@@ -1671,7 +1674,7 @@ mod tests {
             area1_tr,
             area1_br,
             area1_bl,
-            AreaType::Video,
+            AreaType::Empty,
             true,
             false,
             false,

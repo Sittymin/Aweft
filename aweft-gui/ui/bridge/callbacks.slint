@@ -1,0 +1,13 @@
+import {SlintKey, ActionZoneCorner, AreaType} from "../core/types.slint";
+
+// Slint-Rust 桥接层：回调接口
+// Rust 侧通过 on_xxx 连接这些回调
+export global CallbackManager {
+    // 定义回调 - 使用拆分的键值
+    callback actionzone-drag(area-key: SlintKey, corner: ActionZoneCorner, offset-x: length, offset-y: length);
+    callback actionzone-drag-end(area-key: SlintKey, is-cancel: bool);
+    callback edge-drag-end(is-cancel: bool);
+    callback edge-drag(vert-keys: [SlintKey], offset-x: length, offset-y: length);
+    callback switch-area-type(area-key: SlintKey, area-type: AreaType);
+}
+

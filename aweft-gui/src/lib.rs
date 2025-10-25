@@ -113,6 +113,7 @@ impl AppState {
 
             areas_data.push(ScrAreaData {
                 area_key: key_to_slint_area_key(area_key),
+                area_type: types::rust_area_type_to_slint(&area.area_type),
                 x: logical_x as f32,
                 y: logical_y as f32,
                 width: logical_width as f32,
@@ -403,7 +404,7 @@ impl AppWindowManager {
         // 初始化 GStreamer 与播放管线（WGPU 路径）
         gstreamer::init().unwrap();
         let pipeline = gstreamer::ElementFactory::make("playbin")
-            .property("uri", "file:///home/Sittymin/Downloads/IMG_0161.MP4")
+            .property("uri", "file:///home/Sittymin/Videos/IMG_0161.MP4")
             .build()
             .unwrap()
             .downcast::<gstreamer::Pipeline>()
@@ -989,6 +990,34 @@ impl AppWindowManager {
 
                     // 清除拖拽状态
                     state.current_drag_operation = DragOperation::None;
+                }
+            });
+
+        let weak_instance_for_switch_area_type = weak_instance.clone();
+        let state_for_switch_area_type = Rc::clone(&self.state);
+        self.instance
+            .global::<CallbackManager>()
+            .on_switch_area_type(move |area_key, area_type| {
+                println!("area_key:{:#?} area_type:{:#?}", area_key, area_type);
+                let rust_area_key: ScrAreaKey = slint_area_key_to_key(&area_key);
+                let rust_area_type = slint_area_type_to_rust(&area_type);
+                if let Some(instance) = weak_instance_for_switch_area_type.upgrade() {
+                    let mut state = state_for_switch_area_type.borrow_mut();
+
+                    // 尝试获取并修改对应的 Area
+                    if let Some(area) = state.screen_map.areas.get_mut(rust_area_key) {
+                        // 修改 area_type
+                        area.area_type = rust_area_type;
+                        println!("成功切换 Area {:?} 的类型为 {:?}", area_key, area.area_type);
+
+                        // 4. 转换为 Slint 数据格式
+                        let slint_area_data = state.convert_areas_to_slint_data();
+
+                        // 5. 更新 UI
+                        instance.set_scrareas(slint_area_data.as_slice().into());
+                    } else {
+                        eprintln!("错误：找不到 Area {:?}", area_key);
+                    }
                 }
             });
 

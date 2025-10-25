@@ -1,6 +1,24 @@
 slint::include_modules!();
 use slotmap::{Key, KeyData};
 
+/// 将 Rust 的 AreaType 转换为 Slint 的 AreaType
+pub fn rust_area_type_to_slint(area_type: &crate::screen::area::AreaType) -> AreaType {
+    match area_type {
+        // HACK: 可能Empty类型不需要
+        crate::screen::area::AreaType::Empty => AreaType::LineEditor,
+        crate::screen::area::AreaType::LineEditor => AreaType::LineEditor,
+        crate::screen::area::AreaType::Viewport => AreaType::Viewport,
+        crate::screen::area::AreaType::Timeline => AreaType::LineEditor,
+        crate::screen::area::AreaType::Properties => AreaType::LineEditor,
+    }
+}
+pub fn slint_area_type_to_rust(area_type: &AreaType) -> crate::screen::area::AreaType {
+    match area_type {
+        AreaType::LineEditor => crate::screen::area::AreaType::LineEditor,
+        AreaType::Viewport => crate::screen::area::AreaType::Viewport,
+    }
+}
+
 /// 通用：将 SlotMap 的 Key 拆分为 (index, version)
 fn key_to_index_version<K: Key>(key: K) -> (i32, i32) {
     let ffi = key.data().as_ffi();

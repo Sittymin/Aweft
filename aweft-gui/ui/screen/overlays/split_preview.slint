@@ -1,0 +1,40 @@
+// 分割预览覆盖层：显示 Area 分割操作的预览效果
+
+export struct SplitPreviewOverlayData {
+    x1: length,
+    y1: length,
+    width1: length,
+    height1: length,
+    x2: length,
+    y2: length,
+    width2: length,
+    height2: length,
+}
+
+export component SplitPreviewOverlay inherits Rectangle {
+    in property <SplitPreviewOverlayData> data;
+
+    Rectangle {
+        x: data.x1;
+        y: data.y1;
+        width: data.width1;
+        height: data.height1;
+        border-color: rgba(1.0, 1.0, 1.0, 0.4);
+        border-width: parent.border-width;
+        // background: rgba(1.0, 1.0, 1.0, 0.10);
+        background: red;
+        z: 200;
+    }
+
+    Rectangle {
+        x: data.x2;
+        y: data.y2;
+        width: data.width2;
+        height: data.height2;
+        border-color: blue;
+        border-width: parent.border-width;
+        background: rgba(1.0, 1.0, 1.0, 0.10);
+        z: 200;
+    }
+}
+

@@ -1,0 +1,51 @@
+export struct SlintKey {
+    // 低32位：区域索引
+    key-index: int,
+    // 高32位：区域版本
+    key-version: int,
+}
+
+export enum AreaType {
+    line-editor,
+    viewport,
+}
+
+export struct IconAndText {
+    icon: image,
+    text: string,
+}
+
+export struct ScrAreaData {
+    area_key: SlintKey,
+    area_type: AreaType,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    actionzone-side-length: length,
+}
+
+export enum ActionZoneCorner {
+    top-left,
+    top-right,
+    bottom-left,
+    bottom-right
+}
+
+
+export struct ScrEdgeDisplayData {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    active: bool,
+}
+
+export struct ScrEdgeTouchAreaData {
+    // TouchArea 的稳定位置（避免频繁更新）
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    vert_keys: [SlintKey]
+}

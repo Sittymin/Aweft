@@ -1,0 +1,70 @@
+import { SplitPreviewOverlay, SplitPreviewOverlayData } from "../screen/overlays/split_preview.slint";
+import { JoinHighlightOverlay, JoinHighlightOverlayData } from "../screen/overlays/join_highlight.slint";
+import { CloseAreaOverlays, CloseAreaOverlayData } from "../screen/overlays/close_area.slint";
+import { ScrEdgeDisplay } from "../screen/edges/edge_display.slint";
+import { ScrEdgeTouchArea } from "../screen/edges/edge_touch_area.slint";
+import { SlintScrArea } from "../screen/area_container.slint";
+import { SubtitleOverlay } from "../areas/subtitle.slint";
+import { ScrEdgeDisplayData, ScrEdgeTouchAreaData, ScrAreaData } from "../core/types.slint";
+import { VideoState, SubtitleState } from "../bridge/state.slint";
+import { CallbackManager } from "../bridge/callbacks.slint";
+
+// 重新导出全局对象，使其在 Rust 侧可见
+export { VideoState, SubtitleState, CallbackManager }
+
+// 主窗口组件
+export component MainWindow inherits Window {
+    in property <[ScrAreaData]> scrareas: [];
+    in property <[ScrEdgeDisplayData]> scredgedisplays: [];
+    in property <[ScrEdgeTouchAreaData]> scredgetouchareas: [];
+    in property <length> border-width: 2px;
+    in property <bool> show-split-preview-overlay: false;
+    in property <SplitPreviewOverlayData> split-preview-overlay-data;
+    in property <bool> show-join-highlight-overlay: false;
+    in property <JoinHighlightOverlayData> join-highlight-overlay-data;
+    in property <bool> show-close-area-overlays: false;
+    in property <[CloseAreaOverlayData]> close-area-overlay-datas;
+
+    for scrarea[index] in scrareas: SlintScrArea {
+        area-key: scrarea.area_key;
+        area-type: scrarea.area_type;
+        container-x: scrarea.x;
+        container-y: scrarea.y;
+        container-width: scrarea.width;
+        container-height: scrarea.height;
+        actionzone-side-length: scrarea.actionzone-side-length;
+    }
+
+    for scredgedisplay[index] in scredgedisplays: ScrEdgeDisplay {
+        data: scredgedisplay;
+    }
+    for scredgetoucharea[index] in scredgetouchareas: ScrEdgeTouchArea {
+        touch-area-data: scredgetoucharea;
+    }
+
+    if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {
+        data: split-preview-overlay-data;
+        border-width: border-width;
+    }
+    if show-join-highlight-overlay: join-highlight-overlay := JoinHighlightOverlay {
+        data: join-highlight-overlay-data;
+    }
+    if show-close-area-overlays: close-area-overlays := CloseAreaOverlays {
+        x: 0px;
+        y: 0px;
+        datas: close-area-overlay-datas;
+    }
+
+    // 字幕覆盖层，显示在所有内容之上
+    in property <length> subtitle-x: 0px;
+    in property <length> subtitle-y: 0px;
+    subtitle-overlay := SubtitleOverlay {
+        x: subtitle-x;
+        y: subtitle-y;
+        width: SubtitleState.current-subtitle-frame.width * 1px;
+        height: SubtitleState.current-subtitle-frame.height * 1px;
+        border-width: 1px;
+        border-color: lightslategray;
+        subtitle-frame: SubtitleState.current-subtitle-frame;
+    }
+}

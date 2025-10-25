@@ -1,0 +1,31 @@
+import { AreaType, IconAndText } from "types.slint";
+// 注意：icons 路径相对于此文件
+
+export global AreaTypeMetadata {
+    in property <[IconAndText]> items: [
+        { icon: @image-url("../assets/icons/line_editor.svg"), text: "字幕行编辑器" },
+        { icon: @image-url("../assets/icons/viewport.svg"), text: "视口" },
+    ];
+    
+    // 转换函数：AreaType 枚举 -> 数组索引
+    pure callback area-type-to-index(AreaType) -> int;
+    area-type-to-index(area-type) => {
+        if area-type == AreaType.line-editor {
+            return 0;
+        } else if area-type == AreaType.viewport {
+            return 1;
+        }
+        return -1;  // 未知类型
+    }
+    
+    // 转换函数：数组索引 -> AreaType 枚举
+    pure callback index-to-area-type(int) -> AreaType;
+    index-to-area-type(index) => {
+        if index == 0 {
+            return AreaType.line-editor;
+        } else if index == 1 {
+            return AreaType.viewport;
+        }
+        return AreaType.line-editor;
+    }
+}

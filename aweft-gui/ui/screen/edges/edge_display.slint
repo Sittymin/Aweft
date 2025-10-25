@@ -1,0 +1,14 @@
+import {ScrEdgeDisplayData} from "../../core/types.slint";
+
+// 边缘显示组件：显示 Area 之间边缘的视觉效果
+export component ScrEdgeDisplay inherits Rectangle {
+    in property <ScrEdgeDisplayData> data;
+    animate background { duration: 250ms; }
+    background: data.active ? rgba(255,0,0,1) : rgba(0,255,0,0.5);
+    x: data.x;
+    y: data.y;
+    z: 100;
+    width: data.width;
+    height: data.height;
+}
+

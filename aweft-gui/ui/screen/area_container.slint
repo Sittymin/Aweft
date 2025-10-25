@@ -1,0 +1,76 @@
+import {SlintKey, AreaType, ActionZoneCorner} from "../core/types.slint";
+import {ActionZone} from "action_zone.slint";
+import {AreaHeader} from "../areas/area_header.slint";
+import { LineEditor} from "../areas/line_editor/view.slint";
+import {VideoPlayer} from "../areas/viewport/view.slint";
+import {VideoState} from "../bridge/state.slint";
+
+// Area 容器组件：包含 Area 的边框、ActionZone 和内容
+export component SlintScrArea inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <AreaType> area-type;
+    in property <length> container-x;
+    in property <length> container-y;
+    in property <length> container-width;
+    in property <length> container-height;
+    in property <length> actionzone-side-length;
+
+    x: container-x;
+    y: container-y;
+    width: container-width;
+    height: container-height;
+    border-width: 2px;
+    border-color: #00FFFF; // 青色 - 区域边框
+    VerticalLayout {
+        spacing: 5px;
+        AreaHeader {
+            area-key: area-key;
+            area-type: area-type;
+        }
+
+        if area-type == AreaType.line-editor: LineEditor { }
+        if area-type == AreaType.viewport: VideoPlayer {
+            video-frame: VideoState.current-video-frame;
+        }
+    }
+
+    ActionZone {
+        x: 0;
+        y: 0;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.top-left;
+        area-key: root.area-key;
+        border-color: #FF0080; // 亮粉色 - 左上角
+    }
+
+    ActionZone {
+        x: container-width - actionzone-side-length;
+        y: 0;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.top-right;
+        area-key: root.area-key;
+        border-color: #0080FF; // 亮蓝色 - 右上角
+    }
+
+    ActionZone {
+        x: container-width - actionzone-side-length;
+        y: container-height - actionzone-side-length;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.bottom-right;
+        area-key: root.area-key;
+        border-color: #FF8000; // 亮橙色 - 右下角
+    }
+
+    ActionZone {
+        x: 0;
+        y: container-height - actionzone-side-length;
+        width: actionzone-side-length;
+        height: actionzone-side-length;
+        position: ActionZoneCorner.bottom-left;
+        area-key: root.area-key;
+        border-color: #FFFF00; // 亮黄色 - 左下角
+    }
+}
