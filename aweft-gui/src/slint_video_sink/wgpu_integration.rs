@@ -5,8 +5,8 @@ use gstreamer::{Buffer, Bus, Element, Fraction, Message, Pipeline};
 use gstreamer::{BusSyncReply, prelude::*};
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use gstreamer_video::{VideoCapsBuilder, VideoFormat, VideoInfo};
-use slint::wgpu_24::wgpu;
-use slint::wgpu_24::wgpu::util::DeviceExt;
+use slint::wgpu_27::wgpu;
+use slint::wgpu_27::wgpu::util::DeviceExt;
 
 pub fn create_sink(pipeline: &Pipeline) -> (Element, SlintWGPUSink) {
     let slint_sink = SlintWGPUSink::new();
@@ -58,7 +58,7 @@ impl SlintWGPUSink {
     ) {
         // 获取 WGPU 设备和队列
         match graphics_api {
-            slint::GraphicsAPI::WGPU24 { device, queue, .. } => {
+            slint::GraphicsAPI::WGPU27 { device, queue, .. } => {
                 self.wgpu_device = Some(Arc::new(device.clone()));
                 self.wgpu_queue = Some(Arc::new(queue.clone()));
             }

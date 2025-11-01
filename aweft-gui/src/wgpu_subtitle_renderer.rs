@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use aweft_libass::types::Image;
-use slint::wgpu_24::wgpu;
+use slint::wgpu_27::wgpu;
 use wgpu::util::DeviceExt; // NOTE: 实例化渲染需要用到 create_buffer_init
 
 // 实例化渲染：每个字幕图块的实例数据
@@ -175,7 +175,7 @@ impl SubtitleRenderer {
     // 3. 【初始化动作】在 `new` 方法中执行一次性的资源创建。
     pub fn new(graphics_api: &slint::GraphicsAPI<'_>) -> Self {
         match graphics_api {
-            slint::GraphicsAPI::WGPU24 { device, queue, .. } => {
+            slint::GraphicsAPI::WGPU27 { device, queue, .. } => {
                 let wgpu_device = device.clone();
                 let wgpu_queue = queue.clone();
 
@@ -590,6 +590,7 @@ impl SubtitleRenderer {
                 label: Some("Subtitle Offscreen Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &render_target_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),

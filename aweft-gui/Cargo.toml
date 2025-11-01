@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 bitflags = "2.9.1"
-slint = { version = "1.12.1", features = ["backend-winit", "renderer-femtovg", "unstable-winit-030", "unstable-wgpu-24"] }
+slint = { version = "1.14.1", features = ["backend-winit", "renderer-femtovg", "unstable-winit-030", "unstable-wgpu-27", "live-preview"] }
+wgpu = { version = "27", package = "wgpu", features = ["wgsl"] }
 slotmap = "1.0.7"
 tokio = { version = "1.47.0", features = ["full"] }
 anyhow = "1.0"
@@ -21,4 +22,4 @@ aweft-libass = { path = "../aweft-libass" }
 bytemuck = "1.23.2"
 
 [build-dependencies]
-slint-build = "1.12.1"
+slint-build = "1.14.1"

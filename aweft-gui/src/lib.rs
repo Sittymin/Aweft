@@ -12,7 +12,7 @@ use screen::area::ScrAreaKey;
 use screen::map::ScrAreaMap;
 use screen::primitives::{Adjacency, Rcti};
 use screen::vertex::ScrVertKey;
-use slint::wgpu_24::{WGPUConfiguration, WGPUSettings};
+use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
 use slint::{
     Model, PhysicalSize, RenderingState,
     winit_030::{WinitWindowAccessor, WinitWindowEventResult, winit},
@@ -370,7 +370,7 @@ impl AppWindowManager {
             let res = sel
                 .backend_name("winit".into())
                 // 使用 WGPU 渲染以支持视频显示
-                .require_wgpu_24(WGPUConfiguration::Automatic(WGPUSettings::default()))
+                .require_wgpu_27(WGPUConfiguration::Automatic(WGPUSettings::default()))
                 .select();
             if let Err(e) = res {
                 eprintln!("Slint 后端选择失败: {:?}", e);
