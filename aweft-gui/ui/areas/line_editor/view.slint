@@ -1,15 +1,62 @@
+import { ListView, VerticalBox } from "std-widgets.slint";
+import { TableHeader, TableColumn, ColumnSortOrder } from "../../widgets/table_header.slint";
 export component LineEditor inherits Rectangle {
-    Text {
-        text: "LineEditor";
-        color: green;
-        font-size: 20px;
+    // 定义列数据
+    in property <[TableColumn]> table-columns: [
+        {
+            title: "名称",
+            width: 200px,
+            sort-order: ColumnSortOrder.unsorted,
+            min-width: 100px,
+            horizontal-stretch: 1
+        },
+        {
+            title: "大小",
+            width: 100px,
+            sort-order: ColumnSortOrder.unsorted,
+            min-width: 50px,
+            horizontal-stretch: 0
+        },
+        {
+            title: "日期",
+            width: 150px,
+            sort-order: ColumnSortOrder.unsorted,
+            min-width: 100px,
+            horizontal-stretch: 0
+        },
+    ];
+    VerticalBox {
+        TableHeader {
+            height: 15px;
+            columns: root.table-columns;
+            column-clicked(index) => {
+                debug("列名被点击", index)
+            }
+            column-resized(index, diff) => {
+                debug("修改列宽度", index, diff)
+            }
+        }
 
-        // 1. 让 Text 元素本身的大小占满父级 (LineEditor)
-        width: 100%;
-        height: 100%;
-
-        // 2. 使用内置的对齐属性来居中文本内容
-        horizontal-alignment: center;
-        vertical-alignment: center;
+        ListView {
+            for data in [
+                { text: "Blue", color: #0000ff, bg: #eeeeee },
+                { text: "Red", color: #ff0000, bg: #eeeeee },
+                { text: "Green", color: #00ff00, bg: #eeeeee },
+                { text: "Yellow", color: #ffff00, bg: #222222 },
+                { text: "Black", color: #000000, bg: #eeeeee },
+                { text: "White", color: #ffffff, bg: #222222 },
+                { text: "Magenta", color: #ff00ff, bg: #eeeeee },
+                { text: "Cyan", color: #00ffff, bg: #222222 },
+            ]: Rectangle {
+                height: 30px;
+                background: data.bg;
+                width: parent.width;
+                Text {
+                    x: 0;
+                    text: data.text;
+                    color: data.color;
+                }
+            }
+        }
     }
 }

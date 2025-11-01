@@ -1,0 +1,132 @@
+export enum ColumnSortOrder {
+    unsorted,
+    ascending,
+    descending,
+}
+
+export struct TableColumn {
+    title: string,
+    width: length,
+    sort-order: ColumnSortOrder,
+    min-width: length,
+    horizontal-stretch: float,
+}
+
+// 单个列头
+component TableHeaderColumn inherits Rectangle {
+    clip: false;
+    in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
+    in property <image> drop-down-up: @image-url("../assets/icons/arrow_drop_up.svg");
+    in property <ColumnSortOrder> sort-order: ColumnSortOrder.unsorted;
+    in property <bool> last;
+    callback clicked;
+    callback adjust-size(length);
+
+    // 点击区域(切换排序)
+    touch-area := TouchArea {
+        width: parent.width - 5px;  // 右侧留空间给调整大小
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    layout := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 4px;
+
+        HorizontalLayout {
+            @children
+        }
+
+        Image {
+            visible: root.sort-order != ColumnSortOrder.unsorted;
+            source: root.sort-order == ColumnSortOrder.ascending ? drop-down-arrow : drop-down-up;
+            width: 12px;
+        }
+    }
+
+    if (!root.last): Rectangle {
+        // 由于 TouchArea不可以超出父元素，所以必须让父元素变大
+        x: root.width - 5px;  // 操作区域：10px，横跨边缘
+        width: 10px;
+        height: 100%;
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            width: 10px;
+            height: 100%;
+            background: movable-touch-area.has-hover ? red : transparent;
+            animate background { duration: 150ms; }
+        }
+
+        movable-touch-area := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            mouse-cursor: ew-resize;
+            moved => {
+                if (self.pressed) {
+                    adjust-size(self.mouse-x - self.pressed-x);
+                }
+            }
+        }
+    }
+}
+
+// 整个表头容器
+export component TableHeader inherits Rectangle {
+    min-height: 10px;
+
+    in property <[TableColumn]> columns;
+    callback column-clicked(column-index: int);
+    callback column-resized(column-index: int, new-width: length);
+    callback height-resized(new-height: length);
+    VerticalLayout {
+        HorizontalLayout {
+            for column[index] in columns: TableHeaderColumn {
+                background: mod(index, 2) == 0 ? blue : green;
+                last: index == columns.length - 1;
+                sort-order: column.sort-order;
+                horizontal-stretch: column.horizontal-stretch;
+                min-width: max(column.min-width, column.width);
+                preferred-width: self.min-width;
+            
+                // 传递列标题作为子元素
+                Text {
+                    text: column.title;
+                    vertical-alignment: center;
+                }
+
+                clicked => {
+                    root.column-clicked(index);
+                }
+                adjust-size(diff) => {
+                    root.column-resized(index, diff);
+                }
+            }
+        }
+    
+        // 底部边框
+        Rectangle {
+            width: 100%;
+            height: 10px;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 100%;
+                height: 2px;
+                background: movable-touch-area.has-hover ? red : transparent;
+                animate background { duration: 150ms; }
+            }
+
+            movable-touch-area := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: ns-resize;
+                moved => {
+                    if (self.pressed) {
+                        height-resized(self.mouse-y - self.pressed-y);
+                    }
+                }
+            }
+        }
+    }
+}
