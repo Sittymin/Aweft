@@ -8,16 +8,16 @@ import { SubtitleOverlay } from "../areas/subtitle.slint";
 import { ScrEdgeDisplayData, ScrEdgeTouchAreaData, ScrAreaData } from "../core/types.slint";
 import { VideoState, SubtitleState } from "../bridge/state.slint";
 import { CallbackManager } from "../bridge/callbacks.slint";
+import { Theme } from "../theme/index.slint";
 
 // 重新导出全局对象，使其在 Rust 侧可见
-export { VideoState, SubtitleState, CallbackManager }
+export { VideoState, SubtitleState, CallbackManager, Theme }
 
 // 主窗口组件
 export component MainWindow inherits Window {
     in property <[ScrAreaData]> scrareas: [];
     in property <[ScrEdgeDisplayData]> scredgedisplays: [];
     in property <[ScrEdgeTouchAreaData]> scredgetouchareas: [];
-    in property <length> border-width: 2px;
     in property <bool> show-split-preview-overlay: false;
     in property <SplitPreviewOverlayData> split-preview-overlay-data;
     in property <bool> show-join-highlight-overlay: false;
@@ -44,18 +44,17 @@ export component MainWindow inherits Window {
 
     if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {
         data: split-preview-overlay-data;
-        border-width: border-width;
+        border-width: Theme.data.split-preview.border-width;
     }
     if show-join-highlight-overlay: join-highlight-overlay := JoinHighlightOverlay {
         data: join-highlight-overlay-data;
     }
     if show-close-area-overlays: close-area-overlays := CloseAreaOverlays {
-        x: 0px;
-        y: 0px;
         datas: close-area-overlay-datas;
     }
 
     // 字幕覆盖层，显示在所有内容之上
+    // HACK: 目前还不是相对于视频Area来说的
     in property <length> subtitle-x: 0px;
     in property <length> subtitle-y: 0px;
     subtitle-overlay := SubtitleOverlay {
@@ -63,8 +62,8 @@ export component MainWindow inherits Window {
         y: subtitle-y;
         width: SubtitleState.current-subtitle-frame.width * 1px;
         height: SubtitleState.current-subtitle-frame.height * 1px;
-        border-width: 1px;
-        border-color: lightslategray;
+        border-width: Theme.data.subtitle-overlay.border-width;
+        border-color: Theme.data.subtitle-overlay.border-color;
         subtitle-frame: SubtitleState.current-subtitle-frame;
     }
 }

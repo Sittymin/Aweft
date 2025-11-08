@@ -1,5 +1,4 @@
-// 合并高亮覆盖层：显示 Area 合并操作的高亮效果
-
+import { Theme } from "../../theme/index.slint";
 export struct JoinHighlightOverlayData {
     x: length,
     y: length,
@@ -9,12 +8,11 @@ export struct JoinHighlightOverlayData {
 
 export component JoinHighlightOverlay inherits Rectangle {
     in property <JoinHighlightOverlayData> data;
-    border-color: rgba(1.0, 1.0, 1.0, 0.4);
-    background: red;
+    border-color: Theme.data.join-highlight.border-color;
+    background: Theme.data.join-highlight.background;
     x: data.x;
     y: data.y;
     z: 200;
     width: data.width;
     height: data.height;
 }
-

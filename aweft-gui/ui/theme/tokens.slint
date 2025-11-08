@@ -1,0 +1,220 @@
+export struct NeutralPalette {
+    background: color,
+    surface: color,
+    header: color,
+    border: color,
+    border-strong: color,
+    text: color,
+    text-muted: color,
+}
+
+export struct WidgetPalette {
+    combo-background: color,
+    combo-border: color,
+    popup-background: color,
+    popup-border: color,
+    popup-highlight: color,
+    popup-item-selected: color,
+    popup-item-text: color,
+}
+
+export struct AccentPalette {
+    primary: color,
+    warning: color,
+    danger: color,
+    info: color,
+    success: color,
+}
+
+export struct AreaPalette {
+    border-color: color,
+}
+
+export struct ActionZonePalette {
+    top-left: color,
+    top-right: color,
+    bottom-right: color,
+    bottom-left: color,
+}
+
+export struct OverlayPalette {
+    border-width: length,
+    subtitle-border: color,
+    split-border: color,
+    split-background-primary: color,
+    split-background-secondary: color,
+    join-border: color,
+    join-background: color,
+    close-background: color,
+}
+
+export struct EdgePalette {
+    active: color,
+    inactive: color,
+}
+
+export struct TablePalette {
+    zebra-even: color,
+    zebra-odd: color,
+    resize-hover: color,
+    resize: color,
+    divider-hover: color,
+    divider: color,
+}
+
+export struct SpacingTokens {
+    xs: length,
+    sm: length,
+    md: length,
+    lg: length,
+}
+
+export struct BorderTokens {
+    thin: length,
+    medium: length,
+    thick: length,
+    radius-xs: length,
+    radius-sm: length,
+    radius-md: length,
+}
+
+export struct ControlTokens {
+    combo-width: length,
+    combo-height: length,
+    popup-icon-size: length,
+    popup-item-icon-size: length,
+    popup-item-min-height: length,
+    line-header-height: length,
+    line-row-height: length,
+    table-header-min-height: length,
+    table-header-padding-horizontal: length,
+    table-header-spacing: length,
+    sort-icon-size: length,
+    resize-handle-width: length,
+    table-bottom-divider-height: length,
+}
+
+export struct LayoutTokens {
+    main-border-width: length,
+    area-spacing: length,
+    area-header-height: length,
+    area-header-spacing: length,
+    actionzone-side-length: length,
+    edge-width: length,
+    area-min-size: length,
+}
+
+export struct ThemeTokens {
+    neutral: NeutralPalette,
+    widget: WidgetPalette,
+    accent: AccentPalette,
+    area: AreaPalette,
+    action-zone: ActionZonePalette,
+    overlay: OverlayPalette,
+    edge: EdgePalette,
+    table: TablePalette,
+    spacing: SpacingTokens,
+    border: BorderTokens,
+    control: ControlTokens,
+    layout: LayoutTokens,
+}
+
+export global Tokens {
+    in-out property <ThemeTokens> data: 
+    {
+        neutral: {
+            background: #181818,
+            surface: #242424,
+            header: #303030,
+            border: #242424,
+            border-strong: #3d3d3d,
+            text: #e5e5e5,
+            text-muted: #9fa4ad,
+        },
+        widget: {
+            combo-background: #282828,
+            combo-border: #3d3d3d,
+            popup-background: #181818,
+            popup-border: #242424,
+            popup-highlight: rgba(255, 255, 255, 0.1),
+            popup-item-selected: #4772b3,
+            popup-item-text: #e5e5e5,
+        },
+        accent:  {
+            primary: #4772b3,
+            warning: #ff8000,
+            danger: #ff0080,
+            info: #0080ff,
+            success: #00ffff,
+        },
+        area: {
+            border-color: #00FFFF,
+        },
+        action-zone: {
+            top-left: #FF0080,
+            top-right: #0080FF,
+            bottom-right: #FF8000,
+            bottom-left: #FFFF00,
+        },
+        overlay: {
+            border-width: 2px,
+            subtitle-border: #778899,
+            split-border: rgba(1.0, 1.0, 1.0, 0.4),
+            split-background-primary: #ff0000,
+            split-background-secondary: rgba(1.0, 1.0, 1.0, 0.10),
+            join-border: rgba(1.0, 1.0, 1.0, 0.4),
+            join-background: #ff0000,
+            close-background: #0000ff,
+        },
+        edge: {
+            active: rgba(255, 0, 0, 1),
+            inactive: rgba(0, 255, 0, 0.5),
+        },
+        table: {
+            zebra-even: #0000ff,
+            zebra-odd: #00ff00,
+            resize-hover: #ff0000,
+            resize: rgba(1.0, 1.0, 1.0, 0.0),
+            divider-hover: #ff0000,
+            divider: rgba(1.0, 1.0, 1.0, 0.0),
+        },
+        spacing: {
+            xs: 4px,
+            sm: 5px,
+            md: 8px,
+            lg: 10px,
+        },
+        border: {
+            thin: 1px,
+            medium: 2px,
+            thick: 4px,
+            radius-xs: 2px,
+            radius-sm: 4px,
+            radius-md: 6px,
+        },
+        control: {
+            combo-width: 45px,
+            combo-height: 20px,
+            popup-icon-size: 15px,
+            popup-item-icon-size: 20px,
+            popup-item-min-height: 28px,
+            line-header-height: 15px,
+            line-row-height: 30px,
+            table-header-min-height: 10px,
+            table-header-padding-horizontal: 8px,
+            table-header-spacing: 4px,
+            sort-icon-size: 12px,
+            resize-handle-width: 10px,
+            table-bottom-divider-height: 5px,
+        },
+        layout: {
+            main-border-width: 2px,
+            area-spacing: 5px,
+            area-header-height: 35px,
+            area-header-spacing: 10px,
+            actionzone-side-length: 10px,
+            edge-width: 10px,
+            area-min-size: 50px,
+        }
+    };
+}

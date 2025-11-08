@@ -1,11 +1,12 @@
 import {ActionZoneCorner, SlintKey} from "../core/types.slint";
 import {CallbackManager} from "../bridge/callbacks.slint";
+import { Theme } from "../theme/index.slint";
 
 // ActionZone 组件：Area 四角的拖拽调整区
 export component ActionZone inherits Rectangle {
     in property <ActionZoneCorner> position;
     in property <SlintKey> area-key;
-    border-width: 2px;
+    border-width: Theme.data.action-zone.border-width;
     property <bool> is-dragging;
 
     TouchArea {
@@ -26,4 +27,3 @@ export component ActionZone inherits Rectangle {
         }
     }
 }
-

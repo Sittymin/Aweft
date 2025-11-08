@@ -1,6 +1,6 @@
+use crate::bridge::types::MainWindow;
 use crate::store::AppStore;
 use crate::store::reducers::media::initialize_media;
-use crate::types::MainWindow;
 use anyhow::{Context, Result};
 use slint::ComponentHandle;
 use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
@@ -32,7 +32,7 @@ impl AppWindowManager {
         }
         let instance = MainWindow::new().context("创建 Slint 主窗口失败")?;
         // FIXME: 这里获得的是未初始化的数据
-        let store = Rc::new(RefCell::new(AppStore::new(&instance.window())));
+        let store = Rc::new(RefCell::new(AppStore::new(&instance)));
         // HACK: 临时直接加载一个视频，并且失败直接崩溃
         initialize_media(
             &mut store.borrow_mut(),

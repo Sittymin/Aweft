@@ -4,8 +4,8 @@ use crate::store::state::AppState;
 /// 将内部区域数据转换为 Slint 需要的格式
 pub fn convert_areas(state: &AppState) -> Vec<ScrAreaData> {
     let mut areas_data = Vec::new();
-    let scale_factor = state.ui_settings.get_scale_factor();
-    let actionzone_side_length = state.ui_settings.get_actionzone_side_length() as f32;
+    let scale_factor = state.theme_settings.get_scale_factor();
+    let actionzone_side_length = state.theme_settings.get_actionzone_side_length() as f32;
 
     for (area_key, area) in &state.screen_map.areas {
         let (geometry_rect, winx, winy) = area.geometry();

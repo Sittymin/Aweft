@@ -1,4 +1,6 @@
-use crate::bridge::types::{key_to_slint_area_key, ScrEdgeDisplayData, ScrEdgeTouchAreaData, SlintKey};
+use crate::bridge::types::{
+    ScrEdgeDisplayData, ScrEdgeTouchAreaData, SlintKey, key_to_slint_area_key,
+};
 use crate::screen::vertex::ScrVertKey;
 use crate::store::state::AppState;
 use std::collections::{HashMap, HashSet};
@@ -23,12 +25,16 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
         if edge.border {
             continue;
         }
-        let v1 = state.screen_map.verts.get(edge.v1).unwrap_or_else(|| {
-            panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v1)
-        });
-        let v2 = state.screen_map.verts.get(edge.v2).unwrap_or_else(|| {
-            panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v2)
-        });
+        let v1 = state
+            .screen_map
+            .verts
+            .get(edge.v1)
+            .unwrap_or_else(|| panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v1));
+        let v2 = state
+            .screen_map
+            .verts
+            .get(edge.v2)
+            .unwrap_or_else(|| panic!("Edge: {:#?} 存在无效Vert: {:#?}", edge_key, edge.v2));
 
         let is_horizontal = v1.vec.y == v2.vec.y;
         let is_vertical = v1.vec.x == v2.vec.x;
@@ -75,8 +81,8 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
     }
 
     // 2) 在每个组内按范围合并相邻/重叠的段
-    let half_edge_width = state.ui_settings.get_half_edge_width();
-    let scale_factor = state.ui_settings.get_scale_factor();
+    let half_edge_width = state.theme_settings.get_half_edge_width();
+    let scale_factor = state.theme_settings.get_scale_factor();
 
     let mut result: Vec<EdgeSegmentData> = Vec::new();
 
@@ -118,17 +124,11 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
         for (start, end, mut keys) in merged {
             keys.sort_by_key(|k| {
                 let v = state.screen_map.verts.get(*k).unwrap();
-                if is_horizontal {
-                    v.vec.x
-                } else {
-                    v.vec.y
-                }
+                if is_horizontal { v.vec.x } else { v.vec.y }
             });
             keys.dedup();
-            let vert_keys_vec: Vec<SlintKey> = keys
-                .into_iter()
-                .map(|k| key_to_slint_area_key(k))
-                .collect();
+            let vert_keys_vec: Vec<SlintKey> =
+                keys.into_iter().map(|k| key_to_slint_area_key(k)).collect();
 
             if is_horizontal {
                 let width = ((end - start) as f64 / scale_factor) as f32;
@@ -190,7 +190,9 @@ pub fn convert_edges_touch(state: &AppState) -> Vec<ScrEdgeTouchAreaData> {
 }
 
 /// 同时转换显示和触摸数据
-pub fn convert_edges_both(state: &AppState) -> (Vec<ScrEdgeDisplayData>, Vec<ScrEdgeTouchAreaData>) {
+pub fn convert_edges_both(
+    state: &AppState,
+) -> (Vec<ScrEdgeDisplayData>, Vec<ScrEdgeTouchAreaData>) {
     let edges_data = compute_edges_data(state);
 
     let display_data = edges_data
@@ -217,5 +219,3 @@ pub fn convert_edges_both(state: &AppState) -> (Vec<ScrEdgeDisplayData>, Vec<Scr
 
     (display_data, touch_data)
 }
-
-

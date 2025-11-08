@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use slotmap::SlotMap;
 
-use crate::types::{ActionZoneCorner, UISettings};
+use crate::bridge::types::{ActionZoneCorner, ThemeSettings};
 
 use super::{
     area::{AreaType, ScrArea, ScrAreaKey},
@@ -22,7 +22,7 @@ impl ScrAreaMap {
         &mut self,
         width: &u32,
         height: &u32,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Vec<ScrAreaKey> {
         // 计算分割点
         let mid_x = width / 2; // 水平中点
@@ -75,7 +75,7 @@ impl ScrAreaMap {
             false,
             false,
         );
-        area1.calculate_totrct_and_size(&self.verts, ui_settings);
+        area1.calculate_totrct_and_size(&self.verts, theme_settings);
         let area1_key = self.areas.insert(area1);
         areas.push(area1_key);
 
@@ -91,7 +91,7 @@ impl ScrAreaMap {
             false,
             false,
         );
-        area2.calculate_totrct_and_size(&self.verts, ui_settings);
+        area2.calculate_totrct_and_size(&self.verts, theme_settings);
         let area2_key = self.areas.insert(area2);
         areas.push(area2_key);
 
@@ -107,7 +107,7 @@ impl ScrAreaMap {
             false,
             false,
         );
-        area3.calculate_totrct_and_size(&self.verts, ui_settings);
+        area3.calculate_totrct_and_size(&self.verts, theme_settings);
         let area3_key = self.areas.insert(area3);
         areas.push(area3_key);
 
@@ -125,7 +125,7 @@ impl ScrAreaMap {
     }
 
     /// 更新所有区域的winx/winy，当窗口大小或DPI改变时调用
-    pub fn update_all_areas_rcti(&mut self, ui_settings: &UISettings) {
+    pub fn update_all_areas_rcti(&mut self, theme_settings: &ThemeSettings) {
         let is_single_area = self.areas.len() == 1;
 
         // 收集需要更新的区域keys（避免借用冲突）
@@ -136,7 +136,7 @@ impl ScrAreaMap {
                 if is_single_area {
                     area.is_single_area = is_single_area;
                 }
-                area.calculate_totrct_and_size(&self.verts, ui_settings);
+                area.calculate_totrct_and_size(&self.verts, theme_settings);
             }
         }
     }
@@ -219,9 +219,9 @@ impl ScrAreaMap {
         self.create_edge(v1, v2)
     }
     /// 将所有顶点按窗口边缘吸附规则校正
-    pub fn enforce_window_edge_snap(&mut self, window_rect: &Rcti, ui_settings: &UISettings) {
-        let d2 = ui_settings.get_edge_filter_boundary().round() as u32; // 2x
-        let d1 = ui_settings.get_edge_snap_target().round() as u32; // 1x
+    pub fn enforce_window_edge_snap(&mut self, window_rect: &Rcti, theme_settings: &ThemeSettings) {
+        let d2 = theme_settings.get_edge_filter_boundary().round() as u32; // 2x
+        let d1 = theme_settings.get_edge_snap_target().round() as u32; // 1x
 
         let top_line = window_rect.ymin.saturating_add(d1);
         let bottom_line = window_rect.ymax.saturating_sub(d1);
@@ -392,7 +392,7 @@ impl ScrAreaMap {
         &mut self,
         old_rect: &Rcti,
         new_rect: &Rcti,
-        ui_setting: &UISettings,
+        theme_setting: &ThemeSettings,
     ) {
         // 1. 计算缩放比例
         let scale_x =
@@ -416,14 +416,13 @@ impl ScrAreaMap {
         }
 
         // 3. 重新计算所有区域的几何
-        self.update_all_areas_rcti(ui_setting);
+        self.update_all_areas_rcti(theme_setting);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::UISettings;
 
     #[test]
     fn test_create_edge_simple() {

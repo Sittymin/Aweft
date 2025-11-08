@@ -1,63 +1,85 @@
-export enum ColumnSortOrder {
-    unsorted,
-    ascending,
-    descending,
-}
-
+import { Theme } from "../theme/index.slint";
 export struct TableColumn {
     title: string,
     width: length,
-    sort-order: ColumnSortOrder,
+    sort-order: SortOrder,
     min-width: length,
     horizontal-stretch: float,
 }
 
-// 单个列头
 component TableHeaderColumn inherits Rectangle {
     clip: false;
     in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
     in property <image> drop-down-up: @image-url("../assets/icons/arrow_drop_up.svg");
-    in property <ColumnSortOrder> sort-order: ColumnSortOrder.unsorted;
+    in property <SortOrder> sort-order: SortOrder.unsorted;
+    in property <bool> first;
     in property <bool> last;
     callback clicked;
     callback adjust-size(length);
 
-    // 点击区域(切换排序)
-    touch-area := TouchArea {
-        width: parent.width - 5px;  // 右侧留空间给调整大小
+    // click column(change sort-order)
+
+    // first column
+    // █████████████████████████████░░░
+    if (root.first && !root.last): TouchArea {
+        width: parent.width - (Theme.data.table-header.resize-handle-width / 2);
+        clicked => {
+            root.clicked();
+        }
+    }
+    // middle column
+    // ░░░██████████████████████████░░░
+    if (!root.first && !root.last): TouchArea {
+        x: Theme.data.table-header.resize-handle-width / 2;
+        width: parent.width - Theme.data.table-header.resize-handle-width;
+        clicked => {
+            root.clicked();
+        }
+    }
+    // last column
+    // ░░░█████████████████████████████
+    if (!root.first && root.last): TouchArea {
+        x: Theme.data.table-header.resize-handle-width / 2;
+        width: parent.width - (Theme.data.table-header.resize-handle-width / 2);
+        clicked => {
+            root.clicked();
+        }
+    }
+    // single column
+    // ████████████████████████████████
+    if (root.first && root.last): TouchArea {
+        width: parent.width;
         clicked => {
             root.clicked();
         }
     }
 
     layout := HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 4px;
+        padding-left: Theme.data.table-header.padding-horizontal;
+        padding-right: Theme.data.table-header.padding-horizontal;
+        spacing: Theme.data.table-header.spacing;
 
-        HorizontalLayout {
-            @children
-        }
+        @children
 
         Image {
-            visible: root.sort-order != ColumnSortOrder.unsorted;
-            source: root.sort-order == ColumnSortOrder.ascending ? drop-down-arrow : drop-down-up;
-            width: 12px;
+            visible: root.sort-order != SortOrder.unsorted;
+            source: root.sort-order == SortOrder.ascending ? drop-down-arrow : drop-down-up;
+            width: Theme.data.table-header.sort-icon-size;
+            height: Theme.data.table-header.sort-icon-size;
         }
     }
 
-    if (!root.last): Rectangle {
-        // 由于 TouchArea不可以超出父元素，所以必须让父元素变大
-        x: root.width - 5px;  // 操作区域：10px，横跨边缘
-        width: 10px;
+    // not first column and not single column
+    if (!root.first && !(root.first && root.last)): Rectangle {
+
+        // NOTE: since TouchArea cannot extend beyond its parent element, the parent element must enlarged.
+        x: -(Theme.data.table-header.resize-handle-width / 2);
+        width: Theme.data.table-header.resize-handle-width;
         height: 100%;
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            width: 10px;
-            height: 100%;
-            background: movable-touch-area.has-hover ? red : transparent;
-            animate background { duration: 150ms; }
-        }
+
+        // NOTE: it needs to be on the left; otherwise, the background color of the subsequent columns will overwrite the current background color.
+        background: movable-touch-area.has-hover ? Theme.data.table-header.resize-hover-color : Theme.data.table-header.resize-color;
+        animate background { duration: 150ms; }
 
         movable-touch-area := TouchArea {
             width: parent.width;
@@ -72,7 +94,6 @@ component TableHeaderColumn inherits Rectangle {
     }
 }
 
-// 整个表头容器
 export component TableHeader inherits Rectangle {
     min-height: 10px;
 
@@ -84,13 +105,14 @@ export component TableHeader inherits Rectangle {
         HorizontalLayout {
             for column[index] in columns: TableHeaderColumn {
                 background: mod(index, 2) == 0 ? blue : green;
+                first: index == 0;
                 last: index == columns.length - 1;
                 sort-order: column.sort-order;
                 horizontal-stretch: column.horizontal-stretch;
                 min-width: max(column.min-width, column.width);
                 preferred-width: self.min-width;
             
-                // 传递列标题作为子元素
+                // column title
                 Text {
                     text: column.title;
                     vertical-alignment: center;
@@ -100,22 +122,17 @@ export component TableHeader inherits Rectangle {
                     root.column-clicked(index);
                 }
                 adjust-size(diff) => {
-                    root.column-resized(index, diff);
+                    root.column-resized(/* modify the previous column */ index - 1, diff);
                 }
             }
         }
     
-        // 底部边框
+        // bottom border
         Rectangle {
             width: 100%;
-            height: 10px;
-            Rectangle {
-                y: (parent.height - self.height) / 2;
-                width: 100%;
-                height: 2px;
-                background: movable-touch-area.has-hover ? red : transparent;
-                animate background { duration: 150ms; }
-            }
+            height: Theme.data.table-header.bottom-divider-height;
+            background: movable-touch-area.has-hover ? Theme.data.table-header.bottom-divider-hover-color : Theme.data.table-header.bottom-divider-color;
+            animate background { duration: 150ms; }
 
             movable-touch-area := TouchArea {
                 width: parent.width;

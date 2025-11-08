@@ -4,6 +4,7 @@ import {AreaHeader} from "../areas/area_header.slint";
 import { LineEditor} from "../areas/line_editor/view.slint";
 import {VideoPlayer} from "../areas/viewport/view.slint";
 import {VideoState} from "../bridge/state.slint";
+import { Theme } from "../theme/index.slint";
 
 // Area 容器组件：包含 Area 的边框、ActionZone 和内容
 export component SlintScrArea inherits Rectangle {
@@ -19,10 +20,10 @@ export component SlintScrArea inherits Rectangle {
     y: container-y;
     width: container-width;
     height: container-height;
-    border-width: 2px;
-    border-color: #00FFFF; // 青色 - 区域边框
+    border-width: Theme.data.area-container.border-width;
+    border-color: Theme.data.area-container.border-color;
     VerticalLayout {
-        spacing: 5px;
+        spacing: Theme.data.area-container.content-spacing;
         AreaHeader {
             area-key: area-key;
             area-type: area-type;
@@ -41,7 +42,7 @@ export component SlintScrArea inherits Rectangle {
         height: actionzone-side-length;
         position: ActionZoneCorner.top-left;
         area-key: root.area-key;
-        border-color: #FF0080; // 亮粉色 - 左上角
+        border-color: Theme.data.action-zone.top-left-border-color;
     }
 
     ActionZone {
@@ -51,7 +52,7 @@ export component SlintScrArea inherits Rectangle {
         height: actionzone-side-length;
         position: ActionZoneCorner.top-right;
         area-key: root.area-key;
-        border-color: #0080FF; // 亮蓝色 - 右上角
+        border-color: Theme.data.action-zone.top-right-border-color;
     }
 
     ActionZone {
@@ -61,7 +62,7 @@ export component SlintScrArea inherits Rectangle {
         height: actionzone-side-length;
         position: ActionZoneCorner.bottom-right;
         area-key: root.area-key;
-        border-color: #FF8000; // 亮橙色 - 右下角
+        border-color: Theme.data.action-zone.bottom-right-border-color;
     }
 
     ActionZone {
@@ -71,6 +72,6 @@ export component SlintScrArea inherits Rectangle {
         height: actionzone-side-length;
         position: ActionZoneCorner.bottom-left;
         area-key: root.area-key;
-        border-color: #FFFF00; // 亮黄色 - 左下角
+        border-color: Theme.data.action-zone.bottom-left-border-color;
     }
 }

@@ -1,0 +1,214 @@
+import { Tokens } from "tokens.slint";
+import { Mixins } from "mixins.slint";
+
+export struct MainWindowTheme {
+    border-width: length,
+    area-min-size: length,
+}
+
+export struct SubtitleOverlayTheme {
+    border-width: length,
+    border-color: color,
+}
+
+export struct AreaContainerTheme {
+    border-width: length,
+    border-color: color,
+    content-spacing: length,
+}
+
+export struct ActionZoneTheme {
+    border-width: length,
+    side-length: length,
+    top-left-border-color: color,
+    top-right-border-color: color,
+    bottom-right-border-color: color,
+    bottom-left-border-color: color,
+}
+
+export struct AreaHeaderTheme {
+    height: length,
+    background: color,
+    padding: length,
+    spacing: length,
+}
+
+export struct AreaTypeSwitcherPopupTheme {
+    background: color,
+    highlight-color: color,
+    border-radius: length,
+    border-width: length,
+    border-color: color,
+    padding: length,
+    spacing: length,
+    item-selected-background: color,
+    item-padding-horizontal: length,
+    item-spacing: length,
+    item-min-height: length,
+    item-icon-size: length,
+    item-text-color: color,
+    item-border-radius: length,
+}
+
+export struct AreaTypeSwitcherTheme {
+    width: length,
+    height: length,
+    background: color,
+    border-radius: length,
+    border-width: length,
+    border-color: color,
+    layout-padding-horizontal: length,
+    popup-icon-size: length,
+    popup: AreaTypeSwitcherPopupTheme,
+}
+
+export struct TableHeaderTheme {
+    min-height: length,
+    padding-horizontal: length,
+    spacing: length,
+    sort-icon-size: length,
+    resize-handle-width: length,
+    resize-hover-color: color,
+    resize-color: color,
+    zebra-background-even: color,
+    zebra-background-odd: color,
+    bottom-divider-height: length,
+    bottom-divider-hover-color: color,
+    bottom-divider-color: color,
+}
+
+export struct LineEditorTheme {
+    header-height: length,
+    row-height: length,
+}
+
+export struct EdgeDisplayTheme {
+    width: length,
+    active-color: color,
+    inactive-color: color,
+}
+
+export struct SplitPreviewTheme {
+    border-width: length,
+    border-color: color,
+    background-primary: color,
+    background-secondary: color,
+}
+
+export struct JoinHighlightTheme {
+    border-color: color,
+    background: color,
+}
+
+export struct CloseAreaTheme {
+    background: color,
+}
+
+export struct ThemeData {
+    main-window: MainWindowTheme,
+    subtitle-overlay: SubtitleOverlayTheme,
+    area-container: AreaContainerTheme,
+    action-zone: ActionZoneTheme,
+    area-header: AreaHeaderTheme,
+    area-type-switcher: AreaTypeSwitcherTheme,
+    table-header: TableHeaderTheme,
+    line-editor: LineEditorTheme,
+    edge-display: EdgeDisplayTheme,
+    split-preview: SplitPreviewTheme,
+    join-highlight: JoinHighlightTheme,
+    close-area: CloseAreaTheme,
+}
+
+export global Theme {
+    in-out property <ThemeData> data: {
+        main-window: {
+            border-width: Tokens.data.layout.main-border-width,
+            area-min-size: Tokens.data.layout.area-min-size,
+        },
+        subtitle-overlay: {
+            border-width: Tokens.data.border.thin,
+            border-color: Tokens.data.overlay.subtitle-border,
+        },
+        area-container: {
+            border-width: Tokens.data.border.medium,
+            border-color: Tokens.data.area.border-color,
+            content-spacing: Tokens.data.layout.area-spacing,
+        },
+        action-zone: {
+            border-width: Tokens.data.border.medium,
+            side-length: Tokens.data.layout.actionzone-side-length,
+            top-left-border-color: Tokens.data.action-zone.top-left,
+            top-right-border-color: Tokens.data.action-zone.top-right,
+            bottom-right-border-color: Tokens.data.action-zone.bottom-right,
+            bottom-left-border-color: Tokens.data.action-zone.bottom-left,
+        },
+        area-header: {
+            height: Tokens.data.layout.area-header-height,
+            background: Tokens.data.neutral.header,
+            padding: Tokens.data.spacing.sm,
+            spacing: Tokens.data.layout.area-header-spacing,
+        },
+        area-type-switcher: {
+            width: Tokens.data.control.combo-width,
+            height: Tokens.data.control.combo-height,
+            background: Tokens.data.widget.combo-background,
+            border-radius: Tokens.data.border.radius-sm,
+            border-width: Tokens.data.border.thin,
+            border-color: Tokens.data.widget.combo-border,
+            layout-padding-horizontal: Tokens.data.spacing.sm,
+            popup-icon-size: Tokens.data.control.popup-icon-size,
+            popup: {
+                background: Mixins.popup-surface.background,
+                highlight-color: Mixins.popup-item.highlight-color,
+                border-radius: Mixins.popup-surface.border-radius,
+                border-width: Mixins.popup-surface.border-width,
+                border-color: Mixins.popup-surface.border-color,
+                padding: Mixins.popup-surface.padding,
+                spacing: Mixins.popup-surface.spacing,
+                item-selected-background: Mixins.popup-item.selected-background,
+                item-padding-horizontal: Mixins.popup-item.padding-horizontal,
+                item-spacing: Mixins.popup-item.spacing,
+                item-min-height: Mixins.popup-item.min-height,
+                item-icon-size: Mixins.popup-item.icon-size,
+                item-text-color: Mixins.popup-item.text-color,
+                item-border-radius: Mixins.popup-item.border-radius,
+            }
+        },
+        table-header: {
+            min-height: Mixins.table-header.min-height,
+            padding-horizontal: Mixins.table-header.padding-horizontal,
+            spacing: Mixins.table-header.spacing,
+            sort-icon-size: Mixins.table-header.sort-icon-size,
+            resize-handle-width: Mixins.table-header.resize-handle-width,
+            resize-hover-color: Mixins.table-header.resize-hover-color,
+            resize-color: Mixins.table-header.resize-color,
+            zebra-background-even: Tokens.data.table.zebra-even,
+            zebra-background-odd: Tokens.data.table.zebra-odd,
+            bottom-divider-height: Mixins.table-header.bottom-divider-height,
+            bottom-divider-hover-color: Mixins.table-header.bottom-divider-hover-color,
+            bottom-divider-color: Mixins.table-header.bottom-divider-color,
+        },
+        line-editor: {
+            header-height: Tokens.data.control.line-header-height,
+            row-height: Tokens.data.control.line-row-height,
+        },
+        edge-display: {
+            width: Tokens.data.layout.edge-width,
+            active-color: Tokens.data.edge.active,
+            inactive-color: Tokens.data.edge.inactive,
+        },
+        split-preview: {
+            border-width: Tokens.data.overlay.border-width,
+            border-color: Tokens.data.overlay.split-border,
+            background-primary: Tokens.data.overlay.split-background-primary,
+            background-secondary: Tokens.data.overlay.split-background-secondary,
+        },
+        join-highlight: {
+            border-color: Tokens.data.overlay.join-border,
+            background: Tokens.data.overlay.join-background,
+        },
+        close-area: {
+            background: Tokens.data.overlay.close-background,
+        }
+    };
+}

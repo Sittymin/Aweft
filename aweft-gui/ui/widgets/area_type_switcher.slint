@@ -1,5 +1,6 @@
 import { AreaTypeMetadata} from "../core/area_type_metadata.slint";
 import { IconAndText} from "../core/types.slint";
+import { Theme } from "../theme/index.slint";
 export component IconComboBox inherits Rectangle {
     in-out property <int> current-index: -1;
     in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
@@ -7,12 +8,12 @@ export component IconComboBox inherits Rectangle {
     // 当选择改变时触发的回调
     callback selected(/* new-index: */ int);
 
-    width: 45px;
-    height: 20px;
-    background: #282828;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: #3d3d3d;
+    width: Theme.data.area-type-switcher.width;
+    height: Theme.data.area-type-switcher.height;
+    background: Theme.data.area-type-switcher.background;
+    border-radius: Theme.data.area-type-switcher.border-radius;
+    border-width: Theme.data.area-type-switcher.border-width;
+    border-color: Theme.data.area-type-switcher.border-color;
 
     TouchArea {
         clicked => {
@@ -20,8 +21,8 @@ export component IconComboBox inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 5px;
-            padding-right: 5px;
+            padding-left: Theme.data.area-type-switcher.layout-padding-horizontal;
+            padding-right: Theme.data.area-type-switcher.layout-padding-horizontal;
             // 居中排列
             alignment: center;
 
@@ -40,8 +41,8 @@ export component IconComboBox inherits Rectangle {
                 source: root.drop-down-arrow;
                 y: (parent.height - self.height) / 2;
                 // 垂直居中
-                width: 15px;
-                height: 15px;
+                width: Theme.data.area-type-switcher.popup-icon-size;
+                height: Theme.data.area-type-switcher.popup-icon-size;
             }
         }
     }
@@ -52,18 +53,18 @@ export component IconComboBox inherits Rectangle {
         width: layout.preferred-width;
         height: layout.preferred-height;
 
-        property <color> popup-background: #181818;
-        property <color> highlight-color: rgba(255, 255, 255, 0.1);
+        property <color> popup-background: Theme.data.area-type-switcher.popup.background;
+        property <color> highlight-color: Theme.data.area-type-switcher.popup.highlight-color;
 
         Rectangle {
             background: popup-background;
-            border-radius: 4px;
-            border-width: 2px;
-            border-color: #242424;
+            border-radius: Theme.data.area-type-switcher.popup.border-radius;
+            border-width: Theme.data.area-type-switcher.popup.border-width;
+            border-color: Theme.data.area-type-switcher.popup.border-color;
 
             layout := VerticalLayout {
-                padding: 5px;
-                spacing: 5px;
+                padding: Theme.data.area-type-switcher.popup.padding;
+                spacing: Theme.data.area-type-switcher.popup.spacing;
 
                 for item[i] in AreaTypeMetadata.items: item_touch_area := TouchArea {
                     clicked => {
@@ -78,29 +79,29 @@ export component IconComboBox inherits Rectangle {
                         // 负责视觉表现
                          
                         item_background := Rectangle {
-                        background: i == root.current-index ? #4772b3 : popup-background;
-                        border-radius: 4px;
+                        background: i == root.current-index ? Theme.data.area-type-switcher.popup.item-selected-background : popup-background;
+                        border-radius: Theme.data.area-type-switcher.popup.item-border-radius;
 
                         // 内容
                         
                             HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            min-height: 28px;
-                            spacing: 5px;
+                            padding-left: Theme.data.area-type-switcher.popup.item-padding-horizontal;
+                            padding-right: Theme.data.area-type-switcher.popup.item-padding-horizontal;
+                            min-height: Theme.data.area-type-switcher.popup.item-min-height;
+                            spacing: Theme.data.area-type-switcher.popup.item-spacing;
                             alignment: start;
 
                             Image {
                                 source: item.icon;
-                                width: 20px;
-                                height: 20px;
+                                width: Theme.data.area-type-switcher.popup.item-icon-size;
+                                height: Theme.data.area-type-switcher.popup.item-icon-size;
                                 vertical-alignment: center;
                             }
 
                             Text {
                                 vertical-alignment: center;
                                 text: item.text;
-                                color: #e5e5e5;
+                                color: Theme.data.area-type-switcher.popup.item-text-color;
                             }
                         }
 

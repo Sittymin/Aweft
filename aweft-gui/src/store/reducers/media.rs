@@ -1,4 +1,4 @@
-use crate::{store::AppStore, types::MainWindow};
+use crate::{bridge::types::MainWindow, store::AppStore};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use gstreamer::prelude::*;

@@ -1,13 +1,13 @@
 use crate::bridge::types::{
-    scale_close_overlays, scale_join_overlay, scale_split_overlay, CloseAreaOverlayData,
-    JoinHighlightOverlayData, SplitPreviewOverlayData,
+    CloseAreaOverlayData, JoinHighlightOverlayData, SplitPreviewOverlayData, scale_close_overlays,
+    scale_join_overlay, scale_split_overlay,
 };
 use crate::store::state::{AppState, DragOperation};
 
 /// 转换分割预览覆盖层数据
 pub fn convert_split_overlay(state: &AppState) -> Option<SplitPreviewOverlayData> {
     if let DragOperation::Split { preview_data, .. } = &state.current_drag_operation {
-        let scale_factor = state.ui_settings.get_scale_factor();
+        let scale_factor = state.theme_settings.get_scale_factor();
         Some(scale_split_overlay(preview_data.clone(), scale_factor))
     } else {
         None
@@ -24,12 +24,12 @@ pub fn convert_join_overlay(
         ..
     } = &state.current_drag_operation
     {
-        let scale_factor = state.ui_settings.get_scale_factor();
+        let scale_factor = state.theme_settings.get_scale_factor();
 
         match state.screen_map.preview_join_adjacent_areas(
             *source_area_key,
             *adjacency,
-            &state.ui_settings,
+            &state.theme_settings,
         ) {
             Ok((join_data, close_datas)) => {
                 let join_data_logical = scale_join_overlay(join_data, scale_factor);
@@ -54,5 +54,3 @@ pub fn convert_close_overlays(state: &AppState) -> Vec<CloseAreaOverlayData> {
         Vec::new()
     }
 }
-
-

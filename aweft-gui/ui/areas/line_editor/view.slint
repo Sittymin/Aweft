@@ -1,33 +1,35 @@
 import { ListView, VerticalBox } from "std-widgets.slint";
-import { TableHeader, TableColumn, ColumnSortOrder } from "../../widgets/table_header.slint";
+import { TableHeader, TableColumn} from "../../widgets/table_header.slint";
+import { Theme } from "../../theme/index.slint";
 export component LineEditor inherits Rectangle {
     // 定义列数据
     in property <[TableColumn]> table-columns: [
         {
             title: "名称",
             width: 200px,
-            sort-order: ColumnSortOrder.unsorted,
+            // DEBUG: 测试完后需要改为默认无排序
+            sort-order: SortOrder.ascending,
             min-width: 100px,
             horizontal-stretch: 1
         },
         {
             title: "大小",
             width: 100px,
-            sort-order: ColumnSortOrder.unsorted,
+            sort-order: SortOrder.unsorted,
             min-width: 50px,
             horizontal-stretch: 0
         },
         {
             title: "日期",
             width: 150px,
-            sort-order: ColumnSortOrder.unsorted,
+            sort-order: SortOrder.unsorted,
             min-width: 100px,
             horizontal-stretch: 0
         },
     ];
     VerticalBox {
         TableHeader {
-            height: 15px;
+            height: Theme.data.line-editor.header-height;
             columns: root.table-columns;
             column-clicked(index) => {
                 debug("列名被点击", index)
@@ -48,7 +50,7 @@ export component LineEditor inherits Rectangle {
                 { text: "Magenta", color: #ff00ff, bg: #eeeeee },
                 { text: "Cyan", color: #00ffff, bg: #222222 },
             ]: Rectangle {
-                height: 30px;
+                height: Theme.data.line-editor.row-height;
                 background: data.bg;
                 width: parent.width;
                 Text {

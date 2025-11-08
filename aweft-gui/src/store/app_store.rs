@@ -9,10 +9,13 @@ pub struct AppStore {
 }
 
 impl AppStore {
-    /// 创建新的 Store
-    pub fn new(window: &slint::Window) -> Self {
+    /// 创建新的 Store（从 MainWindow 以访问主题系统）
+    pub fn new(main_window: &crate::bridge::types::MainWindow) -> Self {
+        use slint::ComponentHandle;
+
+        let theme_settings = crate::bridge::types::ThemeSettings::from_main_window(main_window);
         Self {
-            state: AppState::new(window),
+            state: AppState::new(&main_window.window(), theme_settings),
         }
     }
 

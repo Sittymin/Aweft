@@ -97,37 +97,53 @@ pub fn scale_close_overlays(
 /// - 边距等UI元素在物理像素基础上缩放
 /// - 最终传递给Slint时除以scale_factor转换为逻辑坐标
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct UISettings {
+pub struct ThemeSettings {
     scale_factor: f64,                // 缩放因子（从Slint获取）
     base_border_width: f64,           // 基础边框宽度（物理像素）
     base_actionzone_side_length: f64, // 边角区域边长（物理像素）
     base_half_edge_width: f64,
+    area_min_size: u32,
 }
 
-impl Default for UISettings {
-    fn default() -> Self {
-        Self {
-            scale_factor: 1.0,
-            base_border_width: 1.0,
-            base_actionzone_side_length: 5.0,
-            base_half_edge_width: 5.0,
-        }
-    }
-}
+impl ThemeSettings {
+    /// 从 MainWindow 实例和主题系统获取设置
+    /// 这是创建 UISettings 的标准方法，确保所有值都从主题系统读取
+    pub fn from_main_window(main_window: &MainWindow) -> Self {
+        use slint::ComponentHandle;
 
-impl UISettings {
-    /// 从Slint窗口获取缩放设置
-    pub fn from_slint_window(window: &slint::Window) -> Self {
+        let theme = main_window.global::<Theme>();
+        let window = main_window.window();
+
         Self {
             scale_factor: window.scale_factor() as f64,
-            base_border_width: 1.0, // 默认边框宽度
-            base_actionzone_side_length: 10.0,
-            base_half_edge_width: 5.0,
+            base_border_width: theme.get_data().main_window.border_width as f64,
+            base_actionzone_side_length: theme.get_data().action_zone.side_length as f64,
+            // 用于计算正确的中心线位置
+            base_half_edge_width: theme.get_data().edge_display.width as f64 / 2.0,
+            area_min_size: theme.get_data().main_window.area_min_size as u32,
         }
     }
 
     pub fn update_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
+    }
+
+    /// 创建测试用的 ThemeSettings
+    #[cfg(test)]
+    pub fn new(
+        scale_factor: f64,
+        base_border_width: f64,
+        base_actionzone_side_length: f64,
+        base_half_edge_width: f64,
+        area_min_size: u32,
+    ) -> Self {
+        Self {
+            scale_factor,
+            base_border_width,
+            base_actionzone_side_length,
+            base_half_edge_width,
+            area_min_size,
+        }
     }
 
     /// 计算边距像素值（返回物理像素）
@@ -156,15 +172,18 @@ impl UISettings {
         self.base_half_edge_width
     }
 
-    /// 获取边界过滤范围（2倍base_border_width）
+    // NOTE: 窗口边缘Edge自动吸附范围（用于对齐边缘）
     pub fn get_edge_filter_boundary(&self) -> f64 {
-        // TODO: 后续改为面板最小的常量比较好
-        self.base_border_width * 2.0 * self.scale_factor
+        self.area_min_size as f64
     }
 
-    /// 获取边缘对齐目标位置（1倍base_border_width）
+    // NOTE: 窗口边缘Edge自动吸附目标位置（与窗口边缘留出一点空间）
     pub fn get_edge_snap_target(&self) -> f64 {
         self.base_border_width * self.scale_factor
+    }
+
+    pub fn get_area_min_size(&self) -> u32 {
+        self.area_min_size
     }
 
     /// 检查点是否在边界过滤范围内（距离窗口边缘2倍border_width以内）
@@ -179,7 +198,6 @@ impl UISettings {
 
     /// 将点对齐到边缘（1倍border_width距离）
     pub fn snap_point_to_edge(&self, point: u32, window_min: u32, window_max: u32) -> u32 {
-        let boundary = self.get_edge_filter_boundary();
         let target = self.get_edge_snap_target();
         if (point as f64 - window_min as f64) < target {
             return window_min;
@@ -190,5 +208,3 @@ impl UISettings {
         point
     }
 }
-
-

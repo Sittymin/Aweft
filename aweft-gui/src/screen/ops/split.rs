@@ -1,13 +1,13 @@
 use anyhow::Result;
 
 use crate::{
+    bridge::types::{SplitPreviewOverlayData, ThemeSettings},
     screen::{
         area::{ScrArea, ScrAreaKey},
         edge::ScrEdgeKey,
         map::ScrAreaMap,
         vertex::{ScrVertKey, VertPosition},
     },
-    types::{SplitPreviewOverlayData, UISettings},
 };
 
 impl ScrAreaMap {
@@ -16,7 +16,7 @@ impl ScrAreaMap {
         area_key: ScrAreaKey,
         split_coord: u32,
         is_horizontal_split: bool,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Result<ScrAreaKey> {
         let (vert_rect, v1, v2, v3, v4, area_type, is_temp_window, is_fullscreen, is_single_area) = {
             let area = self
@@ -67,9 +67,9 @@ impl ScrAreaMap {
 
             // 重新计算两个区域的几何属性
             let source_area = self.areas.get_mut(area_key).unwrap();
-            source_area.calculate_totrct_and_size(&self.verts, ui_settings);
+            source_area.calculate_totrct_and_size(&self.verts, theme_settings);
             let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
-            new_area_mut.calculate_totrct_and_size(&self.verts, ui_settings);
+            new_area_mut.calculate_totrct_and_size(&self.verts, theme_settings);
 
             // 清理重复的边和顶点（参考Blender的实现）
             self.remove_duplicate_edges();
@@ -107,9 +107,9 @@ impl ScrAreaMap {
 
             // 重新计算两个区域的几何属性
             let source_area = self.areas.get_mut(area_key).unwrap();
-            source_area.calculate_totrct_and_size(&self.verts, ui_settings);
+            source_area.calculate_totrct_and_size(&self.verts, theme_settings);
             let new_area_mut = self.areas.get_mut(new_area_key).unwrap();
-            new_area_mut.calculate_totrct_and_size(&self.verts, ui_settings);
+            new_area_mut.calculate_totrct_and_size(&self.verts, theme_settings);
 
             // 清理重复的边和顶点（参考Blender的实现）
             self.remove_duplicate_edges();
@@ -125,15 +125,15 @@ impl ScrAreaMap {
         &mut self,
         area_key: ScrAreaKey,
         split_data: SplitPreviewOverlayData,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Result<ScrAreaKey> {
         let is_horizontal_split = split_data.width1 != split_data.width2;
         if is_horizontal_split {
             let split_x = split_data.x2 as u32;
-            self.split_area_by_coordinates(area_key, split_x, is_horizontal_split, ui_settings)
+            self.split_area_by_coordinates(area_key, split_x, is_horizontal_split, theme_settings)
         } else {
             let split_y = split_data.y2 as u32;
-            self.split_area_by_coordinates(area_key, split_y, is_horizontal_split, ui_settings)
+            self.split_area_by_coordinates(area_key, split_y, is_horizontal_split, theme_settings)
         }
     }
     /// 插入顶点到两个已存在顶点之间的边上
@@ -169,12 +169,13 @@ impl ScrAreaMap {
         original_offset_y: f64,
         relative_offset_x: f64,
         relative_offset_y: f64,
+        theme_settings: &ThemeSettings,
     ) -> SplitPreviewOverlayData {
         let area = self.areas.get(area_key).unwrap();
         let (tot_rct, winx, winy) = area.geometry();
 
         // 定义最小区域尺寸（像素）
-        const MIN_AREA_SIZE: u32 = 50;
+        let min_area_size = theme_settings.get_area_min_size();
 
         // 根据原始偏移量的绝对值大小决定分割方向
         let is_horizontal_split = original_offset_x.abs() > original_offset_y.abs();
@@ -185,9 +186,9 @@ impl ScrAreaMap {
 
             // WARN: TODO: 这里返回如果实现边拆分后需要合并距离近的顶点
             // 检查是否可以进行水平分割
-            if winx < MIN_AREA_SIZE * 2
-                || split_x < tot_rct.xmin + MIN_AREA_SIZE
-                || split_x > tot_rct.xmax - MIN_AREA_SIZE
+            if winx < min_area_size * 2
+                || split_x < tot_rct.xmin + min_area_size
+                || split_x > tot_rct.xmax - min_area_size
             {
                 // 无法分割，返回完整的原始区域数据
                 return SplitPreviewOverlayData {
@@ -230,9 +231,9 @@ impl ScrAreaMap {
             let split_y = tot_rct.ymin + relative_offset_y as u32;
 
             // 检查是否可以进行垂直分割
-            if winy < MIN_AREA_SIZE * 2
-                || split_y < tot_rct.ymin + MIN_AREA_SIZE
-                || split_y > tot_rct.ymax - MIN_AREA_SIZE
+            if winy < min_area_size * 2
+                || split_y < tot_rct.ymin + min_area_size
+                || split_y > tot_rct.ymax - min_area_size
             {
                 // 无法分割，返回完整的原始区域数据
                 return SplitPreviewOverlayData {
@@ -275,7 +276,6 @@ impl ScrAreaMap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::screen::map::ScrAreaMap;
 
     #[test]

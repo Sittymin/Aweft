@@ -1,0 +1,69 @@
+import { Tokens } from "tokens.slint";
+
+export struct PopupSurfaceMixin {
+    background: color,
+    border-radius: length,
+    border-width: length,
+    border-color: color,
+    padding: length,
+    spacing: length,
+}
+
+export struct PopupItemMixin {
+    min-height: length,
+    padding-horizontal: length,
+    spacing: length,
+    icon-size: length,
+    text-color: color,
+    selected-background: color,
+    highlight-color: color,
+    border-radius: length,
+}
+
+export struct TableHeaderMixin {
+    min-height: length,
+    padding-horizontal: length,
+    spacing: length,
+    sort-icon-size: length,
+    resize-handle-width: length,
+    resize-hover-color: color,
+    resize-color: color,
+    bottom-divider-height: length,
+    bottom-divider-hover-color: color,
+    bottom-divider-color: color,
+}
+
+export global Mixins {
+    in-out property <PopupSurfaceMixin> popup-surface: {
+        background: Tokens.data.widget.popup-background,
+        border-radius: Tokens.data.border.radius-sm,
+        border-width: Tokens.data.border.medium,
+        border-color: Tokens.data.widget.popup-border,
+        padding: Tokens.data.spacing.sm,
+        spacing: Tokens.data.spacing.sm,
+    };
+
+    in-out property <PopupItemMixin> popup-item: {
+        min-height: Tokens.data.control.popup-item-min-height,
+        padding-horizontal: Tokens.data.spacing.lg,
+        spacing: Tokens.data.spacing.sm,
+        icon-size: Tokens.data.control.popup-item-icon-size,
+        text-color: Tokens.data.widget.popup-item-text,
+        selected-background: Tokens.data.widget.popup-item-selected,
+        highlight-color: Tokens.data.widget.popup-highlight,
+        border-radius: Tokens.data.border.radius-sm,
+    };
+
+    in-out property <TableHeaderMixin> table-header: {
+        min-height: Tokens.data.control.table-header-min-height,
+        padding-horizontal: Tokens.data.control.table-header-padding-horizontal,
+        spacing: Tokens.data.control.table-header-spacing,
+        sort-icon-size: Tokens.data.control.sort-icon-size,
+        resize-handle-width: Tokens.data.control.resize-handle-width,
+        resize-hover-color: Tokens.data.table.resize-hover,
+        resize-color: Tokens.data.table.resize,
+        bottom-divider-height: Tokens.data.control.table-bottom-divider-height,
+        bottom-divider-hover-color: Tokens.data.table.divider-hover,
+        bottom-divider-color: Tokens.data.table.divider,
+    };
+}

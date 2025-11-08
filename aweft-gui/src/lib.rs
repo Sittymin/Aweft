@@ -4,15 +4,14 @@ pub mod bridge;
 pub mod screen;
 pub mod slint_video_sink;
 pub mod store;
-pub mod types;
 pub mod ui_update;
 mod wgpu_subtitle_renderer;
 
 use anyhow::{Context, Result};
+use bridge::types::*;
 use screen::area::ScrAreaKey;
 use screen::primitives::Adjacency;
 use screen::vertex::ScrVertKey;
-use types::*;
 
 /// 拖拽操作的状态信息
 #[derive(Debug, Clone)]

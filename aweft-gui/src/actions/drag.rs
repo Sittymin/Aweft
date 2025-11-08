@@ -1,6 +1,6 @@
 use slint::ModelRc;
 
-use crate::types::{ActionZoneCorner, SlintKey};
+use crate::bridge::types::{ActionZoneCorner, SlintKey};
 
 /// 拖拽相关 Action
 #[derive(Debug, Clone)]

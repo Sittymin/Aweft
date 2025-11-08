@@ -1,5 +1,4 @@
-// 分割预览覆盖层：显示 Area 分割操作的预览效果
-
+import { Theme } from "../../theme/index.slint";
 export struct SplitPreviewOverlayData {
     x1: length,
     y1: length,
@@ -19,10 +18,9 @@ export component SplitPreviewOverlay inherits Rectangle {
         y: data.y1;
         width: data.width1;
         height: data.height1;
-        border-color: rgba(1.0, 1.0, 1.0, 0.4);
-        border-width: parent.border-width;
-        // background: rgba(1.0, 1.0, 1.0, 0.10);
-        background: red;
+        border-color: Theme.data.split-preview.border-color;
+        border-width: Theme.data.split-preview.border-width;
+        background: Theme.data.split-preview.background-primary;
         z: 200;
     }
 
@@ -31,10 +29,9 @@ export component SplitPreviewOverlay inherits Rectangle {
         y: data.y2;
         width: data.width2;
         height: data.height2;
-        border-color: blue;
-        border-width: parent.border-width;
-        background: rgba(1.0, 1.0, 1.0, 0.10);
+        border-color: Theme.data.split-preview.border-color;
+        border-width: Theme.data.split-preview.border-width;
+        background: Theme.data.split-preview.background-secondary;
         z: 200;
     }
 }
-

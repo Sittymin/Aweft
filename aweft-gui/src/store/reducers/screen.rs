@@ -27,7 +27,7 @@ pub fn handle_resize(state: &mut AppState, width: u32, height: u32) -> Result<St
     state.screen_map.scale_vertices_to_window(
         &old_window_rect,
         &new_window_rect,
-        &state.ui_settings,
+        &state.theme_settings,
     );
 
     // 更新状态中的窗口大小
@@ -36,7 +36,7 @@ pub fn handle_resize(state: &mut AppState, width: u32, height: u32) -> Result<St
     // 处理边缘顶点，避免微小错位
     state
         .screen_map
-        .enforce_window_edge_snap(&new_window_rect, &state.ui_settings);
+        .enforce_window_edge_snap(&new_window_rect, &state.theme_settings);
 
     let new_size = (width, height);
 
@@ -48,12 +48,14 @@ pub fn handle_resize(state: &mut AppState, width: u32, height: u32) -> Result<St
 
 /// 处理缩放因子改变
 pub fn handle_scale_change(state: &mut AppState, scale_factor: f64) -> Result<StateChange> {
-    let old_scale = state.ui_settings.get_scale_factor();
+    let old_scale = state.theme_settings.get_scale_factor();
 
-    state.ui_settings.update_scale_factor(scale_factor);
+    state.theme_settings.update_scale_factor(scale_factor);
 
     // 更新所有区域的几何属性
-    state.screen_map.update_all_areas_rcti(&state.ui_settings);
+    state
+        .screen_map
+        .update_all_areas_rcti(&state.theme_settings);
 
     Ok(StateChange::Screen(ScreenChange::ScaleChanged {
         old_scale,
@@ -69,13 +71,13 @@ pub fn handle_initialize(state: &mut AppState, width: u32, height: u32) -> Resul
 
     state
         .screen_map
-        .create_three_area_layout(&width, &height, &state.ui_settings);
+        .create_three_area_layout(&width, &height, &state.theme_settings);
 
     // 标记窗口边框边缘
     let current_rect = state.current_window_rect();
     state
         .screen_map
-        .mark_window_border_edges(&current_rect, &state.ui_settings);
+        .mark_window_border_edges(&current_rect, &state.theme_settings);
 
     state.initialized = true;
 

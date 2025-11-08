@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 
 use crate::{
+    bridge::types::{CloseAreaOverlayData, JoinHighlightOverlayData, ThemeSettings},
     screen::{
         area::{ScrArea, ScrAreaKey},
         map::ScrAreaMap,
         primitives::{Adjacency, Rcti},
         vertex::VertPosition,
     },
-    types::{CloseAreaOverlayData, JoinHighlightOverlayData, UISettings},
 };
 
 impl ScrAreaMap {
@@ -72,7 +72,7 @@ impl ScrAreaMap {
         &self,
         source_area_key: ScrAreaKey,
         adjacency: Adjacency,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Result<(JoinHighlightOverlayData, Vec<CloseAreaOverlayData>)> {
         let (source_area_rcti, source_area_width, source_area_height) = self
             .areas
@@ -87,10 +87,7 @@ impl ScrAreaMap {
         };
 
         // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
-        #[cfg(test)]
-        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
-        #[cfg(not(test))]
-        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+        let min_area_size = theme_settings.get_area_min_size();
 
         // 产生的 close 区域
         let mut close_areas_overlay_data: Vec<CloseAreaOverlayData> = Vec::new();
@@ -105,7 +102,7 @@ impl ScrAreaMap {
                 // ┃        ░
                 // ┗━━━━━━━━░
                 // 当分割出来的区域小于最小区域限制时添加到close当中
-                if top.xmin > bottom.xmin && (top.xmin - bottom.xmin) < MIN_AREA_SIZE {
+                if top.xmin > bottom.xmin && (top.xmin - bottom.xmin) < min_area_size {
                     let close_width = top.xmin - bottom.xmin + 1;
                     let close_height = bottom.height();
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -142,7 +139,7 @@ impl ScrAreaMap {
                 // ░target  ┃
                 // ░        ┃
                 // ░━━━━━━━━┛
-                if top.xmax < bottom.xmax && (bottom.xmax - top.xmax) < MIN_AREA_SIZE {
+                if top.xmax < bottom.xmax && (bottom.xmax - top.xmax) < min_area_size {
                     let close_width = bottom.xmax - top.xmax + 1;
                     let close_height = bottom.height();
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -181,7 +178,7 @@ impl ScrAreaMap {
                 // ┗━┳━━━━━━░
                 //   ┃source░
                 //   ┗━━━━━━░
-                if bottom.xmin > top.xmin && (bottom.xmin - top.xmin) < MIN_AREA_SIZE {
+                if bottom.xmin > top.xmin && (bottom.xmin - top.xmin) < min_area_size {
                     let close_width = bottom.xmin - top.xmin + 1;
                     let close_height = top.height();
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -218,7 +215,7 @@ impl ScrAreaMap {
                 // ░━━━━━━┳━┛
                 // ░source┃
                 // ░━━━━━━┛
-                if bottom.xmax < top.xmax && (top.xmax - bottom.xmax) < MIN_AREA_SIZE {
+                if bottom.xmax < top.xmax && (top.xmax - bottom.xmax) < min_area_size {
                     let close_width = top.xmax - bottom.xmax + 1;
                     let close_height = top.height();
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -253,7 +250,7 @@ impl ScrAreaMap {
                 // ┏━━━━━━┫          ┃
                 // ┃source┃  target  ┃
                 // ░░░░░░░░░░░░░░░░░░░
-                if left.ymin > right.ymin && (left.ymin - right.ymin) < MIN_AREA_SIZE {
+                if left.ymin > right.ymin && (left.ymin - right.ymin) < min_area_size {
                     let close_width = right.width();
                     let close_height = left.ymin - right.ymin + 1;
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -285,7 +282,7 @@ impl ScrAreaMap {
                 // ┃source┃  target  ┃
                 // ┗━━━━━━┫          ┃
                 //        ┗━━━━━━━━━━┛
-                if left.ymax < right.ymax && (right.ymax - left.ymax) < MIN_AREA_SIZE {
+                if left.ymax < right.ymax && (right.ymax - left.ymax) < min_area_size {
                     let close_width = right.width();
                     let close_height = right.ymax - left.ymax + 1;
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -318,7 +315,7 @@ impl ScrAreaMap {
                 // ┃          ┣━━━━━━┓
                 // ┃  target  ┃source┃
                 // ░░░░░░░░░░░░░░░░░░░
-                if right.ymin > left.ymin && (right.ymin - left.ymin) < MIN_AREA_SIZE {
+                if right.ymin > left.ymin && (right.ymin - left.ymin) < min_area_size {
                     let close_width = left.width();
                     let close_height = right.ymin - left.ymin + 1;
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -349,7 +346,7 @@ impl ScrAreaMap {
                 // ┃  target  ┃source┃
                 // ┃          ┣━━━━━━┛
                 // ┗━━━━━━━━━━┛
-                if right.ymax < left.ymax && (left.ymax - right.ymax) < MIN_AREA_SIZE {
+                if right.ymax < left.ymax && (left.ymax - right.ymax) < min_area_size {
                     let close_width = left.width();
                     let close_height = left.ymax - right.ymax + 1;
                     close_areas_overlay_data.push(CloseAreaOverlayData {
@@ -386,7 +383,7 @@ impl ScrAreaMap {
         source_area_key: ScrAreaKey,
         target_area_key: ScrAreaKey,
         adjacency: Adjacency,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Result<()> {
         if source_area_key == target_area_key {
             return Ok(());
@@ -398,10 +395,7 @@ impl ScrAreaMap {
         let mut working_source_area_key: ScrAreaKey = source_area_key;
 
         // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
-        #[cfg(test)]
-        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
-        #[cfg(not(test))]
-        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+        let min_area_size = theme_settings.get_area_min_size();
 
         match adjacency {
             Adjacency::TopToBottom { top, bottom } => {
@@ -418,9 +412,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         top.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (top.xmin - bottom.xmin) < MIN_AREA_SIZE {
+                    if (top.xmin - bottom.xmin) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -437,7 +431,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         bottom.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -453,9 +447,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         top.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (bottom.xmax - top.xmax) < MIN_AREA_SIZE {
+                    if (bottom.xmax - top.xmax) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -471,7 +465,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         bottom.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?)
                 }
 
@@ -529,9 +523,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         bottom.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (bottom.xmin - top.xmin) < MIN_AREA_SIZE {
+                    if (bottom.xmin - top.xmin) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -548,7 +542,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         top.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?
                 }
 
@@ -564,9 +558,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         bottom.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (top.xmax - bottom.xmax) < MIN_AREA_SIZE {
+                    if (top.xmax - bottom.xmax) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -582,7 +576,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         top.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?)
                 }
 
@@ -637,9 +631,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         left.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (left.ymin - right.ymin) < MIN_AREA_SIZE {
+                    if (left.ymin - right.ymin) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -653,7 +647,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         right.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -666,9 +660,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         left.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (right.ymax - left.ymax) < MIN_AREA_SIZE {
+                    if (right.ymax - left.ymax) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -681,7 +675,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         right.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?)
                 }
                 // 开始合并对齐的面板
@@ -735,9 +729,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         right.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (right.ymin - left.ymin) < MIN_AREA_SIZE {
+                    if (right.ymin - left.ymin) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -751,7 +745,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         left.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -764,9 +758,9 @@ impl ScrAreaMap {
                         merged_area_key,
                         right.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
-                    if (left.ymax - right.ymax) < MIN_AREA_SIZE {
+                    if (left.ymax - right.ymax) < min_area_size {
                         new_empty_areas.push(temp_close_area_key)
                     }
                 }
@@ -779,7 +773,7 @@ impl ScrAreaMap {
                         working_source_area_key,
                         left.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?)
                 }
                 // 开始合并对齐的面板
@@ -833,18 +827,18 @@ impl ScrAreaMap {
 
         // 递归清理产生的empty区域
         if !new_empty_areas.is_empty() {
-            self.recursive_fill_close_areas(new_empty_areas, ui_settings)?;
+            self.recursive_fill_close_areas(new_empty_areas, theme_settings)?;
         }
 
         // 重新计算所有区域的几何数据
-        self.update_all_areas_rcti(ui_settings);
+        self.update_all_areas_rcti(theme_settings);
 
         Ok(())
     }
     fn fill_close_area(
         &mut self,
         close_area_key: ScrAreaKey,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Result<Vec<ScrAreaKey>> {
         let best_neighbor = self
             .find_best_neighbor_for_close_area(
@@ -864,10 +858,7 @@ impl ScrAreaMap {
         }
 
         // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
-        #[cfg(test)]
-        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
-        #[cfg(not(test))]
-        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+        let min_area_size = theme_settings.get_area_min_size();
 
         let neighbor_rect = self
             .areas
@@ -892,7 +883,7 @@ impl ScrAreaMap {
 
         // 检测相邻关系
         let adjacency = self
-            .detect_adjacency(neighbor_rect, close_rect, MIN_AREA_SIZE)
+            .detect_adjacency(neighbor_rect, close_rect, min_area_size)
             .context("Area 坐标不一致：没有检测到任何相邻关系")?;
 
         // 产生的空白区域
@@ -916,7 +907,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
                 // ┏━━━━━━━━━━░
@@ -930,7 +921,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -944,7 +935,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 }
                 // ░━━━━━━━━━━┓
@@ -957,7 +948,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 }
 
@@ -1016,7 +1007,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
                 //   ┏━━━━━━━━░
@@ -1030,7 +1021,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.xmin,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -1044,7 +1035,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 // ░━━━━━━━━┓
                 // ░ close  ┃
@@ -1056,7 +1047,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.xmax,
                         true,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 }
 
@@ -1114,7 +1105,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 // ┏━━━━━━━━┓
                 // ┃        ┣━━━━━━━━━┓
@@ -1126,7 +1117,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -1139,7 +1130,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 // ░░░░░░░░░░░░░░░░░░░░
                 // ┃neighbor┃  close  ┃
@@ -1150,7 +1141,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 }
                 // 开始合并对齐的面板
@@ -1207,7 +1198,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 //           ┏━━━━━━━━┓
                 // ┏━━━━━━━━━┫        ┃
@@ -1219,7 +1210,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.ymin,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?;
                 }
 
@@ -1232,7 +1223,7 @@ impl ScrAreaMap {
                         merged_area_key,
                         neighbor_rect.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 // ░░░░░░░░░░░░░░░░░░░░
                 // ┃  close  ┃neighbor┃
@@ -1243,7 +1234,7 @@ impl ScrAreaMap {
                         working_neighbor_area_key,
                         close_rect.ymax,
                         false,
-                        ui_settings,
+                        theme_settings,
                     )?);
                 }
                 // 开始合并对齐的面板
@@ -1302,7 +1293,7 @@ impl ScrAreaMap {
     pub fn recursive_fill_close_areas(
         &mut self,
         close_areas: Vec<ScrAreaKey>,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) -> Result<()> {
         const MAX_ITERATIONS: usize = 100;
         let mut current_close_areas = close_areas;
@@ -1316,7 +1307,7 @@ impl ScrAreaMap {
             for close_area_key in current_close_areas {
                 // 检查区域是否仍然存在（可能在之前的处理中被删除了）
                 if self.areas.contains_key(close_area_key) {
-                    match self.fill_close_area(close_area_key, ui_settings) {
+                    match self.fill_close_area(close_area_key, theme_settings) {
                         Ok(mut new_closes) => {
                             next_close_areas.append(&mut new_closes);
                         }
@@ -1421,12 +1412,10 @@ impl ScrAreaMap {
         &self,
         source_area_key: ScrAreaKey,
         target_area_key: ScrAreaKey,
+        theme_settings: &ThemeSettings,
     ) -> Option<Adjacency> {
         // 最小重叠要求 (与 apply_join_adjacent_areas 保持一致)
-        #[cfg(test)]
-        const MIN_AREA_SIZE: u32 = 1; // 测试时使用更小的值便于口算
-        #[cfg(not(test))]
-        const MIN_AREA_SIZE: u32 = 50; // 生产环境使用正常值
+        let min_area_size = theme_settings.get_area_min_size();
 
         let source_rect = self
             .areas
@@ -1437,24 +1426,30 @@ impl ScrAreaMap {
             .get(target_area_key)?
             .get_raw_geometry(&self.verts);
 
-        self.detect_adjacency(source_rect, target_rect, MIN_AREA_SIZE)
+        self.detect_adjacency(source_rect, target_rect, min_area_size)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::bridge::types::ThemeSettings;
     use crate::screen::{
         area::{AreaType, ScrArea},
         map::ScrAreaMap,
     };
-    use crate::types::UISettings;
     use anyhow::Context;
 
     #[test]
     fn test_join_adjacent_areas_small_to_large() {
         let mut screen_map = ScrAreaMap::new();
-        let ui_settings = UISettings::default();
+        // 手动构造测试用的 ThemeSettings
+        let theme_settings = ThemeSettings::new(
+            1.0,  // scale_factor
+            1.0,  // base_border_width
+            10.0, // base_actionzone_side_length
+            5.0,  // base_half_edge_width
+            1,    // area_min_size (测试用小值)
+        );
 
         // 创建顶点：使用10以内的坐标便于口算
         // 大区域：(0,0) 到 (8,6) - 8x6
@@ -1484,11 +1479,11 @@ mod tests {
 
         // 创建两个区域
         let mut large_area = ScrArea::new(v1, v2, v3, v4, AreaType::Empty, true, false, false);
-        large_area.calculate_totrct_and_size(&screen_map.verts, &ui_settings);
+        large_area.calculate_totrct_and_size(&screen_map.verts, &theme_settings);
         let large_area_key = screen_map.areas.insert(large_area);
 
         let mut small_area = ScrArea::new(v5, v6, v7, v8, AreaType::Timeline, true, false, false);
-        small_area.calculate_totrct_and_size(&screen_map.verts, &ui_settings);
+        small_area.calculate_totrct_and_size(&screen_map.verts, &theme_settings);
         let small_area_key = screen_map.areas.insert(small_area);
 
         // 验证初始状态
@@ -1522,7 +1517,7 @@ mod tests {
             small_area_key,
             large_area_key,
             adjacency,
-            &ui_settings,
+            &theme_settings,
         );
         assert!(result.is_ok(), "合并应该成功: {:?}", result);
 
@@ -1640,7 +1635,14 @@ mod tests {
     #[test]
     fn test_join_non_adjacent_areas_should_fail() {
         let mut screen_map = ScrAreaMap::new();
-        let ui_settings = UISettings::default();
+        // 手动构造测试用的 ThemeSettings
+        let theme_settings = ThemeSettings::new(
+            1.0,  // scale_factor
+            1.0,  // base_border_width
+            10.0, // base_actionzone_side_length
+            5.0,  // base_half_edge_width
+            1,    // area_min_size (测试用小值)
+        );
 
         println!("=== 测试不相邻区域合并（应该失败） ===");
 
@@ -1679,7 +1681,7 @@ mod tests {
             false,
             false,
         );
-        area1.calculate_totrct_and_size(&screen_map.verts, &ui_settings);
+        area1.calculate_totrct_and_size(&screen_map.verts, &theme_settings);
         let area1_key = screen_map.areas.insert(area1);
 
         let mut area2 = ScrArea::new(
@@ -1692,7 +1694,7 @@ mod tests {
             false,
             false,
         );
-        area2.calculate_totrct_and_size(&screen_map.verts, &ui_settings);
+        area2.calculate_totrct_and_size(&screen_map.verts, &theme_settings);
         let area2_key = screen_map.areas.insert(area2);
 
         println!("尝试合并不相邻的区域...");
@@ -1715,8 +1717,12 @@ mod tests {
 
         // 如果真的有相邻关系（不应该发生），测试合并操作
         if let Some(adjacency) = adjacency_result {
-            let result =
-                screen_map.apply_join_adjacent_areas(area1_key, area2_key, adjacency, &ui_settings);
+            let result = screen_map.apply_join_adjacent_areas(
+                area1_key,
+                area2_key,
+                adjacency,
+                &theme_settings,
+            );
             assert!(result.is_err(), "合并不相邻区域应该失败");
         }
         println!("✓ 正确检测到不相邻区域并返回错误");

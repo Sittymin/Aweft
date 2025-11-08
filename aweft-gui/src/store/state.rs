@@ -1,8 +1,8 @@
+use crate::bridge::types::{SplitPreviewOverlayData, ThemeSettings};
 use crate::screen::area::ScrAreaKey;
 use crate::screen::map::ScrAreaMap;
 use crate::screen::primitives::{Adjacency, Rcti};
 use crate::screen::vertex::ScrVertKey;
-use crate::types::{SplitPreviewOverlayData, UISettings};
 use slint::PhysicalSize;
 
 /// 拖拽操作的状态信息
@@ -39,7 +39,7 @@ pub enum DragOperation {
 /// 应用状态和逻辑的唯一管理者
 pub struct AppState {
     pub screen_map: ScrAreaMap,
-    pub ui_settings: UISettings,
+    pub theme_settings: ThemeSettings,
     pub window_size: PhysicalSize,
     pub initialized: bool,
     /// 当前拖拽操作状态
@@ -57,11 +57,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// 构造函数，从 Slint 窗口初始化
-    pub fn new(window: &slint::Window) -> Self {
+    /// 构造函数，接收预先创建的 ThemeSettings
+    pub fn new(window: &slint::Window, theme_settings: ThemeSettings) -> Self {
         Self {
             screen_map: ScrAreaMap::new(),
-            ui_settings: UISettings::from_slint_window(window),
+            theme_settings,
             window_size: window.size(),
             initialized: false,
             current_drag_operation: DragOperation::None,
@@ -83,5 +83,3 @@ impl AppState {
         }
     }
 }
-
-

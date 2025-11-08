@@ -208,9 +208,11 @@ impl ScrAreaMap {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::screen::{area::{AreaType, ScrArea}, map::ScrAreaMap};
-    use crate::types::UISettings;
+    use crate::bridge::types::ThemeSettings;
+    use crate::screen::{
+        area::{AreaType, ScrArea},
+        map::ScrAreaMap,
+    };
 
     #[test]
     fn test_duplicate_edge_removal() {
@@ -248,7 +250,7 @@ mod tests {
     #[test]
     fn test_unused_edge_removal() {
         let mut screen_map = ScrAreaMap::new();
-        let ui_settings = UISettings::default();
+        let ui_settings = ThemeSettings::new(1.0, 1.0, 10.0, 5.0, 50);
 
         // 创建顶点
         let v1 = screen_map.add_vertex_to_geometry(0, 0);

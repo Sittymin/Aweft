@@ -1,11 +1,11 @@
 use crate::{
+    bridge::types::ThemeSettings,
     screen::{
         edge::ScrEdgeKey,
         map::ScrAreaMap,
         primitives::Rcti,
         vertex::{ScrVert, ScrVertKey},
     },
-    types::UISettings,
 };
 
 impl ScrAreaMap {
@@ -111,8 +111,8 @@ impl ScrAreaMap {
     }
 
     /// 根据窗口边界标记边的 `border` 字段：靠近四周范围内的标记为 true，其余为 false。
-    pub fn mark_window_border_edges(&mut self, window_rect: &Rcti, ui_settings: &UISettings) {
-        let d2 = ui_settings.get_edge_filter_boundary().round() as u32;
+    pub fn mark_window_border_edges(&mut self, window_rect: &Rcti, theme_settings: &ThemeSettings) {
+        let d2 = theme_settings.get_edge_filter_boundary().round() as u32;
         for (_, e) in &mut self.edges {
             let Some(v1) = self.verts.get(e.v1) else {
                 panic!("存在无效的索引: {:#?}", e.v1);

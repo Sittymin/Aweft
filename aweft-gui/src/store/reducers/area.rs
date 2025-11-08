@@ -1,7 +1,7 @@
+use crate::bridge::types::{AreaType, SlintKey, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::screen::area::ScrAreaKey;
 use crate::store::state::AppState;
 use crate::store::state_change::{AreasChange, StateChange};
-use crate::types::{AreaType, SlintKey, slint_area_key_to_key, slint_area_type_to_rust};
 use anyhow::Result;
 
 /// 处理区域类型切换
@@ -35,7 +35,7 @@ pub fn handle_switch_type(
 pub fn handle_split(
     state: &mut AppState,
     area_key: ScrAreaKey,
-    preview_data: crate::types::SplitPreviewOverlayData,
+    preview_data: crate::bridge::types::SplitPreviewOverlayData,
 ) -> Result<StateChange> {
     // 验证分割数据是否有效（避免0尺寸的区域）
     if preview_data.width2 <= 0.0 || preview_data.height2 <= 0.0 {
@@ -43,17 +43,17 @@ pub fn handle_split(
         return Ok(StateChange::None);
     }
 
-    let ui_settings = state.ui_settings;
+    let theme_settings = state.theme_settings;
 
     let new_area_key = state
         .screen_map
-        .split_area(area_key, preview_data, &ui_settings)?;
+        .split_area(area_key, preview_data, &theme_settings)?;
 
     // 标记窗口边框边缘
     let current_rect = state.current_window_rect();
     state
         .screen_map
-        .mark_window_border_edges(&current_rect, &ui_settings);
+        .mark_window_border_edges(&current_rect, &theme_settings);
 
     println!("成功分割区域 {:?}", area_key);
 
@@ -70,7 +70,7 @@ pub fn handle_join(
     target_area_key: ScrAreaKey,
     adjacency: crate::screen::primitives::Adjacency,
 ) -> Result<StateChange> {
-    let ui_settings = state.ui_settings;
+    let theme_settings = state.theme_settings;
 
     // 记录将要被移除的区域
     let removed_keys = vec![source_area_key];
@@ -79,17 +79,17 @@ pub fn handle_join(
         source_area_key,
         target_area_key,
         adjacency,
-        &ui_settings,
+        &theme_settings,
     )?;
 
     // 重新计算所有区域的几何数据
-    state.screen_map.update_all_areas_rcti(&ui_settings);
+    state.screen_map.update_all_areas_rcti(&theme_settings);
 
     // 标记窗口边框边缘
     let current_rect = state.current_window_rect();
     state
         .screen_map
-        .mark_window_border_edges(&current_rect, &ui_settings);
+        .mark_window_border_edges(&current_rect, &theme_settings);
 
     println!(
         "成功合并区域 {:?} -> {:?}",

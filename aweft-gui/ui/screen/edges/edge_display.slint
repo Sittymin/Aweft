@@ -4,6 +4,7 @@ import {ScrEdgeDisplayData} from "../../core/types.slint";
 export component ScrEdgeDisplay inherits Rectangle {
     in property <ScrEdgeDisplayData> data;
     animate background { duration: 250ms; }
+    // TODO: 还需要增加hover，并且由于需要仅有一个edge变色，所以需要传递到rust侧处理
     background: data.active ? rgba(255,0,0,1) : rgba(0,255,0,0.5);
     x: data.x;
     y: data.y;
@@ -11,4 +12,3 @@ export component ScrEdgeDisplay inherits Rectangle {
     width: data.width;
     height: data.height;
 }
-

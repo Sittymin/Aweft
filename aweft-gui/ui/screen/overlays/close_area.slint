@@ -1,5 +1,4 @@
-// 关闭区域覆盖层：显示 Area 关闭操作的视觉效果
-
+import { Theme } from "../../theme/index.slint";
 export struct CloseAreaOverlayData {
     x: length,
     y: length,
@@ -9,7 +8,7 @@ export struct CloseAreaOverlayData {
 
 export component CloseAreaOverlay inherits Rectangle {
     in property <CloseAreaOverlayData> data;
-    background: blue;
+    background: Theme.data.close-area.background;
     x: data.x;
     y: data.y;
     z: 199;
@@ -19,8 +18,9 @@ export component CloseAreaOverlay inherits Rectangle {
 
 export component CloseAreaOverlays {
     in property <[CloseAreaOverlayData]> datas;
+    x: 0;
+    y: 0;
     for data[index] in datas: CloseAreaOverlay {
         data: data;
     }
 }
-

@@ -1,7 +1,7 @@
 use crate::actions::{Action, area::AreaAction};
+use crate::bridge::types::{CallbackManager, MainWindow};
 use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
-use crate::types::{CallbackManager, MainWindow};
 use crate::ui_update::{UIUpdateCommand, UIUpdater};
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
@@ -86,7 +86,7 @@ fn handle_before_rendering(instance: &MainWindow, store: &Rc<RefCell<AppStore>>)
     if let Some(image) = image_opt {
         println!("收到新视频帧，设置到 UI");
         instance
-            .global::<crate::types::VideoState>()
+            .global::<crate::bridge::types::VideoState>()
             .set_current_video_frame(image);
     }
 }
@@ -135,7 +135,7 @@ fn setup_winit_window_event_callback(instance: &MainWindow, store: Rc<RefCell<Ap
                 //     instance.set_subtitle_y(y as f32);
                 // }
                 if let Some(instance) = instance_opt.as_ref() {
-                    handle_resized(instance, &store, new_size);
+                    handle_resized(instance, &store, &new_size);
                 }
             }
             winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {

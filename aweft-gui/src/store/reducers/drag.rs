@@ -1,7 +1,7 @@
+use crate::bridge::types::{SlintKey, slint_area_key_to_key};
 use crate::screen::area::ScrAreaKey;
 use crate::store::state::{AppState, DragOperation};
 use crate::store::state_change::{DragOperationChange, StateChange};
-use crate::types::{SlintKey, slint_area_key_to_key};
 use anyhow::Result;
 use slint::{Model, ModelRc};
 
@@ -9,12 +9,12 @@ use slint::{Model, ModelRc};
 pub fn handle_actionzone_update(
     state: &mut AppState,
     area_key: SlintKey,
-    corner: crate::types::ActionZoneCorner,
+    corner: crate::bridge::types::ActionZoneCorner,
     offset_x: f32,
     offset_y: f32,
 ) -> Result<StateChange> {
-    let scale_factor = state.ui_settings.get_scale_factor();
-    let actionzone_side_length = state.ui_settings.get_actionzone_side_length();
+    let scale_factor = state.theme_settings.get_scale_factor();
+    let actionzone_side_length = state.theme_settings.get_actionzone_side_length();
 
     let physical_offset_x = offset_x as f64 * scale_factor;
     let physical_offset_y = offset_y as f64 * scale_factor;
@@ -51,6 +51,7 @@ pub fn handle_actionzone_update(
                 physical_offset_y,
                 relative_offset_x,
                 relative_offset_y,
+                &state.theme_settings,
             );
 
             // 更新拖拽状态
@@ -64,10 +65,11 @@ pub fn handle_actionzone_update(
             ))
         } else {
             // 移动到不同区域 - 合并操作
-            if let Some(adjacency) = state
-                .screen_map
-                .detect_adjacency_by_keys(source_area_key, target_area_key)
-            {
+            if let Some(adjacency) = state.screen_map.detect_adjacency_by_keys(
+                source_area_key,
+                target_area_key,
+                &state.theme_settings,
+            ) {
                 state.current_drag_operation = DragOperation::Join {
                     source_area_key,
                     target_area_key,
@@ -154,7 +156,8 @@ pub fn handle_edge_update(
 ) -> Result<StateChange> {
     use crate::screen::vertex::ScrVertKey;
 
-    let scale_factor = state.ui_settings.get_scale_factor();
+    let scale_factor = state.theme_settings.get_scale_factor();
+    let min_area_size = state.theme_settings.get_area_min_size();
 
     // 如果当前已经在边移动状态，继续移动
     if let DragOperation::MoveEdge {
@@ -165,9 +168,9 @@ pub fn handle_edge_update(
         moving_vert_keys,
     } = &state.current_drag_operation.clone()
     {
-        let ui_settings = state.ui_settings;
-        let current_offset_x = offset_x as f64 - ui_settings.get_half_edge_width();
-        let current_offset_y = offset_y as f64 - ui_settings.get_half_edge_width();
+        let theme_settings = state.theme_settings;
+        let current_offset_x = offset_x as f64 - theme_settings.get_half_edge_width();
+        let current_offset_y = offset_y as f64 - theme_settings.get_half_edge_width();
 
         match dir_axis_horizontal {
             true => {
@@ -193,7 +196,7 @@ pub fn handle_edge_update(
         }
 
         // 更新区域几何数据
-        state.screen_map.update_all_areas_rcti(&ui_settings);
+        state.screen_map.update_all_areas_rcti(&theme_settings);
 
         return Ok(StateChange::DragOperation(DragOperationChange::EdgeUpdated));
     }
@@ -208,13 +211,11 @@ pub fn handle_edge_update(
     if let Some((dir_axis_horizontal, origval)) =
         state.screen_map.analyze_move_direction(&moving_vert_keys)
     {
-        // TODO: HACK: 需要统一定义
-        const MIN_AREA_SIZE: u32 = 50;
         let (bigger, smaller) = state.screen_map.compute_move_limits(
             dir_axis_horizontal,
             &moving_vert_keys,
             origval,
-            MIN_AREA_SIZE,
+            min_area_size,
         );
 
         // 设置拖拽状态
@@ -252,7 +253,7 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
         moving_vert_keys,
     } = &state.current_drag_operation.clone()
     {
-        let ui_settings = state.ui_settings;
+        let theme_settings = state.theme_settings;
 
         if is_cancel {
             // 取消：恢复到原始位置
@@ -265,7 +266,7 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
                 *bigger,
                 *smaller,
             );
-            state.screen_map.update_all_areas_rcti(&ui_settings);
+            state.screen_map.update_all_areas_rcti(&theme_settings);
             false
         } else {
             // 确认：保持当前位置
@@ -276,7 +277,7 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
             let current_rect = state.current_window_rect();
             state
                 .screen_map
-                .mark_window_border_edges(&current_rect, &ui_settings);
+                .mark_window_border_edges(&current_rect, &theme_settings);
 
             true
         }

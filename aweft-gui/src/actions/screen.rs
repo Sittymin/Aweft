@@ -8,5 +8,3 @@ pub enum ScreenAction {
     /// 初始化布局
     InitializeLayout { width: u32, height: u32 },
 }
-
-

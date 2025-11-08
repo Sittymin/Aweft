@@ -1,7 +1,7 @@
 use crate::bridge::converters;
+use crate::bridge::types::MainWindow;
 use crate::screen::area::ScrAreaKey;
 use crate::store::AppStore;
-use crate::types::MainWindow;
 use crate::ui_update::UIUpdateCommand;
 
 /// UI 更新执行器

@@ -7,7 +7,7 @@ use anyhow::Result;
 use bitflags::bitflags;
 use slotmap::new_key_type;
 
-use crate::types::UISettings;
+use crate::bridge::types::ThemeSettings;
 
 use super::{
     primitives::Rcti,
@@ -323,7 +323,7 @@ impl ScrArea {
     pub fn calculate_totrct_and_size(
         &mut self,
         vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>,
-        ui_settings: &UISettings,
+        theme_settings: &ThemeSettings,
     ) {
         // 1. 从顶点计算基础矩形 - 这是几何的"真相来源"
         let tl = &vertices.get(self.v_top_left).unwrap().vec;
@@ -337,7 +337,7 @@ impl ScrArea {
         self.tot_rct.ymax = bl.y;
 
         // 2. 根据DPI和UI设置计算边距
-        let px = ui_settings.calculate_margin(false); // 区域间边距
+        let px = theme_settings.calculate_margin(false); // 区域间边距
 
         // 3. 应用边距调整
         // 只有在非全屏、非临时窗口、且有多个区域的情况下才应用边距

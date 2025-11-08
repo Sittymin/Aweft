@@ -1,6 +1,6 @@
-use crate::screen::primitives::Adjacency;
-use crate::types::{AreaType, SlintKey, SplitPreviewOverlayData};
+use crate::bridge::types::{AreaType, SlintKey, SplitPreviewOverlayData};
 use crate::screen::area::ScrAreaKey;
+use crate::screen::primitives::Adjacency;
 
 /// 区域相关 Action
 #[derive(Debug, Clone)]
@@ -22,5 +22,3 @@ pub enum AreaAction {
         adjacency: Adjacency,
     },
 }
-
-
