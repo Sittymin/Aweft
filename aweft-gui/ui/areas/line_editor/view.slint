@@ -1,64 +1,77 @@
+// TODO:
+// 实现内容条目的单选与多选拖动调整顺序
+// 筛选功能（触发方式思考一下）与排序功能
+
+
 import { ListView, VerticalBox } from "std-widgets.slint";
 import { TableHeader, TableColumn} from "../../widgets/table_header.slint";
 import { Theme } from "../../theme/index.slint";
+import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
 export component LineEditor inherits Rectangle {
     // 定义列数据
+    // TODO: 数据由Rust侧处理好后传递
+    // 各部分的Data应当统一顺序
     in property <[TableColumn]> table-columns: [
         {
-            title: "名称",
-            width: 200px,
+            title: "序号",
+            width: 50px,
             // DEBUG: 测试完后需要改为默认无排序
             sort-order: SortOrder.ascending,
-            min-width: 100px,
-            horizontal-stretch: 1
-        },
-        {
-            title: "大小",
-            width: 100px,
-            sort-order: SortOrder.unsorted,
             min-width: 50px,
-            horizontal-stretch: 0
+            horizontal-stretch: 1,
+            // data: []
         },
-        {
-            title: "日期",
-            width: 150px,
-            sort-order: SortOrder.unsorted,
-            min-width: 100px,
-            horizontal-stretch: 0
-        },
-    ];
-    VerticalBox {
-        TableHeader {
-            height: Theme.data.line-editor.header-height;
-            columns: root.table-columns;
-            column-clicked(index) => {
-                debug("列名被点击", index)
+            {
+                title: "时间范围",
+                width: 50px,
+                min-width: 50px,
+                horizontal-stretch: 1,
+            },
+            {
+                title: "内容",
+                width: 150px,
+                sort-order: SortOrder.unsorted,
+                min-width: 100px,
+                horizontal-stretch: 1
+            },
+        ];
+        VerticalBox {
+            TableHeader {
+                height: Theme.data.line-editor.header-height;
+                columns: root.table-columns;
+                column-clicked(index) => {
+                    debug("列名被点击", index)
+                }
+                column-resized(index, diff) => {
+                    debug("修改列宽度", index, diff)
+                }
             }
-            column-resized(index, diff) => {
-                debug("修改列宽度", index, diff)
-            }
-        }
 
-        ListView {
-            for data in [
-                { text: "Blue", color: #0000ff, bg: #eeeeee },
-                { text: "Red", color: #ff0000, bg: #eeeeee },
-                { text: "Green", color: #00ff00, bg: #eeeeee },
-                { text: "Yellow", color: #ffff00, bg: #222222 },
-                { text: "Black", color: #000000, bg: #eeeeee },
-                { text: "White", color: #ffffff, bg: #222222 },
-                { text: "Magenta", color: #ff00ff, bg: #eeeeee },
-                { text: "Cyan", color: #00ffff, bg: #222222 },
-            ]: Rectangle {
-                height: Theme.data.line-editor.row-height;
-                background: data.bg;
-                width: parent.width;
-                Text {
-                    x: 0;
-                    text: data.text;
-                    color: data.color;
+            ListView {
+                for data[index] in [
+                    { start: "0:00:00.00", end: "0:00:12.00", text: "第一行" },
+                    { start: "0:00:00.00", end: "0:00:12.00", text: "第二行" },
+                    { start: "0:00:00.00", end: "0:00:12.00", text: "第三行" },
+                    { start: "0:00:00.00", end: "0:00:12.00", text: "第四行" },
+                ]: HorizontalLayout {
+                    height: Theme.data.line-editor.row-height;
+                    TimecodeEditor { }
+
+                    Text {
+                        text: data.start;
+                        color: white;
+                    }
+
+                    Text {
+                        text: data.end;
+                        color: white;
+                    }
+
+                    Text {
+                        text: data.text;
+                        color: white;
+                    }
                 }
             }
         }
     }
-}

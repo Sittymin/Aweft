@@ -1,0 +1,216 @@
+// TODO:
+// 手动输入的可解析方式
+//     标准格式 (Standard): 1:23:45.67 或 01:23:45.67。
+
+    // 纯数字/无分隔符格式 (Abbreviated): 这是最常用、最高效的快捷输入方式！解析规则通常是从右往左匹配：
+
+    //     12 -> 0.12s (12厘秒)
+
+    //     1234 -> 12.34s (12秒34厘秒)
+
+    //     123456 -> 12:34.56 (12分34秒56厘秒)
+
+    //     12345678 -> 1:23:45.67 (1小时23分45秒67厘秒)
+
+    //     用户只需要输入数字，无需任何符号，软件会自动格式化。
+
+    // 带单位格式 (Unit-based):
+
+    //     90s -> 00:01:30.00
+
+    //     1.5m -> 00:01:30.00
+
+    //     300ms -> 00:00:00.30 (自动舍入到厘秒)
+
+    //     1h5m -> 01:05:00.00
+
+    // 帧号格式 (Frame-based):
+
+    //     1500f -> 根据当前视频的帧率（例如 23.976fps）自动计算为 00:01:02.58。
+
+// 三个鼠标拖动交互
+    // 单值拖动编辑: 左右拖动一个时间值（开始或结束）来调整它。
+    // 多行同时编辑: 上下拖动可以跨越多行，同时编辑它们的属性。
+    // 区间拖动编辑: 通过拖动开始和结束时间之间的 "->" 图标，同时移动整个字幕的区间。
+
+// 更加详细参数的侧边栏需要根据当前宽度和高度自行选择左右布局、上下布局、堆叠布局
+
+
+export component TimecodeEditor inherits Rectangle {
+    in property <image> chevron_left: @image-url("../assets/icons/chevron_left.svg");
+    in property <image> chevron_right: @image-url("../assets/icons/chevron_right.svg");
+    // 拖动阈值（像素）
+    private property <length> drag-threshold: 5px;
+    // 按钮宽度
+    private property <length> button-width: 16px;
+    
+    // 各区域的拖动状态
+    private property <bool> left-dragging: false;
+    private property <bool> center-dragging: false;
+    private property <bool> right-dragging: false;
+    
+    // 是否处于编辑模式
+    in-out property <bool> is-editing: false;
+    // 文本内容
+    in-out property <string> text: "01:23:45.67";
+    
+    // 回调函数
+    callback increment-value();
+    callback decrement-value();
+    callback drag-value-change(delta-x: length);
+    width: 100px;
+    height: 20px;
+    background: #545454;
+
+    // 编辑模式：全宽输入框
+    if (root.is-editing): Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #222222;
+        clip: true;
+        forward-focus: text-input;
+        init => {
+            text-input.focus();
+            text-input.select-all();
+        }
+        text-input := TextInput {
+            x: 4px;
+            width: parent.width - 8px;
+            height: 100%;
+            text: root.text;
+            color: #ffffff;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            changed has-focus => {
+                if (!self.has-focus) {
+                    root.is-editing = false;
+                }
+            }
+            accepted => {
+                root.is-editing = false;
+            }
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    root.is-editing = false;
+                    return accept;
+                }
+                reject
+            }
+        }
+    }
+
+    // 非编辑模式：三区域布局
+    if (!root.is-editing): Rectangle {
+        // 底层完整的TouchArea
+        base-touch := TouchArea {
+            mouse-cursor: self.pressed ? MouseCursor.none : (self.has-hover ? MouseCursor.ew-resize : MouseCursor.default);
+            moved => {
+                if (self.pressed && !root.left-dragging && !root.right-dragging) {
+                    // 中间拖动逻辑
+                    debug("中间开始拖动")
+                }
+            }
+            clicked => {
+                if (!root.center-dragging && !root.left-dragging && !root.right-dragging) {
+                    root.is-editing = true;
+                }
+            }
+            
+            // 显示文本
+            Text {
+                text: root.text;
+                color: #ffffff;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                font-size: 11px;
+            }
+            
+            // 左按钮作为子元素
+            if (base-touch.has-hover): Rectangle {
+                x: 0px;
+                width: root.button-width;
+                height: 100%;
+                background: left-area.has-hover ? #656565 : (left-area.pressed ? #222222 : transparent);
+
+                Image {
+                    source: chevron_left;
+                    width: 15px;
+                    height: 15px;
+                }
+
+                left-area := TouchArea {
+                    // 重要：设置不同的鼠标光标，这样就不会和父级冲突
+                    mouse-cursor: self.pressed ? MouseCursor.none : (self.has-hover ? MouseCursor.pointer : MouseCursor.default);
+                    
+                    // 左按钮的完整交互逻辑
+                    moved => {
+                        if (self.pressed) {
+                            let delta-x = self.mouse-x - self.pressed-x;
+                            let distance = Math.abs(delta-x);
+                            if (distance > root.drag-threshold && !root.left-dragging) {
+                                root.left-dragging = true;
+                            }
+                            if (root.left-dragging) {
+                                root.drag-value-change(-delta-x);
+                            }
+                        }
+                    }
+                    clicked => {
+                        if (!root.left-dragging) {
+                            root.decrement-value();
+                        }
+                    }
+                    changed pressed => {
+                        if (!self.pressed) {
+                            root.left-dragging = false;
+                        }
+                    }
+                }
+            }
+            
+            // 右按钮作为子元素
+            if (base-touch.has-hover): Rectangle {
+                x: parent.width - root.button-width;
+                width: root.button-width;
+                height: 100%;
+                background: right-area.has-hover ? #656565 : (right-area.pressed ? #222222 : transparent);
+
+                Image {
+                    source: chevron_right;
+                    width: 15px;
+                    height: 15px;
+                }
+
+                right-area := TouchArea {
+                    // 重要：设置不同的鼠标光标
+                    mouse-cursor: self.pressed ? MouseCursor.none : (self.has-hover ? MouseCursor.pointer : MouseCursor.default);
+                    
+                    // 左按钮的完整交互逻辑
+                    moved => {
+                        if (self.pressed) {
+                            let delta-x = self.mouse-x - self.pressed-x;
+                            let distance = Math.abs(delta-x);
+                            if (distance > root.drag-threshold && !root.right-dragging) {
+                                root.right-dragging = true;
+                            }
+                            if (root.right-dragging) {
+                                root.drag-value-change(-delta-x);
+                            }
+                        }
+                    }
+                    clicked => {
+                        if (!root.right-dragging) {
+                            root.increment-value();
+                        }
+                    }
+                    changed pressed => {
+                        if (!self.pressed) {
+                            root.right-dragging = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
