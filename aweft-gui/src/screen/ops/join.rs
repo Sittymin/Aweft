@@ -86,7 +86,6 @@ impl ScrAreaMap {
             y: source_area_rcti.ymin as f32,
         };
 
-        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
         let min_area_size = theme_settings.get_area_min_size();
 
         // 产生的 close 区域
@@ -394,7 +393,6 @@ impl ScrAreaMap {
         let mut merged_area_key: ScrAreaKey = target_area_key;
         let mut working_source_area_key: ScrAreaKey = source_area_key;
 
-        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
         let min_area_size = theme_settings.get_area_min_size();
 
         match adjacency {
@@ -857,7 +855,6 @@ impl ScrAreaMap {
             );
         }
 
-        // 最小重叠要求 (TODO: calculate_split_areas 当中一致，需要之后合并)
         let min_area_size = theme_settings.get_area_min_size();
 
         let neighbor_rect = self

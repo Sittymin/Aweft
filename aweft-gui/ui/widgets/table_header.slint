@@ -9,8 +9,8 @@ export struct TableColumn {
 
 component TableHeaderColumn inherits Rectangle {
     clip: false;
-    in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
-    in property <image> drop-down-up: @image-url("../assets/icons/arrow_drop_up.svg");
+    in property <image> arrow_drop_down: @image-url("../assets/icons/arrow_drop_down.svg");
+    in property <image> arrow_drop_up: @image-url("../assets/icons/arrow_drop_up.svg");
     in property <SortOrder> sort-order: SortOrder.unsorted;
     in property <bool> first;
     in property <bool> last;
@@ -63,7 +63,7 @@ component TableHeaderColumn inherits Rectangle {
 
         Image {
             visible: root.sort-order != SortOrder.unsorted;
-            source: root.sort-order == SortOrder.ascending ? drop-down-arrow : drop-down-up;
+            source: root.sort-order == SortOrder.ascending ? arrow_drop_down : arrow_drop_up;
             width: Theme.data.table-header.sort-icon-size;
             height: Theme.data.table-header.sort-icon-size;
         }
