@@ -1,6 +1,4 @@
-use crate::bridge::types::{
-    ScrEdgeDisplayData, ScrEdgeTouchAreaData, SlintKey, key_to_slint_area_key,
-};
+use crate::bridge::types::{ScrEdgeDisplayData, ScrEdgeTouchAreaData, SlintKey, key_to_slint_key};
 use crate::screen::vertex::ScrVertKey;
 use crate::store::state::AppState;
 use std::collections::{HashMap, HashSet};
@@ -128,7 +126,7 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
             });
             keys.dedup();
             let vert_keys_vec: Vec<SlintKey> =
-                keys.into_iter().map(|k| key_to_slint_area_key(k)).collect();
+                keys.into_iter().map(|k| key_to_slint_key(k)).collect();
 
             if is_horizontal {
                 let width = ((end - start) as f64 / scale_factor) as f32;

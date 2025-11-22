@@ -1,77 +1,119 @@
 // TODO:
 // 实现内容条目的单选与多选拖动调整顺序
 // 筛选功能（触发方式思考一下）与排序功能
-
+// FIXME:
+// 目前列表内容展示存在 Bug
 
 import { ListView, VerticalBox } from "std-widgets.slint";
-import { TableHeader, TableColumn} from "../../widgets/table_header.slint";
+import { TableHeader, TableColumn } from "../../widgets/table_header.slint";
 import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
+import { SlintKey } from "../../core/types.slint";
+import { CallbackManager } from "../../bridge/callbacks.slint";
+import { SlintSubtitleRow, SlintSubtitleRowType } from "../../core/types.slint";
+import { SubtitleState } from "../../bridge/state.slint";
+
 export component LineEditor inherits Rectangle {
     // 定义列数据
     // TODO: 数据由Rust侧处理好后传递
     // 各部分的Data应当统一顺序
+    // Event的展示序号由Slint侧计算event的序号处理（即忽视Group）
+    // 展示的序号对于代码没有作用
+
+    // 定义列标题数据
     in property <[TableColumn]> table-columns: [
         {
             title: "序号",
             width: 50px,
-            // DEBUG: 测试完后需要改为默认无排序
-            sort-order: SortOrder.ascending,
             min-width: 50px,
             horizontal-stretch: 1,
-            // data: []
         },
-            {
-                title: "时间范围",
-                width: 50px,
-                min-width: 50px,
-                horizontal-stretch: 1,
-            },
-            {
-                title: "内容",
-                width: 150px,
-                sort-order: SortOrder.unsorted,
-                min-width: 100px,
-                horizontal-stretch: 1
-            },
-        ];
-        VerticalBox {
-            TableHeader {
-                height: Theme.data.line-editor.header-height;
-                columns: root.table-columns;
-                column-clicked(index) => {
-                    debug("列名被点击", index)
-                }
-                column-resized(index, diff) => {
-                    debug("修改列宽度", index, diff)
-                }
+        {
+            title: "时间范围",
+            width: 100px,
+            min-width: 100px,
+            horizontal-stretch: 2,
+        },
+        {
+            title: "内容",
+            width: 200px,
+            min-width: 150px,
+            horizontal-stretch: 3,
+        },
+    ];
+
+    VerticalBox {
+        TableHeader {
+            height: Theme.data.line-editor.header-height;
+            columns: root.table-columns;
+            column-clicked(index) => {
+                debug("列名被点击", index)
             }
+            column-resized(index, diff) => {
+                debug("修改列宽度", index, diff)
+            }
+        }
 
-            ListView {
-                for data[index] in [
-                    { start: "0:00:00.00", end: "0:00:12.00", text: "第一行" },
-                    { start: "0:00:00.00", end: "0:00:12.00", text: "第二行" },
-                    { start: "0:00:00.00", end: "0:00:12.00", text: "第三行" },
-                    { start: "0:00:00.00", end: "0:00:12.00", text: "第四行" },
-                ]: HorizontalLayout {
-                    height: Theme.data.line-editor.row-height;
-                    TimecodeEditor { }
+        ListView {
+            for row[idx] in SubtitleState.rows: HorizontalLayout {
+                // 🎯 根据折叠状态控制可见性
+                visible: CallbackManager.is-row-visible(row);
+                // height: Theme.data.line-editor.row-height;
+                height: 10px;
+                
+                // 🎯 根据类型渲染不同内容
+                if row.row-type == SlintSubtitleRowType.GroupHeader: HorizontalLayout {
+                    padding-left: row.depth * 20px;
+                    
+                    // 折叠按钮
+                    Rectangle {
+                        width: 20px;
+                        Text {
+                            text: "▼";
+                            color: #cccccc;
+                            font-size: 12px;
+                        }
 
+                        TouchArea {
+                            clicked => {
+                                // 🎯 切换折叠状态
+                                debug("触发收起")
+                            }
+                        }
+                    }
+                    
+                    // 分组名
                     Text {
-                        text: data.start;
+                        text: row.group-name + " (" + row.total-row-count + ")";
+                        color: #ffff00;
+                        font-weight: 700;
+                    }
+                }
+                if row.row-type == SlintSubtitleRowType.Event: HorizontalLayout {
+                    padding-left: row.depth * 20px;
+                    
+                    // 序号（只显示Event的序号）
+                    Text {
+                        width: 50px;
+                        text: idx;  // 临时用索引，实际应该计算
                         color: white;
                     }
-
+                    
+                    // 时间范围
                     Text {
-                        text: data.end;
+                        width: 100px;
+                        text: row.start-time + " - " + row.end-time;
                         color: white;
                     }
-
+                    
+                    // 内容
                     Text {
-                        text: data.text;
+                        horizontal-stretch: 1;
+                        text: row.text;
                         color: white;
                     }
                 }
             }
         }
     }
+}

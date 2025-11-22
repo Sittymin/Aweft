@@ -1,4 +1,4 @@
-use crate::bridge::types::{ScrAreaData, key_to_slint_area_key, rust_area_type_to_slint};
+use crate::bridge::types::{ScrAreaData, key_to_slint_key, rust_area_type_to_slint};
 use crate::store::state::AppState;
 
 /// 将内部区域数据转换为 Slint 需要的格式
@@ -17,7 +17,7 @@ pub fn convert_areas(state: &AppState) -> Vec<ScrAreaData> {
         let logical_height = winy as f64 / scale_factor;
 
         areas_data.push(ScrAreaData {
-            area_key: key_to_slint_area_key(area_key),
+            area_key: key_to_slint_key(area_key),
             area_type: rust_area_type_to_slint(&area.area_type),
             x: logical_x as f32,
             y: logical_y as f32,

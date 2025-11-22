@@ -1,17 +1,16 @@
 // TODO: 实现扁平化传递给 Slint 侧展示，并尝试互相操作数据结构
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    mem,
-};
+use std::{collections::HashMap, mem};
 
 use anyhow::Result;
-use aweft_ass::types::event::EventKey;
+use aweft_ass::{ASSFile, types::event::EventKey};
 use uuid::Uuid;
+
+use crate::bridge::parse_group_id;
 
 /// 分组唯一标识符
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct EventGroupId(Uuid);
+pub struct EventGroupId(pub Uuid);
 
 impl EventGroupId {
     pub fn new() -> Self {
@@ -36,6 +35,7 @@ pub struct EventGroup {
     pub name: String,
     pub parent: Option<EventGroupId>,
     pub items: Vec<EventGroupItem>,
+    // 用于持久化，显示逻辑由 Slint 独自处理
     pub collapsed: bool,
     pub color: Option<String>,
 }
@@ -52,7 +52,7 @@ pub enum EventGroupItemLocation {
 /// 分组管理器
 #[derive(Debug, Clone)]
 pub struct EventGroupManager {
-    pub groups: BTreeMap<EventGroupId, EventGroup>,
+    pub groups: HashMap<EventGroupId, EventGroup>,
     pub root_items: Vec<EventGroupItem>,
     pub event_location: HashMap<EventKey, EventGroupItemLocation>,
     pub group_location: HashMap<EventGroupId, EventGroupItemLocation>,
@@ -61,21 +61,21 @@ pub struct EventGroupManager {
 impl EventGroupManager {
     pub fn new() -> Self {
         Self {
-            groups: BTreeMap::new(),
+            groups: HashMap::new(),
             root_items: Vec::new(),
             event_location: HashMap::new(),
             group_location: HashMap::new(),
         }
     }
 
-    pub fn push_event_to_root(&mut self, event_key: EventKey) {
+    fn push_event_to_root(&mut self, event_key: EventKey) {
         let index = self.root_items.len();
         self.root_items.push(EventGroupItem::Event(event_key));
         self.event_location
             .insert(event_key, EventGroupItemLocation::Root(index));
     }
 
-    pub fn insert_event_to_root(&mut self, event_key: EventKey, position: usize) {
+    fn insert_event_to_root(&mut self, event_key: EventKey, position: usize) {
         let pos = position.min(self.root_items.len());
         self.root_items
             .insert(pos, EventGroupItem::Event(event_key));
@@ -85,7 +85,7 @@ impl EventGroupManager {
         self.update_root_indices_after(pos + 1);
     }
 
-    pub fn push_event_to_group(&mut self, event_key: EventKey, group_id: EventGroupId) {
+    fn push_event_to_group(&mut self, event_key: EventKey, group_id: EventGroupId) {
         let group = self.groups.get_mut(&group_id).unwrap();
         let index = group.items.len();
         group.items.push(EventGroupItem::Event(event_key));
@@ -94,7 +94,7 @@ impl EventGroupManager {
             .insert(event_key, EventGroupItemLocation::InGroup(group_id, index));
     }
 
-    pub fn insert_event_to_group(
+    fn insert_event_to_group(
         &mut self,
         event_key: EventKey,
         group_id: EventGroupId,
@@ -107,7 +107,7 @@ impl EventGroupManager {
         self.update_group_indices_after(group_id, pos + 1);
     }
 
-    pub fn move_event(&mut self, event_key: EventKey, target: EventGroupItemLocation) {
+    fn move_event(&mut self, event_key: EventKey, target: EventGroupItemLocation) {
         self.remove_event(event_key);
 
         match target {
@@ -118,7 +118,7 @@ impl EventGroupManager {
         }
     }
 
-    pub fn push_group_to_root(&mut self, name: String) -> EventGroupId {
+    fn push_group_to_root(&mut self, name: String) -> EventGroupId {
         let group_id = EventGroupId::new();
         let group = EventGroup {
             id: group_id,
@@ -139,7 +139,7 @@ impl EventGroupManager {
         group_id
     }
 
-    pub fn insert_group_to_root(&mut self, name: String, position: usize) {
+    fn insert_group_to_root(&mut self, name: String, position: usize) -> EventGroupId {
         let group_id = EventGroupId::new();
         let group = EventGroup {
             id: group_id,
@@ -159,9 +159,11 @@ impl EventGroupManager {
             .insert(group_id, EventGroupItemLocation::Root(pos));
 
         self.update_root_indices_after(pos + 1);
+
+        group_id
     }
 
-    pub fn push_group_to_group(&mut self, name: String, parent_id: EventGroupId) -> EventGroupId {
+    fn push_group_to_group(&mut self, name: String, parent_id: EventGroupId) -> EventGroupId {
         let group_id = EventGroupId::new();
         let group = EventGroup {
             id: group_id,
@@ -183,7 +185,7 @@ impl EventGroupManager {
         group_id
     }
 
-    pub fn insert_group_to_group(
+    fn insert_group_to_group(
         &mut self,
         name: String,
         parent_id: EventGroupId,
@@ -214,11 +216,7 @@ impl EventGroupManager {
         group_id
     }
 
-    pub fn move_group(
-        &mut self,
-        group_id: EventGroupId,
-        target: EventGroupItemLocation,
-    ) -> Result<()> {
+    fn move_group(&mut self, group_id: EventGroupId, target: EventGroupItemLocation) -> Result<()> {
         // 避免父级移到子级
         if let EventGroupItemLocation::InGroup(target_group, _) = target {
             if self.is_ancestor(group_id, target_group) {
@@ -256,7 +254,7 @@ impl EventGroupManager {
         Ok(())
     }
 
-    pub fn remove_event(&mut self, event_key: EventKey) {
+    fn remove_event(&mut self, event_key: EventKey) {
         let location = self.event_location.remove(&event_key).unwrap();
         match location {
             EventGroupItemLocation::Root(index) => {
@@ -271,7 +269,7 @@ impl EventGroupManager {
         }
     }
 
-    pub fn ungroup(&mut self, group_id: EventGroupId) -> Result<()> {
+    fn ungroup(&mut self, group_id: EventGroupId) -> Result<()> {
         let location = self.group_location.get(&group_id).unwrap();
 
         let items_to_move = mem::take(&mut self.groups.get_mut(&group_id).unwrap().items);
@@ -303,7 +301,7 @@ impl EventGroupManager {
         Ok(())
     }
 
-    pub fn remove_group(&mut self, group_id: EventGroupId) {
+    fn remove_group(&mut self, group_id: EventGroupId) {
         let location = self.group_location.remove(&group_id).unwrap();
 
         match location {
@@ -359,5 +357,221 @@ impl EventGroupManager {
             }
         }
         false
+    }
+}
+
+pub struct LineEditorState {
+    // 数据源
+    pub group_manager: EventGroupManager,
+    // FIXME: 应当使用样式节点链的高层抽象
+    pub ass_file: ASSFile,
+
+    // UI缓存
+    ui_rows: Option<Vec<crate::bridge::types::SlintSubtitleRow>>,
+
+    // row_count缓存
+    group_row_counts: HashMap<EventGroupId, i32>,
+    row_counts_valid: bool,
+
+    // EventKey到UI索引的映射
+    event_key_to_ui_index: HashMap<EventKey, usize>,
+    group_id_to_ui_index: HashMap<EventGroupId, usize>,
+}
+
+impl LineEditorState {
+    pub fn new() -> Self {
+        Self {
+            group_manager: EventGroupManager::new(),
+            // FIXME: 应当使用样式节点链的高层抽象
+            ass_file: ASSFile::new(),
+            ui_rows: None,
+            group_row_counts: HashMap::new(),
+            row_counts_valid: false,
+            event_key_to_ui_index: HashMap::new(),
+            group_id_to_ui_index: HashMap::new(),
+        }
+    }
+
+    // 标记row_count失效（任何修改分组结构的操作）
+    pub fn invalidate_row_counts(&mut self) {
+        self.row_counts_valid = false;
+    }
+
+    // 确保row_count有效
+    pub fn ensure_row_counts_valid(&mut self) {
+        if !self.row_counts_valid {
+            self.recompute_row_counts();
+        }
+    }
+
+    // 直接设置Group的row_count
+    fn set_group_row_count(&mut self, group_id: EventGroupId, count: i32) {
+        self.group_row_counts.insert(group_id, count);
+    }
+
+    // 重新计算所有row_count
+    fn recompute_row_counts(&mut self) {
+        use crate::bridge::types::precompute_group_row_counts;
+
+        self.group_row_counts =
+            precompute_group_row_counts(&self.group_manager.groups, &self.ass_file);
+        self.row_counts_valid = true;
+    }
+
+    // 获取Group的row_count
+    pub fn get_group_row_count(&mut self, group_id: EventGroupId) -> Option<i32> {
+        self.ensure_row_counts_valid();
+        self.group_row_counts.get(&group_id).copied()
+    }
+
+    // 完整重建 UI 列表
+    pub fn build_ui_rows(&mut self) -> Vec<crate::bridge::types::SlintSubtitleRow> {
+        use crate::bridge::types::flatten_subtitle_rows;
+
+        let rows = flatten_subtitle_rows(
+            &self.group_manager.root_items,
+            &self.group_manager.groups,
+            &self.ass_file,
+        );
+
+        // 构建索引映射
+        self.event_key_to_ui_index.clear();
+        self.group_id_to_ui_index.clear();
+
+        for (i, row) in rows.iter().enumerate() {
+            match row.row_type {
+                crate::bridge::types::SlintSubtitleRowType::Event => {
+                    let event_key = crate::bridge::types::slint_area_key_to_key(&row.event_key);
+                    self.event_key_to_ui_index.insert(event_key, i);
+                }
+                crate::bridge::types::SlintSubtitleRowType::GroupHeader => {
+                    if let Ok(group_id) = parse_group_id(&row.group_id_str) {
+                        self.group_id_to_ui_index.insert(group_id, i);
+                    }
+                }
+            }
+        }
+
+        // 缓存UI列表
+        self.ui_rows = Some(rows.clone());
+        self.row_counts_valid = true;
+
+        rows
+    }
+
+    // 获取EventKey的UI索引
+    pub fn get_event_ui_index(&self, event_key: EventKey) -> Option<usize> {
+        self.event_key_to_ui_index.get(&event_key).copied()
+    }
+
+    // 获取GroupId的UI索引
+    pub fn get_group_ui_index(&self, group_id: EventGroupId) -> Option<usize> {
+        self.group_id_to_ui_index.get(&group_id).copied()
+    }
+
+    // === 包装EventGroupManager的操作，自动标记失效 ===
+
+    pub fn push_event_to_root(&mut self, event_key: EventKey) {
+        self.group_manager.push_event_to_root(event_key);
+        self.ui_rows = None;
+    }
+
+    pub fn insert_event_to_root(&mut self, event_key: EventKey, position: usize) {
+        self.group_manager.insert_event_to_root(event_key, position);
+        self.ui_rows = None;
+    }
+
+    // NOTE: 可能是子分组，多个分组 count 都将失效
+    pub fn push_event_to_group(&mut self, event_key: EventKey, group_id: EventGroupId) {
+        self.group_manager.push_event_to_group(event_key, group_id);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+    }
+
+    // NOTE: 可能是子分组，多个分组 count 都将失效
+    pub fn insert_event_to_group(
+        &mut self,
+        event_key: EventKey,
+        group_id: EventGroupId,
+        position: usize,
+    ) {
+        self.group_manager
+            .insert_event_to_group(event_key, group_id, position);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+    }
+
+    // NOTE: 需要保证源位置和目标位置都是 Root 才不需要重建（目前未实现判断逻辑）
+    pub fn move_event(&mut self, event_key: EventKey, target: EventGroupItemLocation) {
+        self.group_manager.move_event(event_key, target);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+    }
+
+    // NOTE: Root 级别可以确定 Count 是多少
+    pub fn push_group_to_root(&mut self, name: String) -> EventGroupId {
+        let id = self.group_manager.push_group_to_root(name);
+
+        self.set_group_row_count(id, 1);
+        self.ui_rows = None;
+        id
+    }
+    pub fn insert_group_to_root(&mut self, name: String, position: usize) -> EventGroupId {
+        let id = self.group_manager.insert_group_to_root(name, position);
+
+        self.set_group_row_count(id, 1);
+        self.ui_rows = None;
+        id
+    }
+
+    pub fn push_group_to_group(&mut self, name: String, parent_id: EventGroupId) -> EventGroupId {
+        let id = self.group_manager.push_group_to_group(name, parent_id);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+        id
+    }
+    pub fn insert_group_to_group(
+        &mut self,
+        name: String,
+        parent_id: EventGroupId,
+        position: usize,
+    ) -> EventGroupId {
+        let id = self
+            .group_manager
+            .insert_group_to_group(name, parent_id, position);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+        id
+    }
+    pub fn move_group(
+        &mut self,
+        group_id: EventGroupId,
+        target: EventGroupItemLocation,
+    ) -> Result<()> {
+        self.group_manager.move_group(group_id, target)?;
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+        Ok(())
+    }
+
+    // NOTE: 需要在 Root 级别才不需要标记失效（逻辑未实现）
+    pub fn remove_event(&mut self, event_key: EventKey) {
+        self.group_manager.remove_event(event_key);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+    }
+
+    pub fn ungroup(&mut self, group_id: EventGroupId) -> Result<()> {
+        self.group_manager.ungroup(group_id)?;
+        self.invalidate_row_counts();
+        self.ui_rows = None;
+        Ok(())
+    }
+
+    // NOTE: 需要在 Root 级别才不需要标记失效（逻辑未实现）
+    pub fn remove_group(&mut self, group_id: EventGroupId) {
+        self.group_manager.remove_group(group_id);
+        self.invalidate_row_counts();
+        self.ui_rows = None;
     }
 }

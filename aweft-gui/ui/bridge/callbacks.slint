@@ -1,4 +1,9 @@
-import {SlintKey, ActionZoneCorner, AreaType} from "../core/types.slint";
+import {
+    SlintKey,
+    ActionZoneCorner,
+    AreaType,
+    SlintSubtitleRow,
+} from "../core/types.slint";
 
 // Slint-Rust 桥接层：回调接口
 // Rust 侧通过 on_xxx 连接这些回调
@@ -9,5 +14,6 @@ export global CallbackManager {
     callback edge-drag-end(is-cancel: bool);
     callback edge-drag(vert-keys: [SlintKey], offset-x: length, offset-y: length);
     callback switch-area-type(area-key: SlintKey, area-type: AreaType);
+    // LineEditor 当中用于计算是否折叠的
+    pure callback is-row-visible(SlintSubtitleRow) -> bool;
 }
-

@@ -1,5 +1,6 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
+import { SlintSubtitleRow } from "../core/types.slint";
 
 export global VideoState {
     in property <image> current-video-frame;
@@ -7,5 +8,5 @@ export global VideoState {
 
 export global SubtitleState {
     in property <image> current-subtitle-frame;
+    in property <[SlintSubtitleRow]> rows: [];
 }
-

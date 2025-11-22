@@ -78,6 +78,14 @@ impl Events {
         }
     }
 
+    pub fn get(&self, event_key: EventKey) -> Option<&Event> {
+        self.map.get(event_key)
+    }
+
+    pub fn get_mut(&mut self, event_key: EventKey) -> Option<&mut Event> {
+        self.map.get_mut(event_key)
+    }
+
     pub fn len(&self) -> usize {
         self.order.len()
     }
@@ -650,6 +658,77 @@ pub enum Event {
     Dialogue(Dialogue),
     Comment(Comment),
 }
+
+impl Event {
+    pub fn layer(&self) -> i32 {
+        match self {
+            Event::Dialogue(d) => d.layer,
+            Event::Comment(c) => c.layer,
+        }
+    }
+    pub fn start(&self) -> AssTime {
+        match self {
+            Event::Dialogue(d) => d.start,
+            Event::Comment(c) => c.start,
+        }
+    }
+    pub fn end(&self) -> AssTime {
+        match self {
+            Event::Dialogue(d) => d.end,
+            Event::Comment(c) => c.end,
+        }
+    }
+    pub fn style(&self) -> String {
+        match self {
+            Event::Dialogue(d) => d.style.clone(),
+            Event::Comment(c) => c.style.clone(),
+        }
+    }
+    pub fn name(&self) -> Option<String> {
+        match self {
+            Event::Dialogue(d) => d.name.clone(),
+            Event::Comment(c) => c.name.clone(),
+        }
+    }
+    pub fn margin_l(&self) -> i32 {
+        match self {
+            Event::Dialogue(d) => d.margin_l,
+            Event::Comment(c) => c.margin_l,
+        }
+    }
+    pub fn margin_r(&self) -> i32 {
+        match self {
+            Event::Dialogue(d) => d.margin_r,
+            Event::Comment(c) => c.margin_r,
+        }
+    }
+    pub fn margin_v(&self) -> i32 {
+        match self {
+            Event::Dialogue(d) => d.margin_v,
+            Event::Comment(c) => c.margin_v,
+        }
+    }
+    pub fn effect(&self) -> Option<Effect> {
+        match self {
+            Event::Dialogue(d) => d.effect.clone(),
+            Event::Comment(c) => c.effect.clone(),
+        }
+    }
+    pub fn text(&self) -> String {
+        match self {
+            Event::Dialogue(d) => d
+                .content
+                .iter()
+                .filter_map(|seg| match seg {
+                    TextSegment::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            Event::Comment(c) => c.text.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dialogue {
     pub layer: i32,

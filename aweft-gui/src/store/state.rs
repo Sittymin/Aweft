@@ -3,6 +3,7 @@ use crate::screen::area::ScrAreaKey;
 use crate::screen::map::ScrAreaMap;
 use crate::screen::primitives::{Adjacency, Rcti};
 use crate::screen::vertex::ScrVertKey;
+use crate::store::subtitle::LineEditorState;
 use slint::PhysicalSize;
 
 /// 拖拽操作的状态信息
@@ -42,18 +43,20 @@ pub struct AppState {
     pub theme_settings: ThemeSettings,
     pub window_size: PhysicalSize,
     pub initialized: bool,
-    /// 当前拖拽操作状态
+    // 当前拖拽操作状态
     pub current_drag_operation: DragOperation,
-    /// 保持 GStreamer 管道生命周期，防止被提前释放
+    // 保持 GStreamer 管道生命周期，防止被提前释放
     pub video_pipeline: Option<gstreamer::Pipeline>,
-    /// 保持 Sink 生命周期
+    // 保持 Sink 生命周期
     pub video_sink: Option<gstreamer::Element>,
-    /// WGPU 视频 Sink 实例
+    // WGPU 视频 Sink 实例
     pub wgpu_sink: Option<crate::slint_video_sink::SlintWGPUSink>,
-    /// 字幕渲染器
+    // 字幕渲染器
     pub subtitle_renderer: Option<crate::wgpu_subtitle_renderer::SubtitleRenderer>,
-    /// libass 字幕渲染器
+    // libass 字幕渲染器
     pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
+    // LineEditor 需要的部分
+    pub line_editor_state: LineEditorState,
 }
 
 impl AppState {
@@ -70,6 +73,7 @@ impl AppState {
             wgpu_sink: None,
             subtitle_renderer: None,
             libass_renderer: None,
+            line_editor_state: LineEditorState::new(),
         }
     }
 

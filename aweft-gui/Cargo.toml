@@ -10,6 +10,7 @@ wgpu = { version = "27", package = "wgpu", features = ["wgsl"] }
 slotmap = "1.0.7"
 tokio = { version = "1.47.0", features = ["full"] }
 anyhow = "1.0"
+log = "0.4.28"
 gstreamer = { version = "0.23", package = "gstreamer" }
 gstreamer-app = { version = "0.23", package = "gstreamer-app" }
 gstreamer-video = { version = "0.23", package = "gstreamer-video" }

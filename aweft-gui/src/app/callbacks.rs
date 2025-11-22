@@ -1,11 +1,13 @@
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{CallbackManager, MainWindow};
+use crate::bridge::{SlintSubtitleRowType, parse_group_id};
 use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
 use crate::ui_update::{UIUpdateCommand, UIUpdater};
+use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
-use slint::{ComponentHandle, RenderingState};
+use slint::{ComponentHandle, Model, RenderingState};
 use std::{cell::RefCell, rc::Rc};
 
 /// 设置所有回调
@@ -17,6 +19,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_actionzone_drag_end_callback(instance, Rc::clone(&store));
     setup_edge_drag_callback(instance, Rc::clone(&store));
     setup_edge_drag_end_callback(instance, Rc::clone(&store));
+    pure_setup_line_editor_callback(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -238,6 +241,42 @@ fn setup_edge_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<AppStor
             ));
 
             dispatch_and_render(&store, action, &weak_instance);
+        });
+}
+
+fn pure_setup_line_editor_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    instance
+        .global::<CallbackManager>()
+        .on_is_row_visible(move |row| -> bool {
+            // 分组头总是可见
+            if row.row_type == SlintSubtitleRowType::GroupHeader {
+                return true;
+            }
+
+            // 无祖先
+            if row.ancestor_groups.row_count() == 0 {
+                return true;
+            }
+
+            let store_ref = store.borrow();
+            let groups = &store_ref.state().line_editor_state.group_manager.groups;
+
+            for ancestor_id in row.ancestor_groups.iter() {
+                let Ok(group_id) = parse_group_id(&ancestor_id) else {
+                    warn!("祖先 Group 当中存在无法转换的 ID");
+                    continue;
+                };
+
+                if let Some(group) = groups.get(&group_id) {
+                    if group.collapsed {
+                        return false;
+                    }
+                } else {
+                    warn!("祖先 Group 有不存在的 groups 表当中的数据");
+                }
+            }
+
+            true
         });
 }
 
