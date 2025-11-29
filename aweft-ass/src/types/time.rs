@@ -21,7 +21,7 @@ use std::str::FromStr;
 /// let time2 = AssTime::from_hms_cs(0, 1, 23, 45);
 /// assert_eq!(time, time2);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub struct AssTime(TimeDelta);
 
 impl AssTime {

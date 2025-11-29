@@ -129,9 +129,10 @@ impl Events {
         });
     }
 
-    pub fn push(&mut self, event: Event) {
+    pub fn push(&mut self, event: Event) -> EventKey {
         let key = self.map.insert(event);
         self.order.push(key);
+        key
     }
     pub fn pop(&mut self) -> Option<Event> {
         if let Some(key) = self.order.pop() {

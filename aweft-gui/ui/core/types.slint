@@ -61,16 +61,16 @@ export struct SlintSubtitleRow {
     depth: int,
     // 存储祖先 group_id，用于判断自身是否属于被折叠的
     ancestor_groups: [string],
-    
-    // === 事件数据字段 (row_type == Event 时有效) ===
-    event_key: SlintKey,
     start_time: string,
     end_time: string,
+
+    // === 事件数据字段 (row_type == Event 时有效) ===
+    event_key: SlintKey,
     text: string,
     style: string,
     layer: int,
     is_comment: bool,
-    
+
     // === 分组数据字段 (row_type == GroupHead 时有效) ===
     group_id_str: string,
     group_name: string,

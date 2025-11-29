@@ -1,10 +1,10 @@
+use crate::bridge::SubtitleState;
 use crate::bridge::types::MainWindow;
-use crate::bridge::{SlintSubtitleRow, SubtitleState};
 use crate::store::AppStore;
 use crate::store::reducers::media::initialize_media;
 use anyhow::{Context, Result};
+use slint::ComponentHandle;
 use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
-use slint::{ComponentHandle, SharedString};
 use std::{cell::RefCell, rc::Rc};
 
 /// 简化的应用窗口管理器
@@ -42,14 +42,22 @@ impl AppWindowManager {
         .unwrap();
 
         // ===================================
-        // 创建测试字幕数据
-        let test_rows = create_test_subtitle_rows();
+        // 初始化字幕数据和过滤模型
+        let filter_model = {
+            let mut store_mut = store.borrow_mut();
+            let line_editor_state = &mut store_mut.state_mut().line_editor_state;
 
-        // 设置到Slint
+            create_test_subtitle_data(line_editor_state);
+            line_editor_state.rebuild_all_rows();
+            line_editor_state.init_filter_model()
+        };
+
         let subtitle_state = instance.global::<SubtitleState>();
-        subtitle_state.set_rows(slint::ModelRc::new(slint::VecModel::from_slice(&test_rows)));
+        // NOTE: 之后 UI 数据需要在 filtered_model 修改
+        // 不应当再使用 set_rows 修改数据
+        subtitle_state.set_rows(filter_model);
 
-        println!("✅ 已加载 {} 行测试字幕数据", test_rows.len());
+        println!("✅ 已初始化字幕过滤模型");
         // ===================================
 
         Ok(Self { instance, store })
@@ -69,125 +77,98 @@ impl AppWindowManager {
     }
 }
 
-pub fn create_test_subtitle_rows() -> Vec<SlintSubtitleRow> {
-    vec![
-        // 根级别事件
-        SlintSubtitleRow {
-            row_type: crate::bridge::types::SlintSubtitleRowType::Event,
-            depth: 0,
-            ancestor_groups: slint::ModelRc::new(slint::VecModel::default()),
+/// 创建测试字幕数据
+fn create_test_subtitle_data(line_editor_state: &mut crate::store::subtitle::LineEditorState) {
+    use aweft_ass::types::event::{Dialogue, Event, TextSegment};
+    use aweft_ass::types::time::AssTime;
 
-            event_key: crate::bridge::types::SlintKey {
-                key_index: 1,
-                key_version: 0,
-            },
-            start_time: SharedString::from("0:00:00.00"),
-            end_time: SharedString::from("0:00:05.00"),
-            text: SharedString::from("这是第一行字幕（根级别）"),
-            style: SharedString::from("Default"),
+    // 创建根级别的事件
+    let event1 = Event::Dialogue(Dialogue {
+        layer: 0,
+        start: AssTime::from_centiseconds(0),
+        end: AssTime::from_centiseconds(500),
+        style: "Default".to_string(),
+        name: None,
+        margin_l: 0,
+        margin_r: 0,
+        margin_v: 0,
+        effect: None,
+        content: vec![TextSegment::Text("这是第一行字幕（根级别）".to_string())],
+    });
+    let key1 = line_editor_state.ass_file.events.push(event1);
+    line_editor_state.push_event_to_root(key1);
+
+    // 创建一个分组
+    let group_id = line_editor_state.push_group_to_root("对话组".to_string());
+
+    // 在分组内创建事件
+    let event2 = Event::Dialogue(Dialogue {
+        layer: 0,
+        start: AssTime::from_centiseconds(500),
+        end: AssTime::from_centiseconds(1000),
+        style: "Default".to_string(),
+        name: None,
+        margin_l: 0,
+        margin_r: 0,
+        margin_v: 0,
+        effect: None,
+        content: vec![TextSegment::Text("这是分组内的第一行".to_string())],
+    });
+    let key2 = line_editor_state.ass_file.events.push(event2);
+    line_editor_state.push_event_to_group(key2, group_id);
+
+    // 创建一个嵌套分组
+    let nested_group_id =
+        line_editor_state.insert_group_to_group("循环测试".to_string(), group_id, 1);
+
+    // 在嵌套分组中循环创建100行字幕
+    for i in 0..10000 {
+        let event = Event::Dialogue(Dialogue {
             layer: 0,
-            is_comment: false,
+            start: AssTime::from_centiseconds(1000 + i * 50),
+            end: AssTime::from_centiseconds(1000 + (i + 1) * 50),
+            style: "Default".to_string(),
+            name: None,
+            margin_l: 0,
+            margin_r: 0,
+            margin_v: 0,
+            effect: None,
+            content: vec![TextSegment::Text(format!("循环测试字幕 {}", i + 1))],
+        });
+        let key = line_editor_state.ass_file.events.push(event);
+        line_editor_state.push_event_to_group(key, nested_group_id);
+    }
 
-            group_id_str: SharedString::default(),
-            group_name: SharedString::default(),
-            collapsed: false,
-            total_row_count: 0,
-        },
-        // 分组头
-        SlintSubtitleRow {
-            row_type: crate::bridge::types::SlintSubtitleRowType::GroupHeader,
-            depth: 0,
-            ancestor_groups: slint::ModelRc::new(slint::VecModel::default()),
+    let event3 = Event::Dialogue(Dialogue {
+        layer: 0,
+        start: AssTime::from_centiseconds(6000),
+        end: AssTime::from_centiseconds(6500),
+        style: "Default".to_string(),
+        name: None,
+        margin_l: 0,
+        margin_r: 0,
+        margin_v: 0,
+        effect: None,
+        content: vec![TextSegment::Text("这是分组内的第二行".to_string())],
+    });
+    let key3 = line_editor_state.ass_file.events.push(event3);
+    line_editor_state.push_event_to_group(key3, group_id);
 
-            event_key: crate::bridge::types::SlintKey {
-                key_index: 0,
-                key_version: 0,
-            },
-            start_time: SharedString::default(),
-            end_time: SharedString::default(),
-            text: SharedString::default(),
-            style: SharedString::default(),
-            layer: 0,
-            is_comment: false,
+    // 再创建一个根级别的事件
+    let event4 = Event::Dialogue(Dialogue {
+        layer: 0,
+        start: AssTime::from_centiseconds(6500),
+        end: AssTime::from_centiseconds(7000),
+        style: "Default".to_string(),
+        name: None,
+        margin_l: 0,
+        margin_r: 0,
+        margin_v: 0,
+        effect: None,
+        content: vec![TextSegment::Text("又一行根级别字幕".to_string())],
+    });
+    let key4 = line_editor_state.ass_file.events.push(event4);
+    line_editor_state.push_event_to_root(key4);
 
-            group_id_str: SharedString::from("group-1"),
-            group_name: SharedString::from("对话组"),
-            collapsed: false,
-            total_row_count: 3, // 包含分组头自己+2个事件
-        },
-        // 分组内的事件1
-        SlintSubtitleRow {
-            row_type: crate::bridge::types::SlintSubtitleRowType::Event,
-            depth: 1,
-            ancestor_groups: {
-                let model = slint::VecModel::default();
-                model.push(SharedString::from("group-1"));
-                slint::ModelRc::new(model)
-            },
-
-            event_key: crate::bridge::types::SlintKey {
-                key_index: 2,
-                key_version: 0,
-            },
-            start_time: SharedString::from("0:00:05.00"),
-            end_time: SharedString::from("0:00:10.00"),
-            text: SharedString::from("这是分组内的第一行"),
-            style: SharedString::from("Default"),
-            layer: 0,
-            is_comment: false,
-
-            group_id_str: SharedString::default(),
-            group_name: SharedString::default(),
-            collapsed: false,
-            total_row_count: 0,
-        },
-        // 分组内的事件2
-        SlintSubtitleRow {
-            row_type: crate::bridge::types::SlintSubtitleRowType::Event,
-            depth: 1,
-            ancestor_groups: {
-                let model = slint::VecModel::default();
-                model.push(SharedString::from("group-1"));
-                slint::ModelRc::new(model)
-            },
-
-            event_key: crate::bridge::types::SlintKey {
-                key_index: 3,
-                key_version: 0,
-            },
-            start_time: SharedString::from("0:00:10.00"),
-            end_time: SharedString::from("0:00:15.00"),
-            text: SharedString::from("这是分组内的第二行"),
-            style: SharedString::from("Default"),
-            layer: 0,
-            is_comment: false,
-
-            group_id_str: SharedString::default(),
-            group_name: SharedString::default(),
-            collapsed: false,
-            total_row_count: 0,
-        },
-        // 根级别事件
-        SlintSubtitleRow {
-            row_type: crate::bridge::types::SlintSubtitleRowType::Event,
-            depth: 0,
-            ancestor_groups: slint::ModelRc::new(slint::VecModel::default()),
-
-            event_key: crate::bridge::types::SlintKey {
-                key_index: 4,
-                key_version: 0,
-            },
-            start_time: SharedString::from("0:00:15.00"),
-            end_time: SharedString::from("0:00:20.00"),
-            text: SharedString::from("又一行根级别字幕"),
-            style: SharedString::from("Default"),
-            layer: 0,
-            is_comment: false,
-
-            group_id_str: SharedString::default(),
-            group_name: SharedString::default(),
-            collapsed: false,
-            total_row_count: 0,
-        },
-    ]
+    println!("✅ 已创建测试字幕数据：104个事件，2个分组");
 }

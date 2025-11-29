@@ -1,8 +1,6 @@
 // TODO:
 // 实现内容条目的单选与多选拖动调整顺序
 // 筛选功能（触发方式思考一下）与排序功能
-// FIXME:
-// 目前列表内容展示存在 Bug
 
 import { ListView, VerticalBox } from "std-widgets.slint";
 import { TableHeader, TableColumn } from "../../widgets/table_header.slint";
@@ -14,31 +12,32 @@ import { SlintSubtitleRow, SlintSubtitleRowType } from "../../core/types.slint";
 import { SubtitleState } from "../../bridge/state.slint";
 
 export component LineEditor inherits Rectangle {
-    // 定义列数据
-    // TODO: 数据由Rust侧处理好后传递
-    // 各部分的Data应当统一顺序
-    // Event的展示序号由Slint侧计算event的序号处理（即忽视Group）
-    // 展示的序号对于代码没有作用
-
     // 定义列标题数据
     in property <[TableColumn]> table-columns: [
         {
-            title: "序号",
-            width: 50px,
-            min-width: 50px,
-            horizontal-stretch: 1,
+            title: "折叠/展开",
+            width: 70px,
+            min-width: 30px,
+            horizontal-stretch: 0,
         },
         {
             title: "时间范围",
-            width: 100px,
+            width: 250px,
             min-width: 100px,
-            horizontal-stretch: 2,
+            horizontal-stretch: 0,
+        },
+        {
+            title: "角色",
+            width: 100px,
+            min-width: 50px,
+            horizontal-stretch: 0,
         },
         {
             title: "内容",
-            width: 200px,
+            width: 100px,
+            // 占用剩余空间
             min-width: 150px,
-            horizontal-stretch: 3,
+            horizontal-stretch: 1,
         },
     ];
 
@@ -55,63 +54,187 @@ export component LineEditor inherits Rectangle {
         }
 
         ListView {
-            for row[idx] in SubtitleState.rows: HorizontalLayout {
-                // 🎯 根据折叠状态控制可见性
-                visible: CallbackManager.is-row-visible(row);
-                // height: Theme.data.line-editor.row-height;
-                height: 10px;
-                
-                // 🎯 根据类型渲染不同内容
-                if row.row-type == SlintSubtitleRowType.GroupHeader: HorizontalLayout {
-                    padding-left: row.depth * 20px;
-                    
-                    // 折叠按钮
-                    Rectangle {
-                        width: 20px;
-                        Text {
-                            text: "▼";
-                            color: #cccccc;
-                            font-size: 12px;
-                        }
+            for row[idx] in SubtitleState.rows: Rectangle {
+                height: Theme.data.line-editor.row-height;
 
-                        TouchArea {
-                            clicked => {
-                                // 🎯 切换折叠状态
-                                debug("触发收起")
+                // 统一使用 HorizontalLayout，确保 Group 和 Event 对齐
+                HorizontalLayout {
+                    // 第一列：折叠图标 或 缩进竖线
+                    Rectangle {
+                        width: root.table-columns[0].width;
+                        // 超出层级就截断
+                        clip: true;
+
+                        HorizontalLayout {
+                            alignment: start;
+                            spacing: 0px; // 紧凑一点
+
+                            // 1. 先画缩进占位 (根据 depth)
+                            // 每一个 depth 占用一定宽度，比如 16px
+                            for i in row.depth: Rectangle {
+                                width: 16px;
+                                height: parent.height;
+
+                                // 可选：在缩进位画竖线
+                                Rectangle {
+                                    width: 1px;
+                                    height: parent.height;
+                                    background: #444;
+                                    x: 8px; // 居中
+                                }
+                            }
+
+                            // 折叠按钮
+
+                            if row.row-type == SlintSubtitleRowType.GroupHeader: Rectangle {
+                                width: 16px;
+                                height: 16px;
+
+                                // 垂直居中
+                                y: (parent.height - self.height) / 2;
+
+                                Image {
+                                    width: 16px;
+                                    height: 16px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    transform-rotation: row.collapsed ? -90deg : 0deg;
+                                    animate transform-rotation {
+                                        duration: 250ms;
+                                        easing: ease-in-out;
+                                    }
+                                    source: @image-url("../../assets/icons/arrow_drop_down.svg");
+                                }
+
+                                TouchArea {
+                                    clicked => {
+                                        CallbackManager.toggle-group-collapsed(row.group-id-str);
+                                    }
+                                }
+                            }
+
+                            // Event 行显示缩进竖线
+
+                            if row.row-type == SlintSubtitleRowType.Event: HorizontalLayout {
+                                spacing: 4px;
+                                padding-left: 10px;
+                                alignment: start;
+
+                                // 循环生成竖线
+                                // FIXME: 需要搞明白为啥这里需要减2
+                                for i in row.depth - 2: Rectangle {
+                                    width: 1px;
+                                    height: parent.height;
+                                    background: #666;
+                                    opacity: 0.5;
+                                }
                             }
                         }
                     }
-                    
-                    // 分组名
-                    Text {
-                        text: row.group-name + " (" + row.total-row-count + ")";
-                        color: #ffff00;
-                        font-weight: 700;
+
+                    // 第二列：时间范围
+                    Rectangle {
+                        width: root.table-columns[1].width;
+                        clip: true;
+                        if row.row-type == SlintSubtitleRowType.GroupHeader: Text {
+                            width: 100%;
+                            text: "~" + row.start-time + "~" + " -> " + "~" + row.end-time + "~";
+                            color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
+                            font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                        if row.row-type == SlintSubtitleRowType.Event: Text {
+                            width: 100%;
+                            text: row.start-time + " -> " + row.end-time;
+                            color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
+                            font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+
+                    // 第三列：角色 (Role)
+                    Rectangle {
+                        width: root.table-columns[2].width;
+                        clip: true;
+                        Rectangle {
+                            width: 14px;
+                            height: 14px;
+                            border-radius: self.width / 2;
+                            background: green;
+                            border-width: 1px;
+                            border-color: white;
+
+                            // 居中显示
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    // 第四列：内容/分组名
+                    Rectangle {
+                        horizontal-stretch: root.table-columns[3].horizontal-stretch;
+                        clip: true;
+                        HorizontalLayout {
+                            alignment: start;
+                            // 由内部控制间距
+                            spacing: 0px;
+
+                            // 循环生成每一级深度的占位块
+                            for i in row.depth: Rectangle {
+                                width: 16px; // 每一级缩进的宽度 (对应之前的 10px * depth)
+                                height: parent.height;
+                                Rectangle {
+                                    width: 6px;
+                                    height: parent.height;
+                                    x: 5px;
+                                    background: #666;
+                                    opacity: 0.3;
+                                }
+                            }
+                            Rectangle {
+                                width: 6px;
+                            }
+
+                            // Group 行的文件夹图标
+                            if row.row-type == SlintSubtitleRowType.GroupHeader: Rectangle {
+                                width: 16px;
+                                height: 16px;
+                                y: (parent.height - self.height) / 2;
+
+                                Image {
+                                    width: 100%;
+                                    height: 100%;
+                                    source: row.collapsed ? @image-url("../../assets/icons/folder.svg") : @image-url("../../assets/icons/folder_open.svg");
+                                }
+
+                                TouchArea {
+                                    clicked => {
+                                        CallbackManager.toggle-group-collapsed(row.group-id-str);
+                                    }
+                                }
+                            }
+
+                            // 文本内容
+                            Text {
+                                text: row.row-type == SlintSubtitleRowType.GroupHeader ? row.group-name + " (" + row.total-row-count + ")" : row.text;
+                                color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
+                                font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
                     }
                 }
-                if row.row-type == SlintSubtitleRowType.Event: HorizontalLayout {
-                    padding-left: row.depth * 20px;
-                    
-                    // 序号（只显示Event的序号）
-                    Text {
-                        width: 50px;
-                        text: idx;  // 临时用索引，实际应该计算
-                        color: white;
-                    }
-                    
-                    // 时间范围
-                    Text {
-                        width: 100px;
-                        text: row.start-time + " - " + row.end-time;
-                        color: white;
-                    }
-                    
-                    // 内容
-                    Text {
-                        horizontal-stretch: 1;
-                        text: row.text;
-                        color: white;
-                    }
+
+                // 行分割线
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: #333;
                 }
             }
         }

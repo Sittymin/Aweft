@@ -1,11 +1,11 @@
 // 将原来的 types.rs 内容移动到这里
 slint::include_modules!();
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use aweft_ass::ASSFile;
+use aweft_ass::{ASSFile, types::time::AssTime};
 use log::warn;
-use slint::{ModelRc, SharedString, ToSharedString};
+use slint::{Model, ModelRc, SharedString, ToSharedString, VecModel};
 use slotmap::{Key, KeyData};
 
 use crate::store::subtitle::{EventGroup, EventGroupId, EventGroupItem, EventGroupManager};
@@ -97,28 +97,14 @@ pub fn scale_close_overlays(
         .collect()
 }
 
-// Subtitle 的列表行
-// 预计算所有Group的row_count
-pub fn precompute_group_row_counts(
-    groups: &HashMap<EventGroupId, EventGroup>,
-    ass_file: &ASSFile,
-) -> HashMap<EventGroupId, i32> {
-    let mut counts = HashMap::new();
-
-    for group_id in groups.keys() {
-        if !counts.contains_key(group_id) {
-            compute_group_row_count_recursive(*group_id, groups, ass_file, &mut counts);
-        }
-    }
-
-    counts
-}
-
-// 递归计算单个Group的row_count
-fn compute_group_row_count_recursive(
+// 向下递归计算单个 group 的 row_count
+pub fn update_group_row_count_with_ui(
     group_id: EventGroupId,
     groups: &HashMap<EventGroupId, EventGroup>,
-    ass_file: &ASSFile,
+    all_rows: &VecModel<SlintSubtitleRow>,
+    group_id_to_ui_index: &HashMap<EventGroupId, usize>,
+    dirty_row_counts: &mut HashSet<EventGroupId>,
+    // cache 应当仅在一次执行当中共用
     cache: &mut HashMap<EventGroupId, i32>,
 ) -> i32 {
     if let Some(&count) = cache.get(&group_id) {
@@ -127,26 +113,53 @@ fn compute_group_row_count_recursive(
 
     let group = match groups.get(&group_id) {
         Some(g) => g,
-        None => return 0,
+        None => {
+            warn!(
+                "update_group_row_count 时获得不存在的group_id: {:#?}",
+                group_id
+            );
+            return 0;
+        }
     };
 
-    // WARN: 不确定分组头是否需要直接算一个
+    // 分组头也算
     let mut count = 1;
 
     for item in &group.items {
         match item {
-            EventGroupItem::Event(event_key) => {
-                if ass_file.events.get(*event_key).is_some() {
-                    count += 1;
-                }
+            EventGroupItem::Event(_event_key) => {
+                count += 1;
             }
             EventGroupItem::ChildGroup(child_id) => {
-                count += compute_group_row_count_recursive(*child_id, groups, ass_file, cache);
+                // 条件：不在 dirty 列表中，且能从 UI 索引和 all_rows 中获取到数据
+                let can_use_ui = !dirty_row_counts.contains(child_id)
+                    && group_id_to_ui_index
+                        .get(child_id)
+                        .and_then(|&idx| all_rows.row_data(idx))
+                        .map(|row| {
+                            count += row.total_row_count;
+                            true
+                        })
+                        .unwrap_or(false);
+
+                // 如果不能使用 UI 数据（它是 dirty 的，或者 UI 还没生成），则递归计算
+                if !can_use_ui {
+                    count += update_group_row_count_with_ui(
+                        *child_id,
+                        groups,
+                        all_rows,
+                        group_id_to_ui_index,
+                        dirty_row_counts,
+                        cache,
+                    );
+                }
             }
         }
     }
 
     cache.insert(group_id, count);
+    // 数据有效了
+    dirty_row_counts.remove(&group_id);
     count
 }
 
@@ -157,33 +170,25 @@ pub fn flatten_subtitle_rows(
 ) -> Vec<SlintSubtitleRow> {
     let mut output = Vec::new();
 
-    // 预计算所有row_count
-    let group_row_counts = precompute_group_row_counts(groups, ass_file);
-
     // 扁平化
-    flatten_items_with_counts(
-        root_items,
-        groups,
-        ass_file,
-        &group_row_counts,
-        0,
-        &Vec::new(),
-        &mut output,
-    );
+    flatten_subtitle_items(root_items, groups, ass_file, 0, &Vec::new(), &mut output);
 
     output
 }
 
 // 递归扁平化
-fn flatten_items_with_counts(
+fn flatten_subtitle_items(
     items: &[EventGroupItem],
     groups: &HashMap<EventGroupId, EventGroup>,
     ass_file: &ASSFile,
-    group_row_counts: &HashMap<EventGroupId, i32>,
     depth: i32,
     ancestor_groups: &[SharedString],
     output: &mut Vec<SlintSubtitleRow>,
-) {
+) -> (Option<(AssTime, AssTime)>, i32) {
+    let mut layer_group_start_time: Option<AssTime> = None;
+    let mut layer_group_end_time: Option<AssTime> = None;
+    let mut layer_group_row_count: i32 = 0;
+
     for item in items {
         match item {
             EventGroupItem::Event(e_key) => {
@@ -191,6 +196,19 @@ fn flatten_items_with_counts(
                     warn!("转换扁平化UI列表时发现存在无效 EventKey");
                     continue;
                 };
+
+                // 更新组时间
+                let event_start = event.start();
+                let event_end = event.end();
+                layer_group_start_time = Some(match layer_group_start_time {
+                    Some(s) => s.min(event_start),
+                    None => event_start,
+                });
+                layer_group_end_time = Some(match layer_group_end_time {
+                    Some(e) => e.max(event_end),
+                    None => event_end,
+                });
+
                 output.push(SlintSubtitleRow {
                     row_type: SlintSubtitleRowType::Event,
                     depth,
@@ -210,6 +228,9 @@ fn flatten_items_with_counts(
                     collapsed: false,
                     total_row_count: 0,
                 });
+
+                // 事件行增加
+                layer_group_row_count += 1;
             }
             EventGroupItem::ChildGroup(g_id) => {
                 let Some(group) = groups.get(g_id) else {
@@ -218,13 +239,8 @@ fn flatten_items_with_counts(
                 };
                 let g_id_str = g_id.to_string().to_shared_string();
 
-                let Some(&row_count) = group_row_counts.get(g_id) else {
-                    warn!(
-                        "代码错误: GroupId {:?} 存在于 groups 中但未找到预计算的 row_count。跳过该组以防止 UI 崩溃。",
-                        g_id
-                    );
-                    continue;
-                };
+                // 用于汇总时间后回填
+                let layer_group_idx = output.len();
 
                 output.push(SlintSubtitleRow {
                     row_type: SlintSubtitleRowType::GroupHeader,
@@ -235,6 +251,7 @@ fn flatten_items_with_counts(
                         key_index: 0,
                         key_version: 0,
                     },
+                    // 目前还无法知道内部的汇总时间
                     start_time: SharedString::new(),
                     end_time: SharedString::new(),
                     // FIXME: 这里需要使用样式节点链的高层抽象，不可以直接使用底层数据
@@ -245,23 +262,58 @@ fn flatten_items_with_counts(
 
                     group_id_str: g_id_str.clone(),
                     group_name: group.name.to_shared_string(),
-                    collapsed: false,
-                    total_row_count: row_count,
+                    collapsed: group.collapsed,
+                    // 目前还无法知道内部的汇总计数
+                    total_row_count: 0,
                 });
 
+                // 分组头占用一个计数
+                layer_group_row_count += 1;
+
                 let new_ancestor_groups = [ancestor_groups, &[g_id_str].as_slice()].concat();
-                flatten_items_with_counts(
+                // WARN: 注意调用流程，避免 output 当中顺序错乱
+                let (child_time_range, child_row_count) = flatten_subtitle_items(
                     &group.items,
                     groups,
                     ass_file,
-                    group_row_counts,
                     depth + 1,
                     &new_ancestor_groups,
                     output,
                 );
+
+                // 这个分组的总行数 = 1(分组头) + 子元素行数
+                let total_row_count = 1 + child_row_count;
+                layer_group_row_count += child_row_count;
+
+                if let Some((child_start, child_end)) = child_time_range {
+                    // 更新当前层的时间范围
+                    layer_group_start_time = Some(match layer_group_start_time {
+                        Some(s) => s.min(child_start),
+                        None => child_start,
+                    });
+                    layer_group_end_time = Some(match layer_group_end_time {
+                        Some(e) => e.max(child_end),
+                        None => child_end,
+                    });
+
+                    // 回填分组头缺失数据
+                    output[layer_group_idx].start_time = child_start.to_shared_string();
+                    output[layer_group_idx].end_time = child_end.to_shared_string();
+                    output[layer_group_idx].total_row_count = total_row_count;
+                } else {
+                    // 空分组，只回填行数
+                    output[layer_group_idx].total_row_count = total_row_count;
+                }
             }
         }
     }
+
+    // 返回这一层的时间范围供父层使用
+    let time_range = match (layer_group_start_time, layer_group_end_time) {
+        (Some(s), Some(e)) => Some((s, e)),
+        _ => None,
+    };
+    (time_range, layer_group_row_count)
 }
 
 pub fn parse_group_id(s: &SharedString) -> Result<EventGroupId> {

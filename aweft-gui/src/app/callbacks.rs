@@ -19,7 +19,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_actionzone_drag_end_callback(instance, Rc::clone(&store));
     setup_edge_drag_callback(instance, Rc::clone(&store));
     setup_edge_drag_end_callback(instance, Rc::clone(&store));
-    pure_setup_line_editor_callback(instance, Rc::clone(&store));
+    setup_toggle_group_collapsed_callback(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -244,39 +244,31 @@ fn setup_edge_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<AppStor
         });
 }
 
-fn pure_setup_line_editor_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+/// 设置分组折叠/展开回调
+///
+/// 当用户点击分组头的折叠按钮时：
+/// 1. 切换 group.collapsed 状态
+/// 2. 调用 refresh_filter() 触发 FilterModel 重新过滤
+fn setup_toggle_group_collapsed_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     instance
         .global::<CallbackManager>()
-        .on_is_row_visible(move |row| -> bool {
-            // 分组头总是可见
-            if row.row_type == SlintSubtitleRowType::GroupHeader {
-                return true;
+        .on_toggle_group_collapsed(move |group_id_str| {
+            let Ok(group_id) = parse_group_id(&group_id_str) else {
+                warn!("无效的 group_id: {}", group_id_str);
+                return;
+            };
+
+            let mut store_mut = store.borrow_mut();
+            let line_editor_state = &mut store_mut.state_mut().line_editor_state;
+
+            // Rust 侧修改
+            if let Some(group) = line_editor_state.group_manager.groups.get_mut(&group_id) {
+                group.collapsed = !group.collapsed;
             }
 
-            // 无祖先
-            if row.ancestor_groups.row_count() == 0 {
-                return true;
-            }
-
-            let store_ref = store.borrow();
-            let groups = &store_ref.state().line_editor_state.group_manager.groups;
-
-            for ancestor_id in row.ancestor_groups.iter() {
-                let Ok(group_id) = parse_group_id(&ancestor_id) else {
-                    warn!("祖先 Group 当中存在无法转换的 ID");
-                    continue;
-                };
-
-                if let Some(group) = groups.get(&group_id) {
-                    if group.collapsed {
-                        return false;
-                    }
-                } else {
-                    warn!("祖先 Group 有不存在的 groups 表当中的数据");
-                }
-            }
-
-            true
+            // 触发 FilterModel 重新过滤
+            // Sline 侧修改
+            line_editor_state.toggle_group(group_id);
         });
 }
 

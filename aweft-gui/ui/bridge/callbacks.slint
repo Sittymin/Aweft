@@ -15,5 +15,5 @@ export global CallbackManager {
     callback edge-drag(vert-keys: [SlintKey], offset-x: length, offset-y: length);
     callback switch-area-type(area-key: SlintKey, area-type: AreaType);
     // LineEditor 当中用于计算是否折叠的
-    pure callback is-row-visible(SlintSubtitleRow) -> bool;
+    callback toggle-group-collapsed(string /* group_id */);
 }
