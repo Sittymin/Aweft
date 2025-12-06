@@ -43,6 +43,9 @@ impl UIUpdateCommand {
 
             StateChange::DragOperation(drag_change) => Self::from_drag_change(drag_change),
 
+            // 此部分为响应式，UI已经自动更新
+            StateChange::LineEditor(_) => vec![],
+
             StateChange::Multiple(changes) => {
                 let mut commands = Vec::new();
                 for change in changes {

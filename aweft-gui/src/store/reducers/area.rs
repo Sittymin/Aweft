@@ -1,5 +1,5 @@
-use crate::bridge::types::{AreaType, SlintKey, slint_area_key_to_key, slint_area_type_to_rust};
-use crate::screen::area::ScrAreaKey;
+use crate::bridge::types::{slint_area_key_to_key, slint_area_type_to_rust};
+use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::store::state::AppState;
 use crate::store::state_change::{AreasChange, StateChange};
 use anyhow::Result;
@@ -7,23 +7,20 @@ use anyhow::Result;
 /// 处理区域类型切换
 pub fn handle_switch_type(
     state: &mut AppState,
-    area_key: SlintKey,
+    area_key: ScrAreaKey,
     area_type: AreaType,
 ) -> Result<StateChange> {
-    let rust_area_key: ScrAreaKey = slint_area_key_to_key(&area_key);
-    let rust_area_type = slint_area_type_to_rust(&area_type);
-
     // 尝试获取并修改对应的 Area
-    if let Some(area) = state.screen_map.areas.get_mut(rust_area_key) {
+    if let Some(area) = state.screen_map.areas.get_mut(area_key) {
         let old_type = area.area_type.clone();
-        area.area_type = rust_area_type.clone();
+        area.area_type = area_type.clone();
 
         println!("成功切换 Area {:?} 的类型为 {:?}", area_key, area.area_type);
 
         Ok(StateChange::Areas(AreasChange::TypeChanged {
-            area_key: rust_area_key,
+            area_key: area_key,
             old_type,
-            new_type: rust_area_type,
+            new_type: area_type,
         }))
     } else {
         eprintln!("错误：找不到 Area {:?}", area_key);

@@ -5,7 +5,7 @@ export struct SlintKey {
     key-version: int,
 }
 
-export enum AreaType {
+export enum SlintAreaType {
     line-editor,
     viewport,
 }
@@ -17,7 +17,7 @@ export struct IconAndText {
 
 export struct ScrAreaData {
     area_key: SlintKey,
-    area_type: AreaType,
+    area_type: SlintAreaType,
     x: length,
     y: length,
     width: length,
@@ -63,16 +63,15 @@ export struct SlintSubtitleRow {
     ancestor_groups: [string],
     start_time: string,
     end_time: string,
+    item_id: string,
 
     // === 事件数据字段 (row_type == Event 时有效) ===
-    event_key: SlintKey,
     text: string,
     style: string,
     layer: int,
     is_comment: bool,
 
     // === 分组数据字段 (row_type == GroupHead 时有效) ===
-    group_id_str: string,
     group_name: string,
     collapsed: bool,
     // 缓存的分组内部 item 数 (用于快速局部更新)

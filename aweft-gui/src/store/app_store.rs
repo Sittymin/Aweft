@@ -1,7 +1,10 @@
 use crate::actions::Action;
+use crate::actions::area::AreaAction;
+use crate::actions::line_editor::LineEditorAction;
 use crate::store::state::AppState;
-use crate::store::state_change::StateChange;
+use crate::store::state_change::{LineEditorChange, StateChange};
 use anyhow::Result;
+use aweft_model::structure::ItemContent;
 
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
@@ -32,6 +35,7 @@ impl AppStore {
                 // TODO: 实现媒体相关的 reducer
                 Ok(StateChange::None)
             }
+            Action::LineEditor(act) => self.dispatch_line_editor(act),
         };
 
         // 可以在这里添加日志
@@ -133,7 +137,7 @@ impl AppStore {
         }
     }
 
-    fn dispatch_area(&mut self, action: crate::actions::area::AreaAction) -> Result<StateChange> {
+    fn dispatch_area(&mut self, action: AreaAction) -> Result<StateChange> {
         use crate::actions::area::AreaAction;
 
         match action {
@@ -161,6 +165,51 @@ impl AppStore {
                 target_area_key,
                 adjacency,
             ),
+        }
+    }
+    fn dispatch_line_editor(&mut self, action: LineEditorAction) -> Result<StateChange> {
+        match action {
+            LineEditorAction::ToggleGroupCollapsed { group_id } => {
+                // Rust 数据层修改 (持久化状态)
+                if let Some(item) = self.state.project.structure.get_mut(group_id) {
+                    if let ItemContent::Group(g) = &mut item.content {
+                        g.collapsed = !g.collapsed;
+                    }
+                }
+
+                // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                // 可能需要改动Updater处理的细粒度
+
+                // ViewModel 层修改 (驱动 UI 变化)
+                self.state
+                    .line_editor_state
+                    .toggle_group(group_id.to_string());
+
+                Ok(StateChange::LineEditor(
+                    LineEditorChange::GroupCollapsedToggled,
+                ))
+            }
+            LineEditorAction::InputTimecode {
+                event_id,
+                text,
+                is_start_time,
+            } => {
+                if let Ok(time) = self.state.project.structure.update_event_time_fuzzy(
+                    event_id,
+                    &text,
+                    is_start_time,
+                ) {
+                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                    // 可能需要改动Updater处理的细粒度
+                    self.state.line_editor_state.update_row_time(
+                        &self.state.project,
+                        event_id,
+                        time,
+                        is_start_time,
+                    );
+                }
+                Ok(StateChange::LineEditor(LineEditorChange::TimecodeInputed))
+            }
         }
     }
 }

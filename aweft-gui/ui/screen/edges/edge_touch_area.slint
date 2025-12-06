@@ -1,5 +1,5 @@
-import {ScrEdgeTouchAreaData} from "../../core/types.slint";
-import {CallbackManager} from "../../bridge/callbacks.slint";
+import { ScrEdgeTouchAreaData } from "../../core/types.slint";
+import { DragCallbacks } from "../../bridge/callbacks.slint";
 
 // 边缘交互区域：处理边缘的拖拽操作
 export component ScrEdgeTouchArea inherits TouchArea {
@@ -25,14 +25,13 @@ export component ScrEdgeTouchArea inherits TouchArea {
             self.is-dragging = true;
         } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && root.is-dragging) {
             // 松开时触发结束回调
-            CallbackManager.edge-drag-end(false);
+            DragCallbacks.edge-drag-end(false);
             self.is-dragging = false;
         } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.is-dragging) {
-            CallbackManager.edge-drag-end(true);
+            DragCallbacks.edge-drag-end(true);
             self.is-dragging = false;
         } else if (event.kind == PointerEventKind.move && root.is-dragging) {
-            CallbackManager.edge-drag(root.touch-area-data.vert_keys, self.mouse-x, self.mouse-y);
+            DragCallbacks.edge-drag(root.touch-area-data.vert_keys, self.mouse-x, self.mouse-y);
         }
     }
 }
-

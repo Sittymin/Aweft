@@ -4,6 +4,7 @@ use crate::screen::map::ScrAreaMap;
 use crate::screen::primitives::{Adjacency, Rcti};
 use crate::screen::vertex::ScrVertKey;
 use crate::store::subtitle::LineEditorState;
+use aweft_model::project::Project;
 use slint::PhysicalSize;
 
 /// 拖拽操作的状态信息
@@ -39,6 +40,9 @@ pub enum DragOperation {
 
 /// 应用状态和逻辑的唯一管理者
 pub struct AppState {
+    // 单一持久化数据源
+    pub project: Project,
+
     pub screen_map: ScrAreaMap,
     pub theme_settings: ThemeSettings,
     pub window_size: PhysicalSize,
@@ -55,7 +59,7 @@ pub struct AppState {
     pub subtitle_renderer: Option<crate::wgpu_subtitle_renderer::SubtitleRenderer>,
     // libass 字幕渲染器
     pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
-    // LineEditor 需要的部分
+    // LineEditor 需要的部分（仅包含 UI 状态）
     pub line_editor_state: LineEditorState,
 }
 
@@ -63,6 +67,7 @@ impl AppState {
     /// 构造函数，接收预先创建的 ThemeSettings
     pub fn new(window: &slint::Window, theme_settings: ThemeSettings) -> Self {
         Self {
+            project: Project::new(),
             screen_map: ScrAreaMap::new(),
             theme_settings,
             window_size: window.size(),

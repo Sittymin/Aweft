@@ -1,4 +1,4 @@
-import { SlintKey, AreaType, ActionZoneCorner } from "../core/types.slint";
+import { SlintKey, SlintAreaType, ActionZoneCorner } from "../core/types.slint";
 import { ActionZone } from "action_zone.slint";
 import { AreaHeader } from "../areas/area_header.slint";
 import { LineEditor } from "../areas/line_editor/view.slint";
@@ -9,7 +9,7 @@ import { Theme } from "../theme/index.slint";
 // Area 容器组件：包含 Area 的边框、ActionZone 和内容
 export component SlintScrArea inherits Rectangle {
     in property <SlintKey> area-key;
-    in property <AreaType> area-type;
+    in property <SlintAreaType> area-type;
     in property <length> container-x;
     in property <length> container-y;
     in property <length> container-width;
@@ -29,8 +29,8 @@ export component SlintScrArea inherits Rectangle {
             area-type: area-type;
         }
 
-        if area-type == AreaType.line-editor: LineEditor { }
-        if area-type == AreaType.viewport: VideoPlayer {
+        if area-type == SlintAreaType.line-editor: LineEditor { }
+        if area-type == SlintAreaType.viewport: VideoPlayer {
             video-frame: VideoState.current-video-frame;
         }
     }

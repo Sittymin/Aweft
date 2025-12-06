@@ -1,13 +1,13 @@
 use crate::actions::{Action, area::AreaAction};
-use crate::bridge::types::{CallbackManager, MainWindow};
-use crate::bridge::{SlintSubtitleRowType, parse_group_id};
+use crate::bridge::types::{AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow};
+use crate::bridge::{slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
 use crate::ui_update::{UIUpdateCommand, UIUpdater};
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
-use slint::{ComponentHandle, Model, RenderingState};
+use slint::{ComponentHandle, RenderingState};
 use std::{cell::RefCell, rc::Rc};
 
 /// 设置所有回调
@@ -20,19 +20,17 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_edge_drag_callback(instance, Rc::clone(&store));
     setup_edge_drag_end_callback(instance, Rc::clone(&store));
     setup_toggle_group_collapsed_callback(instance, Rc::clone(&store));
+    setup_line_editor_timecode_editor_callback(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
 fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
 
-    instance
-        .global::<CallbackManager>()
-        .on_switch_area_type(move |area_key, area_type| {
-            println!(
-                "收到切换区域类型请求: area_key={:?}, area_type={:?}",
-                area_key, area_type
-            );
+    instance.global::<AreaCallbacks>().on_switch_area_type(
+        move |slint_area_key, slint_area_type| {
+            let area_key = slint_area_key_to_key(&slint_area_key);
+            let area_type = slint_area_type_to_rust(&slint_area_type);
 
             // 创建 Action
             let action = Action::Area(AreaAction::SwitchType {
@@ -42,7 +40,8 @@ fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>)
 
             // 分发 Action 并更新 UI
             dispatch_and_render(&store, action, &weak_instance);
-        });
+        },
+    );
 }
 
 fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -183,7 +182,7 @@ fn handle_scale_factor_changed(
 fn setup_actionzone_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
 
-    instance.global::<CallbackManager>().on_actionzone_drag(
+    instance.global::<DragCallbacks>().on_actionzone_drag(
         move |area_key, corner, offset_x, offset_y| {
             let action = Action::Drag(crate::actions::drag::DragAction::ActionZone(
                 crate::actions::drag::ActionZoneDrag::Update {
@@ -202,7 +201,7 @@ fn setup_actionzone_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppSt
 fn setup_actionzone_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     instance
-        .global::<CallbackManager>()
+        .global::<DragCallbacks>()
         .on_actionzone_drag_end(move |area_key, is_cancel| {
             let action = Action::Drag(crate::actions::drag::DragAction::ActionZone(
                 crate::actions::drag::ActionZoneDrag::End {
@@ -218,7 +217,7 @@ fn setup_actionzone_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<A
 fn setup_edge_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     instance
-        .global::<CallbackManager>()
+        .global::<DragCallbacks>()
         .on_edge_drag(move |vert_keys, offset_x, offset_y| {
             let action = Action::Drag(crate::actions::drag::DragAction::Edge(
                 crate::actions::drag::EdgeDrag::Update {
@@ -234,7 +233,7 @@ fn setup_edge_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>)
 fn setup_edge_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     instance
-        .global::<CallbackManager>()
+        .global::<DragCallbacks>()
         .on_edge_drag_end(move |is_cancel| {
             let action = Action::Drag(crate::actions::drag::DragAction::Edge(
                 crate::actions::drag::EdgeDrag::End { is_cancel },
@@ -245,31 +244,46 @@ fn setup_edge_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<AppStor
 }
 
 /// 设置分组折叠/展开回调
-///
-/// 当用户点击分组头的折叠按钮时：
-/// 1. 切换 group.collapsed 状态
-/// 2. 调用 refresh_filter() 触发 FilterModel 重新过滤
 fn setup_toggle_group_collapsed_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak_instance = instance.as_weak();
     instance
-        .global::<CallbackManager>()
+        .global::<LineEditorCallbacks>()
         .on_toggle_group_collapsed(move |group_id_str| {
-            let Ok(group_id) = parse_group_id(&group_id_str) else {
+            use aweft_model::ids::ItemId;
+            let Ok(group_id) = uuid::Uuid::parse_str(group_id_str.as_str()).map(ItemId) else {
                 warn!("无效的 group_id: {}", group_id_str);
                 return;
             };
 
-            let mut store_mut = store.borrow_mut();
-            let line_editor_state = &mut store_mut.state_mut().line_editor_state;
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::ToggleGroupCollapsed { group_id },
+            );
 
-            // Rust 侧修改
-            if let Some(group) = line_editor_state.group_manager.groups.get_mut(&group_id) {
-                group.collapsed = !group.collapsed;
-            }
-
-            // 触发 FilterModel 重新过滤
-            // Sline 侧修改
-            line_editor_state.toggle_group(group_id);
+            dispatch_and_render(&store, action, &weak_instance);
         });
+}
+
+fn setup_line_editor_timecode_editor_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak_instance = instance.as_weak();
+    instance.global::<LineEditorCallbacks>().on_timecode_input(
+        move |event_id_str, text, is_start_time| {
+            use aweft_model::ids::ItemId;
+            let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 event_id: {}", event_id_str);
+                return;
+            };
+            println!("输入文本: {text}");
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::InputTimecode {
+                    event_id,
+                    text: text.to_string(),
+                    is_start_time,
+                },
+            );
+
+            dispatch_and_render(&store, action, &weak_instance);
+        },
+    );
 }
 
 /// 统一的 dispatch 和渲染逻辑 - 使用新的 StateChange 机制
@@ -284,7 +298,7 @@ fn dispatch_and_render(
     let state_change = match store_mut.dispatch(action) {
         Ok(change) => change,
         Err(e) => {
-            eprintln!("❌ Action 处理失败: {}", e);
+            log::error!("❌ Action 处理失败: {}", e);
             return;
         }
     };

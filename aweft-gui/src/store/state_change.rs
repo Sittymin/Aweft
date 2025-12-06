@@ -16,6 +16,8 @@ pub enum StateChange {
     /// 拖拽状态变更
     DragOperation(DragOperationChange),
 
+    LineEditor(LineEditorChange),
+
     /// 组合变更（多个同时发生）
     Multiple(Vec<StateChange>),
 }
@@ -64,4 +66,10 @@ pub enum DragOperationChange {
     Ended {
         areas_changed: bool,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum LineEditorChange {
+    GroupCollapsedToggled,
+    TimecodeInputed,
 }

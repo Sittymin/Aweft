@@ -1,12 +1,12 @@
-import { SlintKey, AreaType } from "../core/types.slint";
+import { SlintKey, SlintAreaType } from "../core/types.slint";
 import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
 import { IconComboBox } from "../widgets/area_type_switcher.slint";
-import { CallbackManager } from "../bridge/callbacks.slint";
+import { AreaCallbacks } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
 export component AreaHeader inherits Rectangle {
     in property <SlintKey> area-key;
-    in property <AreaType> area-type;
+    in property <SlintAreaType> area-type;
 
     height: Theme.data.area-header.height;
     background: Theme.data.area-header.background;
@@ -20,7 +20,7 @@ export component AreaHeader inherits Rectangle {
             y: (parent.height - self.height) / 2;
             current-index: AreaTypeMetadata.area-type-to-index(root.area-type);
             selected(new-index) => {
-                CallbackManager.switch-area-type(
+                AreaCallbacks.switch-area-type(
                     root.area-key, 
                     AreaTypeMetadata.index-to-area-type(new-index));
             }

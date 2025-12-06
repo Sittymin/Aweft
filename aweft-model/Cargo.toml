@@ -1,0 +1,11 @@
+[package]
+name = "aweft-model"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+chrono = { version = "0.4.42", features = [ "serde" ] }
+nom = "8.0.0"
+serde = "1.0.228"
+uuid = { version = "1.19.0", features = [ "serde" ] }

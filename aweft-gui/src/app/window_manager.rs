@@ -35,21 +35,23 @@ impl AppWindowManager {
         // FIXME: 这里获得的是未初始化的数据
         let store = Rc::new(RefCell::new(AppStore::new(&instance)));
         // HACK: 临时直接加载一个视频，并且失败直接崩溃
-        initialize_media(
-            &mut store.borrow_mut(),
-            "file:///home/Sittymin/Videos/IMG_0161.MP4",
-        )
-        .unwrap();
+        // initialize_media(
+        //     &mut store.borrow_mut(),
+        //     "file:///home/Sittymin/Videos/IMG_0161.MP4",
+        // )
+        // .unwrap();
 
         // ===================================
         // 初始化字幕数据和过滤模型
         let filter_model = {
             let mut store_mut = store.borrow_mut();
-            let line_editor_state = &mut store_mut.state_mut().line_editor_state;
+            let state = store_mut.state_mut();
+            // 先创建数据
+            create_test_subtitle_data(&mut state.project);
 
-            create_test_subtitle_data(line_editor_state);
-            line_editor_state.rebuild_all_rows();
-            line_editor_state.init_filter_model()
+            // 然后初始化 LineEditorState
+            state.line_editor_state.rebuild_all_rows(&state.project);
+            state.line_editor_state.init_filter_model()
         };
 
         let subtitle_state = instance.global::<SubtitleState>();
@@ -70,7 +72,7 @@ impl AppWindowManager {
 
     /// 运行应用
     pub fn run(&mut self) -> Result<()> {
-        crate::app::callbacks::setup_callbacks(&self.instance, Rc::clone(&self.store));
+        crate::bridge::callbacks::setup_callbacks(&self.instance, Rc::clone(&self.store));
 
         // 直接启动 UI 事件循环
         self.instance.run().context("启动 UI 事件循环失败")
@@ -78,97 +80,89 @@ impl AppWindowManager {
 }
 
 /// 创建测试字幕数据
-fn create_test_subtitle_data(line_editor_state: &mut crate::store::subtitle::LineEditorState) {
-    use aweft_ass::types::event::{Dialogue, Event, TextSegment};
-    use aweft_ass::types::time::AssTime;
+fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
+    use aweft_model::structure::{EventData, ItemLocation};
+    use chrono::TimeDelta;
+
+    let structure = &mut project.structure;
 
     // 创建根级别的事件
-    let event1 = Event::Dialogue(Dialogue {
-        layer: 0,
-        start: AssTime::from_centiseconds(0),
-        end: AssTime::from_centiseconds(500),
+    let event1 = EventData {
+        start_time: TimeDelta::try_milliseconds(0).unwrap(),
+        end_time: TimeDelta::try_milliseconds(5000).unwrap(),
+        actor: None,
+        text: "这是第一行字幕（根级别）".to_string(),
+        segment_timing: None,
         style: "Default".to_string(),
-        name: None,
-        margin_l: 0,
-        margin_r: 0,
-        margin_v: 0,
-        effect: None,
-        content: vec![TextSegment::Text("这是第一行字幕（根级别）".to_string())],
-    });
-    let key1 = line_editor_state.ass_file.events.push(event1);
-    line_editor_state.push_event_to_root(key1);
+    };
+    structure
+        .create_event(event1, ItemLocation::Root(0))
+        .unwrap();
 
     // 创建一个分组
-    let group_id = line_editor_state.push_group_to_root("对话组".to_string());
+    let group_id = structure
+        .create_group("对话组".to_string(), ItemLocation::Root(1))
+        .unwrap();
 
     // 在分组内创建事件
-    let event2 = Event::Dialogue(Dialogue {
-        layer: 0,
-        start: AssTime::from_centiseconds(500),
-        end: AssTime::from_centiseconds(1000),
+    let event2 = EventData {
+        start_time: TimeDelta::try_milliseconds(5000).unwrap(),
+        end_time: TimeDelta::try_milliseconds(10000).unwrap(),
+        actor: None,
+        text: "这是分组内的第一行".to_string(),
+        segment_timing: None,
         style: "Default".to_string(),
-        name: None,
-        margin_l: 0,
-        margin_r: 0,
-        margin_v: 0,
-        effect: None,
-        content: vec![TextSegment::Text("这是分组内的第一行".to_string())],
-    });
-    let key2 = line_editor_state.ass_file.events.push(event2);
-    line_editor_state.push_event_to_group(key2, group_id);
+    };
+    structure
+        .create_event(event2, ItemLocation::InGroup(group_id, 0))
+        .unwrap();
 
     // 创建一个嵌套分组
-    let nested_group_id =
-        line_editor_state.insert_group_to_group("循环测试".to_string(), group_id, 1);
+    let nested_group_id = structure
+        .create_group("循环测试".to_string(), ItemLocation::InGroup(group_id, 1))
+        .unwrap();
 
     // 在嵌套分组中循环创建100行字幕
     for i in 0..10000 {
-        let event = Event::Dialogue(Dialogue {
-            layer: 0,
-            start: AssTime::from_centiseconds(1000 + i * 50),
-            end: AssTime::from_centiseconds(1000 + (i + 1) * 50),
+        let start = 10000 + i * 500;
+        let end = 10000 + (i + 1) * 500;
+        let event = EventData {
+            start_time: TimeDelta::try_milliseconds(start).unwrap(),
+            end_time: TimeDelta::try_milliseconds(end).unwrap(),
+            actor: None,
+            text: format!("循环测试字幕 {}", i + 1),
+            segment_timing: None,
             style: "Default".to_string(),
-            name: None,
-            margin_l: 0,
-            margin_r: 0,
-            margin_v: 0,
-            effect: None,
-            content: vec![TextSegment::Text(format!("循环测试字幕 {}", i + 1))],
-        });
-        let key = line_editor_state.ass_file.events.push(event);
-        line_editor_state.push_event_to_group(key, nested_group_id);
+        };
+        structure
+            .create_event(event, ItemLocation::InGroup(nested_group_id, i as usize))
+            .unwrap();
     }
 
-    let event3 = Event::Dialogue(Dialogue {
-        layer: 0,
-        start: AssTime::from_centiseconds(6000),
-        end: AssTime::from_centiseconds(6500),
+    let event3 = EventData {
+        start_time: TimeDelta::try_milliseconds(60000).unwrap(),
+        end_time: TimeDelta::try_milliseconds(65000).unwrap(),
+        actor: None,
+        text: "这是分组内的第二行".to_string(),
+        segment_timing: None,
         style: "Default".to_string(),
-        name: None,
-        margin_l: 0,
-        margin_r: 0,
-        margin_v: 0,
-        effect: None,
-        content: vec![TextSegment::Text("这是分组内的第二行".to_string())],
-    });
-    let key3 = line_editor_state.ass_file.events.push(event3);
-    line_editor_state.push_event_to_group(key3, group_id);
+    };
+    structure
+        .create_event(event3, ItemLocation::InGroup(group_id, 2))
+        .unwrap();
 
     // 再创建一个根级别的事件
-    let event4 = Event::Dialogue(Dialogue {
-        layer: 0,
-        start: AssTime::from_centiseconds(6500),
-        end: AssTime::from_centiseconds(7000),
+    let event4 = EventData {
+        start_time: TimeDelta::try_milliseconds(65000).unwrap(),
+        end_time: TimeDelta::try_milliseconds(70000).unwrap(),
+        actor: None,
+        text: "又一行根级别字幕".to_string(),
+        segment_timing: None,
         style: "Default".to_string(),
-        name: None,
-        margin_l: 0,
-        margin_r: 0,
-        margin_v: 0,
-        effect: None,
-        content: vec![TextSegment::Text("又一行根级别字幕".to_string())],
-    });
-    let key4 = line_editor_state.ass_file.events.push(event4);
-    line_editor_state.push_event_to_root(key4);
+    };
+    structure
+        .create_event(event4, ItemLocation::Root(2))
+        .unwrap();
 
-    println!("✅ 已创建测试字幕数据：104个事件，2个分组");
+    println!("✅ 已创建测试字幕数据：10004个事件，2个分组");
 }

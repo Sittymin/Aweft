@@ -1,19 +1,22 @@
 import {
     SlintKey,
     ActionZoneCorner,
-    AreaType,
+    SlintAreaType,
     SlintSubtitleRow,
 } from "../core/types.slint";
 
-// Slint-Rust 桥接层：回调接口
-// Rust 侧通过 on_xxx 连接这些回调
-export global CallbackManager {
-    // 定义回调 - 使用拆分的键值
+export global DragCallbacks {
     callback actionzone-drag(area-key: SlintKey, corner: ActionZoneCorner, offset-x: length, offset-y: length);
     callback actionzone-drag-end(area-key: SlintKey, is-cancel: bool);
-    callback edge-drag-end(is-cancel: bool);
     callback edge-drag(vert-keys: [SlintKey], offset-x: length, offset-y: length);
-    callback switch-area-type(area-key: SlintKey, area-type: AreaType);
-    // LineEditor 当中用于计算是否折叠的
-    callback toggle-group-collapsed(string /* group_id */);
+    callback edge-drag-end(is-cancel: bool);
+}
+
+export global AreaCallbacks {
+    callback switch-area-type(area-key: SlintKey, area-type: SlintAreaType);
+}
+
+export global LineEditorCallbacks {
+    callback toggle-group-collapsed(group-id: string);
+    callback timecode-input(item-id: string, text: string, is-start-time: bool);
 }

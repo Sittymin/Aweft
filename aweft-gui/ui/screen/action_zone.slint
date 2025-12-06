@@ -1,5 +1,5 @@
-import {ActionZoneCorner, SlintKey} from "../core/types.slint";
-import {CallbackManager} from "../bridge/callbacks.slint";
+import { ActionZoneCorner, SlintKey } from "../core/types.slint";
+import { DragCallbacks } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
 // ActionZone 组件：Area 四角的拖拽调整区
@@ -16,13 +16,13 @@ export component ActionZone inherits Rectangle {
                 root.is-dragging = true;
             } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && root.is-dragging) {
                 // 松开时触发结束回调
-                CallbackManager.actionzone-drag-end(root.area-key, false);
+                DragCallbacks.actionzone-drag-end(root.area-key, false);
                 root.is-dragging = false;
             } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.is-dragging) {
-                CallbackManager.actionzone-drag-end(root.area-key, true);
+                DragCallbacks.actionzone-drag-end(root.area-key, true);
                 root.is-dragging = false;
             } else if (event.kind == PointerEventKind.move && root.is-dragging) {
-                CallbackManager.actionzone-drag(root.area-key, root.position, self.mouse-x, self.mouse-y);
+                DragCallbacks.actionzone-drag(root.area-key, root.position, self.mouse-x, self.mouse-y);
             }
         }
     }

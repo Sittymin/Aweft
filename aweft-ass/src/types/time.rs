@@ -1,5 +1,6 @@
 use crate::error::TimeParseError;
 use chrono::TimeDelta;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -21,7 +22,7 @@ use std::str::FromStr;
 /// let time2 = AssTime::from_hms_cs(0, 1, 23, 45);
 /// assert_eq!(time, time2);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct AssTime(TimeDelta);
 
 impl AssTime {

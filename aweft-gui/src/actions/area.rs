@@ -1,5 +1,5 @@
-use crate::bridge::types::{AreaType, SlintKey, SplitPreviewOverlayData};
-use crate::screen::area::ScrAreaKey;
+use crate::bridge::types::SplitPreviewOverlayData;
+use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::primitives::Adjacency;
 
 /// 区域相关 Action
@@ -7,7 +7,7 @@ use crate::screen::primitives::Adjacency;
 pub enum AreaAction {
     /// 切换区域类型
     SwitchType {
-        area_key: SlintKey,
+        area_key: ScrAreaKey,
         area_type: AreaType,
     },
     /// 分割区域

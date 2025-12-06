@@ -20,11 +20,22 @@ import {
     ScrAreaData,
 } from "../core/types.slint";
 import { VideoState, SubtitleState } from "../bridge/state.slint";
-import { CallbackManager } from "../bridge/callbacks.slint";
+import {
+    DragCallbacks,
+    AreaCallbacks,
+    LineEditorCallbacks,
+} from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
 // 重新导出全局对象，使其在 Rust 侧可见
-export { VideoState, SubtitleState, CallbackManager, Theme }
+export {
+    VideoState,
+    SubtitleState,
+    DragCallbacks,
+    AreaCallbacks,
+    LineEditorCallbacks,
+    Theme
+}
 
 // 主窗口组件
 export component MainWindow inherits Window {

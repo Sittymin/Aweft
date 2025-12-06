@@ -20,11 +20,12 @@ glutin_egl_sys = "0.7.1"
 url = "2.5"
 futures = "0.3.31"
 aweft-libass = { path = "../aweft-libass" }
-aweft-ass = { path = "../aweft-ass" }
+aweft-model = { path = "../aweft-model" }
 bytemuck = "1.23.2"
 uuid = { version = "1.18.1", features = [
     "v4",
 ]}
+chrono = "0.4.42"
 
 [build-dependencies]
 slint-build = "1.14.1"

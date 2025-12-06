@@ -1,5 +1,6 @@
 pub mod area;
 pub mod drag;
+pub mod line_editor;
 pub mod media;
 pub mod screen;
 
@@ -14,4 +15,5 @@ pub enum Action {
     Area(area::AreaAction),
     /// 媒体相关操作
     Media(media::MediaAction),
+    LineEditor(line_editor::LineEditorAction),
 }

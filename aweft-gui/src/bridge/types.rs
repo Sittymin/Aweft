@@ -3,28 +3,27 @@ slint::include_modules!();
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use aweft_ass::{ASSFile, types::time::AssTime};
+use aweft_model::ids::ItemId;
+use chrono::TimeDelta;
 use log::warn;
 use slint::{Model, ModelRc, SharedString, ToSharedString, VecModel};
 use slotmap::{Key, KeyData};
 
-use crate::store::subtitle::{EventGroup, EventGroupId, EventGroupItem, EventGroupManager};
-
 /// 将 Rust 的 AreaType 转换为 Slint 的 AreaType
-pub fn rust_area_type_to_slint(area_type: &crate::screen::area::AreaType) -> AreaType {
+pub fn rust_area_type_to_slint(area_type: &crate::screen::area::AreaType) -> SlintAreaType {
     match area_type {
         // HACK: 可能Empty类型不需要
-        crate::screen::area::AreaType::Empty => AreaType::LineEditor,
-        crate::screen::area::AreaType::LineEditor => AreaType::LineEditor,
-        crate::screen::area::AreaType::Viewport => AreaType::Viewport,
-        crate::screen::area::AreaType::Timeline => AreaType::LineEditor,
-        crate::screen::area::AreaType::Properties => AreaType::LineEditor,
+        crate::screen::area::AreaType::Empty => SlintAreaType::LineEditor,
+        crate::screen::area::AreaType::LineEditor => SlintAreaType::LineEditor,
+        crate::screen::area::AreaType::Viewport => SlintAreaType::Viewport,
+        crate::screen::area::AreaType::Timeline => SlintAreaType::LineEditor,
+        crate::screen::area::AreaType::Properties => SlintAreaType::LineEditor,
     }
 }
-pub fn slint_area_type_to_rust(area_type: &AreaType) -> crate::screen::area::AreaType {
+pub fn slint_area_type_to_rust(area_type: &SlintAreaType) -> crate::screen::area::AreaType {
     match area_type {
-        AreaType::LineEditor => crate::screen::area::AreaType::LineEditor,
-        AreaType::Viewport => crate::screen::area::AreaType::Viewport,
+        SlintAreaType::LineEditor => crate::screen::area::AreaType::LineEditor,
+        SlintAreaType::Viewport => crate::screen::area::AreaType::Viewport,
     }
 }
 
@@ -54,6 +53,33 @@ pub fn key_to_slint_key<K: Key>(key: K) -> SlintKey {
 /// 通用：SlintKey -> SlotMap Key
 pub fn slint_area_key_to_key<K: Key>(area_key: &SlintKey) -> K {
     index_version_to_key::<K>(area_key.key_index, area_key.key_version)
+}
+
+pub fn format_time(delta: TimeDelta) -> SharedString {
+    let ms = delta.num_milliseconds();
+    let total_cs = ms / 10;
+    let cs = total_cs % 100;
+    let total_s = total_cs / 100;
+    let s = total_s % 60;
+    let total_m = total_s / 60;
+    let m = total_m % 60;
+    let h = total_m / 60;
+    slint::format!("{}:{:02}:{:02}.{:02}", h, m, s, cs)
+}
+pub fn parse_time(time_str: &SharedString) -> Option<TimeDelta> {
+    let s = time_str.as_str();
+    let (hms_part, cs_part) = s.split_once('.')?;
+    let cs: i64 = cs_part.parse().ok()?;
+    let mut parts = hms_part.split(':');
+    let h: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let s: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let total_ms = h * 3_600_000 + m * 60_000 + s * 1_000 + cs * 10;
+
+    Some(TimeDelta::milliseconds(total_ms))
 }
 
 // 参数修改成相同的Rust定义
@@ -95,231 +121,6 @@ pub fn scale_close_overlays(
             height: d.height / s,
         })
         .collect()
-}
-
-// 向下递归计算单个 group 的 row_count
-pub fn update_group_row_count_with_ui(
-    group_id: EventGroupId,
-    groups: &HashMap<EventGroupId, EventGroup>,
-    all_rows: &VecModel<SlintSubtitleRow>,
-    group_id_to_ui_index: &HashMap<EventGroupId, usize>,
-    dirty_row_counts: &mut HashSet<EventGroupId>,
-    // cache 应当仅在一次执行当中共用
-    cache: &mut HashMap<EventGroupId, i32>,
-) -> i32 {
-    if let Some(&count) = cache.get(&group_id) {
-        return count;
-    }
-
-    let group = match groups.get(&group_id) {
-        Some(g) => g,
-        None => {
-            warn!(
-                "update_group_row_count 时获得不存在的group_id: {:#?}",
-                group_id
-            );
-            return 0;
-        }
-    };
-
-    // 分组头也算
-    let mut count = 1;
-
-    for item in &group.items {
-        match item {
-            EventGroupItem::Event(_event_key) => {
-                count += 1;
-            }
-            EventGroupItem::ChildGroup(child_id) => {
-                // 条件：不在 dirty 列表中，且能从 UI 索引和 all_rows 中获取到数据
-                let can_use_ui = !dirty_row_counts.contains(child_id)
-                    && group_id_to_ui_index
-                        .get(child_id)
-                        .and_then(|&idx| all_rows.row_data(idx))
-                        .map(|row| {
-                            count += row.total_row_count;
-                            true
-                        })
-                        .unwrap_or(false);
-
-                // 如果不能使用 UI 数据（它是 dirty 的，或者 UI 还没生成），则递归计算
-                if !can_use_ui {
-                    count += update_group_row_count_with_ui(
-                        *child_id,
-                        groups,
-                        all_rows,
-                        group_id_to_ui_index,
-                        dirty_row_counts,
-                        cache,
-                    );
-                }
-            }
-        }
-    }
-
-    cache.insert(group_id, count);
-    // 数据有效了
-    dirty_row_counts.remove(&group_id);
-    count
-}
-
-pub fn flatten_subtitle_rows(
-    root_items: &[EventGroupItem],
-    groups: &HashMap<EventGroupId, EventGroup>,
-    ass_file: &ASSFile,
-) -> Vec<SlintSubtitleRow> {
-    let mut output = Vec::new();
-
-    // 扁平化
-    flatten_subtitle_items(root_items, groups, ass_file, 0, &Vec::new(), &mut output);
-
-    output
-}
-
-// 递归扁平化
-fn flatten_subtitle_items(
-    items: &[EventGroupItem],
-    groups: &HashMap<EventGroupId, EventGroup>,
-    ass_file: &ASSFile,
-    depth: i32,
-    ancestor_groups: &[SharedString],
-    output: &mut Vec<SlintSubtitleRow>,
-) -> (Option<(AssTime, AssTime)>, i32) {
-    let mut layer_group_start_time: Option<AssTime> = None;
-    let mut layer_group_end_time: Option<AssTime> = None;
-    let mut layer_group_row_count: i32 = 0;
-
-    for item in items {
-        match item {
-            EventGroupItem::Event(e_key) => {
-                let Some(event) = ass_file.events.get(*e_key) else {
-                    warn!("转换扁平化UI列表时发现存在无效 EventKey");
-                    continue;
-                };
-
-                // 更新组时间
-                let event_start = event.start();
-                let event_end = event.end();
-                layer_group_start_time = Some(match layer_group_start_time {
-                    Some(s) => s.min(event_start),
-                    None => event_start,
-                });
-                layer_group_end_time = Some(match layer_group_end_time {
-                    Some(e) => e.max(event_end),
-                    None => event_end,
-                });
-
-                output.push(SlintSubtitleRow {
-                    row_type: SlintSubtitleRowType::Event,
-                    depth,
-                    ancestor_groups: ModelRc::from(ancestor_groups),
-
-                    event_key: key_to_slint_key(*e_key),
-                    start_time: event.start().to_shared_string(),
-                    end_time: event.end().to_shared_string(),
-                    // FIXME: 这里需要使用样式节点链的高层抽象，不可以直接使用底层数据
-                    text: event.text().to_shared_string(),
-                    style: event.style().to_shared_string(),
-                    layer: event.layer(),
-                    is_comment: matches!(event, aweft_ass::types::event::Event::Comment(_)),
-
-                    group_id_str: SharedString::new(),
-                    group_name: SharedString::new(),
-                    collapsed: false,
-                    total_row_count: 0,
-                });
-
-                // 事件行增加
-                layer_group_row_count += 1;
-            }
-            EventGroupItem::ChildGroup(g_id) => {
-                let Some(group) = groups.get(g_id) else {
-                    warn!("代码错误: 转换扁平化UI列表时发现存在无效 EventGroupId");
-                    continue;
-                };
-                let g_id_str = g_id.to_string().to_shared_string();
-
-                // 用于汇总时间后回填
-                let layer_group_idx = output.len();
-
-                output.push(SlintSubtitleRow {
-                    row_type: SlintSubtitleRowType::GroupHeader,
-                    depth,
-                    ancestor_groups: ModelRc::from(ancestor_groups),
-
-                    event_key: SlintKey {
-                        key_index: 0,
-                        key_version: 0,
-                    },
-                    // 目前还无法知道内部的汇总时间
-                    start_time: SharedString::new(),
-                    end_time: SharedString::new(),
-                    // FIXME: 这里需要使用样式节点链的高层抽象，不可以直接使用底层数据
-                    text: SharedString::new(),
-                    style: SharedString::new(),
-                    layer: -1,
-                    is_comment: false,
-
-                    group_id_str: g_id_str.clone(),
-                    group_name: group.name.to_shared_string(),
-                    collapsed: group.collapsed,
-                    // 目前还无法知道内部的汇总计数
-                    total_row_count: 0,
-                });
-
-                // 分组头占用一个计数
-                layer_group_row_count += 1;
-
-                let new_ancestor_groups = [ancestor_groups, &[g_id_str].as_slice()].concat();
-                // WARN: 注意调用流程，避免 output 当中顺序错乱
-                let (child_time_range, child_row_count) = flatten_subtitle_items(
-                    &group.items,
-                    groups,
-                    ass_file,
-                    depth + 1,
-                    &new_ancestor_groups,
-                    output,
-                );
-
-                // 这个分组的总行数 = 1(分组头) + 子元素行数
-                let total_row_count = 1 + child_row_count;
-                layer_group_row_count += child_row_count;
-
-                if let Some((child_start, child_end)) = child_time_range {
-                    // 更新当前层的时间范围
-                    layer_group_start_time = Some(match layer_group_start_time {
-                        Some(s) => s.min(child_start),
-                        None => child_start,
-                    });
-                    layer_group_end_time = Some(match layer_group_end_time {
-                        Some(e) => e.max(child_end),
-                        None => child_end,
-                    });
-
-                    // 回填分组头缺失数据
-                    output[layer_group_idx].start_time = child_start.to_shared_string();
-                    output[layer_group_idx].end_time = child_end.to_shared_string();
-                    output[layer_group_idx].total_row_count = total_row_count;
-                } else {
-                    // 空分组，只回填行数
-                    output[layer_group_idx].total_row_count = total_row_count;
-                }
-            }
-        }
-    }
-
-    // 返回这一层的时间范围供父层使用
-    let time_range = match (layer_group_start_time, layer_group_end_time) {
-        (Some(s), Some(e)) => Some((s, e)),
-        _ => None,
-    };
-    (time_range, layer_group_row_count)
-}
-
-pub fn parse_group_id(s: &SharedString) -> Result<EventGroupId> {
-    use uuid::Uuid;
-    let uuid = Uuid::parse_str(s.as_str())?;
-    Ok(EventGroupId(uuid))
 }
 
 /// UI缩放相关的设置

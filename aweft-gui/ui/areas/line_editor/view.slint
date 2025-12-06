@@ -7,7 +7,7 @@ import { TableHeader, TableColumn } from "../../widgets/table_header.slint";
 import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
 import { SlintKey } from "../../core/types.slint";
-import { CallbackManager } from "../../bridge/callbacks.slint";
+import { LineEditorCallbacks } from "../../bridge/callbacks.slint";
 import { SlintSubtitleRow, SlintSubtitleRowType } from "../../core/types.slint";
 import { SubtitleState } from "../../bridge/state.slint";
 
@@ -99,16 +99,12 @@ export component LineEditor inherits Rectangle {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                     transform-rotation: row.collapsed ? -90deg : 0deg;
-                                    animate transform-rotation {
-                                        duration: 250ms;
-                                        easing: ease-in-out;
-                                    }
                                     source: @image-url("../../assets/icons/arrow_drop_down.svg");
                                 }
 
                                 TouchArea {
                                     clicked => {
-                                        CallbackManager.toggle-group-collapsed(row.group-id-str);
+                                        LineEditorCallbacks.toggle-group-collapsed(row.item_id);
                                     }
                                 }
                             }
@@ -136,23 +132,59 @@ export component LineEditor inherits Rectangle {
                     Rectangle {
                         width: root.table-columns[1].width;
                         clip: true;
-                        if row.row-type == SlintSubtitleRowType.GroupHeader: Text {
+                        // 组头
+                        if row.row-type == SlintSubtitleRowType.GroupHeader: HorizontalLayout {
+                            alignment: center;
                             width: 100%;
-                            text: "~" + row.start-time + "~" + " -> " + "~" + row.end-time + "~";
-                            color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
-                            font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            overflow: elide;
+                            // NOTE: 分组的开始时间和结束时间操作还没构思好
+                            Text {
+                                text: "~" + row.start-time + "~";
+                                color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
+                                font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+
+                            // TODO: 左右移动需要实现全组时间移动
+                            Image {
+                                width: 20px;
+                                height: 20px;
+                                source: @image-url("../../assets/icons/arrow_right_alt.svg");
+                            }
+
+                            Text {
+                                text: "~" + row.end-time + "~";
+                                color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
+                                font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
                         }
-                        if row.row-type == SlintSubtitleRowType.Event: Text {
+                        if row.row-type == SlintSubtitleRowType.Event: HorizontalLayout {
+                            alignment: center;
                             width: 100%;
-                            text: row.start-time + " -> " + row.end-time;
-                            color: row.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
-                            font-weight: row.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                            overflow: elide;
+                            TimecodeEditor {
+                                timecode-input(text) => {
+                                    LineEditorCallbacks.timecode-input(row.item-id, text, true);
+                                }
+                                text: row.start-time;
+                            }
+
+                            // TODO: 左右移动需要实现开始时间和结束时间同时移动
+                            Image {
+                                width: 20px;
+                                height: 20px;
+                                source: @image-url("../../assets/icons/arrow_right_alt.svg");
+                            }
+
+                            TimecodeEditor {
+                                timecode-input(text) => {
+                                    LineEditorCallbacks.timecode-input(row.item-id, text, false);
+                                }
+                                text: row.end-time;
+                            }
                         }
                     }
 
@@ -213,7 +245,7 @@ export component LineEditor inherits Rectangle {
 
                                 TouchArea {
                                     clicked => {
-                                        CallbackManager.toggle-group-collapsed(row.group-id-str);
+                                        LineEditorCallbacks.toggle-group-collapsed(row.item_id);
                                     }
                                 }
                             }
