@@ -72,4 +72,9 @@ pub enum DragOperationChange {
 pub enum LineEditorChange {
     GroupCollapsedToggled,
     TimecodeInputed,
+    TimecodeIncremented,
+    TimecodeDecremented,
+    TimecodePreviewDraged,
+    TimecodeCommitDraged,
+    TimecodeCancelDraged,
 }

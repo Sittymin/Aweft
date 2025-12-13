@@ -21,6 +21,11 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_edge_drag_end_callback(instance, Rc::clone(&store));
     setup_toggle_group_collapsed_callback(instance, Rc::clone(&store));
     setup_line_editor_timecode_editor_callback(instance, Rc::clone(&store));
+    setup_line_editor_increment_timecode_callback(instance, Rc::clone(&store));
+    setup_line_editor_decrement_timecode_callback(instance, Rc::clone(&store));
+    setup_line_editor_drag_timecode_preview_callback(instance, Rc::clone(&store));
+    setup_line_editor_drag_timecode_commit_callback(instance, Rc::clone(&store));
+    setup_line_editor_drag_timecode_cancel_callback(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -266,7 +271,7 @@ fn setup_toggle_group_collapsed_callback(instance: &MainWindow, store: Rc<RefCel
 fn setup_line_editor_timecode_editor_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     instance.global::<LineEditorCallbacks>().on_timecode_input(
-        move |event_id_str, text, is_start_time| {
+        move |event_id_str, is_start_time, text| {
             use aweft_model::ids::ItemId;
             let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
                 warn!("无效的 event_id: {}", event_id_str);
@@ -276,14 +281,131 @@ fn setup_line_editor_timecode_editor_callback(instance: &MainWindow, store: Rc<R
             let action = Action::LineEditor(
                 crate::actions::line_editor::LineEditorAction::InputTimecode {
                     event_id,
-                    text: text.to_string(),
                     is_start_time,
+                    text: text.to_string(),
                 },
             );
 
             dispatch_and_render(&store, action, &weak_instance);
         },
     );
+}
+fn setup_line_editor_increment_timecode_callback(
+    instance: &MainWindow,
+    store: Rc<RefCell<AppStore>>,
+) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_increment_timecode(move |event_id_str, is_start_time| {
+            use aweft_model::ids::ItemId;
+            let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 event_id: {}", event_id_str);
+                return;
+            };
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::IncrementTimecode {
+                    event_id,
+                    is_start_time,
+                },
+            );
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
+}
+fn setup_line_editor_decrement_timecode_callback(
+    instance: &MainWindow,
+    store: Rc<RefCell<AppStore>>,
+) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_decrement_timecode(move |event_id_str, is_start_time| {
+            use aweft_model::ids::ItemId;
+            let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 event_id: {}", event_id_str);
+                return;
+            };
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::DecrementTimecode {
+                    event_id,
+                    is_start_time,
+                },
+            );
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
+}
+fn setup_line_editor_drag_timecode_preview_callback(
+    instance: &MainWindow,
+    store: Rc<RefCell<AppStore>>,
+) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_drag_timecode_preview(move |event_id_str, is_start_time, delta_x| {
+            use aweft_model::ids::ItemId;
+            let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 event_id: {}", event_id_str);
+                return;
+            };
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::DragTimecodePreview {
+                    event_id,
+                    is_start_time,
+                    delta_x,
+                },
+            );
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
+}
+fn setup_line_editor_drag_timecode_commit_callback(
+    instance: &MainWindow,
+    store: Rc<RefCell<AppStore>>,
+) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_drag_timecode_commit(move |event_id_str, is_start_time, delta_x| {
+            use aweft_model::ids::ItemId;
+            let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 event_id: {}", event_id_str);
+                return;
+            };
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::DragTimecodeCommit {
+                    event_id,
+                    is_start_time,
+                    delta_x,
+                },
+            );
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
+}
+fn setup_line_editor_drag_timecode_cancel_callback(
+    instance: &MainWindow,
+    store: Rc<RefCell<AppStore>>,
+) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_drag_timecode_cancel(move |event_id_str, is_start_time| {
+            use aweft_model::ids::ItemId;
+            let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 event_id: {}", event_id_str);
+                return;
+            };
+            let action = Action::LineEditor(
+                crate::actions::line_editor::LineEditorAction::DragTimecodeCancel {
+                    event_id,
+                    is_start_time,
+                },
+            );
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
 }
 
 /// 统一的 dispatch 和渲染逻辑 - 使用新的 StateChange 机制

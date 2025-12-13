@@ -124,22 +124,38 @@ impl ProjectStructure {
         false
     }
 
+    pub fn event_time(&self, id: ItemId, is_start_time: bool) -> Result<TimeDelta> {
+        if let Some(item) = self.items.get(&id) {
+            if let ItemContent::Event(event_data) = &item.content {
+                if is_start_time {
+                    Ok(event_data.start_time)
+                } else {
+                    Ok(event_data.end_time)
+                }
+            } else {
+                return Err(anyhow!("Item 不是 Event"));
+            }
+        } else {
+            return Err(anyhow!("Item 没找到"));
+        }
+    }
+
     // === 修改数据 ===
 
-    pub fn update_event_time_fuzzy(
+    pub fn set_event_time_fuzzy(
         &mut self,
         id: ItemId,
-        text: &str,
         is_start_time: bool,
+        text: &str,
     ) -> Result<TimeDelta> {
-        let delta = parse_fuzzy_timecode(text)?;
+        let target_time = parse_fuzzy_timecode(text)?;
 
         if let Some(item) = self.items.get_mut(&id) {
             if let ItemContent::Event(event_data) = &mut item.content {
-                if is_start_time && delta <= event_data.end_time {
-                    event_data.start_time = delta;
-                } else if delta >= event_data.start_time {
-                    event_data.end_time = delta;
+                if is_start_time && target_time <= event_data.end_time {
+                    event_data.start_time = target_time;
+                } else if target_time >= event_data.start_time {
+                    event_data.end_time = target_time;
                 } else {
                     return Err(anyhow!("时间无法形成范围"));
                 }
@@ -149,7 +165,73 @@ impl ProjectStructure {
         } else {
             return Err(anyhow!("Item 没找到"));
         }
-        Ok(delta)
+        Ok(target_time)
+    }
+
+    pub fn adjust_event_time(
+        &mut self,
+        id: ItemId,
+        is_start_time: bool,
+        delta: TimeDelta,
+    ) -> Result<TimeDelta> {
+        if let Some(item) = self.items.get_mut(&id) {
+            if let ItemContent::Event(event_data) = &mut item.content {
+                if is_start_time {
+                    let new_start_time = event_data.start_time + delta;
+                    if new_start_time <= event_data.end_time {
+                        event_data.start_time = new_start_time;
+                        Ok(new_start_time)
+                    } else {
+                        Err(anyhow!("调整后的开始时间不能晚于结束时间"))
+                    }
+                } else {
+                    // is_end_time
+                    let new_end_time = event_data.end_time + delta;
+                    if new_end_time >= event_data.start_time {
+                        event_data.end_time = new_end_time;
+                        Ok(new_end_time)
+                    } else {
+                        Err(anyhow!("调整后的结束时间不能早于开始时间"))
+                    }
+                }
+            } else {
+                Err(anyhow!("Item 不是 Event"))
+            }
+        } else {
+            Err(anyhow!("Item 没找到"))
+        }
+    }
+    // 不修改实际数据的版本
+    pub fn preview_adjust_event_time(
+        &mut self,
+        id: ItemId,
+        is_start_time: bool,
+        delta: TimeDelta,
+    ) -> Result<TimeDelta> {
+        if let Some(item) = self.items.get_mut(&id) {
+            if let ItemContent::Event(event_data) = &mut item.content {
+                if is_start_time {
+                    let new_start_time = event_data.start_time + delta;
+                    if new_start_time <= event_data.end_time {
+                        Ok(new_start_time)
+                    } else {
+                        Err(anyhow!("调整后的开始时间不能晚于结束时间"))
+                    }
+                } else {
+                    // is_end_time
+                    let new_end_time = event_data.end_time + delta;
+                    if new_end_time >= event_data.start_time {
+                        Ok(new_end_time)
+                    } else {
+                        Err(anyhow!("调整后的结束时间不能早于开始时间"))
+                    }
+                }
+            } else {
+                Err(anyhow!("Item 不是 Event"))
+            }
+        } else {
+            Err(anyhow!("Item 没找到"))
+        }
     }
 
     // === 创建与插入 ===

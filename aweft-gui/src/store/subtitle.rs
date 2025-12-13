@@ -108,8 +108,8 @@ impl LineEditorState {
         &mut self,
         project: &Project,
         event_id: ItemId,
-        time: TimeDelta,
         is_start_time: bool,
+        time: TimeDelta,
     ) {
         let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
             return;
@@ -137,9 +137,9 @@ impl LineEditorState {
                     if let Some(mut ancestor_row) = self.all_rows.row_data(ancestor_idx) {
                         // 决定是否可以进行简单的边界扩展
                         let can_quick_update = if is_start_time {
-                            parse_time(&ancestor_row.start_time).map_or(false, |val| time < val)
+                            parse_time(&ancestor_row.start_time).map_or(false, |val| time <= val)
                         } else {
-                            parse_time(&ancestor_row.end_time).map_or(false, |val| time > val)
+                            parse_time(&ancestor_row.end_time).map_or(false, |val| time >= val)
                         };
 
                         if can_quick_update {
@@ -169,6 +169,30 @@ impl LineEditorState {
                 }
             }
         }
+    }
+
+    // update_row_time 的轻量版本（但是会导致分组头时间不正确）
+    pub fn update_row_time_without_ancestor_groups(
+        &mut self,
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    ) {
+        let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
+            return;
+        };
+
+        let Some(mut row) = self.all_rows.row_data(idx) else {
+            return;
+        };
+
+        if is_start_time {
+            row.start_time = format_time(time);
+        } else {
+            row.end_time = format_time(time);
+        }
+
+        self.all_rows.set_row_data(idx, row);
     }
 
     pub fn toggle_group(&mut self, group_id_str: String) {

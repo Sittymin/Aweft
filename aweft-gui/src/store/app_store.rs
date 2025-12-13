@@ -5,6 +5,7 @@ use crate::store::state::AppState;
 use crate::store::state_change::{LineEditorChange, StateChange};
 use anyhow::Result;
 use aweft_model::structure::ItemContent;
+use chrono::TimeDelta;
 
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
@@ -194,21 +195,147 @@ impl AppStore {
                 text,
                 is_start_time,
             } => {
-                if let Ok(time) = self.state.project.structure.update_event_time_fuzzy(
+                if let Ok(time) = self.state.project.structure.set_event_time_fuzzy(
                     event_id,
-                    &text,
                     is_start_time,
+                    &text,
                 ) {
                     // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
                     // 可能需要改动Updater处理的细粒度
                     self.state.line_editor_state.update_row_time(
                         &self.state.project,
                         event_id,
-                        time,
                         is_start_time,
+                        time,
                     );
+                    return Ok(StateChange::LineEditor(LineEditorChange::TimecodeInputed));
                 }
-                Ok(StateChange::LineEditor(LineEditorChange::TimecodeInputed))
+                Ok(StateChange::None)
+            }
+            LineEditorAction::IncrementTimecode {
+                event_id,
+                is_start_time,
+            } => {
+                if let Ok(time) = self.state.project.structure.adjust_event_time(
+                    event_id,
+                    is_start_time,
+                    TimeDelta::seconds(1),
+                ) {
+                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                    // 可能需要改动Updater处理的细粒度
+                    self.state.line_editor_state.update_row_time(
+                        &self.state.project,
+                        event_id,
+                        is_start_time,
+                        time,
+                    );
+                    return Ok(StateChange::LineEditor(
+                        LineEditorChange::TimecodeIncremented,
+                    ));
+                }
+                Ok(StateChange::None)
+            }
+            LineEditorAction::DecrementTimecode {
+                event_id,
+                is_start_time,
+            } => {
+                if let Ok(time) = self.state.project.structure.adjust_event_time(
+                    event_id,
+                    is_start_time,
+                    TimeDelta::seconds(-1),
+                ) {
+                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                    // 可能需要改动Updater处理的细粒度
+                    self.state.line_editor_state.update_row_time(
+                        &self.state.project,
+                        event_id,
+                        is_start_time,
+                        time,
+                    );
+                    return Ok(StateChange::LineEditor(
+                        LineEditorChange::TimecodeDecremented,
+                    ));
+                }
+                Ok(StateChange::None)
+            }
+            LineEditorAction::DragTimecodePreview {
+                event_id,
+                is_start_time,
+                delta_x,
+            } => {
+                if !delta_x.is_finite()
+                    || delta_x >= (i64::MAX as f32)
+                    || delta_x <= (i64::MIN as f32)
+                {
+                    return Ok(StateChange::None);
+                }
+                if let Ok(time) = self.state.project.structure.preview_adjust_event_time(
+                    event_id,
+                    is_start_time,
+                    TimeDelta::milliseconds((delta_x.trunc() as i64) * 10),
+                ) {
+                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                    // 可能需要改动Updater处理的细粒度
+                    self.state
+                        .line_editor_state
+                        .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
+                    return Ok(StateChange::LineEditor(
+                        LineEditorChange::TimecodePreviewDraged,
+                    ));
+                }
+                Ok(StateChange::None)
+            }
+            LineEditorAction::DragTimecodeCommit {
+                event_id,
+                is_start_time,
+                delta_x,
+            } => {
+                if !delta_x.is_finite()
+                    || delta_x >= (i64::MAX as f32)
+                    || delta_x <= (i64::MIN as f32)
+                {
+                    return Ok(StateChange::None);
+                }
+                if let Ok(time) = self.state.project.structure.adjust_event_time(
+                    event_id,
+                    is_start_time,
+                    TimeDelta::milliseconds((delta_x.trunc() as i64) * 10),
+                ) {
+                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                    // 可能需要改动Updater处理的细粒度
+                    self.state.line_editor_state.update_row_time(
+                        &self.state.project,
+                        event_id,
+                        is_start_time,
+                        time,
+                    );
+                    return Ok(StateChange::LineEditor(
+                        LineEditorChange::TimecodePreviewDraged,
+                    ));
+                }
+                Ok(StateChange::None)
+            }
+            LineEditorAction::DragTimecodeCancel {
+                event_id,
+                is_start_time,
+            } => {
+                if let Ok(time) = self
+                    .state
+                    .project
+                    .structure
+                    .event_time(event_id, is_start_time)
+                {
+                    self.state.line_editor_state.update_row_time(
+                        &self.state.project,
+                        event_id,
+                        is_start_time,
+                        time,
+                    );
+                    return Ok(StateChange::LineEditor(
+                        LineEditorChange::TimecodeCancelDraged,
+                    ));
+                }
+                Ok(StateChange::None)
             }
         }
     }

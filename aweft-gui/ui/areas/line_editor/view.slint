@@ -166,8 +166,23 @@ export component LineEditor inherits Rectangle {
                             alignment: center;
                             width: 100%;
                             TimecodeEditor {
+                                increment-timecode => {
+                                    LineEditorCallbacks.increment-timecode(row.item-id, true);
+                                }
+                                decrement-timecode => {
+                                    LineEditorCallbacks.decrement-timecode(row.item-id, true);
+                                }
+                                drag-timecode-preview(delta-x) => {
+                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x)
+                                }
+                                drag-timecode-commit(delta-x) => {
+                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, true, delta-x)
+                                }
+                                drag-timecode-cancel() => {
+                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, true)
+                                }
                                 timecode-input(text) => {
-                                    LineEditorCallbacks.timecode-input(row.item-id, text, true);
+                                    LineEditorCallbacks.timecode-input(row.item-id, true, text);
                                 }
                                 text: row.start-time;
                             }
@@ -180,8 +195,23 @@ export component LineEditor inherits Rectangle {
                             }
 
                             TimecodeEditor {
+                                increment-timecode => {
+                                    LineEditorCallbacks.increment-timecode(row.item-id, false);
+                                }
+                                decrement-timecode => {
+                                    LineEditorCallbacks.decrement-timecode(row.item-id, false);
+                                }
+                                drag-timecode-preview(delta-x) => {
+                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x)
+                                }
+                                drag-timecode-commit(delta-x) => {
+                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, false, delta-x)
+                                }
+                                drag-timecode-cancel() => {
+                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, false)
+                                }
                                 timecode-input(text) => {
-                                    LineEditorCallbacks.timecode-input(row.item-id, text, false);
+                                    LineEditorCallbacks.timecode-input(row.item-id, false, text);
                                 }
                                 text: row.end-time;
                             }
