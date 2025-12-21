@@ -148,7 +148,18 @@ impl ProjectStructure {
         is_start_time: bool,
         text: &str,
     ) -> Result<TimeDelta> {
-        let target_time = parse_fuzzy_timecode(text)?;
+        let input = text.trim();
+
+        // +/- 调整
+        if let Some(sign) = input.chars().next() {
+            if sign == '+' || sign == '-' {
+                let delta = parse_fuzzy_timecode(&input[1..])?;
+                let delta = if sign == '-' { -delta } else { delta };
+                return self.adjust_event_time(id, is_start_time, delta);
+            }
+        }
+
+        let target_time = parse_fuzzy_timecode(input)?;
 
         if let Some(item) = self.items.get_mut(&id) {
             if let ItemContent::Event(event_data) = &mut item.content {
