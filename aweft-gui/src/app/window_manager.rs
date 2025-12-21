@@ -119,25 +119,117 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         .create_event(event2, ItemLocation::InGroup(group_id, 0))
         .unwrap();
 
-    // 创建一个嵌套分组
-    let nested_group_id = structure
-        .create_group("循环测试".to_string(), ItemLocation::InGroup(group_id, 1))
+    // 创建多层嵌套分组：level1 -> level2 -> level3
+    // L1 前置事件
+    let l1_pre = EventData {
+        start_time: TimeDelta::try_milliseconds(10000).unwrap(),
+        end_time: TimeDelta::try_milliseconds(10500).unwrap(),
+        actor: None,
+        text: "L1 前置事件".to_string(),
+        segment_timing: None,
+        style: "Default".to_string(),
+    };
+    structure
+        .create_event(l1_pre, ItemLocation::InGroup(group_id, 1))
+        .unwrap();
+    // L1 分组
+    let nested_group_lvl1 = structure
+        .create_group(
+            "循环测试 L1".to_string(),
+            ItemLocation::InGroup(group_id, 2),
+        )
+        .unwrap();
+    // L1 后置事件
+    let l1_post = EventData {
+        start_time: TimeDelta::try_milliseconds(10500).unwrap(),
+        end_time: TimeDelta::try_milliseconds(11000).unwrap(),
+        actor: None,
+        text: "L1 后置事件".to_string(),
+        segment_timing: None,
+        style: "Default".to_string(),
+    };
+    structure
+        .create_event(l1_post, ItemLocation::InGroup(group_id, 3))
         .unwrap();
 
-    // 在嵌套分组中循环创建100行字幕
-    for i in 0..10000 {
-        let start = 10000 + i * 500;
-        let end = 10000 + (i + 1) * 500;
+    // L2 前置事件
+    let l2_pre = EventData {
+        start_time: TimeDelta::try_milliseconds(11000).unwrap(),
+        end_time: TimeDelta::try_milliseconds(11500).unwrap(),
+        actor: None,
+        text: "L2 前置事件".to_string(),
+        segment_timing: None,
+        style: "Default".to_string(),
+    };
+    structure
+        .create_event(l2_pre, ItemLocation::InGroup(nested_group_lvl1, 0))
+        .unwrap();
+    // L2 分组
+    let nested_group_lvl2 = structure
+        .create_group(
+            "循环测试 L2".to_string(),
+            ItemLocation::InGroup(nested_group_lvl1, 1),
+        )
+        .unwrap();
+    // L2 后置事件
+    let l2_post = EventData {
+        start_time: TimeDelta::try_milliseconds(11500).unwrap(),
+        end_time: TimeDelta::try_milliseconds(12000).unwrap(),
+        actor: None,
+        text: "L2 后置事件".to_string(),
+        segment_timing: None,
+        style: "Default".to_string(),
+    };
+    structure
+        .create_event(l2_post, ItemLocation::InGroup(nested_group_lvl1, 2))
+        .unwrap();
+
+    // L3 前置事件
+    let l3_pre = EventData {
+        start_time: TimeDelta::try_milliseconds(12000).unwrap(),
+        end_time: TimeDelta::try_milliseconds(12500).unwrap(),
+        actor: None,
+        text: "L3 前置事件".to_string(),
+        segment_timing: None,
+        style: "Default".to_string(),
+    };
+    structure
+        .create_event(l3_pre, ItemLocation::InGroup(nested_group_lvl2, 0))
+        .unwrap();
+    // L3 分组
+    let nested_group_lvl3 = structure
+        .create_group(
+            "循环测试 L3".to_string(),
+            ItemLocation::InGroup(nested_group_lvl2, 1),
+        )
+        .unwrap();
+    // L3 后置事件
+    let l3_post = EventData {
+        start_time: TimeDelta::try_milliseconds(12500).unwrap(),
+        end_time: TimeDelta::try_milliseconds(13000).unwrap(),
+        actor: None,
+        text: "L3 后置事件".to_string(),
+        segment_timing: None,
+        style: "Default".to_string(),
+    };
+    structure
+        .create_event(l3_post, ItemLocation::InGroup(nested_group_lvl2, 2))
+        .unwrap();
+
+    // 在最内层嵌套分组中循环创建 10 行字幕
+    for i in 0..10 {
+        let start = 13000 + i * 500;
+        let end = 13000 + (i + 1) * 500;
         let event = EventData {
             start_time: TimeDelta::try_milliseconds(start).unwrap(),
             end_time: TimeDelta::try_milliseconds(end).unwrap(),
             actor: None,
-            text: format!("循环测试字幕 {}", i + 1),
+            text: format!("循环测试字幕 L3-{}", i + 1),
             segment_timing: None,
             style: "Default".to_string(),
         };
         structure
-            .create_event(event, ItemLocation::InGroup(nested_group_id, i as usize))
+            .create_event(event, ItemLocation::InGroup(nested_group_lvl3, i as usize))
             .unwrap();
     }
 
@@ -165,6 +257,4 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     structure
         .create_event(event4, ItemLocation::Root(2))
         .unwrap();
-
-    println!("✅ 已创建测试字幕数据：10004个事件，2个分组");
 }
