@@ -32,4 +32,13 @@ pub enum LineEditorAction {
         event_id: ItemId,
         is_start_time: bool,
     },
+    SelectSingle {
+        item_id: ItemId,
+    },
+    SelectRange {
+        item_id: ItemId,
+    },
+    SelectToggle {
+        item_id: ItemId,
+    },
 }

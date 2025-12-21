@@ -64,6 +64,8 @@ export struct SlintSubtitleRow {
     start_time: string,
     end_time: string,
     item_id: string,
+    // 是否被选中
+    selected: bool,
 
     // === 事件数据字段 (row_type == Event 时有效) ===
     text: string,
@@ -75,6 +77,7 @@ export struct SlintSubtitleRow {
     group_name: string,
     collapsed: bool,
     // 缓存的分组内部 item 数 (用于快速局部更新)
+    // 分组头也算一个
     total_row_count: int,
 }
 

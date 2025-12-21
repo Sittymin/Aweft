@@ -24,4 +24,8 @@ export global LineEditorCallbacks {
     callback drag-timecode-commit(item-id: string, is-start-time: bool, delta-x: length);
     callback drag-timecode-cancel(item-id: string, is-start-time: bool);
     callback timecode-input(item-id: string, is-start-time: bool, text: string);
+    // 行选择
+    callback select-single(item-id: string);
+    callback select-range(item-id: string);
+    callback select-toggle(item-id: string);
 }

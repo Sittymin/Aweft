@@ -56,6 +56,25 @@ export component LineEditor inherits Rectangle {
         ListView {
             for row[idx] in SubtitleState.rows: Rectangle {
                 height: Theme.data.line-editor.row-height;
+                background: row.selected ? red : transparent;
+
+                // 点击行空白部分选择
+                TouchArea {
+                    pointer-event(event) => {
+                        if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                            if event.modifiers.shift {
+                                debug("Shift + 左键点击", idx, "行");
+                                LineEditorCallbacks.select-range(row.item-id)
+                            } else if event.modifiers.control {
+                                debug("Ctrl + 左键点击", idx, "行");
+                                LineEditorCallbacks.select-toggle(row.item-id)
+                            } else {
+                                debug("普通左键点击", idx, "行");
+                                LineEditorCallbacks.select-single(row.item-id)
+                            }
+                        }
+                    }
+                }
 
                 // 统一使用 HorizontalLayout，确保 Group 和 Event 对齐
                 HorizontalLayout {

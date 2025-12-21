@@ -337,6 +337,24 @@ impl AppStore {
                 }
                 Ok(StateChange::None)
             }
+            LineEditorAction::SelectSingle { item_id } => {
+                self.state
+                    .line_editor_state
+                    .select_single(&self.state.project, item_id);
+                Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+            }
+            LineEditorAction::SelectRange { item_id } => {
+                self.state
+                    .line_editor_state
+                    .select_range(&self.state.project, item_id);
+                Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+            }
+            LineEditorAction::SelectToggle { item_id } => {
+                self.state
+                    .line_editor_state
+                    .select_toggle(&self.state.project, item_id);
+                Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+            }
         }
     }
 }
