@@ -86,25 +86,23 @@ export component LineEditor inherits Rectangle {
 
                         HorizontalLayout {
                             alignment: start;
-                            spacing: 0px; // 紧凑一点
+                            spacing: 0px;
 
-                            // 1. 先画缩进占位 (根据 depth)
-                            // 每一个 depth 占用一定宽度，比如 16px
+                            // 缩进占位 (根据 depth)
                             for i in row.depth: Rectangle {
                                 width: 16px;
                                 height: parent.height;
 
-                                // 可选：在缩进位画竖线
+                                // 在缩进位画竖线
                                 Rectangle {
                                     width: 1px;
                                     height: parent.height;
                                     background: #444;
-                                    x: 8px; // 居中
+                                    x: parent.width / 2;
                                 }
                             }
 
                             // 折叠按钮
-
                             if row.row-type == SlintSubtitleRowType.GroupHeader: Rectangle {
                                 width: 16px;
                                 height: 16px;
@@ -125,23 +123,6 @@ export component LineEditor inherits Rectangle {
                                     clicked => {
                                         LineEditorCallbacks.toggle-group-collapsed(row.item_id);
                                     }
-                                }
-                            }
-
-                            // Event 行显示缩进竖线
-
-                            if row.row-type == SlintSubtitleRowType.Event: HorizontalLayout {
-                                spacing: 4px;
-                                padding-left: 10px;
-                                alignment: start;
-
-                                // 循环生成竖线
-                                // FIXME: 需要搞明白为啥这里需要减2
-                                for i in row.depth - 2: Rectangle {
-                                    width: 1px;
-                                    height: parent.height;
-                                    background: #666;
-                                    opacity: 0.5;
                                 }
                             }
                         }
@@ -264,20 +245,18 @@ export component LineEditor inherits Rectangle {
                             // 由内部控制间距
                             spacing: 0px;
 
-                            // 循环生成每一级深度的占位块
+                            // 缩进占位 (根据 depth)
                             for i in row.depth: Rectangle {
-                                width: 16px; // 每一级缩进的宽度 (对应之前的 10px * depth)
+                                // 每一级缩进的宽度
+                                width: 8px;
                                 height: parent.height;
                                 Rectangle {
-                                    width: 6px;
+                                    width: parent.width / 2;
                                     height: parent.height;
-                                    x: 5px;
+                                    x: 0px;
                                     background: #666;
                                     opacity: 0.3;
                                 }
-                            }
-                            Rectangle {
-                                width: 6px;
                             }
 
                             // Group 行的文件夹图标
