@@ -61,6 +61,8 @@ impl AppWindowManager {
 
         println!("✅ 已初始化字幕过滤模型");
         // ===================================
+        // 初始化日志
+        env_logger::init();
 
         Ok(Self { instance, store })
     }
