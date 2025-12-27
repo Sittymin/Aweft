@@ -221,9 +221,11 @@ fn setup_actionzone_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<A
 
 fn setup_edge_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
-    instance
-        .global::<DragCallbacks>()
-        .on_edge_drag(move |vert_keys, offset_x, offset_y| {
+    instance.global::<DragCallbacks>().on_edge_drag(
+        move |vert_keys,
+              // 此坐标是相较于 UI Edge 矩形左上角的
+              offset_x,
+              offset_y| {
             let action = Action::Drag(crate::actions::drag::DragAction::Edge(
                 crate::actions::drag::EdgeDrag::Update {
                     vert_keys,
@@ -233,7 +235,8 @@ fn setup_edge_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>)
             ));
 
             dispatch_and_render(&store, action, &weak_instance);
-        });
+        },
+    );
 }
 fn setup_edge_drag_end_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
@@ -290,13 +293,13 @@ fn setup_line_editor_timecode_editor_callback(instance: &MainWindow, store: Rc<R
         },
     );
 }
-fn setup_line_editor_timecode_step_callbacks(
-    instance: &MainWindow,
-    store: Rc<RefCell<AppStore>>,
-) {
+fn setup_line_editor_timecode_step_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     let register = |setter: fn(&MainWindow, Box<dyn FnMut(slint::SharedString, bool)>),
-                    build: fn(aweft_model::ids::ItemId, bool) -> crate::actions::line_editor::LineEditorAction| {
+                    build: fn(
+        aweft_model::ids::ItemId,
+        bool,
+    ) -> crate::actions::line_editor::LineEditorAction| {
         let s = Rc::clone(&store);
         let w = weak_instance.clone();
         setter(
@@ -314,29 +317,40 @@ fn setup_line_editor_timecode_step_callbacks(
     };
 
     register(
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_increment_timecode(cb),
-        |event_id, is_start_time| crate::actions::line_editor::LineEditorAction::IncrementTimecode {
-            event_id,
-            is_start_time,
+        |inst, cb| {
+            inst.global::<LineEditorCallbacks>()
+                .on_increment_timecode(cb)
+        },
+        |event_id, is_start_time| {
+            crate::actions::line_editor::LineEditorAction::IncrementTimecode {
+                event_id,
+                is_start_time,
+            }
         },
     );
 
     register(
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_decrement_timecode(cb),
-        |event_id, is_start_time| crate::actions::line_editor::LineEditorAction::DecrementTimecode {
-            event_id,
-            is_start_time,
+        |inst, cb| {
+            inst.global::<LineEditorCallbacks>()
+                .on_decrement_timecode(cb)
+        },
+        |event_id, is_start_time| {
+            crate::actions::line_editor::LineEditorAction::DecrementTimecode {
+                event_id,
+                is_start_time,
+            }
         },
     );
 }
 
-fn setup_line_editor_drag_timecode_callbacks(
-    instance: &MainWindow,
-    store: Rc<RefCell<AppStore>>,
-) {
+fn setup_line_editor_drag_timecode_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     let register = |setter: fn(&MainWindow, Box<dyn FnMut(slint::SharedString, bool, f32)>),
-                    build: fn(aweft_model::ids::ItemId, bool, f32) -> crate::actions::line_editor::LineEditorAction| {
+                    build: fn(
+        aweft_model::ids::ItemId,
+        bool,
+        f32,
+    ) -> crate::actions::line_editor::LineEditorAction| {
         let s = Rc::clone(&store);
         let w = weak_instance.clone();
         setter(
@@ -354,7 +368,10 @@ fn setup_line_editor_drag_timecode_callbacks(
     };
 
     register(
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_drag_timecode_preview(cb),
+        |inst, cb| {
+            inst.global::<LineEditorCallbacks>()
+                .on_drag_timecode_preview(cb)
+        },
         |event_id, is_start_time, delta_x| {
             crate::actions::line_editor::LineEditorAction::DragTimecodePreview {
                 event_id,
@@ -365,7 +382,10 @@ fn setup_line_editor_drag_timecode_callbacks(
     );
 
     register(
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_drag_timecode_commit(cb),
+        |inst, cb| {
+            inst.global::<LineEditorCallbacks>()
+                .on_drag_timecode_commit(cb)
+        },
         |event_id, is_start_time, delta_x| {
             crate::actions::line_editor::LineEditorAction::DragTimecodeCommit {
                 event_id,
@@ -455,7 +475,7 @@ fn dispatch_and_render(
     };
 
     // 2. 转换为 UI 更新指令
-    let ui_commands = UIUpdateCommand::from_state_change(&state_change);
+    let ui_commands = UIUpdateCommand::from_state_change(state_change);
 
     // 3. 合并优化指令
     let optimized_commands = UIUpdateCommand::merge(ui_commands);
@@ -463,7 +483,7 @@ fn dispatch_and_render(
     // 4. 如果有需要更新的内容，执行 UI 更新
     if !optimized_commands.is_empty() {
         if let Some(instance) = weak_instance.upgrade() {
-            UIUpdater::execute(&instance, &store_mut, &optimized_commands);
+            UIUpdater::execute(&instance, &mut store_mut, optimized_commands);
         }
     }
 }

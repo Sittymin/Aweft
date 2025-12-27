@@ -1,9 +1,11 @@
 use crate::bridge::types::{SlintKey, slint_area_key_to_key};
 use crate::screen::area::ScrAreaKey;
+use crate::screen::edge::ScrEdgeKey;
 use crate::store::state::{AppState, DragOperation};
 use crate::store::state_change::{DragOperationChange, StateChange};
 use anyhow::Result;
 use slint::{Model, ModelRc};
+use std::rc::Rc;
 
 /// 处理 ActionZone 拖拽更新
 pub fn handle_actionzone_update(
@@ -150,11 +152,14 @@ pub fn handle_actionzone_end(
 /// 处理边缘拖拽更新
 pub fn handle_edge_update(
     state: &mut AppState,
+    // 变化位置 vert
     vert_keys: ModelRc<SlintKey>,
+    // 此坐标是相较于 UI Edge 矩形左上角的
     offset_x: f32,
     offset_y: f32,
 ) -> Result<StateChange> {
     use crate::screen::vertex::ScrVertKey;
+    use std::collections::HashSet;
 
     let scale_factor = state.theme_settings.get_scale_factor();
     let min_area_size = state.theme_settings.get_area_min_size();
@@ -166,15 +171,17 @@ pub fn handle_edge_update(
         bigger,
         smaller,
         moving_vert_keys,
+        edge_keys_rc,
+        area_keys_rc,
     } = &state.current_drag_operation.clone()
     {
         let theme_settings = state.theme_settings;
-        let current_offset_x = offset_x as f64 - theme_settings.get_half_edge_width();
-        let current_offset_y = offset_y as f64 - theme_settings.get_half_edge_width();
 
         match dir_axis_horizontal {
             true => {
-                state.screen_map.apply_edge_move(
+                // 将偏移变为相对于中心的
+                let current_offset_y = offset_y as f64 - theme_settings.get_half_edge_width();
+                state.screen_map.apply_verts_move(
                     *dir_axis_horizontal,
                     moving_vert_keys,
                     *origval,
@@ -184,7 +191,8 @@ pub fn handle_edge_update(
                 );
             }
             false => {
-                state.screen_map.apply_edge_move(
+                let current_offset_x = offset_x as f64 - theme_settings.get_half_edge_width();
+                state.screen_map.apply_verts_move(
                     *dir_axis_horizontal,
                     moving_vert_keys,
                     *origval,
@@ -198,7 +206,12 @@ pub fn handle_edge_update(
         // 更新区域几何数据
         state.screen_map.update_all_areas_rcti(&theme_settings);
 
-        return Ok(StateChange::DragOperation(DragOperationChange::EdgeUpdated));
+        return Ok(StateChange::DragOperation(
+            DragOperationChange::EdgeUpdated {
+                edge_keys_rc: edge_keys_rc.clone(),
+                area_keys_rc: area_keys_rc.clone(),
+            },
+        ));
     }
 
     // 开始新的边移动操作
@@ -208,42 +221,73 @@ pub fn handle_edge_update(
         .collect();
 
     // 分析移动方向和原始坐标
-    if let Some((dir_axis_horizontal, origval)) =
-        state.screen_map.analyze_move_direction(&moving_vert_keys)
-    {
-        let (bigger, smaller) = state.screen_map.compute_move_limits(
-            dir_axis_horizontal,
-            &moving_vert_keys,
-            origval,
-            min_area_size,
-        );
+    let (dir_axis_horizontal, origval) =
+        state.screen_map.analyze_move_direction(&moving_vert_keys)?;
+    // 计算可移动范围
+    let (bigger, smaller) = state.screen_map.compute_move_limits(
+        dir_axis_horizontal,
+        &moving_vert_keys,
+        origval,
+        min_area_size,
+    );
 
-        // 设置拖拽状态
-        state.current_drag_operation = DragOperation::MoveEdge {
-            dir_axis_horizontal,
-            origval,
-            bigger,
-            smaller,
-            moving_vert_keys,
-        };
-
-        println!(
-            "开始边移动操作: 方向={}, 原始值={}, 限制=({}, {})",
-            if dir_axis_horizontal {
-                "水平"
-            } else {
-                "垂直"
-            },
-            origval,
-            bigger,
-            smaller
-        );
+    // 计算受影响的边和区域 （仅仅开始 Drag 需要计算，后续可以复用）
+    let moving_set: HashSet<ScrVertKey> = moving_vert_keys.iter().copied().collect();
+    let mut edge_keys_set = HashSet::new();
+    for (ek, e) in &state.screen_map.edges {
+        if moving_set.contains(&e.v1) || moving_set.contains(&e.v2) {
+            edge_keys_set.insert(ek);
+        }
+    }
+    let mut area_keys_set = HashSet::new();
+    for (ak, a) in &state.screen_map.areas {
+        let verts = [
+            a.v_top_left(),
+            a.v_top_right(),
+            a.v_bottom_right(),
+            a.v_bottom_left(),
+        ];
+        if verts.iter().any(|v| moving_set.contains(v)) {
+            area_keys_set.insert(ak);
+        }
     }
 
-    Ok(StateChange::DragOperation(DragOperationChange::EdgeUpdated))
+    let edge_keys_rc: Rc<Vec<ScrEdgeKey>> = Rc::new(edge_keys_set.into_iter().collect());
+    let area_keys_rc: Rc<Vec<ScrAreaKey>> = Rc::new(area_keys_set.into_iter().collect());
+
+    // 设置拖拽状态
+    state.current_drag_operation = DragOperation::MoveEdge {
+        dir_axis_horizontal,
+        origval,
+        bigger,
+        smaller,
+        moving_vert_keys: moving_vert_keys.clone(),
+        edge_keys_rc: edge_keys_rc.clone(),
+        area_keys_rc: area_keys_rc.clone(),
+    };
+
+    println!(
+        "开始边移动操作: 方向={}, 原始值={}, 限制=({}, {})",
+        if dir_axis_horizontal {
+            "水平"
+        } else {
+            "垂直"
+        },
+        origval,
+        bigger,
+        smaller
+    );
+
+    Ok(StateChange::DragOperation(
+        DragOperationChange::EdgeUpdated {
+            edge_keys_rc: edge_keys_rc,
+            area_keys_rc: area_keys_rc,
+        },
+    ))
 }
 
 /// 处理边缘拖拽结束
+// FIXME: 这里的局部更新需要检查一下
 pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateChange> {
     let areas_changed = if let DragOperation::MoveEdge {
         dir_axis_horizontal,
@@ -251,6 +295,8 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
         bigger,
         smaller,
         moving_vert_keys,
+        edge_keys_rc: _,
+        area_keys_rc: _,
     } = &state.current_drag_operation.clone()
     {
         let theme_settings = state.theme_settings;
@@ -258,7 +304,7 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
         if is_cancel {
             // 取消：恢复到原始位置
             println!("取消边移动，恢复到原始位置");
-            state.screen_map.apply_edge_move(
+            state.screen_map.apply_verts_move(
                 *dir_axis_horizontal,
                 moving_vert_keys,
                 *origval,

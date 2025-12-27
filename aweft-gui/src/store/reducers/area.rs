@@ -1,4 +1,3 @@
-use crate::bridge::types::{slint_area_key_to_key, slint_area_type_to_rust};
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::store::state::AppState;
 use crate::store::state_change::{AreasChange, StateChange};

@@ -3,6 +3,7 @@ use crate::actions::area::AreaAction;
 use crate::actions::line_editor::LineEditorAction;
 use crate::store::state::AppState;
 use crate::store::state_change::{LineEditorChange, StateChange};
+use crate::store::ui_models::UiModels;
 use anyhow::Result;
 use aweft_model::structure::ItemContent;
 use chrono::TimeDelta;
@@ -10,6 +11,7 @@ use chrono::TimeDelta;
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
     state: AppState,
+    ui_models: UiModels,
 }
 
 impl AppStore {
@@ -20,6 +22,7 @@ impl AppStore {
         let theme_settings = crate::bridge::types::ThemeSettings::from_main_window(main_window);
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
+            ui_models: UiModels::new(),
         }
     }
 
@@ -53,6 +56,26 @@ impl AppStore {
     /// 获取可变状态（内部使用）
     pub fn state_mut(&mut self) -> &mut AppState {
         &mut self.state
+    }
+
+    /// 获取 UI 模型（只读）
+    pub fn ui_models(&self) -> &UiModels {
+        &self.ui_models
+    }
+
+    /// 获取 UI 模型（可变）
+    pub fn ui_models_mut(&mut self) -> &mut UiModels {
+        &mut self.ui_models
+    }
+
+    /// 重建 LineEditor 的行数据与过滤模型，返回过滤后的 ModelRc。
+    pub fn rebuild_line_editor_models(
+        &mut self,
+    ) -> slint::ModelRc<crate::bridge::types::SlintSubtitleRow> {
+        self.ui_models
+            .line_editor_state
+            .rebuild_all_rows(&self.state.project);
+        self.ui_models.line_editor_state.init_filter_model()
     }
 
     // ========== 内部 dispatch 方法 ==========
@@ -182,7 +205,7 @@ impl AppStore {
                 // 可能需要改动Updater处理的细粒度
 
                 // ViewModel 层修改 (驱动 UI 变化)
-                self.state
+                self.ui_models
                     .line_editor_state
                     .toggle_group(group_id.to_string());
 
@@ -202,7 +225,7 @@ impl AppStore {
                 ) {
                     // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
                     // 可能需要改动Updater处理的细粒度
-                    self.state.line_editor_state.update_row_time(
+                    self.ui_models.line_editor_state.update_row_time(
                         &self.state.project,
                         event_id,
                         is_start_time,
@@ -223,7 +246,7 @@ impl AppStore {
                 ) {
                     // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
                     // 可能需要改动Updater处理的细粒度
-                    self.state.line_editor_state.update_row_time(
+                    self.ui_models.line_editor_state.update_row_time(
                         &self.state.project,
                         event_id,
                         is_start_time,
@@ -246,7 +269,7 @@ impl AppStore {
                 ) {
                     // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
                     // 可能需要改动Updater处理的细粒度
-                    self.state.line_editor_state.update_row_time(
+                    self.ui_models.line_editor_state.update_row_time(
                         &self.state.project,
                         event_id,
                         is_start_time,
@@ -276,7 +299,7 @@ impl AppStore {
                 ) {
                     // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
                     // 可能需要改动Updater处理的细粒度
-                    self.state
+                    self.ui_models
                         .line_editor_state
                         .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
                     return Ok(StateChange::LineEditor(
@@ -303,7 +326,7 @@ impl AppStore {
                 ) {
                     // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
                     // 可能需要改动Updater处理的细粒度
-                    self.state.line_editor_state.update_row_time(
+                    self.ui_models.line_editor_state.update_row_time(
                         &self.state.project,
                         event_id,
                         is_start_time,
@@ -325,7 +348,7 @@ impl AppStore {
                     .structure
                     .event_time(event_id, is_start_time)
                 {
-                    self.state.line_editor_state.update_row_time(
+                    self.ui_models.line_editor_state.update_row_time(
                         &self.state.project,
                         event_id,
                         is_start_time,
@@ -338,19 +361,19 @@ impl AppStore {
                 Ok(StateChange::None)
             }
             LineEditorAction::SelectSingle { item_id } => {
-                self.state
+                self.ui_models
                     .line_editor_state
                     .select_single(&self.state.project, item_id);
                 Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
             }
             LineEditorAction::SelectRange { item_id } => {
-                self.state
+                self.ui_models
                     .line_editor_state
                     .select_range(&self.state.project, item_id);
                 Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
             }
             LineEditorAction::SelectToggle { item_id } => {
-                self.state
+                self.ui_models
                     .line_editor_state
                     .select_toggle(&self.state.project, item_id);
                 Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))

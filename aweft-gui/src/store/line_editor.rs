@@ -58,6 +58,11 @@ impl LineEditorState {
         }
     }
 
+    /// 暴露底层 VecModel，便于其他持有方（如 UiModels）在 Slint 初始化时绑定。
+    pub fn all_rows_model(&self) -> Rc<VecModel<SlintSubtitleRow>> {
+        self.all_rows.clone()
+    }
+
     /// 创建过滤模型
     ///
     /// 使用 Slint 的 FilterModel 包装数据源，根据折叠状态自动过滤可见行。

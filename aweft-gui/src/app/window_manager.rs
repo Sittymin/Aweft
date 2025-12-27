@@ -1,10 +1,10 @@
-use crate::bridge::SubtitleState;
 use crate::bridge::types::MainWindow;
-use crate::store::AppStore;
+use crate::bridge::SubtitleState;
 use crate::store::reducers::media::initialize_media;
+use crate::store::AppStore;
 use anyhow::{Context, Result};
-use slint::ComponentHandle;
 use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
+use slint::ComponentHandle;
 use std::{cell::RefCell, rc::Rc};
 
 /// 简化的应用窗口管理器
@@ -45,19 +45,30 @@ impl AppWindowManager {
         // 初始化字幕数据和过滤模型
         let filter_model = {
             let mut store_mut = store.borrow_mut();
-            let state = store_mut.state_mut();
-            // 先创建数据
-            create_test_subtitle_data(&mut state.project);
-
-            // 然后初始化 LineEditorState
-            state.line_editor_state.rebuild_all_rows(&state.project);
-            state.line_editor_state.init_filter_model()
+            {
+                // 先创建数据
+                let state = store_mut.state_mut();
+                create_test_subtitle_data(&mut state.project);
+            }
+            // 然后初始化 LineEditorState（使用 UiModels 持有的模型）
+            store_mut.rebuild_line_editor_models()
         };
 
         let subtitle_state = instance.global::<SubtitleState>();
         // NOTE: 之后 UI 数据需要在 filtered_model 修改
         // 不应当再使用 set_rows 修改数据
         subtitle_state.set_rows(filter_model);
+
+        // 初始化模型并绑定给 Slint（占位空数组，后续通过 UIUpdater 刷新）
+        {
+            let areas_model = store.borrow().ui_models().scrareas();
+            let scr_edge_displays_model = store.borrow().ui_models().scredge_displays();
+            let scr_edge_touch_areas_model = store.borrow().ui_models().scredge_touch_areas();
+            instance.set_scr_areas(slint::ModelRc::from(areas_model));
+            instance
+                .set_scr_edge_touch_areas_displays(slint::ModelRc::from(scr_edge_displays_model));
+            instance.set_scr_edge_touch_areas(slint::ModelRc::from(scr_edge_touch_areas_model));
+        }
 
         println!("✅ 已初始化字幕过滤模型");
         // ===================================

@@ -1,9 +1,11 @@
+use std::rc::Rc;
+
 use crate::bridge::types::{SplitPreviewOverlayData, ThemeSettings};
 use crate::screen::area::ScrAreaKey;
+use crate::screen::edge::ScrEdgeKey;
 use crate::screen::map::ScrAreaMap;
 use crate::screen::primitives::{Adjacency, Rcti};
 use crate::screen::vertex::ScrVertKey;
-use crate::store::subtitle::LineEditorState;
 use aweft_model::project::Project;
 use slint::PhysicalSize;
 
@@ -35,6 +37,9 @@ pub enum DragOperation {
         smaller: u32,
         /// 参与移动的顶点键集合
         moving_vert_keys: Vec<ScrVertKey>,
+        // 影响到的 Edge 和 Area （用于局部更新 UI）
+        edge_keys_rc: Rc<Vec<ScrEdgeKey>>,
+        area_keys_rc: Rc<Vec<ScrAreaKey>>,
     },
 }
 
@@ -59,8 +64,6 @@ pub struct AppState {
     pub subtitle_renderer: Option<crate::wgpu_subtitle_renderer::SubtitleRenderer>,
     // libass 字幕渲染器
     pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
-    // LineEditor 需要的部分（仅包含 UI 状态）
-    pub line_editor_state: LineEditorState,
 }
 
 impl AppState {
@@ -78,7 +81,6 @@ impl AppState {
             wgpu_sink: None,
             subtitle_renderer: None,
             libass_renderer: None,
-            line_editor_state: LineEditorState::new(),
         }
     }
 

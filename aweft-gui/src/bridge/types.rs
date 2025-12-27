@@ -28,7 +28,7 @@ pub fn slint_area_type_to_rust(area_type: &SlintAreaType) -> crate::screen::area
 }
 
 /// 通用：将 SlotMap 的 Key 拆分为 (index, version)
-fn key_to_index_version<K: Key>(key: K) -> (i32, i32) {
+fn key_to_index_version<K: Key>(key: &K) -> (i32, i32) {
     let ffi = key.data().as_ffi();
     let index = (ffi & 0xFFFF_FFFF) as i32;
     let version = (ffi >> 32) as i32;
@@ -42,7 +42,7 @@ fn index_version_to_key<K: Key>(index: i32, version: i32) -> K {
 }
 
 /// 通用：SlotMap Key -> SlintKey
-pub fn key_to_slint_key<K: Key>(key: K) -> SlintKey {
+pub fn key_to_slint_key<K: Key>(key: &K) -> SlintKey {
     let (index, version) = key_to_index_version(key);
     SlintKey {
         key_index: index,

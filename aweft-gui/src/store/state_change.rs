@@ -1,5 +1,6 @@
 use crate::screen::area::{AreaType, ScrAreaKey};
-use crate::screen::primitives::Adjacency;
+use crate::screen::edge::ScrEdgeKey;
+use std::rc::Rc;
 
 /// 状态变更描述 - 精确描述哪些数据被修改了
 #[derive(Debug, Clone)]
@@ -61,7 +62,11 @@ pub enum DragOperationChange {
     SplitPreviewUpdated,
     JoinPreviewUpdated,
     PreviewCleared,
-    EdgeUpdated,
+    EdgeUpdated {
+        // NEED_CHECK: UI 局部更新时涉及到的 Edge 和 Area
+        edge_keys_rc: Rc<Vec<ScrEdgeKey>>,
+        area_keys_rc: Rc<Vec<ScrAreaKey>>,
+    },
     /// 结束拖拽（隐藏覆盖层 + 可能的区域变更）
     Ended {
         areas_changed: bool,

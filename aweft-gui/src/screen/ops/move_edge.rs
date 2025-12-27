@@ -1,3 +1,5 @@
+use anyhow::{Context, Result, anyhow};
+
 use crate::{
     bridge::types::ThemeSettings,
     screen::{
@@ -63,14 +65,14 @@ impl ScrAreaMap {
         }
     }
 
-    /// 应用边移动，更新顶点坐标并刷新区域几何
-    /// 返回实际应用的最终坐标
-    pub fn apply_edge_move(
+    // 返回实际应用的轴向坐标
+    pub fn apply_verts_move(
         &mut self,
         dir_axis_horizontal: bool,
         moving_vert_keys: &[ScrVertKey],
         origval: u32,
         delta: i32,
+        // 移动的边缘坐标
         bigger: u32,
         smaller: u32,
     ) -> u32 {
@@ -138,23 +140,31 @@ impl ScrAreaMap {
     }
     /// 从移动顶点集合中分析移动方向和原始坐标
     /// 返回: (dir_axis_horizontal, origval)
-    /// dir_axis_horizontal: true=水平移动(改变Y坐标)，false=垂直移动(改变X坐标)
-    pub fn analyze_move_direction(&self, moving_vert_keys: &[ScrVertKey]) -> Option<(bool, u32)> {
+    /// dir_axis_horizontal: true=水平线(改变Y坐标)，false=垂直线(改变X坐标)
+    pub fn analyze_move_direction(&self, moving_vert_keys: &[ScrVertKey]) -> Result<(bool, u32)> {
         if moving_vert_keys.len() < 2 {
-            return None;
+            return Err(anyhow!("顶点数量不足，至少需要2个"));
         }
 
         // 取前两个顶点来判断移动方向
-        let v1 = self.verts.get(moving_vert_keys[0])?;
-        let v2 = self.verts.get(moving_vert_keys[1])?;
+        let v1 = self
+            .verts
+            .get(moving_vert_keys[0])
+            .context("无法获取第一个顶点")?;
+        let v2 = self
+            .verts
+            .get(moving_vert_keys[1])
+            .context("无法获取第二个顶点")?;
 
         // 判断移动方向
-        let dir_axis_horizontal = if v1.vec.y == v2.vec.y {
+        let dir_axis_horizontal = if v1.vec.y == v2.vec.y && v1.vec.x == v2.vec.x {
+            return Err(anyhow!("顶点重合，无法判断方向"));
+        } else if v1.vec.y == v2.vec.y {
             true // 水平线，移动时改变Y坐标
         } else if v1.vec.x == v2.vec.x {
             false // 垂直线，移动时改变X坐标
         } else {
-            return None; // 非轴对齐，不支持移动
+            return Err(anyhow!("两个顶点不在同一水平或垂直轴上"));
         };
 
         // 获取原始轴坐标值
@@ -164,7 +174,7 @@ impl ScrAreaMap {
             v1.vec.x
         };
 
-        Some((dir_axis_horizontal, origval))
+        Ok((dir_axis_horizontal, origval))
     }
 
     /// 计算边移动的范围限制，确保所有区域不小于最小尺寸

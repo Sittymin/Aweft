@@ -33,12 +33,13 @@ export enum ActionZoneCorner {
 }
 
 
-export struct ScrEdgeDisplayData {
+export struct ScrEdgeTouchAreaDisplayData {
     x: length,
     y: length,
     width: length,
     height: length,
     active: bool,
+    edge_keys: [SlintKey],
 }
 
 export struct ScrEdgeTouchAreaData {
@@ -47,6 +48,8 @@ export struct ScrEdgeTouchAreaData {
     y: length,
     width: length,
     height: length,
+    // 可能同一水平/垂直并且连续的两条边合并了
+    edge_keys: [SlintKey],
     vert_keys: [SlintKey]
 }
 

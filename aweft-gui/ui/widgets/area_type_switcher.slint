@@ -1,12 +1,12 @@
-import { AreaTypeMetadata} from "../core/area_type_metadata.slint";
-import { IconAndText} from "../core/types.slint";
+import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
+import { IconAndText } from "../core/types.slint";
 import { Theme } from "../theme/index.slint";
 export component IconComboBox inherits Rectangle {
     in-out property <int> current-index: -1;
     in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
 
     // 当选择改变时触发的回调
-    callback selected(/* new-index: */ int);
+    callback selected(new-index: int);
 
     width: Theme.data.area-type-switcher.width;
     height: Theme.data.area-type-switcher.height;
@@ -16,8 +16,10 @@ export component IconComboBox inherits Rectangle {
     border-color: Theme.data.area-type-switcher.border-color;
 
     TouchArea {
-        clicked => {
-            popup.show();
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                popup.show();
+            }
         }
 
         HorizontalLayout {
@@ -67,13 +69,15 @@ export component IconComboBox inherits Rectangle {
                 spacing: Theme.data.area-type-switcher.popup.spacing;
 
                 for item[i] in AreaTypeMetadata.items: item_touch_area := TouchArea {
-                    clicked => {
-                        if root.current-index != i {
-                            root.current-index = i;
-                            root.selected(i);
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            if root.current-index != i {
+                                root.current-index = i;
+                                root.selected(i);
+                            }
+                            // WARN: 不可以提前，不然之后的代码不会执行
+                            popup.close();
                         }
-                        // WARN: 不可以提前，不然之后的代码不会执行
-                        popup.close();
                     }
 
                         // 负责视觉表现

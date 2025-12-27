@@ -15,7 +15,7 @@ import { ScrEdgeTouchArea } from "../screen/edges/edge_touch_area.slint";
 import { SlintScrArea } from "../screen/area_container.slint";
 import { SubtitleOverlay } from "../areas/subtitle.slint";
 import {
-    ScrEdgeDisplayData,
+    ScrEdgeTouchAreaDisplayData,
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
@@ -39,9 +39,9 @@ export {
 
 // 主窗口组件
 export component MainWindow inherits Window {
-    in property <[ScrAreaData]> scrareas: [];
-    in property <[ScrEdgeDisplayData]> scredgedisplays: [];
-    in property <[ScrEdgeTouchAreaData]> scredgetouchareas: [];
+    in property <[ScrAreaData]> scr-areas: [];
+    in property <[ScrEdgeTouchAreaDisplayData]> scr-edge-touch-areas-displays: [];
+    in property <[ScrEdgeTouchAreaData]> scr-edge-touch-areas: [];
     in property <bool> show-split-preview-overlay: false;
     in property <SplitPreviewOverlayData> split-preview-overlay-data;
     in property <bool> show-join-highlight-overlay: false;
@@ -49,21 +49,20 @@ export component MainWindow inherits Window {
     in property <bool> show-close-area-overlays: false;
     in property <[CloseAreaOverlayData]> close-area-overlay-datas;
 
-    for scrarea[index] in scrareas: SlintScrArea {
-        area-key: scrarea.area_key;
-        area-type: scrarea.area_type;
-        container-x: scrarea.x;
-        container-y: scrarea.y;
-        container-width: scrarea.width;
-        container-height: scrarea.height;
-        actionzone-side-length: scrarea.actionzone-side-length;
+    for scr-area[index] in scr-areas: SlintScrArea {
+        area-key: scr-area.area_key;
+        area-type: scr-area.area_type;
+        container-x: scr-area.x;
+        container-y: scr-area.y;
+        container-width: scr-area.width;
+        container-height: scr-area.height;
+        actionzone-side-length: scr-area.actionzone-side-length;
     }
-
-    for scredgedisplay[index] in scredgedisplays: ScrEdgeDisplay {
-        data: scredgedisplay;
+    for scr-edge-touch-areas-display[index] in scr-edge-touch-areas-displays: ScrEdgeDisplay {
+        data: scr-edge-touch-areas-display;
     }
-    for scredgetoucharea[index] in scredgetouchareas: ScrEdgeTouchArea {
-        touch-area-data: scredgetoucharea;
+    for scr-edge-touch-area[index] in scr-edge-touch-areas: ScrEdgeTouchArea {
+        touch-area-data: scr-edge-touch-area;
     }
 
     if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {

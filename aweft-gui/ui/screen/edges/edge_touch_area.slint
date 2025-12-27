@@ -12,7 +12,7 @@ export component ScrEdgeTouchArea inherits TouchArea {
     changed has-hover => {
         if (self.has-hover) {
             // 指针进入区域时的回调
-            // TODO: 添加一个回调用于将对应ScrEdgeDisplayData active设置
+            // TODO: 添加一个回调用于将对应ScrEdgeTouchAreaDisplayData active设置
             debug("鼠标悬停进入");
         } else {
             // 指针离开区域时的回调
@@ -31,6 +31,7 @@ export component ScrEdgeTouchArea inherits TouchArea {
             DragCallbacks.edge-drag-end(true);
             self.is-dragging = false;
         } else if (event.kind == PointerEventKind.move && root.is-dragging) {
+            debug("当前 UI 回调 mouse 坐标", self.mouse-x, self.mouse-y);
             DragCallbacks.edge-drag(root.touch-area-data.vert_keys, self.mouse-x, self.mouse-y);
         }
     }
