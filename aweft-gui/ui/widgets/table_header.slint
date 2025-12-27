@@ -110,6 +110,9 @@ export component TableHeader inherits Rectangle {
                 sort-order: column.sort-order;
                 horizontal-stretch: column.horizontal-stretch;
                 min-width: max(column.min-width, column.width);
+                // 避免因为 min-width 溢出到其他 Area
+                // FIXME: 各列到最小宽度时依旧会溢出一点
+                clip: true;
                 preferred-width: self.min-width;
             
                 // column title

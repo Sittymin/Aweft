@@ -287,7 +287,6 @@ pub fn handle_edge_update(
 }
 
 /// 处理边缘拖拽结束
-// FIXME: 这里的局部更新需要检查一下
 pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateChange> {
     let areas_changed = if let DragOperation::MoveEdge {
         dir_axis_horizontal,
