@@ -11,7 +11,7 @@ env:
 
 jobs:
   build:
-    runs-on: codeberg-small-lazy
+    runs-on: codeberg-medium-lazy
 
     steps:
     - name: Check out code
@@ -52,7 +52,7 @@ jobs:
       run: cd aweft-libass/third_party/libass && autoreconf -ivf
 
     - name: Build
-      run: cargo build -j 2 --verbose
+      run: cargo build -j 1 --verbose
       
     - name: Test
       run: cargo test -j 2 --verbose
