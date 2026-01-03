@@ -345,38 +345,43 @@ fn setup_line_editor_timecode_step_callbacks(instance: &MainWindow, store: Rc<Re
 
 fn setup_line_editor_drag_timecode_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
-    let register = |setter: fn(&MainWindow, Box<dyn FnMut(slint::SharedString, bool, f32)>),
-                    build: fn(
-        aweft_model::ids::ItemId,
-        bool,
-        f32,
-    ) -> crate::actions::line_editor::LineEditorAction| {
-        let s = Rc::clone(&store);
-        let w = weak_instance.clone();
-        setter(
-            instance,
-            Box::new(move |event_id_str, is_start_time, delta_x| {
-                use aweft_model::ids::ItemId;
-                let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
-                    warn!("无效的 event_id: {}", event_id_str);
-                    return;
-                };
-                let action = Action::LineEditor(build(event_id, is_start_time, delta_x));
-                dispatch_and_render(&s, action, &w);
-            }),
-        );
-    };
+    let register =
+        |setter: fn(&MainWindow, Box<dyn FnMut(slint::SharedString, bool, f32, bool)>),
+         build: fn(
+            aweft_model::ids::ItemId,
+            bool,
+            f32,
+            bool,
+        ) -> crate::actions::line_editor::LineEditorAction| {
+            let s = Rc::clone(&store);
+            let w = weak_instance.clone();
+            setter(
+                instance,
+                Box::new(move |event_id_str, is_start_time, delta_x, is_batch| {
+                    use aweft_model::ids::ItemId;
+                    let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId)
+                    else {
+                        warn!("无效的 event_id: {}", event_id_str);
+                        return;
+                    };
+                    let action =
+                        Action::LineEditor(build(event_id, is_start_time, delta_x, is_batch));
+                    dispatch_and_render(&s, action, &w);
+                }),
+            );
+        };
 
     register(
         |inst, cb| {
             inst.global::<LineEditorCallbacks>()
                 .on_drag_timecode_preview(cb)
         },
-        |event_id, is_start_time, delta_x| {
+        |event_id, is_start_time, delta_x, is_batch| {
             crate::actions::line_editor::LineEditorAction::DragTimecodePreview {
                 event_id,
                 is_start_time,
                 delta_x,
+                is_batch,
             }
         },
     );
@@ -386,11 +391,12 @@ fn setup_line_editor_drag_timecode_callbacks(instance: &MainWindow, store: Rc<Re
             inst.global::<LineEditorCallbacks>()
                 .on_drag_timecode_commit(cb)
         },
-        |event_id, is_start_time, delta_x| {
+        |event_id, is_start_time, delta_x, is_batch| {
             crate::actions::line_editor::LineEditorAction::DragTimecodeCommit {
                 event_id,
                 is_start_time,
                 delta_x,
+                is_batch,
             }
         },
     );
@@ -402,7 +408,7 @@ fn setup_line_editor_drag_timecode_cancel_callback(
     let weak_instance = instance.as_weak();
     instance
         .global::<LineEditorCallbacks>()
-        .on_drag_timecode_cancel(move |event_id_str, is_start_time| {
+        .on_drag_timecode_cancel(move |event_id_str, is_start_time, is_batch| {
             use aweft_model::ids::ItemId;
             let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
                 warn!("无效的 event_id: {}", event_id_str);
@@ -412,6 +418,7 @@ fn setup_line_editor_drag_timecode_cancel_callback(
                 crate::actions::line_editor::LineEditorAction::DragTimecodeCancel {
                     event_id,
                     is_start_time,
+                    is_batch,
                 },
             );
 

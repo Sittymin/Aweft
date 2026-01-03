@@ -172,14 +172,14 @@ export component LineEditor inherits Rectangle {
                                 decrement-timecode => {
                                     LineEditorCallbacks.decrement-timecode(row.item-id, true);
                                 }
-                                drag-timecode-preview(delta-x) => {
-                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x)
+                                drag-timecode-preview(delta-x, is_batch) => {
+                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch)
                                 }
-                                drag-timecode-commit(delta-x) => {
-                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, true, delta-x)
+                                drag-timecode-commit(delta-x, is_batch) => {
+                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, true, delta-x, is_batch)
                                 }
-                                drag-timecode-cancel() => {
-                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, true)
+                                drag-timecode-cancel(is_batch) => {
+                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, true, is_batch)
                                 }
                                 timecode-input(text) => {
                                     LineEditorCallbacks.timecode-input(row.item-id, true, text);
@@ -201,14 +201,14 @@ export component LineEditor inherits Rectangle {
                                 decrement-timecode => {
                                     LineEditorCallbacks.decrement-timecode(row.item-id, false);
                                 }
-                                drag-timecode-preview(delta-x) => {
-                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x)
+                                drag-timecode-preview(delta-x, is_batch) => {
+                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch)
                                 }
-                                drag-timecode-commit(delta-x) => {
-                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, false, delta-x)
+                                drag-timecode-commit(delta-x, is_batch) => {
+                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, false, delta-x, is_batch)
                                 }
-                                drag-timecode-cancel() => {
-                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, false)
+                                drag-timecode-cancel(is_batch) => {
+                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, false, is_batch)
                                 }
                                 timecode-input(text) => {
                                     LineEditorCallbacks.timecode-input(row.item-id, false, text);

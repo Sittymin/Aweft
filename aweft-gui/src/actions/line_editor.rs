@@ -22,15 +22,18 @@ pub enum LineEditorAction {
         event_id: ItemId,
         is_start_time: bool,
         delta_x: f32,
+        is_batch: bool,
     },
     DragTimecodeCommit {
         event_id: ItemId,
         is_start_time: bool,
         delta_x: f32,
+        is_batch: bool,
     },
     DragTimecodeCancel {
         event_id: ItemId,
         is_start_time: bool,
+        is_batch: bool,
     },
     SelectSingle {
         item_id: ItemId,

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::actions::Action;
 use crate::actions::area::AreaAction;
 use crate::actions::line_editor::LineEditorAction;
@@ -5,6 +7,7 @@ use crate::store::state::AppState;
 use crate::store::state_change::{LineEditorChange, StateChange};
 use crate::store::ui_models::UiModels;
 use anyhow::Result;
+use aweft_model::ids::ItemId;
 use aweft_model::structure::ItemContent;
 use chrono::TimeDelta;
 
@@ -285,6 +288,7 @@ impl AppStore {
                 event_id,
                 is_start_time,
                 delta_x,
+                is_batch,
             } => {
                 if !delta_x.is_finite()
                     || delta_x >= (i64::MAX as f32)
@@ -292,26 +296,66 @@ impl AppStore {
                 {
                     return Ok(StateChange::None);
                 }
-                if let Ok(time) = self.state.project.structure.preview_adjust_event_time(
-                    event_id,
-                    is_start_time,
-                    TimeDelta::milliseconds((delta_x.trunc() as i64) * 10),
-                ) {
-                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                    // 可能需要改动Updater处理的细粒度
-                    self.ui_models
+
+                let delta = TimeDelta::milliseconds((delta_x.trunc() as i64) * 10);
+
+                if is_batch {
+                    // 批量调整：获取所有选中的事件项
+                    let mut event_ids: HashSet<ItemId> = self
+                        .ui_models
                         .line_editor_state
-                        .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
-                    return Ok(StateChange::LineEditor(
-                        LineEditorChange::TimecodePreviewDraged,
-                    ));
+                        .get_selected_events(&self.state.project);
+
+                    // 确保当前 event_id 也在列表中（同时也避免重复）
+                    event_ids.insert(event_id);
+
+                    // 批量预览调整
+                    let mut updated_count = 0;
+                    for &id in &event_ids {
+                        if let Ok(time) = self.state.project.structure.preview_adjust_event_time(
+                            id,
+                            is_start_time,
+                            delta,
+                        ) {
+                            // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                            // 可能需要改动Updater处理的细粒度
+                            self.ui_models
+                                .line_editor_state
+                                .update_row_time_without_ancestor_groups(id, is_start_time, time);
+                            updated_count += 1;
+                        }
+                    }
+
+                    if updated_count > 0 {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodePreviewDraged,
+                        ));
+                    }
+                } else {
+                    // 单个调整
+                    if let Ok(time) = self.state.project.structure.preview_adjust_event_time(
+                        event_id,
+                        is_start_time,
+                        delta,
+                    ) {
+                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                        // 可能需要改动Updater处理的细粒度
+                        self.ui_models
+                            .line_editor_state
+                            .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodePreviewDraged,
+                        ));
+                    }
                 }
+
                 Ok(StateChange::None)
             }
             LineEditorAction::DragTimecodeCommit {
                 event_id,
                 is_start_time,
                 delta_x,
+                is_batch,
             } => {
                 if !delta_x.is_finite()
                     || delta_x >= (i64::MAX as f32)
@@ -319,44 +363,134 @@ impl AppStore {
                 {
                     return Ok(StateChange::None);
                 }
-                if let Ok(time) = self.state.project.structure.adjust_event_time(
-                    event_id,
-                    is_start_time,
-                    TimeDelta::milliseconds((delta_x.trunc() as i64) * 10),
-                ) {
-                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                    // 可能需要改动Updater处理的细粒度
-                    self.ui_models.line_editor_state.update_row_time(
-                        &self.state.project,
+
+                let delta = TimeDelta::milliseconds((delta_x.trunc() as i64) * 10);
+
+                if is_batch {
+                    // 批量调整：获取所有选中的事件项
+                    let mut event_ids: HashSet<ItemId> = self
+                        .ui_models
+                        .line_editor_state
+                        .get_selected_events(&self.state.project)
+                        .into_iter()
+                        .collect();
+
+                    // 确保当前 event_id 也在列表中（同时也避免重复）
+                    event_ids.insert(event_id);
+
+                    // 批量调整
+                    let mut updated_count = 0;
+                    let total_count = event_ids.len();
+
+                    for (index, &id) in event_ids.iter().enumerate() {
+                        if let Ok(time) =
+                            self.state
+                                .project
+                                .structure
+                                .adjust_event_time(id, is_start_time, delta)
+                        {
+                            // 最后一个事件时更新分组头，其他事件只更新自身
+                            let is_last = index == total_count - 1;
+
+                            if is_last {
+                                // 最后一个：全量递归更新分组头
+                                self.ui_models
+                                    .line_editor_state
+                                    .update_row_time_full_bounds_recursive(
+                                        &self.state.project,
+                                        id,
+                                        is_start_time,
+                                        time,
+                                    );
+                            } else {
+                                // 其他事件：只更新自身，不更新分组头
+                                self.ui_models
+                                    .line_editor_state
+                                    .update_row_time_without_ancestor_groups(
+                                        id,
+                                        is_start_time,
+                                        time,
+                                    );
+                            }
+                            updated_count += 1;
+                        }
+                    }
+
+                    if updated_count > 0 {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeCommitDraged,
+                        ));
+                    }
+                } else {
+                    // 单个调整
+                    if let Ok(time) = self.state.project.structure.adjust_event_time(
                         event_id,
                         is_start_time,
-                        time,
-                    );
-                    return Ok(StateChange::LineEditor(
-                        LineEditorChange::TimecodePreviewDraged,
-                    ));
+                        delta,
+                    ) {
+                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                        // 可能需要改动Updater处理的细粒度
+                        self.ui_models.line_editor_state.update_row_time(
+                            &self.state.project,
+                            event_id,
+                            is_start_time,
+                            time,
+                        );
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeCommitDraged,
+                        ));
+                    }
                 }
+
                 Ok(StateChange::None)
             }
             LineEditorAction::DragTimecodeCancel {
                 event_id,
                 is_start_time,
+                is_batch,
             } => {
-                if let Ok(time) = self
-                    .state
-                    .project
-                    .structure
-                    .event_time(event_id, is_start_time)
-                {
-                    self.ui_models.line_editor_state.update_row_time(
-                        &self.state.project,
-                        event_id,
-                        is_start_time,
-                        time,
-                    );
-                    return Ok(StateChange::LineEditor(
-                        LineEditorChange::TimecodeCancelDraged,
-                    ));
+                if is_batch {
+                    // 批量取消：获取所有选中的事件项
+                    let mut event_ids: HashSet<ItemId> = self
+                        .ui_models
+                        .line_editor_state
+                        .get_selected_events(&self.state.project);
+
+                    // 确保当前 event_id 也在列表中（同时也避免重复）
+                    event_ids.insert(event_id);
+
+                    // 批量恢复到原始时间
+                    let mut updated_count = 0;
+                    for &id in &event_ids {
+                        if let Ok(time) = self.state.project.structure.event_time(id, is_start_time)
+                        {
+                            self.ui_models
+                                .line_editor_state
+                                .update_row_time_without_ancestor_groups(id, is_start_time, time);
+                            updated_count += 1;
+                        }
+                    }
+
+                    if updated_count > 0 {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeCancelDraged,
+                        ));
+                    }
+                } else {
+                    // 单个取消（原有逻辑）
+                    if let Ok(time) = self
+                        .state
+                        .project
+                        .structure
+                        .event_time(event_id, is_start_time)
+                    {
+                        self.ui_models
+                            .line_editor_state
+                            .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeCancelDraged,
+                        ));
+                    }
                 }
                 Ok(StateChange::None)
             }

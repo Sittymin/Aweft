@@ -20,9 +20,9 @@ export global LineEditorCallbacks {
     callback toggle-group-collapsed(group-id: string);
     callback increment-timecode(item-id: string, is-start-time: bool);
     callback decrement-timecode(item-id: string, is-start-time: bool);
-    callback drag-timecode-preview(item-id: string, is-start-time: bool, delta-x: length);
-    callback drag-timecode-commit(item-id: string, is-start-time: bool, delta-x: length);
-    callback drag-timecode-cancel(item-id: string, is-start-time: bool);
+    callback drag-timecode-preview(item-id: string, is-start-time: bool, delta-x: length, is_batch: bool);
+    callback drag-timecode-commit(item-id: string, is-start-time: bool, delta-x: length, is_batch: bool);
+    callback drag-timecode-cancel(item-id: string, is-start-time: bool, is_batch: bool);
     callback timecode-input(item-id: string, is-start-time: bool, text: string);
     // 行选择
     callback select-single(item-id: string);

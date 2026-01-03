@@ -21,6 +21,8 @@ export component TimecodeEditor inherits Rectangle {
     private property <length> drag-start-x;
     // 用来共享当前累积偏移
     private property <length> accumulated-drag: 0px;
+    // 记录拖动开始时的 Shift 键状态
+    private property <bool> shift-pressed-on-drag-start: false;
 
     // 是否处于编辑模式
     in-out property <bool> is-editing: false;
@@ -30,9 +32,9 @@ export component TimecodeEditor inherits Rectangle {
     // 回调函数
     callback increment-timecode();
     callback decrement-timecode();
-    callback drag-timecode-preview(delta-x: length);
-    callback drag-timecode-commit(delta-x: length);
-    callback drag-timecode-cancel();
+    callback drag-timecode-preview(delta-x: length, is_batch: bool);
+    callback drag-timecode-commit(delta-x: length, is_batch: bool);
+    callback drag-timecode-cancel(is_batch: bool);
     callback timecode-input(text: string);
 
     width: 100px;
@@ -90,11 +92,16 @@ export component TimecodeEditor inherits Rectangle {
             pointer-event(event) => {
                 if (event.button == PointerEventButton.right) {
                     if (root.center-dragging) {
-                        root.center-dragging = false;
-                        root.accumulated-drag = 0px;
-                        root.drag-timecode-cancel();
+                        root.drag-timecode-cancel(root.shift-pressed-on-drag-start);
                         debug("中间拖动已取消");
+                        root.shift-pressed-on-drag-start = false;
+                        root.right-dragging = false;
+                        root.accumulated-drag = 0px;
                     }
+                }
+                // 在按下时记录 Shift 键状态（左右按钮拖动也有一致的逻辑）
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.shift-pressed-on-drag-start = event.modifiers.shift;
                 }
             }
 
@@ -111,7 +118,7 @@ export component TimecodeEditor inherits Rectangle {
                     if (root.center-dragging) {
                         // 计算累积值：总距离 - 阈值偏移（保留方向）
                         root.accumulated-drag = delta-x - root.drag-start-x;
-                        root.drag-timecode-preview(root.accumulated-drag);
+                        root.drag-timecode-preview(root.accumulated-drag, root.shift-pressed-on-drag-start);
                         debug("中间拖动中", root.accumulated-drag);
                     }
                 }
@@ -125,9 +132,10 @@ export component TimecodeEditor inherits Rectangle {
                 // 松开鼠标
                 if (!self.pressed) {
                     if (root.center-dragging) {
-                        root.drag-timecode-commit(root.accumulated-drag);
+                        root.drag-timecode-commit(root.accumulated-drag, root.shift-pressed-on-drag-start);
                         debug("中间拖动提交", root.accumulated-drag);
                     }
+                    root.shift-pressed-on-drag-start = false;
                     root.center-dragging = false;
                     root.accumulated-drag = 0px;
                 }
@@ -170,11 +178,15 @@ export component TimecodeEditor inherits Rectangle {
                     pointer-event(event) => {
                         if (event.button == PointerEventButton.right) {
                             if (root.left-dragging) {
+                                root.drag-timecode-cancel(root.shift-pressed-on-drag-start);
+                                debug("左侧拖动已取消");
+                                root.shift-pressed-on-drag-start = false;
                                 root.left-dragging = false;
                                 root.accumulated-drag = 0px;
-                                root.drag-timecode-cancel();
-                                debug("左侧拖动已取消");
                             }
+                        }
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                            root.shift-pressed-on-drag-start = event.modifiers.shift;
                         }
                     }
 
@@ -189,7 +201,7 @@ export component TimecodeEditor inherits Rectangle {
                             }
                             if (root.left-dragging) {
                                 root.accumulated-drag = delta-x - root.drag-start-x;
-                                root.drag-timecode-preview(root.accumulated-drag);
+                                root.drag-timecode-preview(root.accumulated-drag, root.shift-pressed-on-drag-start);
                                 debug("左侧拖动中", root.accumulated-drag);
                             }
                         }
@@ -203,9 +215,10 @@ export component TimecodeEditor inherits Rectangle {
                         // 松开鼠标
                         if (!self.pressed) {
                             if (root.left-dragging) {
-                                root.drag-timecode-commit(root.accumulated-drag);
+                                root.drag-timecode-commit(root.accumulated-drag, root.shift-pressed-on-drag-start);
                                 debug("左侧拖动提交", root.accumulated-drag);
                             }
+                            root.shift-pressed-on-drag-start = false;
                             root.left-dragging = false;
                             root.accumulated-drag = 0px;
                         }
@@ -241,11 +254,15 @@ export component TimecodeEditor inherits Rectangle {
                     pointer-event(event) => {
                         if (event.button == PointerEventButton.right) {
                             if (root.right-dragging) {
+                                root.drag-timecode-cancel(root.shift-pressed-on-drag-start);
+                                debug("右侧拖动已取消");
+                                root.shift-pressed-on-drag-start = false;
                                 root.right-dragging = false;
                                 root.accumulated-drag = 0px;
-                                root.drag-timecode-cancel();
-                                debug("右侧拖动已取消");
                             }
+                        }
+                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                            root.shift-pressed-on-drag-start = event.modifiers.shift;
                         }
                     }
 
@@ -260,7 +277,7 @@ export component TimecodeEditor inherits Rectangle {
                             }
                             if (root.right-dragging) {
                                 root.accumulated-drag = delta-x - root.drag-start-x;
-                                root.drag-timecode-preview(root.accumulated-drag);
+                                root.drag-timecode-preview(root.accumulated-drag, root.shift-pressed-on-drag-start);
                                 debug("右侧拖动中", root.accumulated-drag);
                             }
                         }
@@ -274,9 +291,10 @@ export component TimecodeEditor inherits Rectangle {
                         // 松开鼠标
                         if (!self.pressed) {
                             if (root.right-dragging) {
-                                root.drag-timecode-commit(root.accumulated-drag);
+                                root.drag-timecode-commit(root.accumulated-drag, root.shift-pressed-on-drag-start);
                                 debug("右侧拖动提交", root.accumulated-drag);
                             }
+                            root.shift-pressed-on-drag-start = false;
                             root.right-dragging = false;
                             root.accumulated-drag = 0px;
                         }

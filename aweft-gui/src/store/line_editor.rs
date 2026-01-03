@@ -29,7 +29,7 @@ pub struct LineEditorState {
     // total_row_count 与 event_count_cache 已经失效了的 group
     dirty_row_counts: HashSet<ItemId>,
 
-    // 选中的行
+    // 选中的行（group 和 event 都包含）
     selected_items: HashSet<ItemId>,
     // 分组内选中的数量（可以与 total_row_count 结合，快速计算是否全选）
     // 仅用于分组（不包含分组头），不可直接使用 total_row_count （因为比较时无法知道嵌套的分组头有多少个）
@@ -101,6 +101,24 @@ impl LineEditorState {
 
         self.filter_model = Some(filter_model.clone());
         ModelRc::from(filter_model)
+    }
+
+    pub fn get_selected_events(&self, project: &Project) -> HashSet<ItemId> {
+        self.selected_items
+            .iter()
+            .filter_map(|&id| {
+                // 检查是否是事件项
+                if let Some(item) = project.structure.get(id) {
+                    if matches!(item.content, ItemContent::Event(_)) {
+                        Some(id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     /// 重建所有 UI 行数据
@@ -185,6 +203,59 @@ impl LineEditorState {
                         }
 
                         // 无论通过哪个路径修改了 ancestor_row，都在最后统一提交更新。
+                        self.all_rows.set_row_data(ancestor_idx, ancestor_row);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn update_row_time_full_bounds_recursive(
+        &mut self,
+        project: &Project,
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    ) {
+        let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
+            warn!("在 item_id_to_ui_index 当中存在无效 item");
+            return;
+        };
+        let Some(mut row) = self.all_rows.row_data(idx) else {
+            warn!("获得的索引在 all_rows 当中不存在");
+            return;
+        };
+
+        if is_start_time {
+            row.start_time = format_time(time);
+        } else {
+            row.end_time = format_time(time);
+        }
+
+        // 克隆父级列表以避免借用冲突
+        let ancestor_groups = row.ancestor_groups.clone();
+        self.all_rows.set_row_data(idx, row);
+
+        // HACK: 这里走楼梯写法是否可以优化?
+        // 遍历并更新所有受影响的父级
+        let mut cache: TimeBoundsCache = HashMap::new();
+        for ancestor_group_str in ancestor_groups.iter() {
+            if let Ok(ancestor_id) = uuid::Uuid::parse_str(&ancestor_group_str).map(ItemId) {
+                if let Some(&ancestor_idx) = self.item_id_to_ui_index.get(&ancestor_id) {
+                    if let Some(mut ancestor_row) = self.all_rows.row_data(ancestor_idx) {
+                        // 决定是否可以进行简单的边界扩展
+                        // 路径B: 不是简单扩展，需要递归重新计算，成本高
+                        if let Some((min_start, max_end)) =
+                            find_item_time_bounds_recursive(ancestor_id, project, &mut cache)
+                        {
+                            // 保持原始意图：只更新与触发事件相关的那个时间字段
+                            if is_start_time {
+                                ancestor_row.start_time = format_time(min_start);
+                            } else {
+                                ancestor_row.end_time = format_time(max_end);
+                            }
+                        }
+
                         self.all_rows.set_row_data(ancestor_idx, ancestor_row);
                     }
                 }
