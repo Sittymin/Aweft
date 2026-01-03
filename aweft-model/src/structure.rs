@@ -165,7 +165,7 @@ impl ProjectStructure {
             if let ItemContent::Event(event_data) = &mut item.content {
                 if is_start_time && target_time <= event_data.end_time {
                     event_data.start_time = target_time;
-                } else if target_time >= event_data.start_time {
+                } else if !is_start_time && target_time >= event_data.start_time {
                     event_data.end_time = target_time;
                 } else {
                     return Err(anyhow!("时间无法形成范围"));
