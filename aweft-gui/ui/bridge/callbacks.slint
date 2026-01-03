@@ -18,8 +18,8 @@ export global AreaCallbacks {
 
 export global LineEditorCallbacks {
     callback toggle-group-collapsed(group-id: string);
-    callback increment-timecode(item-id: string, is-start-time: bool);
-    callback decrement-timecode(item-id: string, is-start-time: bool);
+    callback increment-timecode(item-id: string, is-start-time: bool, is_batch: bool);
+    callback decrement-timecode(item-id: string, is-start-time: bool, is_batch: bool);
     callback drag-timecode-preview(item-id: string, is-start-time: bool, delta-x: length, is_batch: bool);
     callback drag-timecode-commit(item-id: string, is-start-time: bool, delta-x: length, is_batch: bool);
     callback drag-timecode-cancel(item-id: string, is-start-time: bool, is_batch: bool);

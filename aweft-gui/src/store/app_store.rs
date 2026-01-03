@@ -241,46 +241,162 @@ impl AppStore {
             LineEditorAction::IncrementTimecode {
                 event_id,
                 is_start_time,
+                is_batch,
             } => {
-                if let Ok(time) = self.state.project.structure.adjust_event_time(
-                    event_id,
-                    is_start_time,
-                    TimeDelta::seconds(1),
-                ) {
-                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                    // 可能需要改动Updater处理的细粒度
-                    self.ui_models.line_editor_state.update_row_time(
-                        &self.state.project,
+                let delta = TimeDelta::seconds(1);
+
+                if is_batch {
+                    // 批量调整：获取所有选中的事件项
+                    let mut event_ids: Vec<ItemId> = self
+                        .ui_models
+                        .line_editor_state
+                        .get_selected_events(&self.state.project)
+                        .into_iter()
+                        .collect();
+
+                    // 确保当前 event_id 也在列表中（同时也避免重复）
+                    if !event_ids.contains(&event_id) {
+                        event_ids.push(event_id);
+                    }
+
+                    // 批量调整
+                    let mut updated_count = 0;
+                    let total_count = event_ids.len();
+
+                    for (index, &id) in event_ids.iter().enumerate() {
+                        if let Ok(time) = self.state.project.structure.adjust_event_time(
+                            id,
+                            is_start_time,
+                            delta,
+                        ) {
+                            // 最后一个事件时更新分组头，其他事件只更新自身
+                            let is_last = index == total_count - 1;
+
+                            if is_last {
+                                // 最后一个：使用 update_row_time 更新分组头
+                                self.ui_models
+                                    .line_editor_state
+                                    .update_row_time_full_bounds_recursive(
+                                        &self.state.project,
+                                        id,
+                                        is_start_time,
+                                        time,
+                                    );
+                            } else {
+                                // 其他事件：只更新自身，不更新分组头
+                                self.ui_models
+                                    .line_editor_state
+                                    .update_row_time_without_ancestor_groups(id, is_start_time, time);
+                            }
+                            updated_count += 1;
+                        }
+                    }
+
+                    if updated_count > 0 {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeIncremented,
+                        ));
+                    }
+                } else {
+                    // 单个调整
+                    if let Ok(time) = self.state.project.structure.adjust_event_time(
                         event_id,
                         is_start_time,
-                        time,
-                    );
-                    return Ok(StateChange::LineEditor(
-                        LineEditorChange::TimecodeIncremented,
-                    ));
+                        delta,
+                    ) {
+                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                        // 可能需要改动Updater处理的细粒度
+                        self.ui_models.line_editor_state.update_row_time(
+                            &self.state.project,
+                            event_id,
+                            is_start_time,
+                            time,
+                        );
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeIncremented,
+                        ));
+                    }
                 }
                 Ok(StateChange::None)
             }
             LineEditorAction::DecrementTimecode {
                 event_id,
                 is_start_time,
+                is_batch,
             } => {
-                if let Ok(time) = self.state.project.structure.adjust_event_time(
-                    event_id,
-                    is_start_time,
-                    TimeDelta::seconds(-1),
-                ) {
-                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                    // 可能需要改动Updater处理的细粒度
-                    self.ui_models.line_editor_state.update_row_time(
-                        &self.state.project,
+                let delta = TimeDelta::seconds(-1);
+
+                if is_batch {
+                    // 批量调整：获取所有选中的事件项
+                    let mut event_ids: Vec<ItemId> = self
+                        .ui_models
+                        .line_editor_state
+                        .get_selected_events(&self.state.project)
+                        .into_iter()
+                        .collect();
+
+                    // 确保当前 event_id 也在列表中（同时也避免重复）
+                    if !event_ids.contains(&event_id) {
+                        event_ids.push(event_id);
+                    }
+
+                    // 批量调整
+                    let mut updated_count = 0;
+                    let total_count = event_ids.len();
+
+                    for (index, &id) in event_ids.iter().enumerate() {
+                        if let Ok(time) = self.state.project.structure.adjust_event_time(
+                            id,
+                            is_start_time,
+                            delta,
+                        ) {
+                            // 最后一个事件时更新分组头，其他事件只更新自身
+                            let is_last = index == total_count - 1;
+
+                            if is_last {
+                                // 最后一个：使用 update_row_time 更新分组头
+                                self.ui_models
+                                    .line_editor_state
+                                    .update_row_time_full_bounds_recursive(
+                                        &self.state.project,
+                                        id,
+                                        is_start_time,
+                                        time,
+                                    );
+                            } else {
+                                // 其他事件：只更新自身，不更新分组头
+                                self.ui_models
+                                    .line_editor_state
+                                    .update_row_time_without_ancestor_groups(id, is_start_time, time);
+                            }
+                            updated_count += 1;
+                        }
+                    }
+
+                    if updated_count > 0 {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeDecremented,
+                        ));
+                    }
+                } else {
+                    // 单个调整
+                    if let Ok(time) = self.state.project.structure.adjust_event_time(
                         event_id,
                         is_start_time,
-                        time,
-                    );
-                    return Ok(StateChange::LineEditor(
-                        LineEditorChange::TimecodeDecremented,
-                    ));
+                        delta,
+                    ) {
+                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
+                        // 可能需要改动Updater处理的细粒度
+                        self.ui_models.line_editor_state.update_row_time(
+                            &self.state.project,
+                            event_id,
+                            is_start_time,
+                            time,
+                        );
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodeDecremented,
+                        ));
+                    }
                 }
                 Ok(StateChange::None)
             }

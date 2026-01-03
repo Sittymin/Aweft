@@ -13,10 +13,12 @@ pub enum LineEditorAction {
     IncrementTimecode {
         event_id: ItemId,
         is_start_time: bool,
+        is_batch: bool,
     },
     DecrementTimecode {
         event_id: ItemId,
         is_start_time: bool,
+        is_batch: bool,
     },
     DragTimecodePreview {
         event_id: ItemId,

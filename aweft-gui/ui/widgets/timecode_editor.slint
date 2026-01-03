@@ -30,8 +30,8 @@ export component TimecodeEditor inherits Rectangle {
     in-out property <string> text: "未输入";
 
     // 回调函数
-    callback increment-timecode();
-    callback decrement-timecode();
+    callback increment-timecode(is_batch: bool);
+    callback decrement-timecode(is_batch: bool);
     callback drag-timecode-preview(delta-x: length, is_batch: bool);
     callback drag-timecode-commit(delta-x: length, is_batch: bool);
     callback drag-timecode-cancel(is_batch: bool);
@@ -208,7 +208,7 @@ export component TimecodeEditor inherits Rectangle {
                     }
                     clicked => {
                         if (!root.left-dragging) {
-                            root.decrement-timecode();
+                            root.decrement-timecode(root.shift-pressed-on-drag-start);
                         }
                     }
                     changed pressed => {
@@ -284,7 +284,7 @@ export component TimecodeEditor inherits Rectangle {
                     }
                     clicked => {
                         if (!root.right-dragging) {
-                            root.increment-timecode();
+                            root.increment-timecode(root.shift-pressed-on-drag-start);
                         }
                     }
                     changed pressed => {

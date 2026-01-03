@@ -166,11 +166,11 @@ export component LineEditor inherits Rectangle {
                             alignment: center;
                             width: 100%;
                             TimecodeEditor {
-                                increment-timecode => {
-                                    LineEditorCallbacks.increment-timecode(row.item-id, true);
+                                increment-timecode(is_batch) => {
+                                    LineEditorCallbacks.increment-timecode(row.item-id, true, is_batch);
                                 }
-                                decrement-timecode => {
-                                    LineEditorCallbacks.decrement-timecode(row.item-id, true);
+                                decrement-timecode(is_batch) => {
+                                    LineEditorCallbacks.decrement-timecode(row.item-id, true, is_batch);
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch)
@@ -195,11 +195,11 @@ export component LineEditor inherits Rectangle {
                             }
 
                             TimecodeEditor {
-                                increment-timecode => {
-                                    LineEditorCallbacks.increment-timecode(row.item-id, false);
+                                increment-timecode(is_batch) => {
+                                    LineEditorCallbacks.increment-timecode(row.item-id, false, is_batch);
                                 }
-                                decrement-timecode => {
-                                    LineEditorCallbacks.decrement-timecode(row.item-id, false);
+                                decrement-timecode(is_batch) => {
+                                    LineEditorCallbacks.decrement-timecode(row.item-id, false, is_batch);
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch)
