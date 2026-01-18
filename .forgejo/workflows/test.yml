@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  test:
     runs-on: codeberg-medium-lazy
 
     steps:
@@ -51,8 +51,5 @@ jobs:
     - name: Generate libass configure script
       run: cd aweft-libass/third_party/libass && autoreconf -ivf
 
-    - name: Build
-      run: cargo build -j 1 --verbose
-      
     - name: Test
       run: cargo test -j 2 --verbose
