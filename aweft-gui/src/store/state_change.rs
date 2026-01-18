@@ -83,4 +83,5 @@ pub enum LineEditorChange {
     TimecodeCommitDraged,
     TimecodeCancelDraged,
     SelectionChanged,
+    ItemsInserted,
 }

@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use aweft_model::{
     ids::ItemId,
     project::Project,
@@ -625,50 +625,57 @@ impl LineEditorState {
         self.filter_model.clone()
     }
 
-    // FIXME: 后面实现操作列表时审查一下代码
-
-    // === 局部更新 API ===
-    // 这些方法负责在 ProjectStructure 已经修改后，同步更新 UI (all_rows)
-    // 而不需要调用 rebuild_all_rows。
-
     /// 处理项插入后的 UI 更新
     pub fn handle_item_inserted(
         &mut self,
         project: &Project,
         item_id: ItemId,
-        location: ItemLocation,
-    ) {
-        let insert_idx = self.calculate_insert_ui_index(project, location);
+        new_item_id: ItemId,
+    ) -> Result<()> {
+        let new_item = project.structure.get(new_item_id).unwrap();
 
-        let mut new_rows = Vec::new();
-        let ancestor_groups = self.get_ancestor_groups_for_location(location);
+        // 参考的 item
+        let item_ui_idx = self
+            .item_id_to_ui_index
+            .get(&item_id)
+            .context("索引缓存出错")?;
+        let mut item_row = self.all_rows.row_data(*item_ui_idx).context("索引越界")?;
 
-        flatten_items(
-            &[item_id],
-            &project.structure,
-            self.calculate_depth(location),
-            &ancestor_groups,
-            &mut new_rows,
-        );
+        let insert_idx = item_ui_idx + 1;
 
-        let count = new_rows.len();
-        self.shift_indices_after(insert_idx, count as i32);
-
-        for (i, row) in new_rows.into_iter().enumerate() {
-            let target_idx = insert_idx + i;
-
-            if let Ok(uuid) = uuid::Uuid::parse_str(row.item_id.as_str()) {
-                self.item_id_to_ui_index.insert(ItemId(uuid), target_idx);
-            }
-
-            self.all_rows.insert(target_idx, row);
+        // 正确构建新行数据
+        item_row.item_id = new_item_id.to_string().to_shared_string();
+        // 此函数始终为 Event
+        if item_row.row_type == SlintSubtitleRowType::GroupHeader {
+            item_row.depth += 1;
+            item_row.row_type = SlintSubtitleRowType::Event;
         }
 
-        if let ItemLocation::InGroup(parent_id, _) = location {
-            self.mark_group_chain_dirty(project, parent_id);
-            self.update_all_dirty_groups(project);
+        // 从新事件中读取实际数据
+        if let ItemContent::Event(event) = &new_item.content {
+            item_row.text = event.text.to_shared_string();
+            item_row.start_time = format_time(event.start_time);
+            item_row.end_time = format_time(event.end_time);
+            item_row.style = event.style.to_shared_string();
         }
+
+        // 清除选中状态（新行默认不选中）
+        item_row.selected = false;
+
+        // 更新后续索引
+        self.shift_indices_after(insert_idx, 1);
+
+        self.item_id_to_ui_index.insert(new_item_id, insert_idx);
+        self.all_rows.insert(insert_idx, item_row);
+
+        // 标记父级 total_row_count 失效
+        if let Some(pid) = new_item.parent {
+            self.mark_group_chain_dirty(project, pid);
+        }
+        Ok(())
     }
+
+    // FIXME: 后面实现操作列表时审查一下代码
 
     /// 处理项移除后的 UI 更新
     pub fn handle_item_removed(&mut self, project: &Project, item_id: ItemId) {
@@ -718,18 +725,18 @@ impl LineEditorState {
     }
 
     /// 处理项移动后的 UI 更新
-    pub fn handle_item_moved(
-        &mut self,
-        project: &Project,
-        item_id: ItemId,
-        _old_location: ItemLocation,
-        new_location: ItemLocation,
-    ) {
-        // 先删除（此时 handle_item_removed 会自动处理旧 parent 的更新）
-        self.handle_item_removed(project, item_id);
-        // 再插入（此时 handle_item_inserted 会自动处理新 parent 的更新）
-        self.handle_item_inserted(project, item_id, new_location);
-    }
+    // pub fn handle_item_moved(
+    //     &mut self,
+    //     project: &Project,
+    //     item_id: ItemId,
+    //     _old_location: ItemLocation,
+    //     new_location: ItemLocation,
+    // ) {
+    //     // 先删除（此时 handle_item_removed 会自动处理旧 parent 的更新）
+    //     self.handle_item_removed(project, item_id);
+    //     // 再插入（此时 handle_item_inserted 会自动处理新 parent 的更新）
+    //     self.handle_item_inserted(project, item_id, new_location);
+    // }
 
     // === 行数与时间统计更新 ===
 

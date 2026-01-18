@@ -1,10 +1,11 @@
 use crate::actions::line_editor::LineEditorAction;
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow};
-use crate::bridge::{slint_area_key_to_key, slint_area_type_to_rust};
+use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
 use crate::ui_update::{UIUpdateCommand, UIUpdater};
+use chrono::TimeDelta;
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
@@ -26,6 +27,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_drag_timecode_callbacks(instance, Rc::clone(&store));
     setup_line_editor_drag_timecode_cancel_callback(instance, Rc::clone(&store));
     setup_line_editor_selection_callbacks(instance, Rc::clone(&store));
+    setup_line_editor_add_line_callback(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -464,6 +466,46 @@ fn setup_line_editor_selection_callbacks(instance: &MainWindow, store: Rc<RefCel
     register(
         |item_id| LineEditorAction::SelectToggle { item_id },
         |inst, cb| inst.global::<LineEditorCallbacks>().on_select_toggle(cb),
+    );
+}
+
+fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak_instance = instance.as_weak();
+    instance.global::<LineEditorCallbacks>().on_add_line(
+        move |item_id_str, start_time_str, end_time_str, text| {
+            use aweft_model::ids::ItemId;
+            let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 item_id: {}", item_id_str);
+                return;
+            };
+
+            let start_time = if let Some(start_time) = parse_time(&start_time_str) {
+                start_time
+            } else {
+                warn!("无效的 : start_time_str {}", start_time_str);
+                return;
+            };
+
+            let end_time = if let Some(end_time) = parse_time(&end_time_str) {
+                end_time
+            } else {
+                warn!("无效的 : end_time_str {}", end_time_str);
+                return;
+            };
+
+            let action =
+                Action::LineEditor(crate::actions::line_editor::LineEditorAction::AddLine {
+                    item_id,
+                    start_time,
+                    end_time,
+                    actor: None,
+                    text: None,
+                    segment_timing: None,
+                    style: None,
+                });
+
+            dispatch_and_render(&store, action, &weak_instance);
+        },
     );
 }
 

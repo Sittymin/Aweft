@@ -264,11 +264,12 @@ impl AppStore {
                     let total_count = event_ids.len();
 
                     for (index, &id) in event_ids.iter().enumerate() {
-                        if let Ok(time) = self.state.project.structure.adjust_event_time(
-                            id,
-                            is_start_time,
-                            delta,
-                        ) {
+                        if let Ok(time) =
+                            self.state
+                                .project
+                                .structure
+                                .adjust_event_time(id, is_start_time, delta)
+                        {
                             // 最后一个事件时更新分组头，其他事件只更新自身
                             let is_last = index == total_count - 1;
 
@@ -286,7 +287,11 @@ impl AppStore {
                                 // 其他事件：只更新自身，不更新分组头
                                 self.ui_models
                                     .line_editor_state
-                                    .update_row_time_without_ancestor_groups(id, is_start_time, time);
+                                    .update_row_time_without_ancestor_groups(
+                                        id,
+                                        is_start_time,
+                                        time,
+                                    );
                             }
                             updated_count += 1;
                         }
@@ -345,11 +350,12 @@ impl AppStore {
                     let total_count = event_ids.len();
 
                     for (index, &id) in event_ids.iter().enumerate() {
-                        if let Ok(time) = self.state.project.structure.adjust_event_time(
-                            id,
-                            is_start_time,
-                            delta,
-                        ) {
+                        if let Ok(time) =
+                            self.state
+                                .project
+                                .structure
+                                .adjust_event_time(id, is_start_time, delta)
+                        {
                             // 最后一个事件时更新分组头，其他事件只更新自身
                             let is_last = index == total_count - 1;
 
@@ -367,7 +373,11 @@ impl AppStore {
                                 // 其他事件：只更新自身，不更新分组头
                                 self.ui_models
                                     .line_editor_state
-                                    .update_row_time_without_ancestor_groups(id, is_start_time, time);
+                                    .update_row_time_without_ancestor_groups(
+                                        id,
+                                        is_start_time,
+                                        time,
+                                    );
                             }
                             updated_count += 1;
                         }
@@ -627,6 +637,34 @@ impl AppStore {
                     .line_editor_state
                     .select_toggle(&self.state.project, item_id);
                 Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+            }
+            LineEditorAction::AddLine {
+                item_id,
+                start_time,
+                end_time,
+                actor,
+                text,
+                segment_timing,
+                // FIXME: 之后需要更改为节点链
+                style,
+            } => {
+                let new_item_id = self.state.project.structure.insert_event_after(
+                    item_id,
+                    start_time,
+                    end_time,
+                    actor,
+                    text,
+                    segment_timing,
+                    style,
+                )?;
+
+                self.ui_models.line_editor_state.handle_item_inserted(
+                    &self.state.project,
+                    item_id,
+                    new_item_id,
+                )?;
+
+                Ok(StateChange::LineEditor(LineEditorChange::ItemsInserted))
             }
         }
     }

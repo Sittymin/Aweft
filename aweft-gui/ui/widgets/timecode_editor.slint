@@ -28,6 +28,8 @@ export component TimecodeEditor inherits Rectangle {
     in-out property <bool> is-editing: false;
     // 文本内容
     in-out property <string> text: "未输入";
+    // TODO: 可能有效的双向链接获取 TextInput 的输入同步批量修改显示
+    // in-out property <string> text <=> text-input.text;
 
     // 回调函数
     callback increment-timecode(is_batch: bool);

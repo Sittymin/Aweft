@@ -73,6 +73,90 @@ export component LineEditor inherits Rectangle {
                                 LineEditorCallbacks.select-single(row.item-id)
                             }
                         }
+                        // 右键
+                        else if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                            // 如果右键的不是已选择的项目，那么就单选右键的行
+                            if row.selected == false {
+                                LineEditorCallbacks.select-single(row.item-id);
+                            }
+
+                            // 手动显示菜单
+                            list-view-menu-area.show({ x: self.mouse-x, y: self.mouse-y });
+                        }
+                    }
+                }
+
+                // NOTE: 后声明的组件会先接收到事件（所以需要放在 “TouchArea 处理左键” 的后面）
+                // 右键菜单
+                list-view-menu-area := ContextMenuArea {
+                    // 由 TouchArea 捕获控制
+                    enabled: false;
+                    Menu {
+                        MenuItem {
+                            title: "增加行";
+                            activated => {
+                                LineEditorCallbacks.add-line(row.item-id, row.start-time, row.end-time, "");
+                            }
+                        }
+
+                        MenuItem {
+                            title: "增加分组（未完成）";
+                            activated => {
+                                debug("增加分组（未完成）", idx);
+                            }
+                        }
+
+                        MenuItem {
+                            title: "复制（未完成）";
+                            activated => {
+                                debug("复制（未完成）", idx);
+                            }
+                        }
+
+                        MenuItem {
+                            title: "剪切（未完成）";
+                            activated => {
+                                debug("剪切（未完成）", idx);
+                            }
+                        }
+
+                        MenuItem {
+                            title: "粘贴（未完成）";
+                            activated => {
+                                debug("粘贴（未完成）", idx);
+                            }
+                        }
+
+                        MenuItem {
+                            title: "删除（未完成）";
+                            activated => {
+                                debug("删除（未完成）", idx);
+                            }
+                        }
+
+                        MenuItem {
+                            title: "上移（未完成）";
+                            activated => {
+                                debug("上移（未完成）", idx);
+                            }
+                        }
+
+                        MenuItem {
+                            title: "下移（未完成）";
+                            activated => {
+                                debug("下移（未完成）", idx);
+                            }
+                        }
+
+                        // 分隔符
+                        MenuSeparator { }
+
+                        if row.row-type == SlintSubtitleRowType.GroupHeader: MenuItem {
+                            title: "解散分组（未完成）";
+                            activated => {
+                                debug("解散分组（未完成）", idx);
+                            }
+                        }
                     }
                 }
 

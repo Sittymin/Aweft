@@ -1,4 +1,8 @@
-use aweft_model::ids::ItemId;
+use aweft_model::{
+    ids::{ActorId, ItemId},
+    structure::SegmentTiming,
+};
+use chrono::TimeDelta;
 
 #[derive(Debug, Clone)]
 pub enum LineEditorAction {
@@ -45,5 +49,15 @@ pub enum LineEditorAction {
     },
     SelectToggle {
         item_id: ItemId,
+    },
+    AddLine {
+        item_id: ItemId,
+        start_time: TimeDelta,
+        end_time: TimeDelta,
+        actor: Option<ActorId>,
+        text: Option<String>,
+        segment_timing: Option<SegmentTiming>,
+        // FIXME: 之后需要更改为节点链
+        style: Option<String>,
     },
 }

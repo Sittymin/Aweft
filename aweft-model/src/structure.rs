@@ -1,5 +1,5 @@
 use crate::ids::{ActorId, ItemId};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use chrono::TimeDelta;
 use nom::{
     Finish, IResult, Parser,
@@ -74,6 +74,14 @@ pub struct EventData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentTiming {
     pub segments: Vec<Segment>,
+}
+
+impl Default for SegmentTiming {
+    fn default() -> Self {
+        SegmentTiming {
+            segments: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,6 +298,64 @@ impl ProjectStructure {
 
         self.insert_item_to_structure(item, location)?;
         Ok(id)
+    }
+
+    pub fn insert_event_after(
+        &mut self,
+        item_id: ItemId,
+        // 因为无法从分组获得时间等信息，所以需要从 UI 获得
+        start_time: TimeDelta,
+        end_time: TimeDelta,
+        actor: Option<ActorId>,
+        text: Option<String>,
+        segment_timing: Option<SegmentTiming>,
+        // FIXME: 之后需要更改为节点链
+        style: Option<String>,
+    ) -> Result<ItemId> {
+        let location = self.find_insert_location(item_id)?;
+        let new_item = EventData {
+            start_time,
+            end_time,
+            actor,
+            text: text.unwrap_or_default(),
+            segment_timing,
+            style: style.unwrap_or_default(),
+        };
+        let new_item_id = self.create_event(new_item, location)?;
+        Ok(new_item_id)
+    }
+
+    fn find_insert_location(&self, item_id: ItemId) -> Result<ItemLocation> {
+        let item = self.items.get(&item_id).context("不存在的 ItemId")?;
+
+        // 是分组时则是分组内第一个
+        if let ItemContent::Group(_) = &item.content {
+            return Ok(ItemLocation::InGroup(item_id, 0));
+        }
+
+        match item.parent {
+            None => {
+                let idx = self
+                    .root_items
+                    .iter()
+                    .position(|&x| x == item_id)
+                    .context("root_items 未找到 item")?;
+                Ok(ItemLocation::Root(idx + 1))
+            }
+            Some(pid) => {
+                let parent_item = self.items.get(&pid).context("parent 不存在")?;
+                if let ItemContent::Group(g) = &parent_item.content {
+                    let idx = g
+                        .children
+                        .iter()
+                        .position(|&x| x == item_id)
+                        .context("children 未找到 item")?;
+                    Ok(ItemLocation::InGroup(pid, idx + 1))
+                } else {
+                    Err(anyhow!("parent 不是 group"))
+                }
+            }
+        }
     }
 
     // 内部 helper：将 item 放入 map 并链接到 children 列表
