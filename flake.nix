@@ -4,6 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
   outputs =
@@ -11,11 +12,15 @@
       self,
       nixpkgs,
       flake-utils,
+      rust-overlay,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        overlays = [ (import rust-overlay) ];
+        pkgs = import nixpkgs {
+          inherit system overlays;
+        };
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
@@ -62,7 +67,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = buildToolsAndDevLibs;
+          nativeBuildInputs = buildToolsAndDevLibs ++ [ rustToolchain ];
 
           # buildInputs 包含了所有最终程序需要链接的“零件”
           buildInputs = libassRuntimeDeps ++ slintRuntimeDeps;
