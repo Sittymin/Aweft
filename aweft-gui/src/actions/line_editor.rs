@@ -60,4 +60,5 @@ pub enum LineEditorAction {
         // FIXME: 之后需要更改为节点链
         style: Option<String>,
     },
+    DeleteItems,
 }

@@ -8,7 +8,11 @@ import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
 import { SlintKey } from "../../core/types.slint";
 import { LineEditorCallbacks } from "../../bridge/callbacks.slint";
-import { SlintSubtitleRow, SlintSubtitleRowType } from "../../core/types.slint";
+import {
+    SlintSubtitleRow,
+    SlintSubtitleRowType,
+    SlintSelectionState,
+} from "../../core/types.slint";
 import { SubtitleState } from "../../bridge/state.slint";
 
 export component LineEditor inherits Rectangle {
@@ -56,7 +60,7 @@ export component LineEditor inherits Rectangle {
         ListView {
             for row[idx] in SubtitleState.rows: Rectangle {
                 height: Theme.data.line-editor.row-height;
-                background: row.selected ? red : transparent;
+                background: row.selected == SlintSelectionState.DirectlySelected ? red : row.selected == SlintSelectionState.IndirectlySelected ? blue : transparent;
 
                 // 点击行空白部分选择
                 TouchArea {
@@ -76,7 +80,7 @@ export component LineEditor inherits Rectangle {
                         // 右键
                         else if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
                             // 如果右键的不是已选择的项目，那么就单选右键的行
-                            if row.selected == false {
+                            if row.selected != SlintSelectionState.DirectlySelected {
                                 LineEditorCallbacks.select-single(row.item-id);
                             }
 
@@ -128,9 +132,9 @@ export component LineEditor inherits Rectangle {
                         }
 
                         MenuItem {
-                            title: "删除（未完成）";
+                            title: "删除";
                             activated => {
-                                debug("删除（未完成）", idx);
+                                LineEditorCallbacks.delete-selected-items();
                             }
                         }
 

@@ -58,6 +58,13 @@ export enum SlintSubtitleRowType {
     GroupHeader,
 }
 
+export enum SlintSelectionState {
+    Unselected,
+    DirectlySelected,
+    // 间接选中只适用于 选中分组内所有 items 的时候分组头的状态
+    IndirectlySelected, // 间接选中 For example: 在没有选中 groupheader 的时候选中所有内部 items
+}
+
 export struct SlintSubtitleRow {
     // === 通用字段 ===
     row_type: SlintSubtitleRowType,
@@ -68,7 +75,7 @@ export struct SlintSubtitleRow {
     end_time: string,
     item_id: string,
     // 是否被选中
-    selected: bool,
+    selected: SlintSelectionState,
 
     // === 事件数据字段 (row_type == Event 时有效) ===
     text: string,

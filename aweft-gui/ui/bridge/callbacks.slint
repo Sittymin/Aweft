@@ -31,20 +31,20 @@ export global LineEditorCallbacks {
     // 右键菜单
     // 参数用于定位新增的行位置
     callback add-line(item-id: string, start-time: string, end_time: string,
-    // FIXME: 或许应该使用 enum，会有一个默认 Actor
-    // actor: Option<ActorId>,
-    text: string,
-    // TODO: 这个分片的类型设计需要考虑
-    // segment_timing: 
-    // TODO: 样式链的类型设计也需要考虑
-    // style: 
+        // FIXME: 或许应该使用 enum，会有一个默认 Actor
+        // actor: Option<ActorId>,
+        text: string,
+        // TODO: 这个分片的类型设计需要考虑
+        // segment_timing: 
+        // TODO: 样式链的类型设计也需要考虑
+        // style: 
     );
     callback add-group(item-id: string);
     // 应用范围是选中的行
     callback copy-items();
     callback cut-items();
     callback paste-items(item-id: string);
-    callback delete-items();
+    callback delete-selected-items();
     callback move-items-up();
     callback move-items-down();
     callback ungroups();

@@ -5,7 +5,6 @@ use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
 use crate::ui_update::{UIUpdateCommand, UIUpdater};
-use chrono::TimeDelta;
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
@@ -28,6 +27,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_drag_timecode_cancel_callback(instance, Rc::clone(&store));
     setup_line_editor_selection_callbacks(instance, Rc::clone(&store));
     setup_line_editor_add_line_callback(instance, Rc::clone(&store));
+    setup_line_editor_delete_selected_items_callback(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -507,6 +507,21 @@ fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<
             dispatch_and_render(&store, action, &weak_instance);
         },
     );
+}
+
+fn setup_line_editor_delete_selected_items_callback(
+    instance: &MainWindow,
+    store: Rc<RefCell<AppStore>>,
+) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_delete_selected_items(move || {
+            let action =
+                Action::LineEditor(crate::actions::line_editor::LineEditorAction::DeleteItems);
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
 }
 
 /// 统一的 dispatch 和渲染逻辑 - 使用新的 StateChange 机制
