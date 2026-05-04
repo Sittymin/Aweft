@@ -8,8 +8,27 @@ use crate::store::state_change::{LineEditorChange, StateChange};
 use crate::store::ui_models::UiModels;
 use anyhow::Result;
 use aweft_model::ids::ItemId;
-use aweft_model::structure::ItemContent;
+use aweft_model::structure::{ItemContent, ProjectStructure};
 use chrono::TimeDelta;
+
+/// 判断 `item_id` 在 `structure` 中向上的任一祖先是否也在 `set` 当中。
+///
+/// 用于"批量删除"等需要去重子树的场景：当父级已在删除集合时，
+/// 子项无需再独立处理，避免重复删除或顺序错乱。
+fn has_ancestor_in_set(
+    structure: &ProjectStructure,
+    item_id: ItemId,
+    set: &HashSet<ItemId>,
+) -> bool {
+    let mut current = structure.get(item_id).and_then(|i| i.parent);
+    while let Some(pid) = current {
+        if set.contains(&pid) {
+            return true;
+        }
+        current = structure.get(pid).and_then(|i| i.parent);
+    }
+    false
+}
 
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
@@ -69,6 +88,13 @@ impl AppStore {
     /// 获取 UI 模型（可变）
     pub fn ui_models_mut(&mut self) -> &mut UiModels {
         &mut self.ui_models
+    }
+
+    /// 同时获取只读 `state` 与可变 `ui_models`。
+    ///
+    /// 用于需要“读取 Domain、写入 UI Projection”的场景（典型是 `UIUpdater` 应用 LineEditor 投影更新）。
+    pub fn split_mut(&mut self) -> (&AppState, &mut UiModels) {
+        (&self.state, &mut self.ui_models)
     }
 
     /// 重建 LineEditor 的行数据与过滤模型，返回过滤后的 ModelRc。
@@ -194,6 +220,29 @@ impl AppStore {
             ),
         }
     }
+    /// 处理 LineEditor 相关 Action。
+    ///
+    /// 设计目标：本函数只做 Domain（`project.structure`）修改，UI 投影更新交给
+    /// `UIUpdater`（通过返回的 `LineEditorChange`）。
+    ///
+    /// 当前已完成 Domain ↔ UI 拆分的分支：
+    /// - `ToggleGroupCollapsed`
+    /// - `InputTimecode`
+    /// - `IncrementTimecode` / `DecrementTimecode`（仅单条）
+    /// - `DragTimecodePreview` / `DragTimecodeCommit` / `DragTimecodeCancel`（仅单条）
+    /// - `SelectSingle` / `SelectRange` / `SelectToggle`
+    /// - `AddLine` / `DeleteItems`
+    ///
+    /// FIXME: 仍混合了 UI 投影更新（is_batch == true 的分支）：
+    /// - `IncrementTimecode { is_batch: true }`
+    /// - `DecrementTimecode { is_batch: true }`
+    /// - `DragTimecodePreview { is_batch: true }`
+    /// - `DragTimecodeCommit { is_batch: true }`
+    /// - `DragTimecodeCancel { is_batch: true }`
+    ///
+    /// 这些批量分支需要新设计 payload（建议引入
+    /// `LineEditorChange::TimecodesBatchUpdated { updates, with_ancestor_recalc }`），
+    /// 当前先保留以维持行为不变。
     fn dispatch_line_editor(&mut self, action: LineEditorAction) -> Result<StateChange> {
         match action {
             LineEditorAction::ToggleGroupCollapsed { group_id } => {
@@ -204,16 +253,10 @@ impl AppStore {
                     }
                 }
 
-                // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                // 可能需要改动Updater处理的细粒度
-
-                // ViewModel 层修改 (驱动 UI 变化)
-                self.ui_models
-                    .line_editor_state
-                    .toggle_group(group_id.to_string());
-
                 Ok(StateChange::LineEditor(
-                    LineEditorChange::GroupCollapsedToggled,
+                    LineEditorChange::GroupCollapsedToggled {
+                        group_id: group_id.to_string(),
+                    },
                 ))
             }
             LineEditorAction::InputTimecode {
@@ -226,15 +269,11 @@ impl AppStore {
                     is_start_time,
                     &text,
                 ) {
-                    // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                    // 可能需要改动Updater处理的细粒度
-                    self.ui_models.line_editor_state.update_row_time(
-                        &self.state.project,
+                    return Ok(StateChange::LineEditor(LineEditorChange::TimecodeInputed {
                         event_id,
                         is_start_time,
                         time,
-                    );
-                    return Ok(StateChange::LineEditor(LineEditorChange::TimecodeInputed));
+                    }));
                 }
                 Ok(StateChange::None)
             }
@@ -297,10 +336,10 @@ impl AppStore {
                         }
                     }
 
+                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
+                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
                     if updated_count > 0 {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeIncremented,
-                        ));
+                        return Ok(StateChange::None);
                     }
                 } else {
                     // 单个调整
@@ -309,16 +348,12 @@ impl AppStore {
                         is_start_time,
                         delta,
                     ) {
-                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                        // 可能需要改动Updater处理的细粒度
-                        self.ui_models.line_editor_state.update_row_time(
-                            &self.state.project,
-                            event_id,
-                            is_start_time,
-                            time,
-                        );
                         return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeIncremented,
+                            LineEditorChange::TimecodeIncremented {
+                                event_id,
+                                is_start_time,
+                                time,
+                            },
                         ));
                     }
                 }
@@ -383,10 +418,10 @@ impl AppStore {
                         }
                     }
 
+                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
+                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
                     if updated_count > 0 {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeDecremented,
-                        ));
+                        return Ok(StateChange::None);
                     }
                 } else {
                     // 单个调整
@@ -395,16 +430,12 @@ impl AppStore {
                         is_start_time,
                         delta,
                     ) {
-                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                        // 可能需要改动Updater处理的细粒度
-                        self.ui_models.line_editor_state.update_row_time(
-                            &self.state.project,
-                            event_id,
-                            is_start_time,
-                            time,
-                        );
                         return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeDecremented,
+                            LineEditorChange::TimecodeDecremented {
+                                event_id,
+                                is_start_time,
+                                time,
+                            },
                         ));
                     }
                 }
@@ -452,10 +483,10 @@ impl AppStore {
                         }
                     }
 
+                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
+                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
                     if updated_count > 0 {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodePreviewDraged,
-                        ));
+                        return Ok(StateChange::None);
                     }
                 } else {
                     // 单个调整
@@ -464,13 +495,12 @@ impl AppStore {
                         is_start_time,
                         delta,
                     ) {
-                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                        // 可能需要改动Updater处理的细粒度
-                        self.ui_models
-                            .line_editor_state
-                            .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
                         return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodePreviewDraged,
+                            LineEditorChange::TimecodePreviewDraged {
+                                event_id,
+                                is_start_time,
+                                time,
+                            },
                         ));
                     }
                 }
@@ -542,10 +572,10 @@ impl AppStore {
                         }
                     }
 
+                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
+                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
                     if updated_count > 0 {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeCommitDraged,
-                        ));
+                        return Ok(StateChange::None);
                     }
                 } else {
                     // 单个调整
@@ -554,16 +584,12 @@ impl AppStore {
                         is_start_time,
                         delta,
                     ) {
-                        // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                        // 可能需要改动Updater处理的细粒度
-                        self.ui_models.line_editor_state.update_row_time(
-                            &self.state.project,
-                            event_id,
-                            is_start_time,
-                            time,
-                        );
                         return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeCommitDraged,
+                            LineEditorChange::TimecodeCommitDraged {
+                                event_id,
+                                is_start_time,
+                                time,
+                            },
                         ));
                     }
                 }
@@ -597,46 +623,42 @@ impl AppStore {
                         }
                     }
 
+                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
+                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
                     if updated_count > 0 {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeCancelDraged,
-                        ));
+                        return Ok(StateChange::None);
                     }
                 } else {
-                    // 单个取消（原有逻辑）
+                    // 单个取消（恢复到 Domain 当前值）
                     if let Ok(time) = self
                         .state
                         .project
                         .structure
                         .event_time(event_id, is_start_time)
                     {
-                        self.ui_models
-                            .line_editor_state
-                            .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
                         return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeCancelDraged,
+                            LineEditorChange::TimecodeCancelDraged {
+                                event_id,
+                                is_start_time,
+                                time,
+                            },
                         ));
                     }
                 }
                 Ok(StateChange::None)
             }
             LineEditorAction::SelectSingle { item_id } => {
-                self.ui_models
-                    .line_editor_state
-                    .select_single(&self.state.project, item_id);
-                Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+                Ok(StateChange::LineEditor(LineEditorChange::SelectSingle {
+                    item_id,
+                }))
             }
             LineEditorAction::SelectRange { item_id } => {
-                self.ui_models
-                    .line_editor_state
-                    .select_range(&self.state.project, item_id);
-                Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+                Ok(StateChange::LineEditor(LineEditorChange::SelectRange { item_id }))
             }
             LineEditorAction::SelectToggle { item_id } => {
-                self.ui_models
-                    .line_editor_state
-                    .select_toggle(&self.state.project, item_id);
-                Ok(StateChange::LineEditor(LineEditorChange::SelectionChanged))
+                Ok(StateChange::LineEditor(LineEditorChange::SelectToggle {
+                    item_id,
+                }))
             }
             LineEditorAction::AddLine {
                 item_id,
@@ -658,13 +680,39 @@ impl AppStore {
                     style,
                 )?;
 
-                self.ui_models.line_editor_state.handle_item_inserted(
-                    &self.state.project,
+                Ok(StateChange::LineEditor(LineEditorChange::ItemsInserted {
                     item_id,
                     new_item_id,
-                )?;
+                }))
+            }
+            LineEditorAction::DeleteItems {} => {
+                // 1. 收集当前选中集合，过滤掉"祖先也被选中"的项，
+                //    避免在同一批删除中尝试移除已被父级递归删除的子项。
+                let selected_set = self
+                    .ui_models
+                    .line_editor_state
+                    .directly_selected_items()
+                    .clone();
+                let to_delete: Vec<ItemId> = selected_set
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        !has_ancestor_in_set(&self.state.project.structure, *id, &selected_set)
+                    })
+                    .collect();
 
-                Ok(StateChange::LineEditor(LineEditorChange::ItemsInserted))
+                // 2. 实际从 Domain（project.structure）当中删除（递归清理子树）。
+                let mut removed: Vec<ItemId> = Vec::with_capacity(to_delete.len());
+                for id in to_delete {
+                    match self.state.project.structure.remove_item(id) {
+                        Ok(()) => removed.push(id),
+                        Err(e) => log::warn!("删除 structure 项失败 id={:?}: {}", id, e),
+                    }
+                }
+
+                Ok(StateChange::LineEditor(LineEditorChange::ItemsRemoved {
+                    item_ids: removed,
+                }))
             }
         }
     }

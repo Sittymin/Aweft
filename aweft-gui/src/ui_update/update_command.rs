@@ -1,6 +1,10 @@
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::edge::ScrEdgeKey;
-use crate::store::state_change::{AreasChange, DragOperationChange, ScreenChange, StateChange};
+use aweft_model::ids::ItemId;
+use chrono::TimeDelta;
+use crate::store::state_change::{
+    AreasChange, DragOperationChange, LineEditorChange, ScreenChange, StateChange,
+};
 use std::rc::Rc;
 
 /// UI 更新指令 - 明确告诉 UI 层要做什么
@@ -38,6 +42,38 @@ pub enum UIUpdateCommand {
 
     /// 更新所有（回退方案）
     UpdateAll,
+
+    UpdateLineEditorGroupCollapsedToggled {
+        group_id: String,
+    },
+    /// 更新某行时间码（同时刷新祖先分组的聚合时间）
+    UpdateLineEditorTimecodeRowAndAncestors {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    /// 仅更新某行时间码（不刷新祖先聚合，常用于拖拽预览/取消）
+    UpdateLineEditorTimecodeRowOnly {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    UpdateLineEditorSelectSingle {
+        item_id: ItemId,
+    },
+    UpdateLineEditorSelectRange {
+        item_id: ItemId,
+    },
+    UpdateLineEditorSelectToggle {
+        item_id: ItemId,
+    },
+    UpdateLineEditorItemsInserted {
+        item_id: ItemId,
+        new_item_id: ItemId,
+    },
+    UpdateLineEditorItemsRemoved {
+        item_ids: Vec<ItemId>,
+    },
 }
 
 impl UIUpdateCommand {
@@ -45,16 +81,13 @@ impl UIUpdateCommand {
     pub fn from_state_change(change: StateChange) -> Vec<Self> {
         match change {
             StateChange::None => vec![],
-
             StateChange::Screen(screen_change) => Self::from_screen_change(screen_change),
-
             StateChange::Areas(areas_change) => Self::from_areas_change(areas_change),
-
             StateChange::DragOperation(drag_change) => Self::from_drag_change(drag_change),
-
             // 此部分为响应式，UI已经自动更新
-            StateChange::LineEditor(_) => vec![],
-
+            StateChange::LineEditor(line_editor_change) => {
+                Self::from_line_editor_change(line_editor_change)
+            }
             StateChange::Multiple(changes) => {
                 let mut commands = Vec::new();
                 for change in changes {
@@ -141,103 +174,74 @@ impl UIUpdateCommand {
         }
     }
 
+    pub fn from_line_editor_change(change: LineEditorChange) -> Vec<Self> {
+        match change {
+            LineEditorChange::GroupCollapsedToggled { group_id } => {
+                vec![Self::UpdateLineEditorGroupCollapsedToggled { group_id }]
+            }
+            LineEditorChange::TimecodeInputed {
+                event_id,
+                is_start_time,
+                time,
+            }
+            | LineEditorChange::TimecodeIncremented {
+                event_id,
+                is_start_time,
+                time,
+            }
+            | LineEditorChange::TimecodeDecremented {
+                event_id,
+                is_start_time,
+                time,
+            }
+            | LineEditorChange::TimecodeCommitDraged {
+                event_id,
+                is_start_time,
+                time,
+            } => vec![Self::UpdateLineEditorTimecodeRowAndAncestors {
+                event_id,
+                is_start_time,
+                time,
+            }],
+            LineEditorChange::TimecodePreviewDraged {
+                event_id,
+                is_start_time,
+                time,
+            }
+            | LineEditorChange::TimecodeCancelDraged {
+                event_id,
+                is_start_time,
+                time,
+            } => vec![Self::UpdateLineEditorTimecodeRowOnly {
+                event_id,
+                is_start_time,
+                time,
+            }],
+            LineEditorChange::SelectSingle { item_id } => {
+                vec![Self::UpdateLineEditorSelectSingle { item_id }]
+            }
+            LineEditorChange::SelectRange { item_id } => {
+                vec![Self::UpdateLineEditorSelectRange { item_id }]
+            }
+            LineEditorChange::SelectToggle { item_id } => {
+                vec![Self::UpdateLineEditorSelectToggle { item_id }]
+            }
+            LineEditorChange::ItemsInserted {
+                item_id,
+                new_item_id,
+            } => vec![Self::UpdateLineEditorItemsInserted {
+                item_id,
+                new_item_id,
+            }],
+            LineEditorChange::ItemsRemoved { item_ids } => {
+                vec![Self::UpdateLineEditorItemsRemoved { item_ids }]
+            }
+        }
+    }
+
     /// 合并多个指令，优化更新
     pub fn merge(commands: Vec<Self>) -> Vec<Self> {
-        use std::collections::{HashMap, HashSet};
-
-        if commands.is_empty() {
-            return vec![];
-        }
-
-        let mut has_update_all = false;
-        let mut has_update_areas = false;
-        let mut has_update_edges = false;
-        let mut has_update_edges_only_display = false;
-        let mut has_update_edges_only_touch_area = false;
-        let mut has_update_split_overlay = false;
-        let mut has_update_join_overlay = false;
-        let mut has_hide_overlays = false;
-        let mut area_geom_keys = HashSet::new();
-        let mut single_edge_keys = HashSet::new();
-        let mut area_type_updates: HashMap<ScrAreaKey, AreaType> = HashMap::new();
-
-        for cmd in commands {
-            match cmd {
-                Self::UpdateAll => has_update_all = true,
-                Self::UpdateAreas => has_update_areas = true,
-                Self::UpdateEdgesWithMerge => has_update_edges = true,
-                Self::UpdateEdgesWithMergeOnlyDisplay => has_update_edges_only_display = true,
-                Self::UpdateEdgesWithMergeOnlyTouchArea => has_update_edges_only_touch_area = true,
-                Self::HideOverlays => has_hide_overlays = true,
-                Self::UpdateAreaGeometry(key) => {
-                    area_geom_keys.insert(key);
-                }
-                Self::UpdateMultipleAreaGeometries(keys) => {
-                    area_geom_keys.extend(keys.iter().copied());
-                }
-                Self::UpdateEdgeLocalOnlyDisplay(key) => {
-                    single_edge_keys.insert(key);
-                }
-                Self::UpdateMultipleEdgesLocalOnlyDisplay(keys) => {
-                    single_edge_keys.extend(keys.iter().copied());
-                }
-                Self::UpdateSplitOverlay => has_update_split_overlay = true,
-                Self::UpdateJoinOverlay => has_update_join_overlay = true,
-                Self::UpdateAreaType { area_key, new_type } => {
-                    area_type_updates.insert(area_key, new_type);
-                }
-            }
-        }
-
-        // 如果有 UpdateAll，其他都不需要了
-        if has_update_all {
-            return vec![Self::UpdateAll];
-        }
-
-        let mut result = Vec::new();
-
-        // 如果有 UpdateAreas，单个区域更新就不需要了
-        if has_update_areas {
-            result.push(Self::UpdateAreas);
-        } else {
-            // 如果没有全量更新，先应用区域类型的局部更新
-            result.extend(
-                area_type_updates
-                    .into_iter()
-                    .map(|(area_key, new_type)| Self::UpdateAreaType { area_key, new_type }),
-            );
-
-            if !area_geom_keys.is_empty() {
-                result.push(Self::UpdateMultipleAreaGeometries(Rc::new(
-                    area_geom_keys.into_iter().collect(),
-                )));
-            }
-        }
-
-        if has_update_edges || (has_update_edges_only_touch_area && has_update_edges_only_display) {
-            result.push(Self::UpdateEdgesWithMerge);
-        } else if has_update_edges_only_display {
-            result.push(Self::UpdateEdgesWithMergeOnlyDisplay);
-        } else if has_update_edges_only_touch_area {
-            result.push(Self::UpdateEdgesWithMergeOnlyTouchArea);
-        } else if !single_edge_keys.is_empty() {
-            result.push(Self::UpdateMultipleEdgesLocalOnlyDisplay(Rc::new(
-                single_edge_keys.into_iter().collect(),
-            )));
-        }
-
-        if has_update_split_overlay {
-            result.push(Self::UpdateSplitOverlay);
-        }
-
-        if has_update_join_overlay {
-            result.push(Self::UpdateJoinOverlay);
-        }
-
-        if has_hide_overlays {
-            result.push(Self::HideOverlays);
-        }
-
-        result
+        // TODO: 需要优秀实现
+        commands
     }
 }

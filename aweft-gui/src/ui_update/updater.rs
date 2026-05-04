@@ -92,6 +92,72 @@ impl UIUpdater {
                         .ui_models_mut()
                         .update_area_type(&area_key, slint_type);
                 }
+                UIUpdateCommand::UpdateLineEditorGroupCollapsedToggled { group_id } => {
+                    store
+                        .ui_models_mut()
+                        .line_editor_state
+                        .toggle_group(&group_id);
+                }
+                UIUpdateCommand::UpdateLineEditorTimecodeRowAndAncestors {
+                    event_id,
+                    is_start_time,
+                    time,
+                } => {
+                    let (state, ui_models) = store.split_mut();
+                    ui_models.line_editor_state.update_row_time(
+                        &state.project,
+                        event_id,
+                        is_start_time,
+                        time,
+                    );
+                }
+                UIUpdateCommand::UpdateLineEditorTimecodeRowOnly {
+                    event_id,
+                    is_start_time,
+                    time,
+                } => {
+                    store
+                        .ui_models_mut()
+                        .line_editor_state
+                        .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
+                }
+                UIUpdateCommand::UpdateLineEditorSelectSingle { item_id } => {
+                    let (state, ui_models) = store.split_mut();
+                    ui_models
+                        .line_editor_state
+                        .select_single(&state.project, item_id);
+                }
+                UIUpdateCommand::UpdateLineEditorSelectRange { item_id } => {
+                    let (state, ui_models) = store.split_mut();
+                    ui_models
+                        .line_editor_state
+                        .select_range(&state.project, item_id);
+                }
+                UIUpdateCommand::UpdateLineEditorSelectToggle { item_id } => {
+                    let (state, ui_models) = store.split_mut();
+                    ui_models
+                        .line_editor_state
+                        .select_toggle(&state.project, item_id);
+                }
+                UIUpdateCommand::UpdateLineEditorItemsInserted {
+                    item_id,
+                    new_item_id,
+                } => {
+                    let (state, ui_models) = store.split_mut();
+                    if let Err(err) = ui_models.line_editor_state.handle_item_inserted(
+                        &state.project,
+                        item_id,
+                        new_item_id,
+                    ) {
+                        log::error!("执行 UpdateLineEditorItemsInserted 失败: {}", err);
+                    }
+                }
+                UIUpdateCommand::UpdateLineEditorItemsRemoved { item_ids } => {
+                    let (state, ui_models) = store.split_mut();
+                    ui_models
+                        .line_editor_state
+                        .handle_items_removed(&state.project, &item_ids);
+                }
             }
         }
     }

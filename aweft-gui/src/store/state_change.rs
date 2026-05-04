@@ -1,5 +1,7 @@
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::edge::ScrEdgeKey;
+use aweft_model::ids::ItemId;
+use chrono::TimeDelta;
 use std::rc::Rc;
 
 /// 状态变更描述 - 精确描述哪些数据被修改了
@@ -75,13 +77,61 @@ pub enum DragOperationChange {
 
 #[derive(Debug, Clone)]
 pub enum LineEditorChange {
-    GroupCollapsedToggled,
-    TimecodeInputed,
-    TimecodeIncremented,
-    TimecodeDecremented,
-    TimecodePreviewDraged,
-    TimecodeCommitDraged,
-    TimecodeCancelDraged,
-    SelectionChanged,
-    ItemsInserted,
+    GroupCollapsedToggled {
+        group_id: String,
+    },
+    /// 时间码已更新（整行 + 祖先分组聚合）
+    TimecodeInputed {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    /// 时间码已自增（整行 + 祖先分组聚合）
+    TimecodeIncremented {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    /// 时间码已自减（整行 + 祖先分组聚合）
+    TimecodeDecremented {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    /// 拖拽预览中（仅更新本行，不更新祖先聚合）
+    TimecodePreviewDraged {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    /// 拖拽提交（整行 + 祖先分组聚合）
+    TimecodeCommitDraged {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    /// 拖拽取消（仅更新本行回到原值，不更新祖先聚合）
+    TimecodeCancelDraged {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    },
+    SelectSingle {
+        item_id: ItemId,
+    },
+    SelectRange {
+        item_id: ItemId,
+    },
+    SelectToggle {
+        item_id: ItemId,
+    },
+    ItemsInserted {
+        item_id: ItemId,
+        new_item_id: ItemId,
+    },
+    /// 已从 `project.structure` 移除的项（由 reducer 过滤去重后给出）。
+    /// UIUpdater 据此进行 UI 投影删除并清理选中/高亮状态。
+    ItemsRemoved {
+        item_ids: Vec<ItemId>,
+    },
 }

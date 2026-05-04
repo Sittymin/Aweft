@@ -13,7 +13,9 @@ use chrono::TimeDelta;
 use log::warn;
 use slint::{FilterModel, Model, ModelRc, SharedString, ToSharedString, VecModel};
 
-use crate::bridge::{SlintSubtitleRow, SlintSubtitleRowType, format_time, parse_time};
+use crate::bridge::{
+    SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, format_time, parse_time,
+};
 
 type SubtitleFilterModel =
     slint::FilterModel<ModelRc<SlintSubtitleRow>, Box<dyn Fn(&SlintSubtitleRow) -> bool>>;
@@ -30,10 +32,12 @@ pub struct LineEditorState {
     dirty_row_counts: HashSet<ItemId>,
 
     // 选中的行（group 和 event 都包含）
-    selected_items: HashSet<ItemId>,
+    directly_selected_items: HashSet<ItemId>,
+    // 显示追踪（重置状态用：记录所有 selection_state != Unselected 的行）
+    all_highlighted_items: HashSet<ItemId>,
     // 分组内选中的数量（可以与 total_row_count 结合，快速计算是否全选）
     // 仅用于分组（不包含分组头），不可直接使用 total_row_count （因为比较时无法知道嵌套的分组头有多少个）
-    selected_counts: HashMap<ItemId, usize>,
+    selected_event_counts: HashMap<ItemId, usize>,
     // 分组事件数缓存（count_events_recursive 的缓存）
     event_count_cache: HashMap<ItemId, usize>,
     // 最后选择的 ui 索引（用于处理范围选择）
@@ -50,8 +54,9 @@ impl LineEditorState {
             filter_model: None,
             collapsed_groups: Rc::new(std::cell::RefCell::new(HashSet::new())),
             dirty_row_counts: HashSet::new(),
-            selected_items: HashSet::new(),
-            selected_counts: HashMap::new(),
+            directly_selected_items: HashSet::new(),
+            all_highlighted_items: HashSet::new(),
+            selected_event_counts: HashMap::new(),
             event_count_cache: HashMap::new(),
             last_selection_anchor: None,
             item_id_to_ui_index: HashMap::new(),
@@ -104,7 +109,7 @@ impl LineEditorState {
     }
 
     pub fn get_selected_events(&self, project: &Project) -> HashSet<ItemId> {
-        self.selected_items
+        self.directly_selected_items
             .iter()
             .filter_map(|&id| {
                 // 检查是否是事件项
@@ -119,6 +124,13 @@ impl LineEditorState {
                 }
             })
             .collect()
+    }
+
+    /// 暴露当前直接选中的项（包含 group 与 event）。
+    ///
+    /// 主要供 reducer 在处理 `DeleteItems` 等需要"作用于当前选中集合"的 Action 时读取。
+    pub fn directly_selected_items(&self) -> &HashSet<ItemId> {
+        &self.directly_selected_items
     }
 
     /// 重建所有 UI 行数据
@@ -287,8 +299,8 @@ impl LineEditorState {
         self.all_rows.set_row_data(idx, row);
     }
 
-    pub fn toggle_group(&mut self, group_id_str: String) {
-        if let Ok(group_id) = uuid::Uuid::parse_str(&group_id_str).map(ItemId) {
+    pub fn toggle_group(&mut self, group_id: &str) {
+        if let Ok(group_id) = uuid::Uuid::parse_str(&group_id).map(ItemId) {
             // 同步折叠状态到共享集合
             let is_now_collapsed = {
                 let mut collapsed = self.collapsed_groups.borrow_mut();
@@ -318,18 +330,29 @@ impl LineEditorState {
 
     // 选择相关操作
     pub fn select_single(&mut self, project: &Project, item_id: ItemId) {
-        for item in &self.selected_items {
+        println!(
+            "[select_single] highlighted_count={}, index_count={}",
+            self.all_highlighted_items.len(),
+            self.item_id_to_ui_index.len()
+        );
+        for item in &self.all_highlighted_items {
+            println!(
+                "[select_single] highlighted item={:?}, has_index={}",
+                item,
+                self.item_id_to_ui_index.contains_key(item)
+            );
+        }
+        for item in &self.all_highlighted_items {
             let &idx = self.item_id_to_ui_index.get(item).expect("无法获得索引");
             let mut row = self.all_rows.row_data(idx).expect("传入了无效索引");
-            // UI 取消行选中
-            if row.selected {
-                row.selected = false;
-                self.all_rows.set_row_data(idx, row);
-            }
+            // 取消选中
+            row.selected = SlintSelectionState::Unselected;
+            self.all_rows.set_row_data(idx, row);
         }
         // 直接全部清空
-        self.selected_items.clear();
-        self.selected_counts.clear();
+        self.directly_selected_items.clear();
+        self.all_highlighted_items.clear();
+        self.selected_event_counts.clear();
 
         let &idx = self
             .item_id_to_ui_index
@@ -337,37 +360,41 @@ impl LineEditorState {
             .expect("无法获得索引");
         self.last_selection_anchor = Some(idx);
         let mut row = self.all_rows.row_data(idx).expect("传入了无效索引");
+
         if row.row_type == SlintSubtitleRowType::GroupHeader {
             let ui_total_rows = row.total_row_count.max(1) as usize;
             let event_cnt = self.event_count_cached(project, &item_id);
             // 子树范围 [idx, ui_end)
             let ui_end = idx + ui_total_rows;
-            for i in idx..ui_end {
-                if let Some(mut row) = self.all_rows.row_data(i) {
+            for absolute_idx in idx..ui_end {
+                if let Some(mut row) = self.all_rows.row_data(absolute_idx) {
                     let id = uuid::Uuid::parse_str(row.item_id.as_str())
                         .map(ItemId)
                         .expect("UI 传来的 ItemId 转换失败");
-                    // 更新 selected 数据
-                    self.selected_items.insert(id);
+                    // 加入直接选中
+                    self.directly_selected_items.insert(item_id);
+                    // 加入高亮组
+                    self.all_highlighted_items.insert(id);
                     if row.row_type == SlintSubtitleRowType::GroupHeader {
                         // UI 视图是扁平化的，这步骤将计算所有内部嵌套分组
                         let cnt = self.event_count_cached(project, &id);
-                        self.selected_counts.insert(id, cnt);
+                        self.selected_event_counts.insert(id, cnt);
                     }
+                    row.selected = SlintSelectionState::DirectlySelected;
                     // 更新 UI 数据
-                    if !row.selected {
-                        row.selected = true;
-                        self.all_rows.set_row_data(i, row);
-                    }
+                    self.all_rows.set_row_data(absolute_idx, row);
                 }
             }
             // 祖先计数一次性增加整棵子树（事件数）
             self.adjust_selected_counts_to_ancestors(idx, event_cnt as i32);
-        } else {
-            row.selected = true;
+        }
+        // 非分组
+        else {
+            self.directly_selected_items.insert(item_id);
+            self.all_highlighted_items.insert(item_id);
+            row.selected = SlintSelectionState::DirectlySelected;
             self.all_rows.set_row_data(idx, row);
             self.adjust_selected_counts_to_ancestors(idx, 1);
-            self.selected_items.insert(item_id);
         };
     }
     pub fn select_toggle(&mut self, project: &Project, item_id: ItemId) {
@@ -379,69 +406,82 @@ impl LineEditorState {
         let row = self.all_rows.row_data(idx).expect("传入了无效索引");
         let is_selected = row.selected;
 
+        // 分组头
         if row.row_type == SlintSubtitleRowType::GroupHeader {
+            // HACK: 话说哪里检查了 total_row_count 是正确的数字？
             let ui_total_rows = row.total_row_count.max(1) as usize;
             let event_cnt = self.event_count_cached(project, &item_id);
             // 子树范围 [idx, ui_end)
             let ui_end = idx + ui_total_rows;
 
-            if is_selected {
-                // 取消整棵子树
-                for i in idx..ui_end {
-                    if let Some(mut r) = self.all_rows.row_data(i) {
+            // 取消整棵子树
+            if is_selected == SlintSelectionState::DirectlySelected {
+                for absolute_idx in idx..ui_end {
+                    if let Some(mut row) = self.all_rows.row_data(absolute_idx) {
                         // 更新 selected 数据
-                        let id = uuid::Uuid::parse_str(r.item_id.as_str())
+                        let id = uuid::Uuid::parse_str(row.item_id.as_str())
                             .map(ItemId)
                             .expect("UI 传来的 ItemId 转换失败");
-                        self.selected_items.remove(&id);
-                        if r.row_type == SlintSubtitleRowType::GroupHeader {
+
+                        self.directly_selected_items.remove(&id);
+                        self.all_highlighted_items.remove(&id);
+
+                        if row.row_type == SlintSubtitleRowType::GroupHeader {
                             // UI 视图是扁平化的，这步骤将清理所有内部嵌套分组
-                            self.selected_counts.remove(&id);
+                            self.selected_event_counts.remove(&id);
                         }
                         // 更新 UI
-                        if r.selected {
-                            r.selected = false;
-                            self.all_rows.set_row_data(i, r);
-                        }
+                        row.selected = SlintSelectionState::Unselected;
+                        self.all_rows.set_row_data(absolute_idx, row);
                     }
                 }
                 self.adjust_selected_counts_to_ancestors(idx, -(event_cnt as i32));
-            } else {
-                // 选中整棵子树
-                for i in idx..ui_end {
-                    if let Some(mut r) = self.all_rows.row_data(i) {
+            }
+            // 选中整棵子树
+            else {
+                for absolute_idx in idx..ui_end {
+                    if let Some(mut row) = self.all_rows.row_data(absolute_idx) {
                         // 更新 selected 数据
-                        let id = uuid::Uuid::parse_str(r.item_id.as_str())
+                        let id = uuid::Uuid::parse_str(row.item_id.as_str())
                             .map(ItemId)
                             .expect("UI 传来的 ItemId 转换失败");
-                        self.selected_items.insert(id);
-                        if r.row_type == SlintSubtitleRowType::GroupHeader {
+                        self.directly_selected_items.insert(id);
+                        self.all_highlighted_items.insert(id);
+                        if row.row_type == SlintSubtitleRowType::GroupHeader {
                             // UI 视图是扁平化的，这步骤将计算所有内部嵌套分组
                             let cnt = self.event_count_cached(project, &id);
-                            self.selected_counts.insert(id, cnt);
+                            self.selected_event_counts.insert(id, cnt);
                         }
-                        // 更新 UI 数据
-                        if !r.selected {
-                            r.selected = true;
-                            self.all_rows.set_row_data(i, r);
-                        }
+                        // 转换状态
+                        if row.selected != SlintSelectionState::DirectlySelected {
+                            row.selected = SlintSelectionState::DirectlySelected;
+                            self.all_rows.set_row_data(absolute_idx, row);
+                        };
                     }
                 }
                 self.adjust_selected_counts_to_ancestors(idx, event_cnt as i32);
             }
-        } else {
-            // 事件行
-            let mut r = row;
-            r.selected = !is_selected;
-            self.all_rows.set_row_data(idx, r);
-            if is_selected {
+        }
+        // 事件行
+        else {
+            let mut row = row;
+            row.selected = if row.selected == SlintSelectionState::Unselected {
+                SlintSelectionState::DirectlySelected
+            } else {
+                // NOTE: event 不可能是 InDirectlySelected
+                SlintSelectionState::Unselected
+            };
+            self.all_rows.set_row_data(idx, row);
+            if is_selected == SlintSelectionState::DirectlySelected {
                 // 取消选中
                 self.adjust_selected_counts_to_ancestors(idx, -1);
-                self.selected_items.remove(&item_id);
+                self.directly_selected_items.remove(&item_id);
+                self.all_highlighted_items.remove(&item_id);
             } else {
                 // 选中
                 self.adjust_selected_counts_to_ancestors(idx, 1);
-                self.selected_items.insert(item_id);
+                self.directly_selected_items.insert(item_id);
+                self.all_highlighted_items.insert(item_id);
             }
         };
         // 分组头仅在子树全选时才标记为选中
@@ -461,16 +501,15 @@ impl LineEditorState {
         };
 
         // 清空旧选中
-        for item in &self.selected_items {
-            let &idx = self.item_id_to_ui_index.get(item).expect("无法获得索引");
+        for item_id in &self.all_highlighted_items {
+            let &idx = self.item_id_to_ui_index.get(item_id).expect("无法获得索引");
             let mut row = self.all_rows.row_data(idx).expect("传入了无效的索引");
-            if row.selected {
-                row.selected = false;
-                self.all_rows.set_row_data(idx, row);
-            }
+            row.selected = SlintSelectionState::Unselected;
+            self.all_rows.set_row_data(idx, row);
         }
-        self.selected_items.clear();
-        self.selected_counts.clear();
+        self.directly_selected_items.clear();
+        self.all_highlighted_items.clear();
+        self.selected_event_counts.clear();
 
         let mut i = ui_start;
         while i <= ui_end {
@@ -483,6 +522,7 @@ impl LineEditorState {
 
             // 边缘是分组头：整棵子树全选，并跳过子树范围（避免重复计算）
             if row.row_type == SlintSubtitleRowType::GroupHeader && is_edge {
+                // HACK: 哪里保证了数据正确？
                 let ui_subtree_total_rows = row.total_row_count.max(1) as usize;
                 let event_cnt = self.event_count_cached(
                     project,
@@ -494,25 +534,26 @@ impl LineEditorState {
 
                 // 将边缘分组的子项选中
                 for j in i..ui_subtree_end {
-                    let mut r = self
+                    let mut row = self
                         .all_rows
                         .row_data(j)
                         .expect("UI 索引存在断层或数据不一致");
-                    let id = uuid::Uuid::parse_str(r.item_id.as_str())
+                    let id = uuid::Uuid::parse_str(row.item_id.as_str())
                         .map(ItemId)
                         .expect("UI 传来的 ItemId 转换失败");
                     // 更新 selected 数据
-                    self.selected_items.insert(id);
-                    if r.row_type == SlintSubtitleRowType::GroupHeader {
+                    self.directly_selected_items.insert(id);
+                    self.all_highlighted_items.insert(id);
+                    if row.row_type == SlintSubtitleRowType::GroupHeader {
                         // 子分组直接全选
                         // 再次嵌套的分组也会被计算到，因为 UI 层面数据是扁平化的
                         let cnt = self.event_count_cached(project, &id);
-                        self.selected_counts.insert(id, cnt);
+                        self.selected_event_counts.insert(id, cnt);
                     }
                     // 更新 UI 数据
-                    if !r.selected {
-                        r.selected = true;
-                        self.all_rows.set_row_data(j, r);
+                    if row.selected != SlintSelectionState::DirectlySelected {
+                        row.selected = SlintSelectionState::DirectlySelected;
+                        self.all_rows.set_row_data(j, row);
                     }
                 }
 
@@ -522,17 +563,19 @@ impl LineEditorState {
                 i = ui_subtree_end;
             } else {
                 // 中间命中分组头不标记为选中；事件行选自身
+                // 因为后续可能没有将分组内容全选
                 if row.row_type != SlintSubtitleRowType::GroupHeader {
                     let mut r = self.all_rows.row_data(i).expect("传入了无效索引");
                     let id = uuid::Uuid::parse_str(r.item_id.as_str())
                         .map(ItemId)
                         .expect("UI 传来的 ItemId 转换失败");
                     // 更新 selected 数据
-                    self.selected_items.insert(id);
+                    self.directly_selected_items.insert(id);
+                    self.all_highlighted_items.insert(id);
                     self.adjust_selected_counts_to_ancestors(i, 1);
                     // 更新 UI 数据
-                    if !r.selected {
-                        r.selected = true;
+                    if r.selected != SlintSelectionState::DirectlySelected {
+                        r.selected = SlintSelectionState::DirectlySelected;
                         self.all_rows.set_row_data(i, r);
                     }
                 }
@@ -550,7 +593,7 @@ impl LineEditorState {
             let gid = uuid::Uuid::parse_str(anc.as_str())
                 .map(ItemId)
                 .expect("UI 传来的 ItemId 转换失败");
-            let entry = self.selected_counts.entry(gid).or_insert(0);
+            let entry = self.selected_event_counts.entry(gid).or_insert(0);
             if delta > 0 {
                 *entry += delta as usize;
             } else {
@@ -594,29 +637,40 @@ impl LineEditorState {
     // 根据 selected_counts 同步各分组头的 selected 状态
     fn refresh_group_selected_by_counts(&mut self, project: &Project) {
         // 只遍历当前有计数的分组，避免全表扫描
-        let gids: Vec<ItemId> = self.selected_counts.keys().cloned().collect();
+        let gids: Vec<ItemId> = self.selected_event_counts.keys().cloned().collect();
         for gid in gids {
             let &idx = self.item_id_to_ui_index.get(&gid).expect("无法获得索引");
             let mut row = self.all_rows.row_data(idx).expect("传入了无效索引");
 
             let expect = self.event_count_cached(project, &gid);
-            let cnt = *self.selected_counts.get(&gid).unwrap_or(&0);
-            let should_selected = expect > 0 && cnt == expect;
-            if row.selected != should_selected {
-                // 更新 selected 数据
-                if should_selected {
-                    self.selected_items.insert(gid);
-                } else {
-                    self.selected_items.remove(&gid);
+            let cnt = *self.selected_event_counts.get(&gid).unwrap_or(&0);
+
+            let is_all_selected = expect > 0 && cnt == expect;
+
+            let target_state = match (is_all_selected, row.selected) {
+                // 子event全选，且分组头有 DirectlySelected -> 保持 DirectlySelected
+                (true, SlintSelectionState::DirectlySelected) => {
+                    SlintSelectionState::DirectlySelected
                 }
-                // 更新 UI 数据
-                row.selected = should_selected;
+                // 子event全选，且分组头不是 DirectlySelected -> 变成 IndirectlySelected
+                (true, _) => SlintSelectionState::IndirectlySelected,
+                // 子event没有全选 -> 直接为 Unselected
+                (false, _) => SlintSelectionState::Unselected,
+            };
+
+            // 如果 UI 状态需要变更
+            if row.selected != target_state {
+                row.selected = target_state;
                 self.all_rows.set_row_data(idx, row);
             }
-            // UI 分组头已被选中，并且现在应当被选中情况
-            else if should_selected {
-                // 确保 selected_items 中包含已选分组头
-                self.selected_items.insert(gid);
+
+            // 更新数据
+            if is_all_selected {
+                self.directly_selected_items.insert(gid);
+                self.all_highlighted_items.insert(gid);
+            } else {
+                self.directly_selected_items.remove(&gid);
+                self.all_highlighted_items.remove(&gid);
             }
         }
     }
@@ -660,7 +714,7 @@ impl LineEditorState {
         }
 
         // 清除选中状态（新行默认不选中）
-        item_row.selected = false;
+        item_row.selected = SlintSelectionState::Unselected;
 
         // 更新后续索引
         self.shift_indices_after(insert_idx, 1);
@@ -675,53 +729,76 @@ impl LineEditorState {
         Ok(())
     }
 
-    // FIXME: 后面实现操作列表时审查一下代码
+    /// 处理已从 `project.structure` 移除的项的 UI 投影更新。
+    ///
+    /// 调用方需保证：
+    /// - `project.structure` 上对应的 `remove_item` 已被调用（reducer 负责）；
+    /// - `item_ids` 是"互不为祖先"的独立集合（删除一个 group 时其子项不应再单独出现）。
+    ///
+    /// 函数内部按 UI 行布局递减式删除 `all_rows` 与 `item_id_to_ui_index`，
+    /// 然后清理 `directly_selected_items` / `all_highlighted_items` /
+    /// `selected_event_counts` 当中已不存在的 ID（包含被一同递归删掉的子项）。
+    pub fn handle_items_removed(&mut self, project: &Project, item_ids: &[ItemId]) {
+        for item_id in item_ids {
+            let parent_id = self.find_parent_from_ui(item_id);
+            let ui_index = match self.item_id_to_ui_index.get(item_id) {
+                Some(&idx) => idx,
+                None => {
+                    warn!("[delete] item={:?} 已不在 UI 索引中，跳过", item_id);
+                    continue;
+                }
+            };
 
-    /// 处理项移除后的 UI 更新
-    pub fn handle_item_removed(&mut self, project: &Project, item_id: ItemId) {
-        // 先获取 parent 以便后续标记 dirty
-        // 注意：此时 ProjectStructure 中 item 可能已经被移除了，所以无法查询 parent。
-        // 调用者需要在移除前通过 item_id 查到 parent 并保留，或者 handle_item_removed 接口应该接受 parent_id 参数。
-        // 但为了接口简单，我们在 LineEditorState 中可能无法完美获取 parent。
-        // 变通方法：通过 item_id_to_ui_index 找到行，读取 ancestor_groups 的最后一个元素作为 parent。
-        let parent_id = self.find_parent_from_ui(item_id);
-
-        let ui_index = match self.item_id_to_ui_index.get(&item_id) {
-            Some(&idx) => idx,
-            None => return,
-        };
-
-        // 获取要删除的行数
-        let count = if let Some(row) = self.all_rows.row_data(ui_index) {
-            if row.row_type == SlintSubtitleRowType::GroupHeader {
-                row.total_row_count as usize
+            // 获取要删除的行数
+            let count = if let Some(row) = self.all_rows.row_data(ui_index) {
+                if row.row_type == SlintSubtitleRowType::GroupHeader {
+                    // HACK: 哪里保证了数据正确
+                    row.total_row_count as usize
+                } else {
+                    1
+                }
             } else {
                 1
-            }
-        } else {
-            1
-        };
+            };
 
-        // 先清理索引
-        for i in 0..count {
-            let idx = ui_index + i;
-            if let Some(row) = self.all_rows.row_data(idx) {
-                if let Ok(uuid) = uuid::Uuid::parse_str(row.item_id.as_str()) {
-                    self.item_id_to_ui_index.remove(&ItemId(uuid));
+            // 从后向前清理数据
+            for i in (0..count).rev() {
+                let absolute_idx = ui_index + i;
+
+                if absolute_idx >= self.all_rows.row_count() {
+                    warn!(
+                        "[delete] OOB: absolute_idx={} >= row_count={}",
+                        absolute_idx,
+                        self.all_rows.row_count()
+                    );
+                    continue;
                 }
+                if let Some(row) = self.all_rows.row_data(absolute_idx) {
+                    if let Ok(uuid) = uuid::Uuid::parse_str(row.item_id.as_str()) {
+                        self.item_id_to_ui_index.remove(&ItemId(uuid));
+                    }
+                }
+                self.all_rows.remove(absolute_idx);
+            }
+
+            // 后续索引偏移
+            self.shift_indices_after(ui_index, -(count as i32));
+
+            // 父级子 items 数量失效
+            if let Some(pid) = parent_id {
+                self.mark_group_chain_dirty(project, pid);
+                self.update_all_dirty_groups(project);
             }
         }
 
-        for _ in 0..count {
-            self.all_rows.remove(ui_index);
-        }
-
-        self.shift_indices_after(ui_index, -(count as i32));
-
-        if let Some(pid) = parent_id {
-            self.mark_group_chain_dirty(project, pid);
-            self.update_all_dirty_groups(project);
-        }
+        // 清理选中/高亮状态中已被删除的项（含被一同递归删掉的子项）
+        let alive_ids: HashSet<ItemId> = self.item_id_to_ui_index.keys().copied().collect();
+        self.directly_selected_items
+            .retain(|id| alive_ids.contains(id));
+        self.all_highlighted_items
+            .retain(|id| alive_ids.contains(id));
+        self.selected_event_counts
+            .retain(|id, _| alive_ids.contains(id));
     }
 
     /// 处理项移动后的 UI 更新
@@ -851,8 +928,8 @@ impl LineEditorState {
 
     // === 辅助计算 ===
 
-    fn find_parent_from_ui(&self, item_id: ItemId) -> Option<ItemId> {
-        let idx = self.item_id_to_ui_index.get(&item_id)?;
+    fn find_parent_from_ui(&self, item_id: &ItemId) -> Option<ItemId> {
+        let idx = self.item_id_to_ui_index.get(item_id)?;
         let row = self.all_rows.row_data(*idx)?;
         // ancestor_groups: ["grandparent_id", "parent_id"]
         // 取最后一个
@@ -994,7 +1071,7 @@ fn flatten_items(
                     start_time: format_time(start).to_shared_string(),
                     end_time: format_time(end).to_shared_string(),
                     item_id: item_id.to_string().to_shared_string(),
-                    selected: false,
+                    selected: SlintSelectionState::Unselected,
                     text: event.text.to_shared_string(),
                     style: event.style.to_shared_string(),
                     layer: 0,
@@ -1016,7 +1093,7 @@ fn flatten_items(
                     start_time: SharedString::new(),
                     end_time: SharedString::new(),
                     item_id: group_id_str.clone(),
-                    selected: false,
+                    selected: SlintSelectionState::Unselected,
                     text: SharedString::new(),
                     style: SharedString::new(),
                     layer: -1,
