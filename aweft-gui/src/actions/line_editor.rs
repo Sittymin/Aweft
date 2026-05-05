@@ -55,10 +55,13 @@ pub enum LineEditorAction {
         start_time: TimeDelta,
         end_time: TimeDelta,
         actor: Option<ActorId>,
-        text: Option<String>,
+        text: String,
         segment_timing: Option<SegmentTiming>,
         // FIXME: 之后需要更改为节点链
         style: Option<String>,
+    },
+    AddGroup {
+        item_id: ItemId,
     },
     DeleteItems,
 }

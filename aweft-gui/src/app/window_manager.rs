@@ -1,10 +1,11 @@
-use crate::bridge::types::MainWindow;
 use crate::bridge::SubtitleState;
-use crate::store::reducers::media::initialize_media;
+use crate::bridge::types::MainWindow;
 use crate::store::AppStore;
+use crate::store::reducers::media::initialize_media;
 use anyhow::{Context, Result};
-use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
+use aweft_model::structure::GroupData;
 use slint::ComponentHandle;
+use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
 use std::{cell::RefCell, rc::Rc};
 
 /// 简化的应用窗口管理器
@@ -113,8 +114,14 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         .unwrap();
 
     // 创建一个分组
+    let group = GroupData {
+        name: "对话组".to_string(),
+        collapsed: false,
+        color: None,
+        children: Vec::new(),
+    };
     let group_id = structure
-        .create_group("对话组".to_string(), ItemLocation::Root(1))
+        .create_group(group, ItemLocation::Root(1))
         .unwrap();
 
     // 在分组内创建事件
@@ -146,7 +153,12 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     // L1 分组
     let nested_group_lvl1 = structure
         .create_group(
-            "循环测试 L1".to_string(),
+            GroupData {
+                name: "循环测试 L1".to_string(),
+                collapsed: false,
+                color: None,
+                children: Vec::new(),
+            },
             ItemLocation::InGroup(group_id, 2),
         )
         .unwrap();
@@ -178,7 +190,12 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     // L2 分组
     let nested_group_lvl2 = structure
         .create_group(
-            "循环测试 L2".to_string(),
+            GroupData {
+                name: "循环测试 L2".to_string(),
+                collapsed: false,
+                color: None,
+                children: Vec::new(),
+            },
             ItemLocation::InGroup(nested_group_lvl1, 1),
         )
         .unwrap();
@@ -210,7 +227,12 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     // L3 分组
     let nested_group_lvl3 = structure
         .create_group(
-            "循环测试 L3".to_string(),
+            GroupData {
+                name: "循环测试 L3".to_string(),
+                collapsed: false,
+                color: None,
+                children: Vec::new(),
+            },
             ItemLocation::InGroup(nested_group_lvl2, 1),
         )
         .unwrap();

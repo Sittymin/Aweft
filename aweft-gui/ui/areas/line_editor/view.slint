@@ -99,14 +99,14 @@ export component LineEditor inherits Rectangle {
                         MenuItem {
                             title: "增加行";
                             activated => {
-                                LineEditorCallbacks.add-line(row.item-id, row.start-time, row.end-time, "");
+                                LineEditorCallbacks.add-line(row.item-id, row.start-time, row.end-time, row.text);
                             }
                         }
 
                         MenuItem {
-                            title: "增加分组（未完成）";
+                            title: "增加分组";
                             activated => {
-                                debug("增加分组（未完成）", idx);
+                                LineEditorCallbacks.add-group(row.item-id);
                             }
                         }
 

@@ -29,6 +29,7 @@ export global LineEditorCallbacks {
     callback select-range(item-id: string);
     callback select-toggle(item-id: string);
     // 右键菜单
+    // NOTE: 后续在空列表当中的也需要实现（即无法获得开始与结束时间）
     // 参数用于定位新增的行位置
     callback add-line(item-id: string, start-time: string, end_time: string,
         // FIXME: 或许应该使用 enum，会有一个默认 Actor

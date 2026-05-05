@@ -27,6 +27,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_drag_timecode_cancel_callback(instance, Rc::clone(&store));
     setup_line_editor_selection_callbacks(instance, Rc::clone(&store));
     setup_line_editor_add_line_callback(instance, Rc::clone(&store));
+    setup_line_editor_add_group_callback(instance, Rc::clone(&store));
     setup_line_editor_delete_selected_items_callback(instance, Rc::clone(&store));
 }
 
@@ -475,21 +476,21 @@ fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<
         move |item_id_str, start_time_str, end_time_str, text| {
             use aweft_model::ids::ItemId;
             let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
-                warn!("无效的 item_id: {}", item_id_str);
+                println!("[callback] 无效的 item_id: {}", item_id_str);
                 return;
             };
 
             let start_time = if let Some(start_time) = parse_time(&start_time_str) {
                 start_time
             } else {
-                warn!("无效的 : start_time_str {}", start_time_str);
+                println!("[callback] 无效的 : start_time_str {}", start_time_str);
                 return;
             };
 
             let end_time = if let Some(end_time) = parse_time(&end_time_str) {
                 end_time
             } else {
-                warn!("无效的 : end_time_str {}", end_time_str);
+                println!("[callback] 无效的 : end_time_str {}", end_time_str);
                 return;
             };
 
@@ -499,7 +500,7 @@ fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<
                     start_time,
                     end_time,
                     actor: None,
-                    text: None,
+                    text: text.into(),
                     segment_timing: None,
                     style: None,
                 });
@@ -507,6 +508,26 @@ fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<
             dispatch_and_render(&store, action, &weak_instance);
         },
     );
+}
+
+fn setup_line_editor_add_group_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_add_group(move |item_id_str| {
+            use aweft_model::ids::ItemId;
+            let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
+                println!("[callback] 无效的 item_id: {}", item_id_str);
+                return;
+            };
+
+            let action =
+                Action::LineEditor(crate::actions::line_editor::LineEditorAction::AddGroup {
+                    item_id,
+                });
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
 }
 
 fn setup_line_editor_delete_selected_items_callback(

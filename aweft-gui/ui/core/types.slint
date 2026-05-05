@@ -79,9 +79,11 @@ export struct SlintSubtitleRow {
 
     // === 事件数据字段 (row_type == Event 时有效) ===
     text: string,
-    style: string,
-    layer: int,
-    is_comment: bool,
+    // TODO: 注释、样式链和其他元数据在侧边栏实现
+    // TODO: 在节点链当中实现
+    // layer: int,
+    // WARNING: 这个小眼睛应当优先实现（可见性）
+    visable: bool,
 
     // === 分组数据字段 (row_type == GroupHead 时有效) ===
     group_name: string,
@@ -90,4 +92,3 @@ export struct SlintSubtitleRow {
     // 分组头也算一个
     total_row_count: int,
 }
-

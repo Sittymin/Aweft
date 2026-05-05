@@ -343,8 +343,11 @@ impl LineEditorState {
             );
         }
         for item in &self.all_highlighted_items {
-            let &idx = self.item_id_to_ui_index.get(item).expect("无法获得索引");
-            let mut row = self.all_rows.row_data(idx).expect("传入了无效索引");
+            let &idx = self
+                .item_id_to_ui_index
+                .get(item)
+                .expect("[panic] 无法获得索引");
+            let mut row = self.all_rows.row_data(idx).expect("[panic] 传入了无效索引");
             // 取消选中
             row.selected = SlintSelectionState::Unselected;
             self.all_rows.set_row_data(idx, row);
@@ -357,7 +360,7 @@ impl LineEditorState {
         let &idx = self
             .item_id_to_ui_index
             .get(&item_id)
-            .expect("无法获得索引");
+            .expect("[panic] 无法获得索引");
         self.last_selection_anchor = Some(idx);
         let mut row = self.all_rows.row_data(idx).expect("传入了无效索引");
 
@@ -686,41 +689,101 @@ impl LineEditorState {
         item_id: ItemId,
         new_item_id: ItemId,
     ) -> Result<()> {
-        let new_item = project.structure.get(new_item_id).unwrap();
+        let new_item = project
+            .structure
+            .get(new_item_id)
+            .expect("[panic] 新插入的 item_id 在 structure 中不存在");
 
         // 参考的 item
-        let item_ui_idx = self
+        let ref_item_ui_idx = self
             .item_id_to_ui_index
             .get(&item_id)
             .context("索引缓存出错")?;
-        let mut item_row = self.all_rows.row_data(*item_ui_idx).context("索引越界")?;
+        let ref_item_row = self
+            .all_rows
+            .row_data(*ref_item_ui_idx)
+            .context("索引越界")?;
 
-        let insert_idx = item_ui_idx + 1;
+        let (insert_idx, depth, ancestor_groups) =
+            if ref_item_row.row_type == SlintSubtitleRowType::GroupHeader {
+                // 插入分组最后
+                let insert_idx = ref_item_ui_idx + ref_item_row.total_row_count as usize;
+                let depth = ref_item_row.depth + 1;
+                let ancestor_groups: ModelRc<SharedString> = ModelRc::new(
+                    ref_item_row
+                        .ancestor_groups
+                        .iter()
+                        .chain(std::iter::once(ref_item_row.item_id.clone()))
+                        .collect::<VecModel<SharedString>>(),
+                );
+                (insert_idx, depth, ancestor_groups)
+            }
+            // is event
+            else {
+                let insert_idx = ref_item_ui_idx + 1;
+                let depth = ref_item_row.depth;
+                let ancestor_groups = ModelRc::new(
+                    ref_item_row
+                        .ancestor_groups
+                        .iter()
+                        .collect::<VecModel<SharedString>>(),
+                );
+                (insert_idx, depth, ancestor_groups)
+            };
 
-        // 正确构建新行数据
-        item_row.item_id = new_item_id.to_string().to_shared_string();
-        // 此函数始终为 Event
-        if item_row.row_type == SlintSubtitleRowType::GroupHeader {
-            item_row.depth += 1;
-            item_row.row_type = SlintSubtitleRowType::Event;
-        }
+        // 选中应由 reducer 额外派发 SelectSingle）
+        let selected = SlintSelectionState::Unselected;
 
-        // 从新事件中读取实际数据
-        if let ItemContent::Event(event) = &new_item.content {
-            item_row.text = event.text.to_shared_string();
-            item_row.start_time = format_time(event.start_time);
-            item_row.end_time = format_time(event.end_time);
-            item_row.style = event.style.to_shared_string();
-        }
+        let new_item_row = match &new_item.content {
+            ItemContent::Group(group_data) => {
+                SlintSubtitleRow {
+                    row_type: SlintSubtitleRowType::GroupHeader,
+                    depth,
+                    ancestor_groups,
+                    start_time: format_time(TimeDelta::zero()),
+                    end_time: format_time(TimeDelta::zero()),
+                    item_id: new_item_id.to_shared_string(),
+                    selected,
 
-        // 清除选中状态（新行默认不选中）
-        item_row.selected = SlintSelectionState::Unselected;
+                    // === 事件数据字段 (row_type == Event 时有效) ===
+                    text: SharedString::new(),
+                    visable: new_item.visible,
 
-        // 更新后续索引
+                    // === 分组数据字段 (row_type == GroupHead 时有效) ===
+                    group_name: group_data.name.to_shared_string(),
+                    collapsed: false,
+                    // 分组头也算一个
+                    total_row_count: 1,
+                }
+            }
+            ItemContent::Event(event_data) => {
+                SlintSubtitleRow {
+                    row_type: SlintSubtitleRowType::Event,
+                    depth,
+                    ancestor_groups,
+                    start_time: format_time(event_data.start_time),
+                    end_time: format_time(event_data.end_time),
+                    item_id: new_item_id.to_shared_string(),
+                    selected,
+
+                    // === 事件数据字段 (row_type == Event 时有效) ===
+                    text: SharedString::new(),
+                    visable: new_item.visible,
+
+                    // === 分组数据字段 (row_type == GroupHead 时有效) ===
+                    group_name: SharedString::new(),
+                    collapsed: false,
+                    // 分组头也算一个
+                    total_row_count: 1,
+                }
+            }
+        };
+
+        // 更新后续索引（插入一行）
         self.shift_indices_after(insert_idx, 1);
 
         self.item_id_to_ui_index.insert(new_item_id, insert_idx);
-        self.all_rows.insert(insert_idx, item_row);
+        self.all_rows.insert(insert_idx, new_item_row);
 
         // 标记父级 total_row_count 失效
         if let Some(pid) = new_item.parent {
@@ -1073,12 +1136,10 @@ fn flatten_items(
                     item_id: item_id.to_string().to_shared_string(),
                     selected: SlintSelectionState::Unselected,
                     text: event.text.to_shared_string(),
-                    style: event.style.to_shared_string(),
-                    layer: 0,
-                    is_comment: false,
+                    visable: item.visible,
                     group_name: SharedString::new(),
                     collapsed: false,
-                    total_row_count: 0,
+                    total_row_count: 1,
                 });
                 row_count += 1;
             }
@@ -1095,12 +1156,10 @@ fn flatten_items(
                     item_id: group_id_str.clone(),
                     selected: SlintSelectionState::Unselected,
                     text: SharedString::new(),
-                    style: SharedString::new(),
-                    layer: -1,
-                    is_comment: false,
+                    visable: item.visible,
                     group_name: group.name.to_shared_string(),
                     collapsed: group.collapsed,
-                    total_row_count: 0,
+                    total_row_count: 1,
                 });
                 row_count += 1;
 

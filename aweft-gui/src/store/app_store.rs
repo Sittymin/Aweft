@@ -51,7 +51,7 @@ impl AppStore {
     /// 分发 Action，返回状态变更描述
     pub fn dispatch(&mut self, action: Action) -> Result<StateChange> {
         // 可以在这里添加日志
-        // println!("📤 Dispatching action: {:?}", action);
+        println!("[dispatch action]: {:?}", action);
 
         let change = match action {
             Action::Screen(screen_action) => self.dispatch_screen(screen_action),
@@ -63,9 +63,6 @@ impl AppStore {
             }
             Action::LineEditor(act) => self.dispatch_line_editor(act),
         };
-
-        // 可以在这里添加日志
-        // println!("📥 State change: {:?}", change);
 
         change
     }
@@ -653,7 +650,9 @@ impl AppStore {
                 }))
             }
             LineEditorAction::SelectRange { item_id } => {
-                Ok(StateChange::LineEditor(LineEditorChange::SelectRange { item_id }))
+                Ok(StateChange::LineEditor(LineEditorChange::SelectRange {
+                    item_id,
+                }))
             }
             LineEditorAction::SelectToggle { item_id } => {
                 Ok(StateChange::LineEditor(LineEditorChange::SelectToggle {
@@ -680,10 +679,42 @@ impl AppStore {
                     style,
                 )?;
 
-                Ok(StateChange::LineEditor(LineEditorChange::ItemsInserted {
-                    item_id,
-                    new_item_id,
-                }))
+                Ok(StateChange::Multiple(vec![
+                    StateChange::LineEditor(LineEditorChange::ItemsInserted {
+                        item_id,
+                        new_item_id,
+                    }),
+                    StateChange::LineEditor(LineEditorChange::SelectSingle {
+                        item_id: new_item_id,
+                    }),
+                ]))
+            }
+            LineEditorAction::AddGroup { item_id } => {
+                let group_count = self
+                    .state
+                    .project
+                    .structure
+                    .items
+                    .values()
+                    .filter(|item| matches!(item.content, ItemContent::Group(_)))
+                    .count();
+
+                let name = format!("新分组 {}", group_count + 1);
+
+                let new_group_item_id = self
+                    .state
+                    .project
+                    .structure
+                    .insert_group_after(item_id, name)?;
+                Ok(StateChange::Multiple(vec![
+                    StateChange::LineEditor(LineEditorChange::ItemsInserted {
+                        item_id,
+                        new_item_id: new_group_item_id,
+                    }),
+                    StateChange::LineEditor(LineEditorChange::SelectSingle {
+                        item_id: new_group_item_id,
+                    }),
+                ]))
             }
             LineEditorAction::DeleteItems {} => {
                 // 1. 收集当前选中集合，过滤掉"祖先也被选中"的项，

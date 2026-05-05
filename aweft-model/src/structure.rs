@@ -276,7 +276,7 @@ impl ProjectStructure {
     }
 
     /// 创建一个新的分组并插入
-    pub fn create_group(&mut self, name: String, location: ItemLocation) -> Result<ItemId> {
+    pub fn create_group(&mut self, data: GroupData, location: ItemLocation) -> Result<ItemId> {
         let id = ItemId::new();
         let parent = match location {
             ItemLocation::Root(_) => None,
@@ -288,12 +288,7 @@ impl ProjectStructure {
             parent,
             locked: false,
             visible: true,
-            content: ItemContent::Group(GroupData {
-                name,
-                collapsed: false,
-                color: None,
-                children: Vec::new(),
-            }),
+            content: ItemContent::Group(data),
         };
 
         self.insert_item_to_structure(item, location)?;
@@ -304,20 +299,21 @@ impl ProjectStructure {
         &mut self,
         item_id: ItemId,
         // 因为无法从分组获得时间等信息，所以需要从 UI 获得
-        start_time: TimeDelta,
+        _start_time: TimeDelta,
         end_time: TimeDelta,
         actor: Option<ActorId>,
-        text: Option<String>,
+        text: String,
         segment_timing: Option<SegmentTiming>,
         // FIXME: 之后需要更改为节点链
         style: Option<String>,
     ) -> Result<ItemId> {
         let location = self.find_insert_location(item_id)?;
         let new_item = EventData {
-            start_time,
+            // 新建行沿用上一行的 end_time
+            start_time: end_time,
             end_time,
             actor,
-            text: text.unwrap_or_default(),
+            text,
             segment_timing,
             style: style.unwrap_or_default(),
         };
@@ -325,12 +321,24 @@ impl ProjectStructure {
         Ok(new_item_id)
     }
 
+    pub fn insert_group_after(&mut self, item_id: ItemId, text: String) -> Result<ItemId> {
+        let location = self.find_insert_location(item_id)?;
+        let new_item = GroupData {
+            name: text,
+            collapsed: false,
+            color: None,
+            children: Vec::new(),
+        };
+        let new_item_id = self.create_group(new_item, location)?;
+        Ok(new_item_id)
+    }
+
     fn find_insert_location(&self, item_id: ItemId) -> Result<ItemLocation> {
         let item = self.items.get(&item_id).context("不存在的 ItemId")?;
 
-        // 是分组时则是分组内第一个
-        if let ItemContent::Group(_) = &item.content {
-            return Ok(ItemLocation::InGroup(item_id, 0));
+        // 是分组时则是分组内最后一个
+        if let ItemContent::Group(g) = &item.content {
+            return Ok(ItemLocation::InGroup(item_id, g.children.len()));
         }
 
         match item.parent {
