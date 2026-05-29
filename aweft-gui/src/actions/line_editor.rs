@@ -64,4 +64,18 @@ pub enum LineEditorAction {
         item_id: ItemId,
     },
     DeleteItems,
+    /// 把当前选中集合写入剪贴板（只读 Domain，不修改）
+    ///
+    CopyItems,
+    /// 复制 + 删除当前选中集合
+    ///
+    CutItems,
+    /// 把剪贴板内的 `ItemsClip` 实例化到 `anchor` 之后/之内
+    ///
+    PasteItems {
+        anchor: ItemId,
+    },
+    UnGroup {
+        group_item_id: ItemId,
+    },
 }

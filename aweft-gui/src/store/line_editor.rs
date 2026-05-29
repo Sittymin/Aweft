@@ -20,6 +20,14 @@ use crate::bridge::{
 type SubtitleFilterModel =
     slint::FilterModel<ModelRc<SlintSubtitleRow>, Box<dyn Fn(&SlintSubtitleRow) -> bool>>;
 
+/// 扁平视图中的"插入点"：`compute_insert_point` 的输出，被
+/// `handle_subtrees_pasted` 等按 `ItemLocation` 精确插入的逻辑消费。
+struct InsertPoint {
+    flat_idx: usize,
+    depth: i32,
+    ancestors: Vec<SharedString>,
+}
+
 pub struct LineEditorState {
     // UI 数据源（扁平化的完整列表）
     // 分组行数与组时间在当中查找
@@ -689,11 +697,6 @@ impl LineEditorState {
         item_id: ItemId,
         new_item_id: ItemId,
     ) -> Result<()> {
-        let new_item = project
-            .structure
-            .get(new_item_id)
-            .expect("[panic] 新插入的 item_id 在 structure 中不存在");
-
         // 参考的 item
         let ref_item_ui_idx = self
             .item_id_to_ui_index
@@ -704,90 +707,57 @@ impl LineEditorState {
             .row_data(*ref_item_ui_idx)
             .context("索引越界")?;
 
-        let (insert_idx, depth, ancestor_groups) =
-            if ref_item_row.row_type == SlintSubtitleRowType::GroupHeader {
-                // 插入分组最后
-                let insert_idx = ref_item_ui_idx + ref_item_row.total_row_count as usize;
-                let depth = ref_item_row.depth + 1;
-                let ancestor_groups: ModelRc<SharedString> = ModelRc::new(
-                    ref_item_row
-                        .ancestor_groups
-                        .iter()
-                        .chain(std::iter::once(ref_item_row.item_id.clone()))
-                        .collect::<VecModel<SharedString>>(),
-                );
-                (insert_idx, depth, ancestor_groups)
-            }
-            // is event
-            else {
-                let insert_idx = ref_item_ui_idx + 1;
-                let depth = ref_item_row.depth;
-                let ancestor_groups = ModelRc::new(
-                    ref_item_row
-                        .ancestor_groups
-                        .iter()
-                        .collect::<VecModel<SharedString>>(),
-                );
-                (insert_idx, depth, ancestor_groups)
-            };
-
-        // 选中应由 reducer 额外派发 SelectSingle）
-        let selected = SlintSelectionState::Unselected;
-
-        let new_item_row = match &new_item.content {
-            ItemContent::Group(group_data) => {
-                SlintSubtitleRow {
-                    row_type: SlintSubtitleRowType::GroupHeader,
-                    depth,
-                    ancestor_groups,
-                    start_time: format_time(TimeDelta::zero()),
-                    end_time: format_time(TimeDelta::zero()),
-                    item_id: new_item_id.to_shared_string(),
-                    selected,
-
-                    // === 事件数据字段 (row_type == Event 时有效) ===
-                    text: SharedString::new(),
-                    visable: new_item.visible,
-
-                    // === 分组数据字段 (row_type == GroupHead 时有效) ===
-                    group_name: group_data.name.to_shared_string(),
-                    collapsed: false,
-                    // 分组头也算一个
-                    total_row_count: 1,
-                }
-            }
-            ItemContent::Event(event_data) => {
-                SlintSubtitleRow {
-                    row_type: SlintSubtitleRowType::Event,
-                    depth,
-                    ancestor_groups,
-                    start_time: format_time(event_data.start_time),
-                    end_time: format_time(event_data.end_time),
-                    item_id: new_item_id.to_shared_string(),
-                    selected,
-
-                    // === 事件数据字段 (row_type == Event 时有效) ===
-                    text: SharedString::new(),
-                    visable: new_item.visible,
-
-                    // === 分组数据字段 (row_type == GroupHead 时有效) ===
-                    group_name: SharedString::new(),
-                    collapsed: false,
-                    // 分组头也算一个
-                    total_row_count: 1,
-                }
-            }
+        let (insert_idx, depth, ancestor_groups) = if ref_item_row.row_type
+            == SlintSubtitleRowType::GroupHeader
+        {
+            // 插入分组最后
+            let insert_idx = ref_item_ui_idx + ref_item_row.total_row_count as usize;
+            let depth = ref_item_row.depth + 1;
+            let ancestor_groups: Vec<SharedString> = ref_item_row
+                .ancestor_groups
+                .iter()
+                .chain(std::iter::once(ref_item_row.item_id.clone()))
+                .collect();
+            (insert_idx, depth, ancestor_groups)
+        }
+        // is event
+        else {
+            let insert_idx = ref_item_ui_idx + 1;
+            let depth = ref_item_row.depth;
+            let ancestor_groups: Vec<SharedString> = ref_item_row.ancestor_groups.iter().collect();
+            (insert_idx, depth, ancestor_groups)
         };
 
-        // 更新后续索引（插入一行）
-        self.shift_indices_after(insert_idx, 1);
+        // 用 flatten_items 统一构造行
+        let mut rows: Vec<SlintSubtitleRow> = Vec::new();
+        flatten_items(
+            &[new_item_id],
+            &project.structure,
+            depth,
+            &ancestor_groups,
+            &mut rows,
+        );
+        let n = rows.len();
+        if n == 0 {
+            return Ok(());
+        }
 
-        self.item_id_to_ui_index.insert(new_item_id, insert_idx);
-        self.all_rows.insert(insert_idx, new_item_row);
+        // 更新后续索引
+        self.shift_indices_after(insert_idx, n as i32);
 
-        // 标记父级 total_row_count 失效
-        if let Some(pid) = new_item.parent {
+        // 批量插入 VecModel，同时更新索引映射
+        for (i, row) in rows.into_iter().enumerate() {
+            if let Ok(uuid) = uuid::Uuid::parse_str(row.item_id.as_str()) {
+                self.item_id_to_ui_index
+                    .insert(ItemId(uuid), insert_idx + i);
+            }
+            self.all_rows.insert(insert_idx + i, row);
+        }
+
+        // 标脏父级链 + 重算
+        if let Some(pid) = project.structure.get(new_item_id).and_then(|i| i.parent) {
             self.mark_group_chain_dirty(project, pid);
+            self.update_all_dirty_groups(project);
         }
         Ok(())
     }
@@ -864,19 +834,233 @@ impl LineEditorState {
             .retain(|id, _| alive_ids.contains(id));
     }
 
-    /// 处理项移动后的 UI 更新
-    // pub fn handle_item_moved(
-    //     &mut self,
-    //     project: &Project,
-    //     item_id: ItemId,
-    //     _old_location: ItemLocation,
-    //     new_location: ItemLocation,
-    // ) {
-    //     // 先删除（此时 handle_item_removed 会自动处理旧 parent 的更新）
-    //     self.handle_item_removed(project, item_id);
-    //     // 再插入（此时 handle_item_inserted 会自动处理新 parent 的更新）
-    //     self.handle_item_inserted(project, item_id, new_location);
-    // }
+    /// 解散分组后的 UI 更新：移除旧分组的全部行 → 在相同位置插入提升的子项行。
+    ///
+    /// `group_id` 是被解散的分组 ID，`new_ids` 是 `structure.ungroup()` 返回的
+    /// 已被提升的子项 ID 列表（文档顺序）。
+    pub fn handle_group_ungrouped(
+        &mut self,
+        project: &Project,
+        group_id: ItemId,
+        new_ids: &[ItemId],
+    ) -> Result<()> {
+        if new_ids.is_empty() {
+            return Ok(());
+        }
+
+        // 直接通过 group_id 在 UI 索引中找到分组头的位置
+        let &group_idx = self
+            .item_id_to_ui_index
+            .get(&group_id)
+            .context("handle_group_ungrouped: 分组不在 UI 索引中")?;
+
+        let group_row = self
+            .all_rows
+            .row_data(group_idx)
+            .context("handle_group_ungrouped: group_row 索引越界")?;
+
+        let total = group_row.total_row_count as usize;
+
+        // 1. 移除分组头（1 行）
+        //    子项保持原位，只需调整 depth 和 ancestor_groups
+        self.all_rows.remove(group_idx);
+        self.item_id_to_ui_index.remove(&group_id);
+
+        // 2. 子项 depth 减 1，祖先链中去掉被删除的分组
+        let child_count = total - 1;
+        for i in 0..child_count {
+            let row_idx = group_idx + i;
+            if let Some(mut row) = self.all_rows.row_data(row_idx) {
+                row.depth -= 1;
+
+                if let Some(ancestor_groups) = row
+                    .ancestor_groups
+                    .as_any()
+                    .downcast_ref::<VecModel<SharedString>>()
+                {
+                    if let Some(index) = ancestor_groups
+                        .iter()
+                        .position(|x| x == group_id.to_shared_string())
+                    {
+                        ancestor_groups.remove(index);
+                    }
+                }
+
+                self.all_rows.set_row_data(row_idx, row);
+            }
+        }
+
+        // 3. 后续索引整体前移 1 位
+        self.shift_indices_after(group_idx, -1);
+
+        // 4. 标脏父级链
+        if let Some(&first) = new_ids.first() {
+            if let Some(pid) = project.structure.get(first).and_then(|i| i.parent) {
+                self.mark_group_chain_dirty(project, pid);
+                self.update_all_dirty_groups(project);
+            }
+        }
+
+        // 清理选中/高亮状态中已被删除的项（含被一同递归删掉的子项）
+        // NOTE: 由于目前仅单选分组会出现 ungroup ，所以可能没必要多选计算
+        let alive_ids: HashSet<ItemId> = self.item_id_to_ui_index.keys().copied().collect();
+        self.directly_selected_items
+            .retain(|id| alive_ids.contains(id));
+        self.all_highlighted_items
+            .retain(|id| alive_ids.contains(id));
+        self.selected_event_counts
+            .retain(|id, _| alive_ids.contains(id));
+
+        Ok(())
+    }
+
+    /// 处理粘贴：把若干 root 子树（已存在于 `project.structure`，且互为兄弟）
+    /// 按顺序批量插入到 `base_location` 的语义位置之后/之内。
+    pub fn handle_subtrees_pasted(
+        &mut self,
+        project: &Project,
+        base_location: ItemLocation,
+        new_root_ids: &[ItemId],
+    ) -> Result<()> {
+        if new_root_ids.is_empty() {
+            return Ok(());
+        }
+
+        let InsertPoint {
+            flat_idx,
+            depth,
+            ancestors,
+        } = self.compute_insert_point(project, base_location)?;
+
+        // 为 root 的坐标，内部偏移由 flatten_items 处理
+        let (start_idx, common_depth, common_ancestors) = (flat_idx, depth, ancestors);
+
+        // 用 flatten_items 一次性扁平化全部 roots 子树
+        let mut rows: Vec<SlintSubtitleRow> = Vec::new();
+        flatten_items(
+            new_root_ids,
+            &project.structure,
+            common_depth,
+            &common_ancestors,
+            &mut rows,
+        );
+        let n = rows.len();
+        if n == 0 {
+            return Ok(());
+        }
+
+        // 整体后移现有索引
+        self.shift_indices_after(start_idx, n as i32);
+
+        for (i, row) in rows.into_iter().enumerate() {
+            // 加入新行索引
+            if let Ok(uuid) = uuid::Uuid::parse_str(row.item_id.as_str()) {
+                self.item_id_to_ui_index.insert(ItemId(uuid), start_idx + i);
+            }
+
+            // 批量插入 VecModel（同步循环，UI 帧内一次性看到结果）
+            self.all_rows.insert(start_idx + i, row);
+        }
+
+        // 标脏父级链
+        if let Some(first_root) = new_root_ids.first() {
+            if let Some(parent_id) = project.structure.get(*first_root).and_then(|i| i.parent) {
+                self.mark_group_chain_dirty(project, parent_id);
+                self.update_all_dirty_groups(project);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 把一个 `ItemLocation` 映射为扁平视图中的"插入点"。
+    /// 输出为前一个元素的下一个索引
+    fn compute_insert_point(
+        &self,
+        project: &Project,
+        location: ItemLocation,
+    ) -> Result<InsertPoint> {
+        match location {
+            ItemLocation::Root(0) => Ok(InsertPoint {
+                flat_idx: 0,
+                depth: 0,
+                ancestors: Vec::new(),
+            }),
+            ItemLocation::Root(idx) => {
+                let prev = project
+                    .structure
+                    .root_items
+                    .get(idx - 1)
+                    .copied()
+                    .context("compute_insert_point Root: idx 越界")?;
+                let &prev_ui_idx = self
+                    .item_id_to_ui_index
+                    .get(&prev)
+                    .context("compute_insert_point Root: prev sibling 缺索引")?;
+                let row = self
+                    .all_rows
+                    .row_data(prev_ui_idx)
+                    .context("compute_insert_point Root: prev sibling 行越界")?;
+                Ok(InsertPoint {
+                    flat_idx: prev_ui_idx + row.total_row_count as usize,
+                    depth: 0,
+                    ancestors: Vec::new(),
+                })
+            }
+            ItemLocation::InGroup(pid, idx) => {
+                let &group_ui_idx = self
+                    .item_id_to_ui_index
+                    .get(&pid)
+                    .context("compute_insert_point InGroup: parent group 缺索引")?;
+                let group_row = self
+                    .all_rows
+                    .row_data(group_ui_idx)
+                    .context("compute_insert_point InGroup: parent group 行越界")?;
+                let mut ancestors: Vec<SharedString> = group_row.ancestor_groups.iter().collect();
+                ancestors.push(group_row.item_id.clone());
+                let depth = group_row.depth + 1;
+
+                if idx == 0 {
+                    Ok(InsertPoint {
+                        flat_idx: group_ui_idx + 1,
+                        depth,
+                        ancestors,
+                    })
+                } else {
+                    let group_children = match &project
+                        .structure
+                        .get(pid)
+                        .context("compute_insert_point InGroup: parent 不存在")?
+                        .content
+                    {
+                        ItemContent::Group(g) => g.children.clone(),
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "compute_insert_point InGroup: parent 不是 Group"
+                            ));
+                        }
+                    };
+                    let prev = group_children
+                        .get(idx - 1)
+                        .copied()
+                        .context("compute_insert_point InGroup: idx 越界")?;
+                    let &prev_ui_idx = self
+                        .item_id_to_ui_index
+                        .get(&prev)
+                        .context("compute_insert_point InGroup: prev sibling 缺索引")?;
+                    let row = self
+                        .all_rows
+                        .row_data(prev_ui_idx)
+                        .context("compute_insert_point InGroup: prev sibling 行越界")?;
+                    Ok(InsertPoint {
+                        flat_idx: prev_ui_idx + row.total_row_count as usize,
+                        depth,
+                        ancestors,
+                    })
+                }
+            }
+        }
+    }
 
     // === 行数与时间统计更新 ===
 

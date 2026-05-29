@@ -111,23 +111,23 @@ export component LineEditor inherits Rectangle {
                         }
 
                         MenuItem {
-                            title: "复制（未完成）";
+                            title: "剪切";
                             activated => {
-                                debug("复制（未完成）", idx);
+                                LineEditorCallbacks.cut-items();
                             }
                         }
 
                         MenuItem {
-                            title: "剪切（未完成）";
+                            title: "复制";
                             activated => {
-                                debug("剪切（未完成）", idx);
+                                LineEditorCallbacks.copy-items();
                             }
                         }
 
                         MenuItem {
-                            title: "粘贴（未完成）";
+                            title: "粘贴";
                             activated => {
-                                debug("粘贴（未完成）", idx);
+                                LineEditorCallbacks.paste-items(row.item-id);
                             }
                         }
 
@@ -138,17 +138,19 @@ export component LineEditor inherits Rectangle {
                             }
                         }
 
+                        // TODO: 实现 Action 节点链化编辑与快捷键触发。
+                        // 预留右键菜单入口，当前不执行任何操作。
                         MenuItem {
-                            title: "上移（未完成）";
+                            title: "上移（TODO）";
                             activated => {
-                                debug("上移（未完成）", idx);
+                                debug("TODO: 实现 Action 节点链化编辑与快捷键触发（上移）（应当作为用户自定义的示例）", idx);
                             }
                         }
 
                         MenuItem {
-                            title: "下移（未完成）";
+                            title: "下移（TODO）";
                             activated => {
-                                debug("下移（未完成）", idx);
+                                debug("TODO: 实现 Action 节点链化编辑与快捷键触发（下移）", idx);
                             }
                         }
 
@@ -158,7 +160,7 @@ export component LineEditor inherits Rectangle {
                         if row.row-type == SlintSubtitleRowType.GroupHeader: MenuItem {
                             title: "解散分组（未完成）";
                             activated => {
-                                debug("解散分组（未完成）", idx);
+                                LineEditorCallbacks.ungroups(row.item-id)
                             }
                         }
                     }

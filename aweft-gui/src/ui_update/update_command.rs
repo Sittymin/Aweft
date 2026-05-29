@@ -1,10 +1,11 @@
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::edge::ScrEdgeKey;
-use aweft_model::ids::ItemId;
-use chrono::TimeDelta;
 use crate::store::state_change::{
     AreasChange, DragOperationChange, LineEditorChange, ScreenChange, StateChange,
 };
+use aweft_model::ids::ItemId;
+use aweft_model::structure::ItemLocation;
+use chrono::TimeDelta;
 use std::rc::Rc;
 
 /// UI 更新指令 - 明确告诉 UI 层要做什么
@@ -73,6 +74,21 @@ pub enum UIUpdateCommand {
     },
     UpdateLineEditorItemsRemoved {
         item_ids: Vec<ItemId>,
+    },
+    /// 已复制 N 项（无 UI 投影变更，仅用于日志/未来 toast 提示）
+    UpdateLineEditorItemsCopied {
+        count: usize,
+    },
+    /// 已粘贴若干 root 子树。走 `handle_subtrees_pasted` 局部批量插入：
+    /// 一次 flatten 所有子树 → 批量插入 VecModel → 标脏父级链更新行数与时间边界。
+    UpdateLineEditorItemsPasted {
+        new_root_ids: Vec<ItemId>,
+        base_location: ItemLocation,
+    },
+    /// 已解散分组。走 `handle_group_ungrouped`：移除旧分组行 → 插入提升的子项行。
+    UpdateLineEditorItemsUngrouped {
+        group_id: ItemId,
+        new_ids: Vec<ItemId>,
     },
 }
 
@@ -236,6 +252,23 @@ impl UIUpdateCommand {
             LineEditorChange::ItemsRemoved { item_ids } => {
                 vec![Self::UpdateLineEditorItemsRemoved { item_ids }]
             }
+            LineEditorChange::ItemsCopied { count } => {
+                vec![Self::UpdateLineEditorItemsCopied { count }]
+            }
+            LineEditorChange::ItemsPasted {
+                new_root_ids,
+                base_location,
+            } => vec![Self::UpdateLineEditorItemsPasted {
+                new_root_ids,
+                base_location,
+            }],
+            LineEditorChange::GroupsUngrouped {
+                group_id,
+                new_ids,
+            } => vec![Self::UpdateLineEditorItemsUngrouped {
+                group_id,
+                new_ids,
+            }],
         }
     }
 

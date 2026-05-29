@@ -1,6 +1,7 @@
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::edge::ScrEdgeKey;
 use aweft_model::ids::ItemId;
+use aweft_model::structure::ItemLocation;
 use chrono::TimeDelta;
 use std::rc::Rc;
 
@@ -133,5 +134,20 @@ pub enum LineEditorChange {
     /// UIUpdater 据此进行 UI 投影删除并清理选中/高亮状态。
     ItemsRemoved {
         item_ids: Vec<ItemId>,
+    },
+    /// 已复制 N 项到剪贴板（仅供 UI 提示，不触发投影变更）。
+    ItemsCopied {
+        count: usize,
+    },
+    /// 已粘贴一组子树。每个 `new_root_id` 是新分配的 ItemId，
+    /// `base_location` 是粘贴时的锚点（首个 root 紧跟其后）。
+    ItemsPasted {
+        new_root_ids: Vec<ItemId>,
+        base_location: ItemLocation,
+    },
+    /// 已解散分组，`new_ids` 是被提升的子项 ID 列表（文档顺序）。
+    GroupsUngrouped {
+        group_id: ItemId,
+        new_ids: Vec<ItemId>,
     },
 }

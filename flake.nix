@@ -78,6 +78,8 @@
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
 
           SLINT_BACKEND = "winit-femtovg-wgpu";
+          # 显示代码的所有 log 输出
+          RUST_LOG = "warn,aweft_gui=trace,aweft_model=trace,aweft_ass=trace,aweft_collab=trace,aweft_convert=trace,aweft_libass=trace";
         };
       }
     );

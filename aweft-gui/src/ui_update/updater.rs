@@ -5,6 +5,7 @@ use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
 use crate::store::AppStore;
 use crate::ui_update::UIUpdateCommand;
+use aweft_model::structure::ItemLocation;
 use slint::Model;
 
 /// UI 更新执行器
@@ -157,6 +158,50 @@ impl UIUpdater {
                     ui_models
                         .line_editor_state
                         .handle_items_removed(&state.project, &item_ids);
+                }
+                // - Copied 仅日志；Pasted 调用 handle_subtrees_pasted 局部插入并把
+                //   首个 root 设为当前选中（保持"粘贴后跳到结果"的常见交互）。
+                UIUpdateCommand::UpdateLineEditorItemsCopied { count } => {
+                    log::info!("已复制 {} 项到剪贴板", count);
+                }
+                UIUpdateCommand::UpdateLineEditorItemsPasted {
+                    new_root_ids,
+                    base_location,
+                } => {
+                    let (state, ui_models) = store.split_mut();
+                    if let Err(err) = ui_models.line_editor_state.handle_subtrees_pasted(
+                        &state.project,
+                        base_location,
+                        &new_root_ids,
+                    ) {
+                        log::error!("执行 UpdateLineEditorItemsPasted 失败: {}", err);
+                        return;
+                    }
+                    if let Some(&first) = new_root_ids.first() {
+                        ui_models
+                            .line_editor_state
+                            .select_single(&state.project, first);
+                    }
+                }
+                UIUpdateCommand::UpdateLineEditorItemsUngrouped { group_id, new_ids } => {
+                    let (state, ui_models) = store.split_mut();
+                    if let Err(err) = ui_models.line_editor_state.handle_group_ungrouped(
+                        &state.project,
+                        group_id,
+                        &new_ids,
+                    ) {
+                        log::error!("执行 UpdateLineEditorItemsUngrouped 失败: {}", err);
+                        return;
+                    }
+                    // 选中内部
+                    if let (Some(&first), Some(&last)) = (new_ids.first(), new_ids.last()) {
+                        ui_models
+                            .line_editor_state
+                            .select_single(&state.project, first);
+                        ui_models
+                            .line_editor_state
+                            .select_range(&state.project, last);
+                    }
                 }
             }
         }

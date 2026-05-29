@@ -5,6 +5,7 @@ use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
 use crate::ui_update::{UIUpdateCommand, UIUpdater};
+use aweft_model::ids::ItemId;
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
@@ -29,6 +30,8 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_add_line_callback(instance, Rc::clone(&store));
     setup_line_editor_add_group_callback(instance, Rc::clone(&store));
     setup_line_editor_delete_selected_items_callback(instance, Rc::clone(&store));
+    setup_line_editor_clipboard_callbacks(instance, Rc::clone(&store));
+    setup_line_editor_ungroup_callbacks(instance, Rc::clone(&store));
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -500,7 +503,10 @@ fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<
                     start_time,
                     end_time,
                     actor: None,
-                    text: text.into(),
+                    // 新行不要延续参考行文本
+                    // TODO: 如果为明显序列 （1,2,3）可以尝试按规则延续
+                    // text: text.into(),
+                    text: String::new(),
                     segment_timing: None,
                     style: None,
                 });
@@ -540,6 +546,69 @@ fn setup_line_editor_delete_selected_items_callback(
         .on_delete_selected_items(move || {
             let action =
                 Action::LineEditor(crate::actions::line_editor::LineEditorAction::DeleteItems);
+
+            dispatch_and_render(&store, action, &weak_instance);
+        });
+}
+
+fn setup_line_editor_clipboard_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak_instance = instance.as_weak();
+
+    {
+        let s = Rc::clone(&store);
+        let w = weak_instance.clone();
+        instance
+            .global::<LineEditorCallbacks>()
+            .on_copy_items(move || {
+                let action = Action::LineEditor(LineEditorAction::CopyItems);
+                dispatch_and_render(&s, action, &w);
+            });
+    }
+
+    {
+        let s = Rc::clone(&store);
+        let w = weak_instance.clone();
+        instance
+            .global::<LineEditorCallbacks>()
+            .on_paste_items(move |anchor_item_id_str| {
+                use aweft_model::ids::ItemId;
+                let Ok(anchor) = uuid::Uuid::parse_str(anchor_item_id_str.as_str()).map(ItemId)
+                else {
+                    warn!("无效的 paste target item_id: {}", anchor_item_id_str);
+                    return;
+                };
+                let action = Action::LineEditor(LineEditorAction::PasteItems { anchor });
+                dispatch_and_render(&s, action, &w);
+            });
+    }
+
+    {
+        let s = Rc::clone(&store);
+        let w = weak_instance;
+        instance
+            .global::<LineEditorCallbacks>()
+            .on_cut_items(move || {
+                let action = Action::LineEditor(LineEditorAction::CutItems);
+                dispatch_and_render(&s, action, &w);
+            });
+    }
+}
+
+fn setup_line_editor_ungroup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak_instance = instance.as_weak();
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_ungroups(move |group_item_id_str| {
+            let Ok(group_item_id) = uuid::Uuid::parse_str(group_item_id_str.as_str()).map(ItemId)
+            else {
+                println!("[callback] ungroup 无效的 item_id: {}", group_item_id_str);
+                return;
+            };
+
+            let action =
+                Action::LineEditor(crate::actions::line_editor::LineEditorAction::UnGroup {
+                    group_item_id,
+                });
 
             dispatch_and_render(&store, action, &weak_instance);
         });

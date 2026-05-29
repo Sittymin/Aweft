@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod app;
 pub mod bridge;
+pub mod clipboard;
 pub mod screen;
 pub mod slint_video_sink;
 pub mod store;

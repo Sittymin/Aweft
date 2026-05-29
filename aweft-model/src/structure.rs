@@ -10,7 +10,7 @@ use nom::{
     sequence::separated_pair,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // === 数据结构定义 ===
 
@@ -128,6 +128,22 @@ impl ProjectStructure {
             } else {
                 break;
             }
+        }
+        false
+    }
+
+    /// 检查在 potential_ancestor_set 当中是否有 descendant 的父级
+    pub fn has_ancestor_in_set(
+        &self,
+        descendant: &ItemId,
+        potential_ancestor_set: &HashSet<ItemId>,
+    ) -> bool {
+        let mut current = self.items.get(descendant).and_then(|i| i.parent);
+        while let Some(pid) = current {
+            if potential_ancestor_set.contains(&pid) {
+                return true;
+            }
+            current = self.items.get(&pid).and_then(|i| i.parent);
         }
         false
     }
@@ -333,7 +349,11 @@ impl ProjectStructure {
         Ok(new_item_id)
     }
 
-    fn find_insert_location(&self, item_id: ItemId) -> Result<ItemLocation> {
+    /// 计算"在 `item_id` 之后/之内"的逻辑插入位置。
+    ///
+    /// - 若 `item_id` 是 Group：返回 `InGroup(item_id, len(children))`（插入到组末尾）。
+    /// - 若是事件/分组：返回 `Root(idx+1)` 或 `InGroup(parent, idx+1)`，即"紧跟其后"。
+    pub fn find_insert_location(&self, item_id: ItemId) -> Result<ItemLocation> {
         let item = self.items.get(&item_id).context("不存在的 ItemId")?;
 
         // 是分组时则是分组内最后一个
@@ -374,28 +394,7 @@ impl ProjectStructure {
     ) -> Result<()> {
         let id = item.id;
         self.items.insert(id, item);
-
-        match location {
-            ItemLocation::Root(idx) => {
-                let pos = idx.min(self.root_items.len());
-                self.root_items.insert(pos, id);
-            }
-            ItemLocation::InGroup(group_id, idx) => {
-                let group_item = self
-                    .items
-                    .get_mut(&group_id)
-                    .ok_or_else(|| anyhow!("Group not found: {}", group_id))?;
-
-                match &mut group_item.content {
-                    ItemContent::Group(g) => {
-                        let pos = idx.min(g.children.len());
-                        g.children.insert(pos, id);
-                    }
-                    _ => return Err(anyhow!("Target item {} is not a group", group_id)),
-                }
-            }
-        }
-        Ok(())
+        self.attach_item(id, location)
     }
 
     // === 移动操作 ===
@@ -408,45 +407,7 @@ impl ProjectStructure {
             }
         }
 
-        // 2. 从旧位置移除 (Detachment)
-        self.detach_item(item_id)?;
-
-        // 3. 更新 parent 指针
-        let new_parent = match target {
-            ItemLocation::Root(_) => None,
-            ItemLocation::InGroup(pid, _) => Some(pid),
-        };
-
-        if let Some(item) = self.items.get_mut(&item_id) {
-            item.parent = new_parent;
-        } else {
-            return Err(anyhow!("Item not found during move"));
-        }
-
-        // 4. 插入到新位置 (Attachment)
-        // 注意：这里不需要 create，只需要 link
-        match target {
-            ItemLocation::Root(idx) => {
-                let pos = idx.min(self.root_items.len());
-                self.root_items.insert(pos, item_id);
-            }
-            ItemLocation::InGroup(group_id, idx) => {
-                let group_item = self
-                    .items
-                    .get_mut(&group_id)
-                    .ok_or_else(|| anyhow!("Target group not found"))?;
-
-                match &mut group_item.content {
-                    ItemContent::Group(g) => {
-                        let pos = idx.min(g.children.len());
-                        g.children.insert(pos, item_id);
-                    }
-                    _ => return Err(anyhow!("Target is not a group")),
-                }
-            }
-        }
-
-        Ok(())
+        self.attach_item(item_id, target)
     }
 
     // === 删除操作 ===
@@ -475,31 +436,50 @@ impl ProjectStructure {
     }
 
     /// 解散分组 (Ungroup)：移除分组壳子，将子项提升到父级
-    pub fn ungroup(&mut self, group_id: ItemId) -> Result<()> {
+    ///
+    /// 返回被提升的子项 ID 列表（保持原文档顺序），便于 UI 层快速更新。
+    pub fn ungroup(&mut self, group_id: ItemId) -> Result<Vec<ItemId>> {
         let (parent_id, children, original_idx) = {
-            let item = self
+            let group = self
                 .items
                 .get(&group_id)
                 .ok_or_else(|| anyhow!("Group not found"))?;
 
-            let parent = item.parent;
+            let parent = group.parent;
 
             // 获取当前在父级中的索引，以便把子项插到正确位置
             let idx = if let Some(pid) = parent {
-                let p_item = self.items.get(&pid).unwrap();
+                let p_item = self
+                    .items
+                    .get(&pid)
+                    .ok_or_else(|| anyhow!("ungroup: parent {:?} not found", pid))?;
                 if let ItemContent::Group(pg) = &p_item.content {
-                    pg.children.iter().position(|&x| x == group_id).unwrap_or(0)
+                    pg.children
+                        .iter()
+                        .position(|&x| x == group_id)
+                        .unwrap_or_else(|| {
+                            log::warn!(
+                                "ungroup: {} 不在父级 {} 的 children 中，使用索引 0",
+                                group_id,
+                                pid,
+                            );
+                            0
+                        })
                 } else {
+                    log::warn!("ungroup: 父级 {} 不是 Group，使用索引 0", pid,);
                     0
                 }
             } else {
                 self.root_items
                     .iter()
                     .position(|&x| x == group_id)
-                    .unwrap_or(0)
+                    .unwrap_or_else(|| {
+                        log::warn!("ungroup: {} 不在 root_items 中，使用索引 0", group_id,);
+                        0
+                    })
             };
 
-            match &item.content {
+            match &group.content {
                 ItemContent::Group(g) => (parent, g.children.clone(), idx),
                 _ => return Err(anyhow!("Target is not a group")),
             }
@@ -509,59 +489,128 @@ impl ProjectStructure {
         self.detach_item(group_id)?;
         self.items.remove(&group_id);
 
-        // 2. 将孩子们移动到父级
-        // 倒序插入以保持顺序
+        // 2. 将子项们移动到父级
+        // 倒序插入 + 固定索引，以保持子项的原始文档顺序
+        // 子项此时 parent 仍指向已被移除的分组，先清除再复用 attach_item
+        let mut new_ids = Vec::with_capacity(children.len());
         for child_id in children.iter().rev() {
+            // 清除旧的 parent 指针，否则 attach_item → detach_item
+            // 会尝试从已删除的旧分组中摘除，导致 "Group not found" 错误
+            if let Some(child) = self.items.get_mut(child_id) {
+                child.parent = None;
+            }
+
             let target = match parent_id {
                 Some(pid) => ItemLocation::InGroup(pid, original_idx),
                 None => ItemLocation::Root(original_idx),
             };
 
-            // 更新孩子的 parent 指针
-            if let Some(child) = self.items.get_mut(child_id) {
-                child.parent = parent_id;
-            }
-
-            // 链接到新位置
-            match target {
-                ItemLocation::Root(i) => self.root_items.insert(i, *child_id),
-                ItemLocation::InGroup(pid, i) => {
-                    if let Some(p_item) = self.items.get_mut(&pid) {
-                        if let ItemContent::Group(pg) = &mut p_item.content {
-                            pg.children.insert(i, *child_id);
-                        }
-                    }
-                }
-            }
+            self.attach_item(*child_id, target)?;
+            new_ids.push(*child_id);
         }
 
-        Ok(())
+        new_ids.reverse(); // 恢复文档顺序
+        Ok(new_ids)
     }
 
     // === 辅助方法 ===
+    //
+    /// 将一个**已经存在于 `self.items`** 的项链接到指定位置（更新 parent
+    /// 指针并写入父级 `children` 或 `root_items`）。
+    ///
+    /// 用于分组子树仅需要重新链接最高父级，剥离原始位置
+    pub fn attach_item(&mut self, item_id: ItemId, location: ItemLocation) -> Result<()> {
+        // 校验
+        self.items
+            .get(&item_id)
+            .ok_or_else(|| anyhow!("Item not found: {}", item_id))?;
 
-    /// 从父级的列表中移除 ID，但不删除 Map 中的数据
-    fn detach_item(&mut self, item_id: ItemId) -> Result<()> {
+        if let ItemLocation::InGroup(group_id, _) = location {
+            let group_item = self
+                .items
+                .get(&group_id)
+                .ok_or_else(|| anyhow!("Group not found: {}", group_id))?;
+            if !matches!(group_item.content, ItemContent::Group(_)) {
+                return Err(anyhow!("Target item {} is not a group", group_id));
+            }
+        }
+
+        self.detach_item(item_id)?;
+
+        let new_parent = match location {
+            ItemLocation::Root(_) => None,
+            ItemLocation::InGroup(pid, _) => Some(pid),
+        };
+
         let item = self
             .items
-            .get(&item_id)
-            .ok_or_else(|| anyhow!("Item not found"))?;
+            .get_mut(&item_id)
+            .expect("[attach_item] 先前代码未检查 item_id 合法性");
+        item.parent = new_parent;
 
-        match item.parent {
-            Some(parent_id) => {
-                let parent_item = self
-                    .items
-                    .get_mut(&parent_id)
-                    .ok_or_else(|| anyhow!("Parent not found"))?;
-                if let ItemContent::Group(g) = &mut parent_item.content {
-                    g.children.retain(|&x| x != item_id);
-                }
+        match location {
+            ItemLocation::Root(idx) => {
+                let pos = idx.min(self.root_items.len());
+                self.root_items.insert(pos, item_id);
             }
-            None => {
-                self.root_items.retain(|&x| x != item_id);
+            ItemLocation::InGroup(group_id, idx) => {
+                let group_item = self
+                    .items
+                    .get_mut(&group_id)
+                    .expect("[attach_item] 先前代码未检查 group_id 合法性");
+
+                match &mut group_item.content {
+                    ItemContent::Group(g) => {
+                        let pos = idx.min(g.children.len());
+                        g.children.insert(pos, item_id);
+                    }
+                    _ => panic!("[attach_item] 先前代码未检查 group_id 类型"),
+                }
             }
         }
         Ok(())
+    }
+
+    // 将指定 Item 剥离树结构
+    fn detach_item(&mut self, item_id: ItemId) -> Result<usize> {
+        let old_parent = self
+            .items
+            .get(&item_id)
+            .ok_or_else(|| anyhow!("Item not found: {}", item_id))?
+            .parent;
+
+        // 从旧容器摘除
+        let removed = match old_parent {
+            None => {
+                let before = self.root_items.len();
+                self.root_items.retain(|&x| x != item_id);
+                before - self.root_items.len()
+            }
+            Some(parent_item_id) => {
+                let group_item = self
+                    .items
+                    .get_mut(&parent_item_id)
+                    .ok_or_else(|| anyhow!("Group not found: {}", parent_item_id))?;
+
+                match &mut group_item.content {
+                    ItemContent::Group(g) => {
+                        let before = g.children.len();
+                        g.children.retain(|&x| x != item_id);
+                        before - g.children.len()
+                    }
+                    _ => return Err(anyhow!("Target item {} is not a group", parent_item_id)),
+                }
+            }
+        };
+
+        // 断开 parent 指针
+        let item = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| anyhow!("Item not found: {}", item_id))?;
+        item.parent = None;
+
+        Ok(removed)
     }
 }
 

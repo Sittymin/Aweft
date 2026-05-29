@@ -3,37 +3,20 @@ use std::collections::HashSet;
 use crate::actions::Action;
 use crate::actions::area::AreaAction;
 use crate::actions::line_editor::LineEditorAction;
+use crate::clipboard::{Clipboard, ItemsClip};
 use crate::store::state::AppState;
 use crate::store::state_change::{LineEditorChange, StateChange};
 use crate::store::ui_models::UiModels;
 use anyhow::Result;
 use aweft_model::ids::ItemId;
-use aweft_model::structure::{ItemContent, ProjectStructure};
+use aweft_model::structure::{ItemContent, ItemLocation};
 use chrono::TimeDelta;
-
-/// 判断 `item_id` 在 `structure` 中向上的任一祖先是否也在 `set` 当中。
-///
-/// 用于"批量删除"等需要去重子树的场景：当父级已在删除集合时，
-/// 子项无需再独立处理，避免重复删除或顺序错乱。
-fn has_ancestor_in_set(
-    structure: &ProjectStructure,
-    item_id: ItemId,
-    set: &HashSet<ItemId>,
-) -> bool {
-    let mut current = structure.get(item_id).and_then(|i| i.parent);
-    while let Some(pid) = current {
-        if set.contains(&pid) {
-            return true;
-        }
-        current = structure.get(pid).and_then(|i| i.parent);
-    }
-    false
-}
 
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
     state: AppState,
     ui_models: UiModels,
+    clipboard: Clipboard,
 }
 
 impl AppStore {
@@ -45,6 +28,7 @@ impl AppStore {
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
             ui_models: UiModels::new(),
+            clipboard: Clipboard::new(),
         }
     }
 
@@ -217,29 +201,29 @@ impl AppStore {
             ),
         }
     }
-    /// 处理 LineEditor 相关 Action。
-    ///
-    /// 设计目标：本函数只做 Domain（`project.structure`）修改，UI 投影更新交给
-    /// `UIUpdater`（通过返回的 `LineEditorChange`）。
-    ///
-    /// 当前已完成 Domain ↔ UI 拆分的分支：
-    /// - `ToggleGroupCollapsed`
-    /// - `InputTimecode`
-    /// - `IncrementTimecode` / `DecrementTimecode`（仅单条）
-    /// - `DragTimecodePreview` / `DragTimecodeCommit` / `DragTimecodeCancel`（仅单条）
-    /// - `SelectSingle` / `SelectRange` / `SelectToggle`
-    /// - `AddLine` / `DeleteItems`
-    ///
-    /// FIXME: 仍混合了 UI 投影更新（is_batch == true 的分支）：
-    /// - `IncrementTimecode { is_batch: true }`
-    /// - `DecrementTimecode { is_batch: true }`
-    /// - `DragTimecodePreview { is_batch: true }`
-    /// - `DragTimecodeCommit { is_batch: true }`
-    /// - `DragTimecodeCancel { is_batch: true }`
-    ///
-    /// 这些批量分支需要新设计 payload（建议引入
-    /// `LineEditorChange::TimecodesBatchUpdated { updates, with_ancestor_recalc }`），
-    /// 当前先保留以维持行为不变。
+    // 处理 LineEditor 相关 Action。
+    //
+    // 设计目标：本函数只做 Domain（`project.structure`）修改，UI 投影更新交给
+    // `UIUpdater`（通过返回的 `LineEditorChange`）。
+    //
+    // 当前已完成 Domain ↔ UI 拆分的分支：
+    // - `ToggleGroupCollapsed`
+    // - `InputTimecode`
+    // - `IncrementTimecode` / `DecrementTimecode`（仅单条）
+    // - `DragTimecodePreview` / `DragTimecodeCommit` / `DragTimecodeCancel`（仅单条）
+    // - `SelectSingle` / `SelectRange` / `SelectToggle`
+    // - `AddLine` / `DeleteItems`
+    //
+    // FIXME: 仍混合了 UI 投影更新（is_batch == true 的分支）：
+    // - `IncrementTimecode { is_batch: true }`
+    // - `DecrementTimecode { is_batch: true }`
+    // - `DragTimecodePreview { is_batch: true }`
+    // - `DragTimecodeCommit { is_batch: true }`
+    // - `DragTimecodeCancel { is_batch: true }`
+    //
+    // 这些批量分支需要新设计 payload（建议引入
+    // `LineEditorChange::TimecodesBatchUpdated { updates, with_ancestor_recalc }`），
+    // 当前先保留以维持行为不变。
     fn dispatch_line_editor(&mut self, action: LineEditorAction) -> Result<StateChange> {
         match action {
             LineEditorAction::ToggleGroupCollapsed { group_id } => {
@@ -717,34 +701,98 @@ impl AppStore {
                 ]))
             }
             LineEditorAction::DeleteItems {} => {
-                // 1. 收集当前选中集合，过滤掉"祖先也被选中"的项，
-                //    避免在同一批删除中尝试移除已被父级递归删除的子项。
-                let selected_set = self
-                    .ui_models
-                    .line_editor_state
-                    .directly_selected_items()
-                    .clone();
-                let to_delete: Vec<ItemId> = selected_set
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        !has_ancestor_in_set(&self.state.project.structure, *id, &selected_set)
-                    })
-                    .collect();
-
-                // 2. 实际从 Domain（project.structure）当中删除（递归清理子树）。
-                let mut removed: Vec<ItemId> = Vec::with_capacity(to_delete.len());
-                for id in to_delete {
-                    match self.state.project.structure.remove_item(id) {
-                        Ok(()) => removed.push(id),
-                        Err(e) => log::warn!("删除 structure 项失败 id={:?}: {}", id, e),
-                    }
-                }
-
+                let removed = self.delete_currently_selected();
                 Ok(StateChange::LineEditor(LineEditorChange::ItemsRemoved {
                     item_ids: removed,
                 }))
             }
+            LineEditorAction::CopyItems => {
+                let count = self.copy_currently_selected()?;
+                Ok(StateChange::LineEditor(LineEditorChange::ItemsCopied {
+                    count,
+                }))
+            }
+            LineEditorAction::CutItems => {
+                let count = self.copy_currently_selected()?;
+                let removed = self.delete_currently_selected();
+                Ok(StateChange::Multiple(vec![
+                    StateChange::LineEditor(LineEditorChange::ItemsCopied { count }),
+                    StateChange::LineEditor(LineEditorChange::ItemsRemoved { item_ids: removed }),
+                ]))
+            }
+            LineEditorAction::UnGroup { group_item_id } => {
+                let new_ids = self
+                    .state
+                    .project
+                    .structure
+                    .ungroup(group_item_id)
+                    .map_err(|e| {
+                        log::error!("解散分组失败 {:?}: {}", group_item_id, e);
+                        e
+                    })?;
+                // UI 更新：移除旧分组行 + 插入提升的子项行
+                Ok(StateChange::LineEditor(
+                    LineEditorChange::GroupsUngrouped {
+                        group_id: group_item_id,
+                        new_ids,
+                    },
+                ))
+            }
+            LineEditorAction::PasteItems { anchor } => {
+                let Some(clip) = self.clipboard.paste_items()? else {
+                    log::info!("剪贴板没有可粘贴的内容");
+                    return Ok(StateChange::None);
+                };
+                let (new_root_ids, base_location) =
+                    clip.instantiate(&mut self.state.project.structure, anchor)?;
+                Ok(StateChange::LineEditor(LineEditorChange::ItemsPasted {
+                    new_root_ids,
+                    base_location,
+                }))
+            }
         }
+    }
+
+    /// 从当前选中集合构造 `ItemsClip` 并写入剪贴板，返回 root 数量。
+    /// 选中为空时返回 0 且不写入剪贴板（保留旧内容）
+    // NOTE: 也许输入为空的时候清空当前剪贴板更好？
+    fn copy_currently_selected(&mut self) -> Result<usize> {
+        let selected = self.ui_models.line_editor_state.directly_selected_items();
+        if selected.is_empty() {
+            return Ok(0);
+        }
+        let clip = ItemsClip::from_selection(&self.state.project.structure, selected);
+        let count = clip.root_count();
+        self.clipboard.copy_items(&clip)?;
+        Ok(count)
+    }
+
+    /// 从 Domain 删除当前选中集合（过滤"祖先已选中"），返回实际被移除的 root id 列表。
+    fn delete_currently_selected(&mut self) -> Vec<ItemId> {
+        let selected_set = self
+            .ui_models
+            .line_editor_state
+            .directly_selected_items()
+            .clone();
+        let to_delete: Vec<ItemId> = selected_set
+            .iter()
+            .copied()
+            .filter(|id| {
+                !&self
+                    .state
+                    .project
+                    .structure
+                    .has_ancestor_in_set(id, &selected_set)
+            })
+            .collect();
+
+        let mut removed: Vec<ItemId> = Vec::with_capacity(to_delete.len());
+        for id in to_delete {
+            match self.state.project.structure.remove_item(id) {
+                Ok(()) => removed.push(id),
+                Err(e) => log::warn!("删除 structure 项失败 id={:?}: {}", id, e),
+            }
+        }
+        removed
     }
 }

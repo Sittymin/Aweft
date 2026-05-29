@@ -36,17 +36,16 @@ export global LineEditorCallbacks {
         // actor: Option<ActorId>,
         text: string,
         // TODO: 这个分片的类型设计需要考虑
-        // segment_timing: 
+        // segment_timing:
         // TODO: 样式链的类型设计也需要考虑
-        // style: 
+        // style:
     );
     callback add-group(item-id: string);
     // 应用范围是选中的行
-    callback copy-items();
     callback cut-items();
-    callback paste-items(item-id: string);
+    callback copy-items();
+    callback paste-items(anchor-item-id: string);
     callback delete-selected-items();
-    callback move-items-up();
-    callback move-items-down();
-    callback ungroups();
+
+    callback ungroups(group-item-id: string);
 }
