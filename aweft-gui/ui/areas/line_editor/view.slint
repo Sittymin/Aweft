@@ -45,6 +45,74 @@ export component LineEditor inherits Rectangle {
         },
     ];
 
+    forward-focus: main-focus;
+
+    private property <int> focused-index: 0;
+    private property <length> row-height: Theme.data.line-editor.row-height;
+
+    function bring-into-view(idx: int) {
+        if idx < 0 || idx >= SubtitleState.rows.length {
+            debug("[bring-into-view](ui): 出现无效索引");
+            return;
+        }
+        let margin = row_height;
+
+        // NOTE: 往下为负
+        // 行的内容坐标（在完整列表中的位置）
+        let row_content_y = -(idx * row_height);
+        // 行的视口坐标（相对于视口顶部的可视位置）
+        let row_vis_y = row_content_y - list-view.viewport-y;
+
+        // === 上边缘处理 ===
+        if abs(row_vis_y) < margin && idx > 0 {
+            // 向上留一行
+            list-view.viewport-y += margin - abs(row_vis_y);
+        }
+        // 行未完全可见
+        else if row_vis_y > 0px {
+            // 第一行无需留边距，保证可见即可
+            list-view.viewport-y += row_vis_y;
+        }
+
+        // 调整后重新计算视口坐标
+        let row_vis_y2 = row_content_y - list-view.viewport-y;
+
+        // === 下边缘处理 ===
+        // 行坐标 此行高度 预留边缘间隔
+        if abs(row_vis_y2 - row_height - margin) > list-view.visible-height && idx + 1 < SubtitleState.rows.length {
+            // 向下留一行空白
+            list-view.viewport-y -= abs(row_vis_y2 - row_height - margin) - list-view.visible-height;
+        } else if abs(row_vis_y2 - row_height) > list-view.visible-height {
+            // 最后一行无需留边距
+            list-view.viewport-y -= abs(row_vis_y2 - row_height) - list-view.visible-height;
+        }
+    }
+
+    // 跟踪当前焦点行的索引
+    main-focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow) {
+                if focused-index + 1 < SubtitleState.rows.length {
+                    focused-index += 1;
+                    bring-into-view(focused-index);
+                    LineEditorCallbacks.select-single(
+                        SubtitleState.rows[focused-index].item-id);
+                }
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                if focused-index > 0 {
+                    focused-index -= 1;
+                    bring-into-view(focused-index);
+                    LineEditorCallbacks.select-single(
+                        SubtitleState.rows[focused-index].item-id);
+                }
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     VerticalBox {
         TableHeader {
             height: Theme.data.line-editor.header-height;
@@ -57,7 +125,7 @@ export component LineEditor inherits Rectangle {
             }
         }
 
-        ListView {
+        list-view := ListView {
             for row[idx] in SubtitleState.rows: Rectangle {
                 height: Theme.data.line-editor.row-height;
                 background: row.selected == SlintSelectionState.DirectlySelected ? red : row.selected == SlintSelectionState.IndirectlySelected ? blue : transparent;
@@ -66,6 +134,10 @@ export component LineEditor inherits Rectangle {
                 TouchArea {
                     pointer-event(event) => {
                         if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                            main-focus.focus();
+                            focused-index = idx;
+                            bring-into-view(idx);
+
                             if event.modifiers.shift {
                                 debug("Shift + 左键点击", idx, "行");
                                 LineEditorCallbacks.select-range(row.item-id)
@@ -79,6 +151,9 @@ export component LineEditor inherits Rectangle {
                         }
                         // 右键
                         else if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                            main-focus.focus();
+                            focused-index = idx;
+
                             // 如果右键的不是已选择的项目，那么就单选右键的行
                             if row.selected != SlintSelectionState.DirectlySelected {
                                 LineEditorCallbacks.select-single(row.item-id);

@@ -29,7 +29,7 @@ export component TimecodeEditor inherits Rectangle {
     // TODO: 可能有效的双向链接获取 TextInput 的输入同步批量修改显示
     // in-out property <string> text <=> text-input.text;
 
-    // 回调函数
+    // 回调函数(外部赋值)
     callback increment-timecode(is_batch: bool);
     callback decrement-timecode(is_batch: bool);
     callback drag-timecode-preview(delta-x: length, is_batch: bool);
