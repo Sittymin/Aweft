@@ -280,22 +280,38 @@ fn setup_toggle_group_collapsed_callback(instance: &MainWindow, store: Rc<RefCel
 fn setup_line_editor_timecode_editor_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     instance.global::<LineEditorCallbacks>().on_timecode_input(
-        move |event_id_str, is_start_time, text| {
+        move |event_id_str, is_start_time, text, is_batch| {
             use aweft_model::ids::ItemId;
             let Ok(event_id) = uuid::Uuid::parse_str(event_id_str.as_str()).map(ItemId) else {
                 warn!("无效的 event_id: {}", event_id_str);
                 return;
             };
             println!("输入文本: {text}");
-            let action = Action::LineEditor(
-                crate::actions::line_editor::LineEditorAction::InputTimecode {
+            if is_batch {
+                // 遍历所有选中的 event 项，应用时间修改
+                let selected_ids = store
+                    .borrow()
+                    .ui_models()
+                    .line_editor_state
+                    .directly_selected_items()
+                    .clone();
+                for &id in &selected_ids {
+                    let action = Action::LineEditor(LineEditorAction::InputTimecode {
+                        event_id: id,
+                        is_start_time,
+                        text: text.to_string(),
+                    });
+                    // dispatch each
+                    dispatch_and_render(&store, action, &weak_instance);
+                }
+            } else {
+                let action = Action::LineEditor(LineEditorAction::InputTimecode {
                     event_id,
                     is_start_time,
                     text: text.to_string(),
-                },
-            );
-
-            dispatch_and_render(&store, action, &weak_instance);
+                });
+                dispatch_and_render(&store, action, &weak_instance);
+            }
         },
     );
 }

@@ -50,6 +50,12 @@ export component LineEditor inherits Rectangle {
     private property <int> focused-index: 0;
     private property <length> row-height: Theme.data.line-editor.row-height;
 
+    // 批量编辑相关
+    private property <bool> is-batch-editing: false;
+    private property <string> batch-text: "";
+    private property <string> batch-master-item-id: "";
+    private property <bool> is-batch-for-start-time: false;
+
     function bring-into-view(idx: int) {
         if idx < 0 || idx >= SubtitleState.rows.length {
             debug("[bring-into-view](ui): 出现无效索引");
@@ -86,6 +92,12 @@ export component LineEditor inherits Rectangle {
             // 最后一行无需留边距
             list-view.viewport-y -= abs(row_vis_y2 - row_height) - list-view.visible-height;
         }
+    }
+
+    function exit-batch-edit() {
+        is-batch-editing = false;
+        batch-text = "";
+        batch-master-item-id = "";
     }
 
     // 跟踪当前焦点行的索引
@@ -333,12 +345,21 @@ export component LineEditor inherits Rectangle {
                             TimecodeEditor {
                                 increment-timecode(is_batch) => {
                                     LineEditorCallbacks.increment-timecode(row.item-id, true, is_batch);
+                                    focused-index = idx;
+                                    bring-into-view(idx);
+                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
                                 decrement-timecode(is_batch) => {
                                     LineEditorCallbacks.decrement-timecode(row.item-id, true, is_batch);
+                                    focused-index = idx;
+                                    bring-into-view(idx);
+                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch)
+                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch);
+                                    focused-index = idx;
+                                    bring-into-view(idx);
+                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
                                 drag-timecode-commit(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-commit(row.item-id, true, delta-x, is_batch)
@@ -347,9 +368,33 @@ export component LineEditor inherits Rectangle {
                                     LineEditorCallbacks.drag-timecode-cancel(row.item-id, true, is_batch)
                                 }
                                 timecode-input(text) => {
-                                    LineEditorCallbacks.timecode-input(row.item-id, true, text);
+                                    LineEditorCallbacks.timecode-input(row.item-id, true, text, root.is-batch-editing);
+                                    root.exit-batch-edit();
+                                }
+                                edit-activated(is_batch) => {
+                                    if is_batch && row.selected == SlintSelectionState.DirectlySelected {
+                                        root.is-batch-editing = true;
+                                        root.batch-master-item-id = row.item-id;
+                                        root.batch-text = row.start-time;
+                                        root.is-batch-for-start-time = true;
+                                    // 未选中状态下会被选中
+                                    } else if row.selected != SlintSelectionState.DirectlySelected {
+                                        focused-index = idx;
+                                        bring-into-view(idx);
+                                        LineEditorCallbacks.select-single(row.item-id)
+                                    }
+                                }
+                                editing-text-changed(text) => {
+                                    if root.is-batch-editing {
+                                        root.batch-text = text;
+                                    }
+                                }
+                                edit-canceled => {
+                                    root.exit-batch-edit()
                                 }
                                 text: row.start-time;
+                                is-passive-editing: root.is-batch-editing && root.is-batch-for-start-time && row.selected == SlintSelectionState.DirectlySelected && root.batch-master-item-id != row.item-id;
+                                batch-text: root.batch-text;
                             }
 
                             // TODO: 左右移动需要实现开始时间和结束时间同时移动
@@ -362,13 +407,23 @@ export component LineEditor inherits Rectangle {
                             TimecodeEditor {
                                 increment-timecode(is_batch) => {
                                     LineEditorCallbacks.increment-timecode(row.item-id, false, is_batch);
+                                    focused-index = idx;
+                                    bring-into-view(idx);
+                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
                                 decrement-timecode(is_batch) => {
                                     LineEditorCallbacks.decrement-timecode(row.item-id, false, is_batch);
+                                    focused-index = idx;
+                                    bring-into-view(idx);
+                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch)
+                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch);
+                                    focused-index = idx;
+                                    bring-into-view(idx);
+                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
+
                                 drag-timecode-commit(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-commit(row.item-id, false, delta-x, is_batch)
                                 }
@@ -376,9 +431,33 @@ export component LineEditor inherits Rectangle {
                                     LineEditorCallbacks.drag-timecode-cancel(row.item-id, false, is_batch)
                                 }
                                 timecode-input(text) => {
-                                    LineEditorCallbacks.timecode-input(row.item-id, false, text);
+                                    LineEditorCallbacks.timecode-input(row.item-id, false, text, root.is-batch-editing);
+                                    root.exit-batch-edit();
+                                }
+                                edit-activated(is_batch) => {
+                                    if is_batch && row.selected == SlintSelectionState.DirectlySelected {
+                                        root.is-batch-editing = true;
+                                        root.batch-master-item-id = row.item-id;
+                                        root.batch-text = row.end-time;
+                                        root.is-batch-for-start-time = false;
+                                    // 未选中状态下会被选中
+                                    } else if row.selected != SlintSelectionState.DirectlySelected {
+                                        focused-index = idx;
+                                        bring-into-view(idx);
+                                        LineEditorCallbacks.select-single(row.item-id)
+                                    }
+                                }
+                                editing-text-changed(text) => {
+                                    if root.is-batch-editing {
+                                        root.batch-text = text;
+                                    }
+                                }
+                                edit-canceled => {
+                                    root.exit-batch-edit()
                                 }
                                 text: row.end-time;
+                                is-passive-editing: root.is-batch-editing && !root.is-batch-for-start-time && row.selected == SlintSelectionState.DirectlySelected && root.batch-master-item-id != row.item-id;
+                                batch-text: root.batch-text;
                             }
                         }
                     }

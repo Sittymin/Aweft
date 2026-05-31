@@ -24,10 +24,10 @@ export component TimecodeEditor inherits Rectangle {
 
     // 是否处于编辑模式
     in-out property <bool> is-editing: false;
+    in-out property <bool> is-passive-editing: false;
     // 文本内容
     in-out property <string> text: "未输入";
-    // TODO: 可能有效的双向链接获取 TextInput 的输入同步批量修改显示
-    // in-out property <string> text <=> text-input.text;
+    in property <string> batch-text: "";
 
     // 回调函数(外部赋值)
     callback increment-timecode(is_batch: bool);
@@ -36,6 +36,9 @@ export component TimecodeEditor inherits Rectangle {
     callback drag-timecode-commit(delta-x: length, is_batch: bool);
     callback drag-timecode-cancel(is_batch: bool);
     callback timecode-input(text: string);
+    callback edit-activated(is-batch: bool);
+    callback edit-canceled();
+    callback editing-text-changed(text: string);
 
     width: 100px;
     height: 20px;
@@ -45,36 +48,49 @@ export component TimecodeEditor inherits Rectangle {
         root.shift-on-press = false;
         root.is-dragging = false;
         root.accumulated-drag = 0px;
+        root.is-editing = false;
+        root.is-passive-editing = false;
     }
 
     // 编辑模式：全宽输入框
-    if (root.is-editing): Rectangle {
+    if (root.is-editing || root.is-passive-editing): Rectangle {
         width: 100%;
         height: 100%;
         background: #222222;
         clip: true;
         forward-focus: text-input;
         init => {
-            text-input.focus();
-            text-input.select-all();
+            // 避免被动编辑抢焦点
+            if root.is-editing {
+                text-input.focus();
+                text-input.select-all();
+            }
         }
         text-input := TextInput {
             x: 4px;
             width: parent.width - 8px;
             height: 100%;
-            text: root.text;
+            // 触发编辑时，此处连接会断裂
+            text: root.is-passive-editing ? root.batch-text : root.text;
             color: #ffffff;
             font-size: 11px;
             vertical-alignment: center;
             horizontal-alignment: center;
             changed has-focus => {
                 if (!self.has-focus) {
-                    root.is-editing = false;
+                    root.edit-canceled();
+                    reset_state();
                 }
+            }
+            edited => {
+                // TODO: HERE
+                debug("编辑了东西：", self.text);
+                root.editing-text-changed(self.text);
             }
             accepted => {
                 root.is-editing = false;
-                root.timecode-input(self.text)
+                root.timecode-input(self.text);
+                reset_state();
             }
             key-pressed(event) => {
                 if (event.text == Key.Escape) {
@@ -87,7 +103,7 @@ export component TimecodeEditor inherits Rectangle {
     }
 
     // 非编辑模式：三区域布局
-    if (!root.is-editing): Rectangle {
+    if (!root.is-editing && !root.is-passive-editing): Rectangle {
         // 底层完整的TouchArea
         base-touch := TouchArea {
 
@@ -112,10 +128,11 @@ export component TimecodeEditor inherits Rectangle {
                 if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
                     if (root.is-dragging) {
                         root.drag-timecode-commit(root.accumulated-drag, root.shift-on-press);
+                        reset_state();
                     } else {
+                        root.edit-activated(root.shift-on-press);
                         root.is-editing = true;
                     }
-                    reset_state();
                 }
                 // 取消：安全清理（差不多是丢失鼠标的时候）
                 if (event.kind == PointerEventKind.cancel) {
