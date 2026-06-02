@@ -233,6 +233,19 @@ impl UIUpdateCommand {
                 is_start_time,
                 time,
             }],
+            LineEditorChange::TimecodesBatchPreviewDraged {
+                event_ids,
+                is_start_time,
+                times,
+            } => event_ids
+                .into_iter()
+                .zip(times.into_iter())
+                .map(|(event_id, time)| Self::UpdateLineEditorTimecodeRowOnly {
+                    event_id,
+                    is_start_time,
+                    time,
+                })
+                .collect(),
             LineEditorChange::SelectSingle { item_id } => {
                 vec![Self::UpdateLineEditorSelectSingle { item_id }]
             }
@@ -262,13 +275,9 @@ impl UIUpdateCommand {
                 new_root_ids,
                 base_location,
             }],
-            LineEditorChange::GroupsUngrouped {
-                group_id,
-                new_ids,
-            } => vec![Self::UpdateLineEditorItemsUngrouped {
-                group_id,
-                new_ids,
-            }],
+            LineEditorChange::GroupsUngrouped { group_id, new_ids } => {
+                vec![Self::UpdateLineEditorItemsUngrouped { group_id, new_ids }]
+            }
         }
     }
 

@@ -99,6 +99,11 @@ pub enum LineEditorChange {
         is_start_time: bool,
         time: TimeDelta,
     },
+    TimecodesBatchPreviewDraged {
+        event_ids: Vec<ItemId>,
+        is_start_time: bool,
+        times: Vec<TimeDelta>,
+    },
     /// 拖拽预览中（仅更新本行，不更新祖先聚合）
     TimecodePreviewDraged {
         event_id: ItemId,

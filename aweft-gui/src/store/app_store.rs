@@ -435,7 +435,6 @@ impl AppStore {
                 let delta = TimeDelta::milliseconds((delta_x.trunc() as i64) * 10);
 
                 if is_batch {
-                    // 批量调整：获取所有选中的事件项
                     let mut event_ids: HashSet<ItemId> = self
                         .ui_models
                         .line_editor_state
@@ -444,27 +443,37 @@ impl AppStore {
                     // 确保当前 event_id 也在列表中（同时也避免重复）
                     event_ids.insert(event_id);
 
+                    let mut batch_event_ids: Vec<ItemId> = Vec::new();
+                    let mut batch_times: Vec<TimeDelta> = Vec::new();
+
                     // 批量预览调整
-                    let mut updated_count = 0;
-                    for &id in &event_ids {
-                        if let Ok(time) = self.state.project.structure.preview_adjust_event_time(
+                    for id in event_ids {
+                        match self.state.project.structure.preview_adjust_event_time(
                             id,
                             is_start_time,
                             delta,
                         ) {
-                            // FIXME: 此部分虽然还是Rust侧持有的数据，但是是修改UI部分的
-                            // 可能需要改动Updater处理的细粒度
-                            self.ui_models
-                                .line_editor_state
-                                .update_row_time_without_ancestor_groups(id, is_start_time, time);
-                            updated_count += 1;
+                            Ok(time) => {
+                                batch_event_ids.push(id);
+                                batch_times.push(time);
+                            }
+                            Err(err) => {
+                                log::error!(
+                                    "Failed to preview adjust event time for id {}: {:?}",
+                                    id,
+                                    err
+                                );
+                            }
                         }
                     }
-
-                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
-                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
-                    if updated_count > 0 {
-                        return Ok(StateChange::None);
+                    if !batch_event_ids.is_empty() && !batch_times.is_empty() {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodesBatchPreviewDraged {
+                                event_ids: batch_event_ids,
+                                is_start_time,
+                                times: batch_times,
+                            },
+                        ));
                     }
                 } else {
                     // 单个调整
@@ -556,19 +565,23 @@ impl AppStore {
                         return Ok(StateChange::None);
                     }
                 } else {
-                    // 单个调整
-                    if let Ok(time) = self.state.project.structure.adjust_event_time(
+                    match self.state.project.structure.adjust_event_time(
                         event_id,
                         is_start_time,
                         delta,
                     ) {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeCommitDraged {
-                                event_id,
-                                is_start_time,
-                                time,
-                            },
-                        ));
+                        Ok(time) => {
+                            return Ok(StateChange::LineEditor(
+                                LineEditorChange::TimecodeCommitDraged {
+                                    event_id,
+                                    is_start_time,
+                                    time,
+                                },
+                            ));
+                        }
+                        Err(e) => {
+                            log::warn!("{e}")
+                        }
                     }
                 }
 
@@ -728,12 +741,10 @@ impl AppStore {
                         e
                     })?;
                 // UI 更新：移除旧分组行 + 插入提升的子项行
-                Ok(StateChange::LineEditor(
-                    LineEditorChange::GroupsUngrouped {
-                        group_id: group_item_id,
-                        new_ids,
-                    },
-                ))
+                Ok(StateChange::LineEditor(LineEditorChange::GroupsUngrouped {
+                    group_id: group_item_id,
+                    new_ids,
+                }))
             }
             LineEditorAction::PasteItems { anchor } => {
                 let Some(clip) = self.clipboard.paste_items()? else {
