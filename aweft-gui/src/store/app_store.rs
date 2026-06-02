@@ -34,9 +34,6 @@ impl AppStore {
 
     /// 分发 Action，返回状态变更描述
     pub fn dispatch(&mut self, action: Action) -> Result<StateChange> {
-        // 可以在这里添加日志
-        println!("[dispatch action]: {:?}", action);
-
         let change = match action {
             Action::Screen(screen_action) => self.dispatch_screen(screen_action),
             Action::Drag(drag_action) => self.dispatch_drag(drag_action),

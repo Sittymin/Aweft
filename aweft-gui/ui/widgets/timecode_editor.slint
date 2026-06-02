@@ -32,6 +32,7 @@ export component TimecodeEditor inherits Rectangle {
     // 回调函数(外部赋值)
     callback increment-timecode(is_batch: bool);
     callback decrement-timecode(is_batch: bool);
+    callback drag-timecode-start();
     callback drag-timecode-preview(delta-x: length, is_batch: bool);
     callback drag-timecode-commit(delta-x: length, is_batch: bool);
     callback drag-timecode-cancel(is_batch: bool);
@@ -147,14 +148,14 @@ export component TimecodeEditor inherits Rectangle {
                     // 检测是否达到阈值
                     if (!root.is-dragging && Math.abs(delta-x) > root.drag-threshold) {
                         root.is-dragging = true;
-                        debug("中间开始拖动", delta-x);
                         root.drag-start-x = delta-x;
+                        root.drag-timecode-start();
+                        debug("中间开始拖动", delta-x);
                     }
                     if (root.is-dragging) {
                         // 计算累积值：总距离 - 阈值偏移（保留方向）
                         root.accumulated-drag = delta-x - root.drag-start-x;
                         root.drag-timecode-preview(root.accumulated-drag, root.shift-on-press);
-                        debug("中间拖动中", root.accumulated-drag);
                     }
                 }
             }
@@ -209,7 +210,6 @@ export component TimecodeEditor inherits Rectangle {
                         if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
                             if (root.is-dragging) {
                                 root.drag-timecode-commit(root.accumulated-drag, root.shift-on-press);
-                                debug("左侧拖动提交", root.accumulated-drag);
                             } else {
                                 root.decrement-timecode(root.shift-on-press);
                             }

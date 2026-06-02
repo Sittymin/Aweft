@@ -355,11 +355,15 @@ export component LineEditor inherits Rectangle {
                                     bring-into-view(idx);
                                     LineEditorCallbacks.select-single(row.item-id);
                                 }
+                                drag-timecode-start => {
+                                    if row.selected != SlintSelectionState.DirectlySelected {
+                                        LineEditorCallbacks.select-single(row.item-id);
+                                    }
+                                }
                                 drag-timecode-preview(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
-                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
                                 drag-timecode-commit(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-commit(row.item-id, true, delta-x, is_batch)
@@ -417,11 +421,15 @@ export component LineEditor inherits Rectangle {
                                     bring-into-view(idx);
                                     LineEditorCallbacks.select-single(row.item-id);
                                 }
+                                drag-timecode-start => {
+                                    if row.selected != SlintSelectionState.DirectlySelected {
+                                        LineEditorCallbacks.select-single(row.item-id);
+                                    }
+                                }
                                 drag-timecode-preview(delta-x, is_batch) => {
                                     LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
-                                    LineEditorCallbacks.select-single(row.item-id);
                                 }
 
                                 drag-timecode-commit(delta-x, is_batch) => {

@@ -213,21 +213,14 @@ impl ProjectStructure {
             if let ItemContent::Event(event_data) = &mut item.content {
                 if is_start_time {
                     let new_start_time = event_data.start_time + delta;
-                    if new_start_time <= event_data.end_time {
-                        event_data.start_time = new_start_time;
-                        Ok(new_start_time)
-                    } else {
-                        Err(anyhow!("调整后的开始时间不能晚于结束时间"))
-                    }
+                    // 避免越界
+                    event_data.start_time = new_start_time.min(event_data.end_time);
+                    Ok(event_data.start_time)
                 } else {
                     // is_end_time
                     let new_end_time = event_data.end_time + delta;
-                    if new_end_time >= event_data.start_time {
-                        event_data.end_time = new_end_time;
-                        Ok(new_end_time)
-                    } else {
-                        Err(anyhow!("调整后的结束时间不能早于开始时间"))
-                    }
+                    event_data.end_time = new_end_time.max(event_data.start_time);
+                    Ok(event_data.end_time)
                 }
             } else {
                 Err(anyhow!("Item 不是 Event"))
@@ -247,19 +240,12 @@ impl ProjectStructure {
             if let ItemContent::Event(event_data) = &mut item.content {
                 if is_start_time {
                     let new_start_time = event_data.start_time + delta;
-                    if new_start_time <= event_data.end_time {
-                        Ok(new_start_time)
-                    } else {
-                        Err(anyhow!("调整后的开始时间不能晚于结束时间"))
-                    }
+                    // 避免越界
+                    Ok(new_start_time.min(event_data.end_time))
                 } else {
                     // is_end_time
                     let new_end_time = event_data.end_time + delta;
-                    if new_end_time >= event_data.start_time {
-                        Ok(new_end_time)
-                    } else {
-                        Err(anyhow!("调整后的结束时间不能早于开始时间"))
-                    }
+                    Ok(new_end_time.max(event_data.start_time))
                 }
             } else {
                 Err(anyhow!("Item 不是 Event"))
