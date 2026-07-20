@@ -347,13 +347,25 @@ export component LineEditor inherits Rectangle {
                                     LineEditorCallbacks.increment-timecode(row.item-id, true, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
-                                    LineEditorCallbacks.select-single(row.item-id);
+                                    if !is_batch {
+                                        LineEditorCallbacks.select-single(row.item-id);
+                                    } else {
+                                        if row.selected != SlintSelectionState.DirectlySelected {
+                                            LineEditorCallbacks.select-toggle(row.item-id);
+                                        }
+                                    }
                                 }
                                 decrement-timecode(is_batch) => {
                                     LineEditorCallbacks.decrement-timecode(row.item-id, true, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
-                                    LineEditorCallbacks.select-single(row.item-id);
+                                    if !is_batch {
+                                        LineEditorCallbacks.select-single(row.item-id);
+                                    } else {
+                                        if row.selected != SlintSelectionState.DirectlySelected {
+                                            LineEditorCallbacks.select-toggle(row.item-id);
+                                        }
+                                    }
                                 }
                                 drag-timecode-start => {
                                     if row.selected != SlintSelectionState.DirectlySelected {
@@ -413,13 +425,17 @@ export component LineEditor inherits Rectangle {
                                     LineEditorCallbacks.increment-timecode(row.item-id, false, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
-                                    LineEditorCallbacks.select-single(row.item-id);
+                                    if !is_batch {
+                                        LineEditorCallbacks.select-single(row.item-id);
+                                    }
                                 }
                                 decrement-timecode(is_batch) => {
                                     LineEditorCallbacks.decrement-timecode(row.item-id, false, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
-                                    LineEditorCallbacks.select-single(row.item-id);
+                                    if !is_batch {
+                                        LineEditorCallbacks.select-single(row.item-id);
+                                    }
                                 }
                                 drag-timecode-start => {
                                     if row.selected != SlintSelectionState.DirectlySelected {

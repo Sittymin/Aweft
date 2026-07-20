@@ -59,6 +59,12 @@ pub enum UIUpdateCommand {
         is_start_time: bool,
         time: TimeDelta,
     },
+    /// 批量更新多行时间码并统一更新祖先分组（批量自增/自减/拖拽提交）
+    UpdateLineEditorTimecodesBatchCommit {
+        event_ids: Vec<ItemId>,
+        is_start_time: bool,
+        times: Vec<TimeDelta>,
+    },
     UpdateLineEditorSelectSingle {
         item_id: ItemId,
     },
@@ -246,6 +252,15 @@ impl UIUpdateCommand {
                     time,
                 })
                 .collect(),
+            LineEditorChange::TimecodesBatchCommitDraged {
+                event_ids,
+                is_start_time,
+                times,
+            } => vec![Self::UpdateLineEditorTimecodesBatchCommit {
+                event_ids,
+                is_start_time,
+                times,
+            }],
             LineEditorChange::SelectSingle { item_id } => {
                 vec![Self::UpdateLineEditorSelectSingle { item_id }]
             }

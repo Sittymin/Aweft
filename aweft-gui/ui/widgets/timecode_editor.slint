@@ -128,6 +128,7 @@ export component TimecodeEditor inherits Rectangle {
                  // 松开：点击或拖动提交
                 if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
                     if (root.is-dragging) {
+                        debug("拖动提交", root.accumulated-drag, root.shift-on-press);
                         root.drag-timecode-commit(root.accumulated-drag, root.shift-on-press);
                         reset_state();
                     } else {

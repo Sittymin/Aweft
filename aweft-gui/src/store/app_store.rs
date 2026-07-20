@@ -276,48 +276,29 @@ impl AppStore {
                         event_ids.push(event_id);
                     }
 
-                    // 批量调整
-                    let mut updated_count = 0;
-                    let total_count = event_ids.len();
-
-                    for (index, &id) in event_ids.iter().enumerate() {
+                    // 批量更新 Model，收集成功的 id+time
+                    let mut updated_ids: Vec<ItemId> = Vec::new();
+                    let mut updated_times: Vec<TimeDelta> = Vec::new();
+                    for &id in &event_ids {
                         if let Ok(time) =
                             self.state
                                 .project
                                 .structure
                                 .adjust_event_time(id, is_start_time, delta)
                         {
-                            // 最后一个事件时更新分组头，其他事件只更新自身
-                            let is_last = index == total_count - 1;
-
-                            if is_last {
-                                // 最后一个：使用 update_row_time 更新分组头
-                                self.ui_models
-                                    .line_editor_state
-                                    .update_row_time_full_bounds_recursive(
-                                        &self.state.project,
-                                        id,
-                                        is_start_time,
-                                        time,
-                                    );
-                            } else {
-                                // 其他事件：只更新自身，不更新分组头
-                                self.ui_models
-                                    .line_editor_state
-                                    .update_row_time_without_ancestor_groups(
-                                        id,
-                                        is_start_time,
-                                        time,
-                                    );
-                            }
-                            updated_count += 1;
+                            updated_ids.push(id);
+                            updated_times.push(time);
                         }
                     }
 
-                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
-                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
-                    if updated_count > 0 {
-                        return Ok(StateChange::None);
+                    if !updated_ids.is_empty() {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodesBatchCommitDraged {
+                                event_ids: updated_ids,
+                                is_start_time,
+                                times: updated_times,
+                            },
+                        ));
                     }
                 } else {
                     // 单个调整
@@ -358,48 +339,29 @@ impl AppStore {
                         event_ids.push(event_id);
                     }
 
-                    // 批量调整
-                    let mut updated_count = 0;
-                    let total_count = event_ids.len();
-
-                    for (index, &id) in event_ids.iter().enumerate() {
+                    // 批量更新 Model，收集成功的 id+time
+                    let mut updated_ids: Vec<ItemId> = Vec::new();
+                    let mut updated_times: Vec<TimeDelta> = Vec::new();
+                    for &id in &event_ids {
                         if let Ok(time) =
                             self.state
                                 .project
                                 .structure
                                 .adjust_event_time(id, is_start_time, delta)
                         {
-                            // 最后一个事件时更新分组头，其他事件只更新自身
-                            let is_last = index == total_count - 1;
-
-                            if is_last {
-                                // 最后一个：使用 update_row_time 更新分组头
-                                self.ui_models
-                                    .line_editor_state
-                                    .update_row_time_full_bounds_recursive(
-                                        &self.state.project,
-                                        id,
-                                        is_start_time,
-                                        time,
-                                    );
-                            } else {
-                                // 其他事件：只更新自身，不更新分组头
-                                self.ui_models
-                                    .line_editor_state
-                                    .update_row_time_without_ancestor_groups(
-                                        id,
-                                        is_start_time,
-                                        time,
-                                    );
-                            }
-                            updated_count += 1;
+                            updated_ids.push(id);
+                            updated_times.push(time);
                         }
                     }
 
-                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
-                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
-                    if updated_count > 0 {
-                        return Ok(StateChange::None);
+                    if !updated_ids.is_empty() {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodesBatchCommitDraged {
+                                event_ids: updated_ids,
+                                is_start_time,
+                                times: updated_times,
+                            },
+                        ));
                     }
                 } else {
                     // 单个调整
@@ -425,6 +387,8 @@ impl AppStore {
                 delta_x,
                 is_batch,
             } => {
+                log::debug!("DragTimecodePreview delta_x: {}", delta_x);
+
                 if !delta_x.is_finite()
                     || delta_x >= (i64::MAX as f32)
                     || delta_x <= (i64::MIN as f32)
@@ -500,6 +464,8 @@ impl AppStore {
                 delta_x,
                 is_batch,
             } => {
+                log::debug!("DragTimecodeCommit delta_x: {}", delta_x);
+
                 if !delta_x.is_finite()
                     || delta_x >= (i64::MAX as f32)
                     || delta_x <= (i64::MIN as f32)
@@ -521,48 +487,29 @@ impl AppStore {
                     // 确保当前 event_id 也在列表中（同时也避免重复）
                     event_ids.insert(event_id);
 
-                    // 批量调整
-                    let mut updated_count = 0;
-                    let total_count = event_ids.len();
-
-                    for (index, &id) in event_ids.iter().enumerate() {
+                    // 批量更新 Model，收集成功的 id+time
+                    let mut updated_ids: Vec<ItemId> = Vec::new();
+                    let mut updated_times: Vec<TimeDelta> = Vec::new();
+                    for &id in &event_ids {
                         if let Ok(time) =
                             self.state
                                 .project
                                 .structure
                                 .adjust_event_time(id, is_start_time, delta)
                         {
-                            // 最后一个事件时更新分组头，其他事件只更新自身
-                            let is_last = index == total_count - 1;
-
-                            if is_last {
-                                // 最后一个：全量递归更新分组头
-                                self.ui_models
-                                    .line_editor_state
-                                    .update_row_time_full_bounds_recursive(
-                                        &self.state.project,
-                                        id,
-                                        is_start_time,
-                                        time,
-                                    );
-                            } else {
-                                // 其他事件：只更新自身，不更新分组头
-                                self.ui_models
-                                    .line_editor_state
-                                    .update_row_time_without_ancestor_groups(
-                                        id,
-                                        is_start_time,
-                                        time,
-                                    );
-                            }
-                            updated_count += 1;
+                            updated_ids.push(id);
+                            updated_times.push(time);
                         }
                     }
 
-                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
-                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
-                    if updated_count > 0 {
-                        return Ok(StateChange::None);
+                    if !updated_ids.is_empty() {
+                        return Ok(StateChange::LineEditor(
+                            LineEditorChange::TimecodesBatchCommitDraged {
+                                event_ids: updated_ids,
+                                is_start_time,
+                                times: updated_times,
+                            },
+                        ));
                     }
                 } else {
                     match self.state.project.structure.adjust_event_time(

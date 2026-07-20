@@ -76,6 +76,8 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (libassRuntimeDeps ++ slintRuntimeDeps);
           # 让 clang 找到库
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+          # 让 bindgen 调用的 libclang 找到 C 标准库头文件 (Nix 下 /usr/include 不存在)
+          BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.glibc.dev}/include";
 
           SLINT_BACKEND = "winit-femtovg-wgpu";
           # 实时更新

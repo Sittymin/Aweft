@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
 
@@ -161,6 +161,42 @@ impl LineEditorState {
         self.dirty_row_counts.clear();
     }
 
+    // === 时间码更新 ===
+
+    /// 更新事件行的时间码，返回该行所有祖先分组的 ID 列表。
+    ///
+    /// 这是时间码更新的核心原子操作：修改行数据，并将已有的祖先信息返回给调用方，
+    /// 由调用方决定是否触发分组头的聚合更新。
+    /// - 若只需预览/取消（不更新分组头），忽略返回值即可。
+    /// - 若需要同步分组头，将返回值加入 `dirty_row_counts` 后调用 `update_all_dirty_groups`。
+    pub fn update_row_time_without_ancestor_groups(
+        &mut self,
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    ) -> Vec<ItemId> {
+        let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
+            return vec![];
+        };
+        let Some(mut row) = self.all_rows.row_data(idx) else {
+            return vec![];
+        };
+        // ancestor_groups 只存父组 ID，不含时间数据，在修改行前后读取结果相同
+        let ancestor_ids: Vec<ItemId> = row
+            .ancestor_groups
+            .iter()
+            .filter_map(|s| uuid::Uuid::parse_str(&s).ok().map(ItemId))
+            .collect();
+        if is_start_time {
+            row.start_time = format_time(time);
+        } else {
+            row.end_time = format_time(time);
+        }
+        self.all_rows.set_row_data(idx, row);
+        ancestor_ids
+    }
+
+    /// 更新单个事件行的时间码，并通过 dirty 机制统一更新所有祖先分组的时间边界。
     pub fn update_row_time(
         &mut self,
         project: &Project,
@@ -168,143 +204,62 @@ impl LineEditorState {
         is_start_time: bool,
         time: TimeDelta,
     ) {
-        let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
-            warn!("在 item_id_to_ui_index 当中存在无效 item");
+        let ancestors = self.update_row_time_without_ancestor_groups(event_id, is_start_time, time);
+        if ancestors.is_empty() {
+            // 根级别事件无祖先，无需更新分组头；若返回空是因为 ID 不存在则静默跳过
             return;
-        };
-        let Some(mut row) = self.all_rows.row_data(idx) else {
-            warn!("获得的索引在 all_rows 当中不存在");
-            return;
-        };
-
-        if is_start_time {
-            row.start_time = format_time(time);
-        } else {
-            row.end_time = format_time(time);
         }
-
-        // 克隆父级列表以避免借用冲突
-        let ancestor_groups = row.ancestor_groups.clone();
-        self.all_rows.set_row_data(idx, row);
-
-        // HACK: 这里走楼梯写法是否可以优化?
-        // 遍历并更新所有受影响的父级
-        let mut cache: TimeBoundsCache = HashMap::new();
-        for ancestor_group_str in ancestor_groups.iter() {
-            if let Ok(ancestor_id) = uuid::Uuid::parse_str(&ancestor_group_str).map(ItemId) {
-                if let Some(&ancestor_idx) = self.item_id_to_ui_index.get(&ancestor_id) {
-                    if let Some(mut ancestor_row) = self.all_rows.row_data(ancestor_idx) {
-                        // 决定是否可以进行简单的边界扩展
-                        let can_quick_update = if is_start_time {
-                            parse_time(&ancestor_row.start_time).map_or(false, |val| time <= val)
-                        } else {
-                            parse_time(&ancestor_row.end_time).map_or(false, |val| time >= val)
-                        };
-
-                        if can_quick_update {
-                            // 路径A: 简单更新，成本低
-                            if is_start_time {
-                                ancestor_row.start_time = format_time(time);
-                            } else {
-                                ancestor_row.end_time = format_time(time);
-                            }
-                        } else {
-                            // 路径B: 不是简单扩展，需要递归重新计算，成本高
-                            if let Some((min_start, max_end)) =
-                                find_item_time_bounds_recursive(ancestor_id, project, &mut cache)
-                            {
-                                // 保持原始意图：只更新与触发事件相关的那个时间字段
-                                if is_start_time {
-                                    ancestor_row.start_time = format_time(min_start);
-                                } else {
-                                    ancestor_row.end_time = format_time(max_end);
-                                }
-                            }
-                        }
-
-                        // 无论通过哪个路径修改了 ancestor_row，都在最后统一提交更新。
-                        self.all_rows.set_row_data(ancestor_idx, ancestor_row);
-                    }
-                }
-            }
-        }
+        self.dirty_row_counts.extend(ancestors);
+        self.update_all_dirty_groups(project);
     }
 
-    pub fn update_row_time_full_bounds_recursive(
+    /// 批量更新多个事件行的时间码，并统一更新所有受影响祖先分组（每个分组仅更新一次）。
+    ///
+    /// 通过复用 `update_row_time_without_ancestor_groups`，在单次循环中同时完成
+    /// 行更新与祖先收集，最后统一触发 dirty 更新，避免对同一分组的重复计算。
+    pub fn update_rows_batch_then_ancestors(
         &mut self,
         project: &Project,
-        event_id: ItemId,
+        event_ids: &[ItemId],
         is_start_time: bool,
-        time: TimeDelta,
+        times: &[TimeDelta],
     ) {
-        let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
-            warn!("在 item_id_to_ui_index 当中存在无效 item");
-            return;
-        };
-        let Some(mut row) = self.all_rows.row_data(idx) else {
-            warn!("获得的索引在 all_rows 当中不存在");
-            return;
-        };
-
-        if is_start_time {
-            row.start_time = format_time(time);
-        } else {
-            row.end_time = format_time(time);
+        let mut dirty_ancestors: HashSet<ItemId> = HashSet::new();
+        for (&id, &time) in event_ids.iter().zip(times.iter()) {
+            let ancestors = self.update_row_time_without_ancestor_groups(id, is_start_time, time);
+            dirty_ancestors.extend(ancestors);
         }
-
-        // 克隆父级列表以避免借用冲突
-        let ancestor_groups = row.ancestor_groups.clone();
-        self.all_rows.set_row_data(idx, row);
-
-        // HACK: 这里走楼梯写法是否可以优化?
-        // 遍历并更新所有受影响的父级
-        let mut cache: TimeBoundsCache = HashMap::new();
-        for ancestor_group_str in ancestor_groups.iter() {
-            if let Ok(ancestor_id) = uuid::Uuid::parse_str(&ancestor_group_str).map(ItemId) {
-                if let Some(&ancestor_idx) = self.item_id_to_ui_index.get(&ancestor_id) {
-                    if let Some(mut ancestor_row) = self.all_rows.row_data(ancestor_idx) {
-                        // 决定是否可以进行简单的边界扩展
-                        // 路径B: 不是简单扩展，需要递归重新计算，成本高
-                        if let Some((min_start, max_end)) =
-                            find_item_time_bounds_recursive(ancestor_id, project, &mut cache)
-                        {
-                            // 保持原始意图：只更新与触发事件相关的那个时间字段
-                            if is_start_time {
-                                ancestor_row.start_time = format_time(min_start);
-                            } else {
-                                ancestor_row.end_time = format_time(max_end);
-                            }
-                        }
-
-                        self.all_rows.set_row_data(ancestor_idx, ancestor_row);
-                    }
-                }
-            }
-        }
+        self.dirty_row_counts.extend(dirty_ancestors);
+        self.update_all_dirty_groups(project);
     }
 
-    // update_row_time 的轻量版本（但是会导致分组头时间不正确）
-    pub fn update_row_time_without_ancestor_groups(
+    pub fn set_row_time(
         &mut self,
         event_id: ItemId,
-        is_start_time: bool,
-        time: TimeDelta,
+        start_time: Option<TimeDelta>,
+        end_time: Option<TimeDelta>,
     ) {
-        let Some(&idx) = self.item_id_to_ui_index.get(&event_id) else {
-            return;
-        };
+        let &ui_idx = self
+            .item_id_to_ui_index
+            .get(&event_id)
+            .unwrap_or_else(|| panic!("数据有污染或未更新，无 {} 的 UI index 索引缓存", event_id));
 
-        let Some(mut row) = self.all_rows.row_data(idx) else {
-            return;
-        };
+        let mut row = self.all_rows.row_data(ui_idx).unwrap_or_else(|| {
+            panic!(
+                "数据有污染或未更新，{} 的 UI index 索引缓存不正确",
+                event_id
+            )
+        });
 
-        if is_start_time {
-            row.start_time = format_time(time);
-        } else {
-            row.end_time = format_time(time);
+        if let Some(start) = start_time {
+            row.start_time = format_time(start);
         }
 
-        self.all_rows.set_row_data(idx, row);
+        if let Some(end) = end_time {
+            row.end_time = format_time(end);
+        }
+
+        self.all_rows.set_row_data(ui_idx, row);
     }
 
     pub fn toggle_group(&mut self, group_id: &str) {

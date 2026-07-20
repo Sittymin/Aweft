@@ -122,6 +122,21 @@ impl UIUpdater {
                         .line_editor_state
                         .update_row_time_without_ancestor_groups(event_id, is_start_time, time);
                 }
+                UIUpdateCommand::UpdateLineEditorTimecodesBatchCommit {
+                    event_ids,
+                    is_start_time,
+                    times,
+                } => {
+                    let (state, ui_models) = store.split_mut();
+                    ui_models
+                        .line_editor_state
+                        .update_rows_batch_then_ancestors(
+                            &state.project,
+                            &event_ids,
+                            is_start_time,
+                            &times,
+                        );
+                }
                 UIUpdateCommand::UpdateLineEditorSelectSingle { item_id } => {
                     let (state, ui_models) = store.split_mut();
                     ui_models

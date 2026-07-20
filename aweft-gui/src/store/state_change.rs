@@ -110,7 +110,13 @@ pub enum LineEditorChange {
         is_start_time: bool,
         time: TimeDelta,
     },
-    /// 拖拽提交（整行 + 祖先分组聚合）
+    /// 批量拖拽提交（批量整行 + 一次性更新祖先肆合）
+    TimecodesBatchCommitDraged {
+        event_ids: Vec<ItemId>,
+        is_start_time: bool,
+        times: Vec<TimeDelta>,
+    },
+    /// 拖拽提交（整行 + 祖先分组膆合）
     TimecodeCommitDraged {
         event_id: ItemId,
         is_start_time: bool,
