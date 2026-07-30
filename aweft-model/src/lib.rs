@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod ids;
 pub mod library;
 pub mod metadata;
