@@ -1,5 +1,6 @@
 pub mod ids;
 pub mod library;
 pub mod metadata;
+pub mod node_graph;
 pub mod project;
 pub mod structure;

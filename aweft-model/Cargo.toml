@@ -8,5 +8,9 @@ anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = [ "serde" ] }
 nom = "8.0.0"
 serde = "1.0.228"
-uuid = { version = "1.19.0", features = [ "serde" ] }
+uuid = { version = "1.19.0", features = [ "serde", "v4" ] }
 log = "0.4.28"
+thiserror = "2"
+palette = { version = "0.7.6", features = [ "serializing" ] }
+proptest = "1.11.0"
+regex = "1.12.1"
