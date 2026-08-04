@@ -8,6 +8,7 @@ use std::path::Path;
 // use crate::processor::{merge_ass_files_with_offsets, FileWithOffset};
 pub use crate::error::{ParseError, Result};
 pub use crate::types::ASSFile;
+pub use aweft_libass::types::AssColorRgb;
 
 pub fn load_ass(path: impl AsRef<Path>) -> Result<ASSFile> {
     ASSFile::parse_from_file(&path)

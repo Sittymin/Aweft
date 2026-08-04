@@ -5,4 +5,13 @@ edition = "2021"
 
 [dependencies]
 aweft-ass = { path = "../aweft-ass" }
+aweft-model = { path = "../aweft-model" }
+chrono = "0.4"
+log = "0.4.28"
 nom = "7"
+palette = "0.7"
+rayon = "1"
+
+[[example]]
+name = "live_dp"
+path = "examples/live_dp.rs"
