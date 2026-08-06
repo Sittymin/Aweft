@@ -1,0 +1,607 @@
+import { Theme } from "../../theme/index.slint";
+
+// 端口数据类型，决定端口与连接线的颜色。
+export enum NodeSocketType {
+    style,
+    text,
+    int,
+    bool,
+    animation,
+}
+
+// 节点上一个端口的描述。
+export struct NodeSocketData {
+    // 端口显示名
+    name: string,
+    // true 为左侧输入端口，false 为右侧输出端口
+    is-input: bool,
+    data-type: NodeSocketType,
+}
+
+// 一条节点连接：数据流方向固定 from（输出端）→ to（输入端）。
+// 端口索引均为"节点内索引"（与 NodeFrame.sockets 的下标一致）。
+export struct GraphLink {
+    // 定长槽位标记：true 表示这条连接有效（编辑器只增不减，重连仅改写端点）
+    active: bool,
+    // 输出端：节点索引 + 端口索引
+    from-node: int,
+    from-socket: int,
+    // 输入端：节点索引 + 端口索引
+    to-node: int,
+    to-socket: int,
+    data-type: NodeSocketType,
+}
+
+// 拖拽释放时命中的输入端口。
+export struct SocketHit {
+    found: bool,
+    node: int,
+    socket: int,
+}
+
+// 画布上的一个节点实例（编辑器内定长槽位管理，active 标记是否有效）。
+export struct GraphNode {
+    active: bool,
+    title: string,
+    // 世界坐标（左上角）
+    x: length,
+    y: length,
+    sockets: [NodeSocketData],
+}
+
+// 节点类型模板（右键菜单里的可选节点）。
+export struct NodeTemplate {
+    title: string,
+    sockets: [NodeSocketData],
+}
+
+// 单个节点：Blender 风格，深色圆角矩形，顶部标题栏，两侧端口，可被拖拽。
+// 左键拖拽通过 drag-moved 上报位移量；滚轮/中键事件转发给画布导航。
+// node-x/y 为世界坐标；视图平移缩放（view-pan/view-zoom）由编辑器传入。
+// 不用 transform-scale 渲染缩放（该方式在极端缩放值下不可靠），
+// 而是把节点几何（尺寸/字体/端口/圆角/阴影）全部按 view-zoom 绑定缩放。
+// 本地坐标系为屏幕像素，因此上报的坐标需换算回世界坐标。
+export component NodeFrame inherits Rectangle {
+    in property <string> title;
+    in property <[NodeSocketData]> sockets;
+    in property <length> node-x;
+    in property <length> node-y;
+    // 视图平移/缩放（来自画布导航）
+    in property <length> view-pan-x: 0px;
+    in property <length> view-pan-y: 0px;
+    in property <float> view-zoom: 1.0;
+    // 选中状态：整圈描边换成高亮色并加粗（Blender 用主题 select 色画节点轮廓）
+    in property <bool> selected: false;
+    callback drag-moved(delta-x: length, delta-y: length);
+    // 左键按下节点主体（未命中端口）时上报，编辑器据此更新选中状态
+    callback press-requested();
+    // 导航事件上报（世界坐标），由编辑器转给画布导航
+    callback scroll-requested(delta-y: length, at-x: length, at-y: length);
+    callback pan-start-requested(at-x: length, at-y: length);
+    callback pan-move-requested(at-x: length, at-y: length);
+    // 端口拖拽事件（世界坐标）：按下命中端口即开始，松开结束。
+    // 编辑据此实现拖拽重连：从输出端拉新线、从已连接的输入端拿下该线。
+    callback socket-drag-started(socket-index: int, is-input: bool, data-type: NodeSocketType, at-world-x: length, at-world-y: length);
+    callback socket-drag-moved(at-world-x: length, at-world-y: length);
+    callback socket-drag-ended(at-world-x: length, at-world-y: length);
+    // 端口拖拽中按下右键：取消本次拖拽（编辑据此恢复原连接）
+    callback socket-drag-canceled();
+    // 右键按下节点主体（未在端口拖拽中）：编辑据此弹出节点菜单（世界坐标）
+    callback right-pressed(at-world-x: length, at-world-y: length);
+
+    // 按 view-zoom 缩放后的几何量
+    private property <length> node-width: Theme.data.node-editor.node-width * view-zoom;
+    private property <length> header-height: Theme.data.node-editor.node-header-height * view-zoom;
+    private property <length> socket-row-height: Theme.data.node-editor.node-socket-row-height * view-zoom;
+    private property <length> socket-size: Theme.data.node-editor.socket-size * view-zoom;
+    private property <length> node-radius: Theme.data.node-editor.node-border-radius * view-zoom;
+    private property <length> title-font-size: Theme.data.node-editor.node-title-font-size * view-zoom;
+    private property <length> socket-font-size: Theme.data.node-editor.node-socket-font-size * view-zoom;
+
+    x: node-x * view-zoom + view-pan-x;
+    y: node-y * view-zoom + view-pan-y;
+    width: node-width;
+    height: header-height + self.sockets.length * socket-row-height;
+    background: Theme.data.node-editor.node-background;
+    border-radius: node-radius;
+    // 描边由独立的 border-overlay 覆盖层绘制（位于标题栏之上、端口之下，
+    // 避免标题栏背景盖住顶部描边，也避免盖住端口；Blender 的节点轮廓同此顺序）
+    // 不画投影（小缩放时渲染会失真，直接不要）
+
+    // 标题栏
+    Rectangle {
+        y: 0;
+        width: 100%;
+        height: header-height;
+        background: Theme.data.node-editor.node-header-background;
+        border-top-left-radius: node-radius;
+        border-top-right-radius: node-radius;
+        Text {
+            text: root.title;
+            width: 100%;
+            height: 100%;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            color: Theme.data.node-editor.node-text;
+            font-size: title-font-size;
+            overflow: elide;
+        }
+    }
+
+    // 节点整圈描边：选中时用高亮色并加粗（Blender 的节点选中轮廓）
+    border-overlay := Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-radius: node-radius;
+        border-width: selected ? 2px * view-zoom : 1px * view-zoom;
+        border-color: selected ? Theme.data.node-editor.node-selected-outline : Theme.data.node-editor.node-border;
+    }
+
+    // 端口行
+    for socket[i] in root.sockets: Rectangle {
+        y: header-height + i * socket-row-height;
+        width: 100%;
+        height: socket-row-height;
+
+        // 输入端口（节点左侧，半伸出边缘）
+        if socket.is-input: Rectangle {
+            width: socket-size;
+            height: socket-size;
+            x: -socket-size / 2;
+            y: (parent.height - socket-size) / 2;
+            border-radius: socket-size / 2;
+            background: root.socket-color(socket.data-type);
+            border-width: 1px * view-zoom;
+            border-color: Theme.data.node-editor.socket-outline;
+        }
+        // 输出端口（节点右侧，半伸出边缘）
+        if !socket.is-input: Rectangle {
+            width: socket-size;
+            height: socket-size;
+            x: parent.width - socket-size / 2;
+            y: (parent.height - socket-size) / 2;
+            border-radius: socket-size / 2;
+            background: root.socket-color(socket.data-type);
+            border-width: 1px * view-zoom;
+            border-color: Theme.data.node-editor.socket-outline;
+        }
+
+        // 端口名：输入靠左，输出靠右
+        Text {
+            text: socket.name;
+            width: parent.width - socket-size - 8px * view-zoom;
+            height: 100%;
+            x: socket.is-input ? socket-size + 6px * view-zoom : 0px;
+            horizontal-alignment: socket.is-input ? left : right;
+            vertical-alignment: center;
+            color: Theme.data.node-editor.node-muted-text;
+            font-size: socket-font-size;
+            overflow: elide;
+        }
+    }
+
+    // 交互状态
+    private property <bool> dragging: false;
+    private property <bool> panning: false;
+    private property <bool> socket-dragging: false;
+    // 按下时的固定鼠标基准：拖动中不更新，避免参考系随节点移动而引入反馈误差
+    private property <length> press-mouse-x: 0px;
+    private property <length> press-mouse-y: 0px;
+    // TouchArea 相对节点左右各外扩的量：端口半伸在节点外，必须扩出去才能被点中
+    private property <length> ta-overhang: socket-size * 2;
+
+    // 光标世界坐标：node-x + (本地屏幕位移 - 外扩) / zoom
+    function world-cursor-x() -> length {
+        return node-x + (ta.mouse-x - ta-overhang) / view-zoom;
+    }
+    function world-cursor-y() -> length {
+        return node-y + ta.mouse-y / view-zoom;
+    }
+
+    // 端口抓取判定：以端口中心为圆心、直径大小的方形区域（比视觉略大，方便连接）。
+    // 输入端口中心伸在节点左缘外，输出端口伸在右缘外。
+    function socket-hits(socket-index: int, x: length, y: length) -> bool {
+        let cx: length = root.sockets[socket-index].is-input
+            ? -socket-size / 2
+            : node-width - socket-size / 2;
+        let cy: length = header-height + socket-index * socket-row-height + socket-row-height / 2;
+        let r: length = socket-size;
+        return x > cx - r && x < cx + r && y > cy - r && y < cy + r;
+    }
+
+    // 命中哪个端口（Slint 函数内无循环，逐下标判断；节点端口数很少）
+    function find-socket-at(x: length, y: length) -> int {
+        if root.sockets.length > 0 && root.socket-hits(0, x, y) { return 0; }
+        if root.sockets.length > 1 && root.socket-hits(1, x, y) { return 1; }
+        if root.sockets.length > 2 && root.socket-hits(2, x, y) { return 2; }
+        if root.sockets.length > 3 && root.socket-hits(3, x, y) { return 3; }
+        return -1;
+    }
+
+    // 左键拖拽节点或端口；滚轮缩放；中键拖拽平移（均转发给编辑器）。
+    // 本组件覆盖范围超出节点，mouse-x 需减去 ta-overhang 换回节点本地坐标。
+    ta := TouchArea {
+        x: -ta-overhang;
+        y: 0px;
+        width: parent.width + 2 * ta-overhang;
+        height: parent.height;
+        scroll-event(event) => {
+            root.scroll-requested(event.delta-y, root.world-cursor-x(), root.world-cursor-y());
+            return EventResult.accept;
+        }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                let hit-index = root.find-socket-at(self.mouse-x - ta-overhang, self.mouse-y);
+                if (hit-index >= 0) {
+                    root.socket-dragging = true;
+                    root.socket-drag-started(
+                        hit-index,
+                        root.sockets[hit-index].is-input,
+                        root.sockets[hit-index].data-type,
+                        root.world-cursor-x(),
+                        root.world-cursor-y()
+                    );
+                } else {
+                    root.press-requested();
+                    root.dragging = true;
+                    root.press-mouse-x = self.mouse-x;
+                    root.press-mouse-y = self.mouse-y;
+                }
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.socket-dragging) {
+                // 拖拽中按右键：取消拖拽，恢复原连接
+                root.socket-drag-canceled();
+                root.socket-dragging = false;
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                // 节点主体右键：弹出节点菜单
+                root.right-pressed(root.world-cursor-x(), root.world-cursor-y());
+            } else if (event.kind == PointerEventKind.move && root.socket-dragging) {
+                root.socket-drag-moved(root.world-cursor-x(), root.world-cursor-y());
+            } else if (event.kind == PointerEventKind.move && root.dragging) {
+                root.drag-moved(
+                    (self.mouse-x - root.press-mouse-x) / root.view-zoom,
+                    (self.mouse-y - root.press-mouse-y) / root.view-zoom
+                );
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.middle) {
+                root.panning = true;
+                root.pan-start-requested(root.world-cursor-x(), root.world-cursor-y());
+            } else if (event.kind == PointerEventKind.move && root.panning) {
+                root.pan-move-requested(root.world-cursor-x(), root.world-cursor-y());
+            } else if (event.kind == PointerEventKind.up) {
+                if (root.socket-dragging) {
+                    root.socket-drag-ended(root.world-cursor-x(), root.world-cursor-y());
+                    root.socket-dragging = false;
+                }
+                root.dragging = false;
+                root.panning = false;
+            }
+        }
+    }
+
+    // 端口类型 -> 颜色
+    function socket-color(data-type: NodeSocketType) -> color {
+        if data-type == NodeSocketType.text {
+            return Theme.data.node-editor.socket-text-color;
+        }
+        if data-type == NodeSocketType.int {
+            return Theme.data.node-editor.socket-int-color;
+        }
+        if data-type == NodeSocketType.bool {
+            return Theme.data.node-editor.socket-bool-color;
+        }
+        if data-type == NodeSocketType.animation {
+            return Theme.data.node-editor.socket-animation-color;
+        }
+        return Theme.data.node-editor.socket-style-color;
+    }
+}
+
+// 一条节点连接线：从 from 端口到 to 端口的三次贝塞尔曲线。
+// 使用 Path 子元素 MoveTo/CubicTo 声明，坐标随端口位置动态绑定。
+// 渲染要点（Slint 1.14 的 Path fit 机制）：
+//  - fit 把 viewbox 缩放到 bounds(=元素尺寸-线宽)。因此元素尺寸 = 源盒+线宽，
+//    使 bounds == viewbox，缩放精确为 1:1，不会因退化 bbox 产生病态缩放。
+//  - 源盒每侧外扩一个线宽，保证水平/垂直对齐时源尺寸非零（否则 viewbox 失效）。
+//  - 元素非零尺寸，避免被渲染器按空几何裁剪掉。
+export component GraphNodeLink inherits Path {
+    in property <length> from-x;
+    in property <length> from-y;
+    in property <length> to-x;
+    in property <length> to-y;
+    // 连接线数据类型，决定线的颜色
+    in property <NodeSocketType> data-type: NodeSocketType.style;
+    // 视图缩放：线宽随缩放变化
+    in property <float> view-zoom: 1.0;
+    // 拖拽重连中：自由端（to）跟随鼠标。
+    // 连接态：整线比接口颜色泛白；拖拽态：已连接端（from）泛白、
+    // 拖拽端（to）为接口颜色，中间线性渐变过渡。
+    in property <bool> dragging: false;
+
+    // 线宽随缩放变化
+    private property <length> line-width: Theme.data.node-editor.link-width * view-zoom;
+    // 水平控制臂长度：两端至少一段固定长度，更远时取间距的一半
+    private property <length> stretch: max(Theme.data.node-editor.link-stretch, (to-x - from-x) / 2);
+    // 源盒每侧外扩一个线宽
+    private property <length> box-pad: line-width;
+
+    // 路径源盒（相对坐标空间）：三次贝塞尔两端控制点水平，x 方向受控制点外扩，y 方向只受端点约束
+    private property <length> src-x: min(from-x, to-x - stretch) - box-pad;
+    private property <length> src-w: max(from-x + stretch, to-x) - min(from-x, to-x - stretch) + box-pad * 2;
+    private property <length> src-y: min(from-y, to-y) - box-pad;
+    private property <length> src-h: max(from-y, to-y) - min(from-y, to-y) + box-pad * 2;
+
+    // 元素 = 源盒 + 线宽，bounds == viewbox，fit 精确 1:1
+    x: src-x;
+    y: src-y;
+    width: src-w + line-width;
+    height: src-h + line-width;
+    viewbox-x: 0;
+    viewbox-y: 0;
+    viewbox-width: src-w / 1px;
+    viewbox-height: src-h / 1px;
+    fill: transparent;
+    // 连接态为泛白纯色；拖拽态为沿连线方向的渐变（from 端泛白 → to 端接口色）
+    stroke: dragging
+        ? @linear-gradient(
+            root.gradient-angle(from-x, from-y, to-x, to-y),
+            root.whitened-color(root.data-type),
+            root.link-color(root.data-type)
+        )
+        : root.whitened-color(root.data-type);
+    stroke-width: line-width;
+    stroke-line-cap: round;
+
+    // 起点（from 端口，相对源盒坐标）
+    MoveTo {
+        x: (from-x - src-x) / 1px;
+        y: (from-y - src-y) / 1px;
+    }
+    // 三次贝塞尔：两端控制点保持水平，形成平滑的“S”形连接
+    CubicTo {
+        control-1-x: (from-x + stretch - src-x) / 1px;
+        control-1-y: (from-y - src-y) / 1px;
+        control-2-x: (to-x - stretch - src-x) / 1px;
+        control-2-y: (to-y - src-y) / 1px;
+        x: (to-x - src-x) / 1px;
+        y: (to-y - src-y) / 1px;
+    }
+
+    function link-color(data-type: NodeSocketType) -> color {
+        if data-type == NodeSocketType.text {
+            return Theme.data.node-editor.socket-text-color;
+        }
+        if data-type == NodeSocketType.int {
+            return Theme.data.node-editor.socket-int-color;
+        }
+        if data-type == NodeSocketType.bool {
+            return Theme.data.node-editor.socket-bool-color;
+        }
+        if data-type == NodeSocketType.animation {
+            return Theme.data.node-editor.socket-animation-color;
+        }
+        return Theme.data.node-editor.link-color;
+    }
+
+    // 连接态线色：比接口颜色泛白一点
+    function whitened-color(data-type: NodeSocketType) -> color {
+        return root.link-color(data-type).mix(white, 0.30);
+    }
+
+    // 渐变方向角：Slint 线性渐变的角度在元素局部坐标下旋转，
+    // 首个色标落在 from（已连接）一侧。由端点差计算屏幕方向角再偏移 90°，
+    // 使渐变沿 from → to 的连线方向（首标泛白、末标接口色）。
+    // Math.atan2 已返回角度（度），与 90deg 相加保持角度类型。
+    function gradient-angle(fx: length, fy: length, tx: length, ty: length) -> angle {
+        return Math.atan2((ty - fy) / 1px, (tx - fx) / 1px) + 90deg;
+    }
+}
+
+// 画布导航：滚轮以光标为中心缩放，中键拖拽平移视图。
+// 自身承载 pan/zoom 状态；编辑器把世界层绑定到 nav 的状态上，
+// 节点位于世界层内，其上报的坐标也统一换算为世界坐标。
+export component GraphNavigation inherits TouchArea {
+    in-out property <length> pan-x: 0px;
+    in-out property <length> pan-y: 0px;
+    in-out property <float> zoom: 1.0;
+
+    private property <float> min-zoom: 0.2;
+    private property <float> max-zoom: 4.0;
+    private property <float> zoom-step: 1.2;
+    private property <length> pan-start-world-x: 0px;
+    private property <length> pan-start-world-y: 0px;
+    private property <bool> panning: false;
+
+    // 屏幕坐标 -> 世界坐标（光标位置换算）
+    function world-x() -> length {
+        return (self.mouse-x - pan-x) / zoom;
+    }
+    function world-y() -> length {
+        return (self.mouse-y - pan-y) / zoom;
+    }
+
+    // 滚轮缩放：围绕世界坐标点 at 进行，保持该点屏幕位置不变
+    public function apply-zoom(delta-y: length, at-x: length, at-y: length) {
+        if (delta-y == 0px) {
+            return;
+        }
+        let old-zoom = zoom;
+        let new-zoom = min(max-zoom, max(min-zoom, old-zoom * (delta-y > 0px ? zoom-step : 1.0 / zoom-step)));
+        if (new-zoom == old-zoom) {
+            return;
+        }
+        zoom = new-zoom;
+        pan-x += at-x * (old-zoom - new-zoom);
+        pan-y += at-y * (old-zoom - new-zoom);
+    }
+
+    public function start-pan(at-x: length, at-y: length) {
+        pan-start-world-x = at-x;
+        pan-start-world-y = at-y;
+    }
+
+    public function move-pan(at-x: length, at-y: length) {
+        // pan-start-world 是拖动开始时的固定世界坐标 w0，不可更新；
+        // 更新的话会引入反馈回路（at 随 pan 变化），导致抖动累积。
+        pan-x += (at-x - pan-start-world-x) * zoom;
+        pan-y += (at-y - pan-start-world-y) * zoom;
+    }
+
+    // 右键菜单请求（画布空白处右键）：at-x/at-y 为画布本地屏幕坐标，由编辑器展示菜单
+    callback context-menu-requested(at-x: length, at-y: length);
+    // 画布空白处左键按下（编辑器据此取消选中）
+    callback background-pressed();
+
+    scroll-event(event) => {
+        root.apply-zoom(event.delta-y, root.world-x(), root.world-y());
+        return EventResult.accept;
+    }
+
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            root.background-pressed();
+        } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+            root.context-menu-requested(self.mouse-x, self.mouse-y);
+        } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.middle) {
+            root.panning = true;
+            root.start-pan(root.world-x(), root.world-y());
+        } else if (event.kind == PointerEventKind.move && root.panning) {
+            root.move-pan(root.world-x(), root.world-y());
+        } else if (event.kind == PointerEventKind.up) {
+            root.panning = false;
+        }
+    }
+}
+
+// 背景点阵单层：单块平铺图片，随视图平移缩放（Blender 式 GPU 渲染，无逐点 for 循环）。
+// 根元素仅占位；内部 layer 固定在原点、尺寸覆盖最小缩放下的编辑器，整体 transform-scale = scale；
+// 平铺图块通过 (pan/scale) mod tile 偏移保持世界锚定——图案随视图平移而不脱离。
+// 同一张 tile-source 通过不同 scale 构成多层级点阵（见 LatticeGrid）。
+export component LatticeBackdrop inherits Rectangle {
+    in property <length> pan-x: 0px;
+    in property <length> pan-y: 0px;
+    // 层缩放：屏幕间距 = tile-size × scale
+    in property <float> scale: 1.0;
+    in property <image> tile-source;
+    // 图块内在尺寸（= 世界步长基准，须与 SVG 实际尺寸一致）
+    in property <length> tile-size: 28px;
+    // true 为三角点阵（图块高 = √3×宽），false 为方形
+    in property <bool> triangular: false;
+    // 点色：对白色点阵图块着色
+    in property <color> dot-color;
+
+    width: 100%;
+    height: 100%;
+
+    private property <length> tile-height: triangular ? tile-size * 1.7320508 : tile-size;
+
+    // 世界锚定的平铺偏移：(pan/scale) mod tile，图案随视图平移
+    private property <length> world-x: pan-x / scale;
+    private property <length> world-y: pan-y / scale;
+    private property <length> off-x: world-x - Math.floor(world-x / tile-size) * tile-size;
+    private property <length> off-y: world-y - Math.floor(world-y / tile-height) * tile-height;
+
+    // 变换层：覆盖最小可见缩放（≈0.3）下的编辑器（6 × 0.3 = 1.8 倍，留余量）
+    layer := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width * 6;
+        height: parent.height * 6;
+        transform-origin: { x: 0px, y: 0px };
+        transform-scale: scale;
+
+        // 图片比 layer 略大并平移一个图块，避免边缘出现空隙
+        Image {
+            width: parent.width + 2 * tile-size;
+            height: parent.height + 2 * tile-height;
+            x: off-x - tile-size;
+            y: off-y - tile-height;
+            horizontal-tiling: repeat;
+            vertical-tiling: repeat;
+            source: tile-source;
+            colorize: dot-color;
+        }
+    }
+}
+
+// 背景点阵（Blender 式层级）：4 个世界步长相差 5 倍的层（W·5^-1 … W·5^2），
+// 每层屏幕间距 = tile-size·5^level·zoom。屏幕间距在 [min, max] 带内不透明度为 1，
+// 带外渐隐并与相邻层交叉淡入淡出——任意缩放下主层间距都不至于过密或过疏。
+export component LatticeGrid inherits Rectangle {
+    in property <length> pan-x: 0px;
+    in property <length> pan-y: 0px;
+    in property <float> zoom: 1.0;
+    in property <image> tile-source;
+    // 最细层世界步长（= 图块内在尺寸）
+    in property <length> tile-size: 28px;
+    in property <bool> triangular: false;
+    in property <color> dot-color;
+
+    width: 100%;
+    height: 100%;
+
+    // 屏幕间距带（每层 5 倍，带 [min, 5·min]）
+    private property <length> min-spacing: 12px;
+    private property <length> max-spacing: 60px;
+
+    LatticeBackdrop {
+        pan-x: pan-x;
+        pan-y: pan-y;
+        scale: level-scale(-1);
+        tile-source: tile-source;
+        tile-size: tile-size;
+        triangular: triangular;
+        dot-color: dot-color;
+        opacity: level-opacity(-1);
+        visible: level-opacity(-1) > 0.0;
+    }
+    LatticeBackdrop {
+        pan-x: pan-x;
+        pan-y: pan-y;
+        scale: level-scale(0);
+        tile-source: tile-source;
+        tile-size: tile-size;
+        triangular: triangular;
+        dot-color: dot-color;
+        opacity: level-opacity(0);
+        visible: level-opacity(0) > 0.0;
+    }
+    LatticeBackdrop {
+        pan-x: pan-x;
+        pan-y: pan-y;
+        scale: level-scale(1);
+        tile-source: tile-source;
+        tile-size: tile-size;
+        triangular: triangular;
+        dot-color: dot-color;
+        opacity: level-opacity(1);
+        visible: level-opacity(1) > 0.0;
+    }
+    LatticeBackdrop {
+        pan-x: pan-x;
+        pan-y: pan-y;
+        scale: level-scale(2);
+        tile-source: tile-source;
+        tile-size: tile-size;
+        triangular: triangular;
+        dot-color: dot-color;
+        opacity: level-opacity(2);
+        visible: level-opacity(2) > 0.0;
+    }
+
+    // 层 scale：世界步长 = tile-size·5^level，scale = 步长/tile-size·zoom = 5^level·zoom
+    function level-scale(level: int) -> float {
+        return Math.pow(5.0, level) * zoom;
+    }
+
+    // 层不透明度：屏幕间距在带内为 1，两侧各约 1/3 带内线性渐隐，与相邻层交叉淡出
+    function level-opacity(level: int) -> float {
+        let spacing: length = tile-size * Math.pow(5.0, level) * zoom;
+        let rise-edge: length = min-spacing / 1.5;
+        let fall-edge: length = max-spacing * 1.5;
+        let rise: float = min(max((spacing - rise-edge) / (min-spacing - rise-edge), 0.0), 1.0);
+        let fall: float = min(max((fall-edge - spacing) / (fall-edge - max-spacing), 0.0), 1.0);
+        return rise * fall;
+    }
+}

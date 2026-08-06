@@ -1,0 +1,29 @@
+// 图标开关按钮（节点图标题栏占位操作钮）：点击切换开/关，按下时高亮。
+import { Theme } from "../theme/index.slint";
+
+export component IconToggleButton inherits Rectangle {
+    in property <image> icon;
+    // 开/关状态（占位：具体作用由 Rust 侧数据驱动）
+    in-out property <bool> toggled: false;
+
+    width: Theme.data.area-type-switcher.height;
+    height: Theme.data.area-type-switcher.height;
+    background: toggled ? Theme.data.area-type-switcher.popup.item-selected-background : transparent;
+    border-radius: Theme.data.area-type-switcher.border-radius;
+    border-width: Theme.data.area-type-switcher.border-width;
+    border-color: Theme.data.area-type-switcher.border-color;
+
+    TouchArea {
+        clicked => {
+            root.toggled = !root.toggled;
+        }
+
+        Image {
+            source: root.icon;
+            width: Theme.data.area-type-switcher.popup-icon-size;
+            height: Theme.data.area-type-switcher.popup-icon-size;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+}

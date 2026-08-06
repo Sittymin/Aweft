@@ -3,6 +3,10 @@ import { ActionZone } from "action_zone.slint";
 import { AreaHeader } from "../areas/area_header.slint";
 import { LineEditor } from "../areas/line_editor/view.slint";
 import { VideoPlayer } from "../areas/viewport/view.slint";
+import { StyleGraphToolbar } from "../areas/style_graph/toolbar.slint";
+import { AppGraphToolbar } from "../areas/app_graph/toolbar.slint";
+import { StyleGraphEditor } from "../areas/style_graph/view.slint";
+import { AppGraphEditor } from "../areas/app_graph/view.slint";
 import { VideoState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -16,6 +20,9 @@ export component SlintScrArea inherits Rectangle {
     in property <length> container-height;
     in property <length> actionzone-side-length;
 
+    // 是否正在编辑链（节点图 Area 状态；切换 Area 类型时复位）
+    private property <bool> chain-editing: false;
+
     x: container-x;
     y: container-y;
     width: container-width;
@@ -24,15 +31,41 @@ export component SlintScrArea inherits Rectangle {
     border-color: Theme.data.area-container.border-color;
     VerticalLayout {
         spacing: Theme.data.area-container.content-spacing;
-        AreaHeader {
+        // 每个 Area 恰好一个标题栏：未写各自 toolbar 的 Area 先用通用 AreaHeader
+        if area-type == SlintAreaType.line-editor: AreaHeader {
             area-key: area-key;
             area-type: area-type;
+        }
+        if area-type == SlintAreaType.viewport: AreaHeader {
+            area-key: area-key;
+            area-type: area-type;
+        }
+        if area-type == SlintAreaType.style-graph-editor: StyleGraphToolbar {
+            area-key: area-key;
+            area-type: area-type;
+            chain-editing <=> root.chain-editing;
+        }
+        if area-type == SlintAreaType.app-graph-editor: AppGraphToolbar {
+            area-key: area-key;
+            area-type: area-type;
+            chain-editing <=> root.chain-editing;
         }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
         if area-type == SlintAreaType.viewport: VideoPlayer {
             video-frame: VideoState.current-video-frame;
         }
+        if area-type == SlintAreaType.style-graph-editor: StyleGraphEditor {
+            chain-editing: root.chain-editing;
+        }
+        if area-type == SlintAreaType.app-graph-editor: AppGraphEditor {
+            chain-editing: root.chain-editing;
+        }
+    }
+
+    // 切换 Area 类型后复位链编辑状态（不同 Area 的链体系不同）
+    changed area-type => {
+        root.chain-editing = false;
     }
 
     ActionZone {

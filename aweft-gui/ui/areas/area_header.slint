@@ -1,34 +1,126 @@
+// 通用 Area 标题栏（统一架构）：每个 Area 都有 AreaType 选择器（位置一致）。
+// 其余内容分三区，由各 Area 通过数据传入：
+//  - 左区：依次排在 AreaType 选择器后面
+//  - 中区：整行居中（绝对定位，是整行的中间，不是选择器后剩余空间）
+//  - 右区：从右往中间排
 import { SlintKey, SlintAreaType } from "../core/types.slint";
 import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
 import { IconComboBox } from "../widgets/area_type_switcher.slint";
+import { ChainSwitcher } from "../widgets/chain_switcher.slint";
+import { IconToggleButton } from "../widgets/icon_toggle_button.slint";
+import { ContextMenuItem } from "../widgets/context_menu.slint";
 import { AreaCallbacks } from "../bridge/callbacks.slint";
+import { Mixins } from "../theme/mixins.slint";
 import { Theme } from "../theme/index.slint";
+
+// 中区内容类型
+export enum AreaHeaderCenterMode {
+    none,
+    chain,
+}
+
+// 左区/右区的一个图标开关按钮（占位）
+export struct AreaHeaderIconAction {
+    icon: image,
+}
 
 export component AreaHeader inherits Rectangle {
     in property <SlintKey> area-key;
     in property <SlintAreaType> area-type;
 
+    // 左区 / 右区内容（图标开关按钮）
+    in property <[AreaHeaderIconAction]> left-actions: [];
+    in property <[AreaHeaderIconAction]> right-actions: [];
+
+    // 中区内容
+    in property <AreaHeaderCenterMode> center-mode: AreaHeaderCenterMode.none;
+    // 链选择器（center-mode == chain 时用；节点图专用，占位数据）
+    in property <[ContextMenuItem]> chain-items;
+    in property <int> current-chain-index: 0;
+    in-out property <bool> chain-editing: false;
+    callback chain-selected(index: int);
+
+    private property <string> current-chain-name: root.current-chain-index >= 0 && root.current-chain-index < root.chain-items.length ? root.chain-items[root.current-chain-index].text : "";
+
     height: Theme.data.area-header.height;
     background: Theme.data.area-header.background;
+
+    // 主行：AreaType 选择器 + 左区 + 右区（右对齐）
     HorizontalLayout {
         padding: Theme.data.area-header.padding;
         spacing: Theme.data.area-header.spacing;
 
         // AreaType 选择器
         IconComboBox {
-            // 垂直居中
             y: (parent.height - self.height) / 2;
             current-index: AreaTypeMetadata.area-type-to-index(root.area-type);
             selected(new-index) => {
                 AreaCallbacks.switch-area-type(
-                    root.area-key, 
+                    root.area-key,
                     AreaTypeMetadata.index-to-area-type(new-index));
             }
         }
-        
-        // 右侧工具栏区域（预留）
+
+        // 左区：依次排在选择器后面
+        for a[i] in root.left-actions: IconToggleButton {
+            icon: a.icon;
+        }
+
+        // 弹性空隙：把右区推到最右侧
         Rectangle {
             horizontal-stretch: 1;
+        }
+
+        // 右区：从右往中间排
+        for a[i] in root.right-actions: IconToggleButton {
+            icon: a.icon;
+        }
+    }
+
+    // 中区：整行居中（绝对定位，画在主行之上）
+    if root.center-mode == AreaHeaderCenterMode.chain: center-box := Rectangle {
+        x: max(0px, (parent.width - self.width) / 2);
+        y: (parent.height - self.height) / 2;
+        width: center-content.preferred-width;
+        height: center-content.preferred-height;
+
+        center-content := HorizontalLayout {
+            spacing: Theme.data.area-header.spacing;
+
+            // 未编辑链：新建大按钮
+            if !root.chain-editing: Rectangle {
+                height: Theme.data.area-type-switcher.height + 4px;
+                background: Mixins.popup-item.selected-background;
+                border-radius: Theme.data.area-type-switcher.border-radius;
+                TouchArea {
+                    clicked => {
+                        root.chain-editing = true;
+                    }
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        height: 100%;
+                        alignment: center;
+                        Text {
+                            text: "新建";
+                            color: #ffffff;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // 编辑链：链选择器
+            if root.chain-editing: ChainSwitcher {
+                current-name: root.current-chain-name;
+                items: root.chain-items;
+                container-width: root.width;
+                container-height: root.height;
+                chain-selected(index) => {
+                    root.chain-selected(index);
+                }
+            }
         }
     }
 }

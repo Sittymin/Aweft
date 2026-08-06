@@ -79,14 +79,14 @@ impl ScrAreaMap {
         let area1_key = self.areas.insert(area1);
         areas.push(area1_key);
 
-        // 区域2：右上角 (Video)
+        // 区域2：右上角 (AppGraph)
         // 顶点顺序：左上、右上、右下、左下
         let mut area2 = ScrArea::new(
             v_mid_top,      // 左上（上边中点）
             v_top_right,    // 右上
             v_right_middle, // 右下（右边中点）
             v_mid_middle,   // 左下（中心点）
-            AreaType::Properties,
+            AreaType::AppGraphEditor,
             false,
             false,
             false,

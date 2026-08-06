@@ -62,6 +62,25 @@ export struct TablePalette {
     divider: color,
 }
 
+export struct NodeEditorPalette {
+    canvas-background: color,
+    node-background: color,
+    node-header-background: color,
+    node-border: color,
+    // 选中节点时整圈描边高亮为偏白（纯白刺眼，用浅灰）
+    node-selected-outline: color,
+    node-text: color,
+    node-muted-text: color,
+    socket-outline: color,
+    socket-style: color,
+    socket-text: color,
+    socket-int: color,
+    socket-bool: color,
+    socket-animation: color,
+    link: color,
+    lattice: color,
+}
+
 export struct SpacingTokens {
     xs: length,
     sm: length,
@@ -76,6 +95,7 @@ export struct BorderTokens {
     radius-xs: length,
     radius-sm: length,
     radius-md: length,
+    node-editor-radius: length,
 }
 
 export struct ControlTokens {
@@ -92,6 +112,15 @@ export struct ControlTokens {
     sort-icon-size: length,
     resize-handle-width: length,
     table-bottom-divider-height: length,
+    node-editor-node-width: length,
+    node-editor-header-height: length,
+    node-editor-socket-row-height: length,
+    node-editor-socket-size: length,
+    node-editor-link-width: length,
+    node-editor-link-stretch: length,
+    node-editor-title-font-size: length,
+    node-editor-socket-font-size: length,
+    node-editor-lattice-base: length,
 }
 
 export struct LayoutTokens {
@@ -113,6 +142,7 @@ export struct ThemeTokens {
     overlay: OverlayPalette,
     edge: EdgePalette,
     table: TablePalette,
+    node-editor: NodeEditorPalette,
     spacing: SpacingTokens,
     border: BorderTokens,
     control: ControlTokens,
@@ -178,6 +208,29 @@ export global Tokens {
             divider-hover: #ff0000,
             divider: rgba(1.0, 1.0, 1.0, 0.0),
         },
+        node-editor: {
+            canvas-background: #1d1d20,
+            node-background: #34343a,
+            node-header-background: #45454f,
+            node-border: #4a4a52,
+            // 选中节点时整圈描边高亮为偏白（纯白刺眼，用浅灰）
+            node-selected-outline: #d0d0d6,
+            node-text: #ececf0,
+            node-muted-text: #a9adb8,
+            socket-outline: #0e0e11,
+            // style(样式链)
+            socket-style: #63c763,
+            // animation(动画)
+            socket-animation: #ed9e5c,
+            // text(文本)
+            socket-text: #70b2ff,
+            // int(整数)
+            socket-int: #598c5c,
+            // bool(布尔)
+            socket-bool: #cca6d6,
+            link: #63c763,
+            lattice: #3a3a40,
+        },
         spacing: {
             xs: 4px,
             sm: 5px,
@@ -191,6 +244,7 @@ export global Tokens {
             radius-xs: 2px,
             radius-sm: 4px,
             radius-md: 6px,
+            node-editor-radius: 6px,
         },
         control: {
             combo-width: 45px,
@@ -206,6 +260,15 @@ export global Tokens {
             sort-icon-size: 12px,
             resize-handle-width: 10px,
             table-bottom-divider-height: 5px,
+            node-editor-node-width: 168px,
+            node-editor-header-height: 24px,
+            node-editor-socket-row-height: 22px,
+            node-editor-socket-size: 14px,
+            node-editor-link-width: 2px,
+            node-editor-link-stretch: 56px,
+            node-editor-title-font-size: 13px,
+            node-editor-socket-font-size: 12px,
+            node-editor-lattice-base: 28px,
         },
         layout: {
             main-border-width: 2px,

@@ -1,0 +1,95 @@
+// 自定义右键菜单：不依赖 Slint 原生 Menu，完全按本项目设计体系（popup 混入）渲染。
+// 以组件根定位在容器坐标系内，内部含悬停高亮、禁用项、色点与分隔线；
+// 由编辑器提供"菜单外点击关闭"的背景层。位置会夹在容器内，避免出界。
+import { Mixins } from "../theme/mixins.slint";
+
+// 菜单中的一项。
+export struct ContextMenuItem {
+    text: string,
+    // false 时灰显且不可点击
+    enabled: bool,
+    // 前导色点（transparent 则不显示），可用于标识数据类型/图标颜色
+    dot-color: color,
+    // true 时在该项上方画一条分隔线
+    separator-before: bool,
+}
+
+export component ContextMenu inherits Rectangle {
+    in property <[ContextMenuItem]> items;
+    // 菜单左上角位置（容器本地屏幕坐标）
+    in property <length> menu-x: 0px;
+    in property <length> menu-y: 0px;
+    in-out property <bool> open: false;
+    // 容器尺寸：用于把菜单夹在内部显示
+    in property <length> container-width: 0px;
+    in property <length> container-height: 0px;
+    // false 时不夹取位置（用于要落在容器外的下拉菜单）
+    in property <bool> clamp-position: true;
+    callback item-selected(index: int);
+
+    // 固定菜单宽度（配合容器夹取时稳定）
+    private property <length> menu-width: 180px;
+
+    visible: root.open;
+    x: clamp-position ? min(menu-x, max(0px, container-width - self.width)) : menu-x;
+    y: clamp-position ? min(menu-y, max(0px, container-height - self.height)) : menu-y;
+    width: menu-width;
+    height: content.preferred-height;
+    background: Mixins.popup-surface.background;
+    border-radius: Mixins.popup-surface.border-radius;
+    border-width: Mixins.popup-surface.border-width;
+    border-color: Mixins.popup-surface.border-color;
+    drop-shadow-blur: 6px;
+    drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+    content := VerticalLayout {
+        padding: Mixins.popup-surface.padding;
+        spacing: Mixins.popup-surface.spacing;
+
+        for item[i] in root.items: VerticalLayout {
+            // 分隔线
+            if item.separator-before: Rectangle {
+                height: 1px;
+                background: Mixins.popup-surface.border-color;
+            }
+
+            item-area := TouchArea {
+                // 禁用项不响应点击
+                enabled: item.enabled;
+                clicked => {
+                    root.item-selected(i);
+                    root.open = false;
+                }
+
+                item-box := Rectangle {
+                    min-height: Mixins.popup-item.min-height;
+                    border-radius: Mixins.popup-item.border-radius;
+                    background: item-area.has-hover && item.enabled ? Mixins.popup-item.highlight-color : transparent;
+
+                    HorizontalLayout {
+                        padding-left: Mixins.popup-item.padding-horizontal;
+                        padding-right: Mixins.popup-item.padding-horizontal;
+                        spacing: Mixins.popup-item.spacing;
+                        alignment: start;
+
+                        // 前导色点（Colors.transparent 表示不显示）
+                        if item.dot-color != Colors.transparent: Rectangle {
+                            width: 10px;
+                            height: 10px;
+                            border-radius: self.width / 2;
+                            background: item.dot-color;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: item.text;
+                            // 禁用项向表面背景色混合，呈现灰显
+                            color: item.enabled ? Mixins.popup-item.text-color : Mixins.popup-item.text-color.mix(Mixins.popup-surface.background, 0.6);
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

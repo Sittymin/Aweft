@@ -1,0 +1,490 @@
+import { GraphLink, GraphNavigation, GraphNode, GraphNodeLink, LatticeGrid, NodeFrame, NodeSocketData, NodeSocketType, NodeTemplate, SocketHit } from "../node_graph/node_frame.slint";
+import { ContextMenu, ContextMenuItem } from "../../widgets/context_menu.slint";
+import { Theme } from "../../theme/index.slint";
+
+// 应用图编辑器：默认展示 上下文输入 -> 匹配角色 -> 应用。
+// 与 application_graph 模型中的应用节点对应，只允许使用匹配/条件类节点。
+// 滚轮以光标为中心缩放整体，中键拖拽平移视图。
+// 端口可拖拽重连：从输出端口拉起新线，从已连接的输入端口拿下该线输入端。
+// 画布空白处右键弹出自定义菜单，可增加节点。
+// 连接态连线为泛白的接口颜色且位于端口下层；拖拽态连线位于端口上层，
+// 已连接端泛白、拖拽端为接口颜色（中间渐变）。
+export component AppGraphEditor inherits Rectangle {
+    background: Theme.data.node-editor.canvas-background;
+    clip: true;
+
+    // 是否正在编辑链（false=空状态：背景为叉叉、不显示节点）
+    in property <bool> chain-editing: true;
+
+    // 节点槽位（定长，active 标记是否有效；只增不减）
+    private property <[GraphNode]> nodes: [
+        { active: true, title: "上下文输入", x: 96px, y: 40px, sockets: [
+            { name: "角色", is-input: false, data-type: NodeSocketType.text },
+            { name: "文本", is-input: false, data-type: NodeSocketType.text },
+            { name: "行号", is-input: false, data-type: NodeSocketType.int },
+        ] },
+        { active: true, title: "匹配角色", x: 360px, y: 40px, sockets: [
+            { name: "源", is-input: true, data-type: NodeSocketType.text },
+            { name: "模式", is-input: true, data-type: NodeSocketType.text },
+            { name: "是否匹配", is-input: false, data-type: NodeSocketType.bool },
+        ] },
+        { active: true, title: "应用", x: 624px, y: 40px, sockets: [
+            { name: "样式", is-input: true, data-type: NodeSocketType.style },
+            { name: "条件", is-input: true, data-type: NodeSocketType.bool },
+            { name: "动画", is-input: true, data-type: NodeSocketType.animation },
+        ] },
+        { active: false, title: "", x: 0px, y: 0px, sockets: [] },
+        { active: false, title: "", x: 0px, y: 0px, sockets: [] },
+        { active: false, title: "", x: 0px, y: 0px, sockets: [] },
+        { active: false, title: "", x: 0px, y: 0px, sockets: [] },
+        { active: false, title: "", x: 0px, y: 0px, sockets: [] },
+    ];
+
+    // 连接槽位（定长，active 标记是否有效；只增不减，重连仅改写端点到已占槽位）。
+    // 初始连接：上下文输入.角色(0,0) -> 匹配角色.源(1,0)；
+    // 匹配角色.是否匹配(1,2) -> 应用.条件(2,1)。
+    private property <[GraphLink]> links: [
+        { active: true, from-node: 0, from-socket: 0, to-node: 1, to-socket: 0, data-type: NodeSocketType.text },
+        { active: true, from-node: 1, from-socket: 2, to-node: 2, to-socket: 1, data-type: NodeSocketType.bool },
+        { active: false, from-node: 0, from-socket: 0, to-node: 1, to-socket: 0, data-type: NodeSocketType.text },
+        { active: false, from-node: 0, from-socket: 0, to-node: 1, to-socket: 0, data-type: NodeSocketType.text },
+        { active: false, from-node: 0, from-socket: 0, to-node: 1, to-socket: 0, data-type: NodeSocketType.text },
+        { active: false, from-node: 0, from-socket: 0, to-node: 1, to-socket: 0, data-type: NodeSocketType.text },
+    ];
+
+    // 可选节点类型（右键菜单项，顺序与 menu-items 一一对应）
+    private property <[NodeTemplate]> node-palette: [
+        { title: "上下文输入", sockets: [
+            { name: "角色", is-input: false, data-type: NodeSocketType.text },
+            { name: "文本", is-input: false, data-type: NodeSocketType.text },
+            { name: "行号", is-input: false, data-type: NodeSocketType.int },
+        ] },
+        { title: "匹配角色", sockets: [
+            { name: "源", is-input: true, data-type: NodeSocketType.text },
+            { name: "模式", is-input: true, data-type: NodeSocketType.text },
+            { name: "是否匹配", is-input: false, data-type: NodeSocketType.bool },
+        ] },
+        { title: "匹配文本", sockets: [
+            { name: "源", is-input: true, data-type: NodeSocketType.text },
+            { name: "是否匹配", is-input: false, data-type: NodeSocketType.bool },
+        ] },
+        { title: "应用", sockets: [
+            { name: "样式", is-input: true, data-type: NodeSocketType.style },
+            { name: "条件", is-input: true, data-type: NodeSocketType.bool },
+            { name: "动画", is-input: true, data-type: NodeSocketType.animation },
+        ] },
+    ];
+
+    // 右键菜单显示项（与 node-palette 顺序对应）
+    private property <[ContextMenuItem]> menu-items: [
+        { text: "上下文输入", enabled: true, dot-color: Theme.data.node-editor.socket-text-color, separator-before: false },
+        { text: "匹配角色", enabled: true, dot-color: Theme.data.node-editor.socket-text-color, separator-before: false },
+        { text: "匹配文本", enabled: true, dot-color: Theme.data.node-editor.socket-bool-color, separator-before: false },
+        { text: "应用", enabled: true, dot-color: Theme.data.node-editor.socket-style-color, separator-before: true },
+    ];
+
+    // 节点右键菜单（目前仅删除当前节点）
+    private property <[ContextMenuItem]> node-menu-items: [
+        { text: "删除当前节点", enabled: true, dot-color: Colors.transparent, separator-before: false },
+    ];
+
+    // 右键菜单状态
+    private property <bool> menu-open: false;
+    // 0=画布空白右键（增加节点），1=节点右键（删除节点）
+    private property <int> menu-mode: 0;
+    private property <length> menu-screen-x: 0px;
+    private property <length> menu-screen-y: 0px;
+    // 右键处的世界坐标（新节点放置位置）
+    private property <length> menu-world-x: 0px;
+    private property <length> menu-world-y: 0px;
+
+    // 当前选中节点（-1 表示未选中；点节点选中、点空白取消）
+    private property <int> selected-node: -1;
+
+    // 拖拽连接状态：拖输入端=拿下已有连线的输入端（drag-link-index 指向被拿下的连线，
+    // 固定端为该连线输出端）；拖输出端=拉新线（drag-link-index=-1，固定端为被拖的输出端）。
+    private property <bool> link-dragging: false;
+    private property <int> drag-from-node: 0;
+    private property <int> drag-from-socket: 0;
+    private property <int> drag-link-index: -1;
+    private property <NodeSocketType> drag-type: NodeSocketType.style;
+    private property <length> drag-x: 0px;
+    private property <length> drag-y: 0px;
+
+    private property <length> header-height: Theme.data.node-editor.node-header-height;
+    private property <length> socket-row-height: Theme.data.node-editor.node-socket-row-height;
+
+    // 第 i 个端口垂直中心相对节点顶部的偏移
+    function socket-offset(idx: int) -> length {
+        return header-height + idx * socket-row-height + socket-row-height / 2;
+    }
+
+    // 节点世界坐标
+    function node-x(node-id: int) -> length {
+        return nodes[node-id].x;
+    }
+    function node-y(node-id: int) -> length {
+        return nodes[node-id].y;
+    }
+
+    // 背景：三角点阵，Blender 式多层级，间距随缩放连续变化。
+    // 未编辑链时切换为灰色叉叉背景（空状态）
+    LatticeGrid {
+        pan-x: nav.pan-x;
+        pan-y: nav.pan-y;
+        zoom: nav.zoom;
+        tile-source: root.chain-editing ? @image-url("../../assets/textures/grid_triangle.svg") : @image-url("../../assets/textures/grid_cross.svg");
+        tile-size: Theme.data.node-editor.lattice-base-spacing;
+        triangular: root.chain-editing;
+        dot-color: Theme.data.node-editor.lattice-color;
+    }
+
+    // 导航层（垫底）：处理滚轮缩放与中键平移，视图状态由 nav 承载
+    nav := GraphNavigation {
+        context-menu-requested(at-x, at-y) => {
+            root.open-menu(at-x, at-y);
+        }
+        background-pressed => {
+            root.selected-node = -1;
+        }
+    }
+
+    // 连接线（屏幕坐标）：连接态，位于端口下层。
+    // 输出端在节点右缘，输入端在左缘；节点宽必须用未缩放的 Theme 值（NodeFrame 内已乘 zoom）。
+    for link[i] in root.links: GraphNodeLink {
+        visible: link.active && root.chain-editing && !(root.link-dragging && i == root.drag-link-index);
+        from-x: (root.node-x(link.from-node) + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
+        from-y: (root.node-y(link.from-node) + root.socket-offset(link.from-socket)) * nav.zoom + nav.pan-y;
+        to-x: root.node-x(link.to-node) * nav.zoom + nav.pan-x;
+        to-y: (root.node-y(link.to-node) + root.socket-offset(link.to-socket)) * nav.zoom + nav.pan-y;
+        data-type: link.data-type;
+        view-zoom: nav.zoom;
+    }
+
+    // 节点
+    for node[i] in root.nodes: NodeFrame {
+        visible: node.active && root.chain-editing;
+        node-x: node.x;
+        node-y: node.y;
+        view-pan-x: nav.pan-x;
+        view-pan-y: nav.pan-y;
+        view-zoom: nav.zoom;
+        title: node.title;
+        sockets: node.sockets;
+        selected: i == root.selected-node;
+        press-requested => {
+            root.selected-node = i;
+        }
+        drag-moved(delta-x, delta-y) => {
+            root.nodes[i].x += delta-x;
+            root.nodes[i].y += delta-y;
+        }
+        socket-drag-started(idx, is-input, data-type, wx, wy) => {
+            root.on-socket-drag-started(i, idx, is-input, data-type, wx, wy);
+        }
+        socket-drag-moved(wx, wy) => { root.on-socket-drag-moved(wx, wy); }
+        socket-drag-ended(wx, wy) => { root.on-socket-drag-ended(wx, wy); }
+        socket-drag-canceled => { root.on-socket-drag-canceled(); }
+        right-pressed(wx, wy) => {
+            root.open-node-menu(i, wx, wy);
+        }
+        scroll-requested(delta, at-x, at-y) => { nav.apply-zoom(delta, at-x, at-y); }
+        pan-start-requested(at-x, at-y) => { nav.start-pan(at-x, at-y); }
+        pan-move-requested(at-x, at-y) => { nav.move-pan(at-x, at-y); }
+    }
+
+    // 拖拽中的连线（屏幕坐标）：位于端口上层，已连接端泛白、拖拽端接口色、中间渐变
+    if root.link-dragging: GraphNodeLink {
+        from-x: (root.node-x(root.drag-from-node) + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
+        from-y: (root.node-y(root.drag-from-node) + root.socket-offset(root.drag-from-socket)) * nav.zoom + nav.pan-y;
+        to-x: root.drag-x * nav.zoom + nav.pan-x;
+        to-y: root.drag-y * nav.zoom + nav.pan-y;
+        data-type: root.drag-type;
+        view-zoom: nav.zoom;
+        dragging: true;
+    }
+
+    // 菜单打开时的背景点击层：点菜单外任意处关闭（位于节点上方、菜单下方）
+    if root.menu-open: TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.menu-open = false;
+            }
+        }
+    }
+
+    // 自定义右键菜单：画布空白=增加节点，节点右键=删除节点
+    ContextMenu {
+        open <=> root.menu-open;
+        items: root.menu-mode == 0 ? root.menu-items : root.node-menu-items;
+        menu-x: root.menu-screen-x;
+        menu-y: root.menu-screen-y;
+        container-width: root.width;
+        container-height: root.height;
+        item-selected(index) => {
+            if root.menu-mode == 0 {
+                root.add-node(index, root.menu-world-x, root.menu-world-y);
+            } else {
+                root.delete-node(root.selected-node);
+            }
+        }
+    }
+
+    // ---- 右键菜单 / 增加节点 ----
+
+    function open-menu(at-x: length, at-y: length) {
+        if !root.chain-editing {
+            return;
+        }
+        menu-mode = 0;
+        menu-screen-x = at-x;
+        menu-screen-y = at-y;
+        // 世界坐标：把屏幕坐标换算到世界层
+        menu-world-x = (at-x - nav.pan-x) / nav.zoom;
+        menu-world-y = (at-y - nav.pan-y) / nav.zoom;
+        menu-open = true;
+    }
+
+    // 节点右键：选中该节点并弹出节点菜单（删除）
+    function open-node-menu(node-id: int, wx: length, wy: length) {
+        selected-node = node-id;
+        menu-mode = 1;
+        // 屏幕坐标：把世界坐标换回画布
+        menu-screen-x = wx * nav.zoom + nav.pan-x;
+        menu-screen-y = wy * nav.zoom + nav.pan-y;
+        menu-open = true;
+    }
+
+    // 删除当前节点：先断开相关连接，再标记空槽位
+    function delete-node(node-id: int) {
+        if node-id < 0 || !nodes[node-id].active {
+            return;
+        }
+        root.deactivate-node-links(node-id);
+        nodes[node-id].active = false;
+        nodes[node-id].sockets = [];
+        if selected-node == node-id {
+            selected-node = -1;
+        }
+    }
+
+    // 断开所有与节点相关的连接（以其为输出端或输入端）
+    function deactivate-node-links(node-id: int) {
+        if links[0].active && (links[0].from-node == node-id || links[0].to-node == node-id) { links[0].active = false; }
+        if links[1].active && (links[1].from-node == node-id || links[1].to-node == node-id) { links[1].active = false; }
+        if links[2].active && (links[2].from-node == node-id || links[2].to-node == node-id) { links[2].active = false; }
+        if links[3].active && (links[3].from-node == node-id || links[3].to-node == node-id) { links[3].active = false; }
+        if links[4].active && (links[4].from-node == node-id || links[4].to-node == node-id) { links[4].active = false; }
+        if links[5].active && (links[5].from-node == node-id || links[5].to-node == node-id) { links[5].active = false; }
+    }
+
+    // 在第一个空槽位创建节点（位于右键位置），并选中它
+    function add-node(template-index: int, wx: length, wy: length) {
+        let t = node-palette[template-index];
+        if !nodes[0].active {
+            nodes[0] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 0;
+            return;
+        }
+        if !nodes[1].active {
+            nodes[1] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 1;
+            return;
+        }
+        if !nodes[2].active {
+            nodes[2] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 2;
+            return;
+        }
+        if !nodes[3].active {
+            nodes[3] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 3;
+            return;
+        }
+        if !nodes[4].active {
+            nodes[4] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 4;
+            return;
+        }
+        if !nodes[5].active {
+            nodes[5] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 5;
+            return;
+        }
+        if !nodes[6].active {
+            nodes[6] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 6;
+            return;
+        }
+        if !nodes[7].active {
+            nodes[7] = { active: true, title: t.title, x: wx, y: wy, sockets: t.sockets };
+            selected-node = 7;
+        }
+    }
+
+    // ---- 端口拖拽 / 连接逻辑 ----
+
+    function on-socket-drag-started(node-id: int, socket-index: int, is-input: bool, data-type: NodeSocketType, wx: length, wy: length) {
+        if is-input {
+            // 拖输入端：拿下已有连线的输入端
+            drag-link-index = root.find-link-for-input(node-id, socket-index);
+            if drag-link-index < 0 {
+                return;
+            }
+            drag-from-node = root.link-output-node(drag-link-index);
+            drag-from-socket = root.link-output-socket(drag-link-index);
+            drag-type = root.link-type(drag-link-index);
+        } else {
+            // 拖输出端：拉新线
+            drag-link-index = -1;
+            drag-from-node = node-id;
+            drag-from-socket = socket-index;
+            drag-type = data-type;
+        }
+        drag-x = wx;
+        drag-y = wy;
+        link-dragging = true;
+    }
+
+    function on-socket-drag-moved(wx: length, wy: length) {
+        drag-x = wx;
+        drag-y = wy;
+    }
+
+    function on-socket-drag-ended(wx: length, wy: length) {
+        drag-x = wx;
+        drag-y = wy;
+        let hit = root.find-drop-socket(wx, wy);
+        if hit.found && root.socket-type-of(hit.node, hit.socket) == drag-type {
+            // 目标输入端同一时刻只保留一根连线，先断开已有连接
+            root.deactivate-link-to(hit.node, hit.socket);
+            if drag-link-index >= 0 {
+                root.links[drag-link-index].to-node = hit.node;
+                root.links[drag-link-index].to-socket = hit.socket;
+                root.links[drag-link-index].active = true;
+            } else {
+                root.append-link(drag-from-node, drag-from-socket, hit.node, hit.socket, drag-type);
+            }
+        } else if drag-link-index >= 0 {
+            // 普通松开且未命中有效输入端口：断开被拿下的连线
+            root.links[drag-link-index].active = false;
+        }
+        link-dragging = false;
+        drag-link-index = -1;
+    }
+
+    // 拖拽中按右键：取消本次拖拽，原连接保持不变（不移动、不断开）
+    function on-socket-drag-canceled() {
+        link-dragging = false;
+        drag-link-index = -1;
+    }
+
+    // 找以该输入端口为目标的已激活连线（即被拿下的连线）；无则 -1
+    function find-link-for-input(node-id: int, socket-index: int) -> int {
+        if links[0].active && links[0].to-node == node-id && links[0].to-socket == socket-index { return 0; }
+        if links[1].active && links[1].to-node == node-id && links[1].to-socket == socket-index { return 1; }
+        if links[2].active && links[2].to-node == node-id && links[2].to-socket == socket-index { return 2; }
+        if links[3].active && links[3].to-node == node-id && links[3].to-socket == socket-index { return 3; }
+        if links[4].active && links[4].to-node == node-id && links[4].to-socket == socket-index { return 4; }
+        if links[5].active && links[5].to-node == node-id && links[5].to-socket == socket-index { return 5; }
+        return -1;
+    }
+
+    function link-output-node(link-idx: int) -> int {
+        if link-idx == 0 { return links[0].from-node; }
+        if link-idx == 1 { return links[1].from-node; }
+        if link-idx == 2 { return links[2].from-node; }
+        if link-idx == 3 { return links[3].from-node; }
+        if link-idx == 4 { return links[4].from-node; }
+        return links[5].from-node;
+    }
+    function link-output-socket(link-idx: int) -> int {
+        if link-idx == 0 { return links[0].from-socket; }
+        if link-idx == 1 { return links[1].from-socket; }
+        if link-idx == 2 { return links[2].from-socket; }
+        if link-idx == 3 { return links[3].from-socket; }
+        if link-idx == 4 { return links[4].from-socket; }
+        return links[5].from-socket;
+    }
+    function link-type(link-idx: int) -> NodeSocketType {
+        if link-idx == 0 { return links[0].data-type; }
+        if link-idx == 1 { return links[1].data-type; }
+        if link-idx == 2 { return links[2].data-type; }
+        if link-idx == 3 { return links[3].data-type; }
+        if link-idx == 4 { return links[4].data-type; }
+        return links[5].data-type;
+    }
+
+    // 断开所有以该输入端为目标的连接（拖输入端时跳过被拿下的那根，避免误删自己）
+    function deactivate-link-to(to-node: int, to-socket: int) {
+        if links[0].active && drag-link-index != 0 && links[0].to-node == to-node && links[0].to-socket == to-socket { links[0].active = false; }
+        if links[1].active && drag-link-index != 1 && links[1].to-node == to-node && links[1].to-socket == to-socket { links[1].active = false; }
+        if links[2].active && drag-link-index != 2 && links[2].to-node == to-node && links[2].to-socket == to-socket { links[2].active = false; }
+        if links[3].active && drag-link-index != 3 && links[3].to-node == to-node && links[3].to-socket == to-socket { links[3].active = false; }
+        if links[4].active && drag-link-index != 4 && links[4].to-node == to-node && links[4].to-socket == to-socket { links[4].active = false; }
+        if links[5].active && drag-link-index != 5 && links[5].to-node == to-node && links[5].to-socket == to-socket { links[5].active = false; }
+    }
+
+    // 在第一个空槽位新建连接
+    function append-link(from-node: int, from-socket: int, to-node: int, to-socket: int, data-type: NodeSocketType) {
+        if !links[0].active {
+            links[0] = { active: true, from-node: from-node, from-socket: from-socket, to-node: to-node, to-socket: to-socket, data-type: data-type };
+            return;
+        }
+        if !links[1].active {
+            links[1] = { active: true, from-node: from-node, from-socket: from-socket, to-node: to-node, to-socket: to-socket, data-type: data-type };
+            return;
+        }
+        if !links[2].active {
+            links[2] = { active: true, from-node: from-node, from-socket: from-socket, to-node: to-node, to-socket: to-socket, data-type: data-type };
+            return;
+        }
+        if !links[3].active {
+            links[3] = { active: true, from-node: from-node, from-socket: from-socket, to-node: to-node, to-socket: to-socket, data-type: data-type };
+            return;
+        }
+        if !links[4].active {
+            links[4] = { active: true, from-node: from-node, from-socket: from-socket, to-node: to-node, to-socket: to-socket, data-type: data-type };
+            return;
+        }
+        if !links[5].active {
+            links[5] = { active: true, from-node: from-node, from-socket: from-socket, to-node: to-node, to-socket: to-socket, data-type: data-type };
+        }
+    }
+
+    // 输入端命中检测（世界坐标）：节点左缘 + 端口偏移，方形判定
+    function input-hits(nx: length, ny: length, idx: int, x: length, y: length) -> bool {
+        let dx: length = x - nx;
+        let dy: length = y - (ny + socket-offset(idx));
+        let r: length = Theme.data.node-editor.socket-size;
+        return dx > -r && dx < r && dy > -r && dy < r;
+    }
+
+    // 节点内命中的输入端口下标；未命中 -1
+    function node-input-hits(node-id: int, x: length, y: length) -> int {
+        if !nodes[node-id].active { return -1; }
+        if nodes[node-id].sockets.length > 0 && nodes[node-id].sockets[0].is-input && root.input-hits(nodes[node-id].x, nodes[node-id].y, 0, x, y) { return 0; }
+        if nodes[node-id].sockets.length > 1 && nodes[node-id].sockets[1].is-input && root.input-hits(nodes[node-id].x, nodes[node-id].y, 1, x, y) { return 1; }
+        if nodes[node-id].sockets.length > 2 && nodes[node-id].sockets[2].is-input && root.input-hits(nodes[node-id].x, nodes[node-id].y, 2, x, y) { return 2; }
+        if nodes[node-id].sockets.length > 3 && nodes[node-id].sockets[3].is-input && root.input-hits(nodes[node-id].x, nodes[node-id].y, 3, x, y) { return 3; }
+        return -1;
+    }
+
+    // 找释放位置命中的输入端口（遍历节点槽位；Slint 函数内无循环，逐槽位判断）
+    function find-drop-socket(x: length, y: length) -> SocketHit {
+        let s0 = root.node-input-hits(0, x, y); if s0 >= 0 { return { found: true, node: 0, socket: s0 }; }
+        let s1 = root.node-input-hits(1, x, y); if s1 >= 0 { return { found: true, node: 1, socket: s1 }; }
+        let s2 = root.node-input-hits(2, x, y); if s2 >= 0 { return { found: true, node: 2, socket: s2 }; }
+        let s3 = root.node-input-hits(3, x, y); if s3 >= 0 { return { found: true, node: 3, socket: s3 }; }
+        let s4 = root.node-input-hits(4, x, y); if s4 >= 0 { return { found: true, node: 4, socket: s4 }; }
+        let s5 = root.node-input-hits(5, x, y); if s5 >= 0 { return { found: true, node: 5, socket: s5 }; }
+        let s6 = root.node-input-hits(6, x, y); if s6 >= 0 { return { found: true, node: 6, socket: s6 }; }
+        let s7 = root.node-input-hits(7, x, y); if s7 >= 0 { return { found: true, node: 7, socket: s7 }; }
+        return { found: false, node: 0, socket: 0 };
+    }
+
+    // 输入端口的数据类型（用于类型匹配，禁止不同数据类型连接）
+    function socket-type-of(node-id: int, socket-index: int) -> NodeSocketType {
+        return nodes[node-id].sockets[socket-index].data-type;
+    }
+}

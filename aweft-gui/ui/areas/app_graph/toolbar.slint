@@ -1,0 +1,46 @@
+// 应用图标题栏：向通用 AreaHeader 传入应用链数据（占位）与右侧操作按钮。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AreaHeader, AreaHeaderCenterMode } from "../area_header.slint";
+import { ContextMenuItem } from "../../widgets/context_menu.slint";
+import { Mixins } from "../../theme/mixins.slint";
+
+export component AppGraphToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+    in-out property <bool> chain-editing: false;
+
+    // 当前应用链索引（占位，真实数据来自 Rust 侧）
+    private property <int> current-chain-index: 0;
+    // 应用链候选（占位）
+    private property <[ContextMenuItem]> app-chain-items: [
+        { text: "应用链 1", enabled: true, dot-color: root.current-chain-index == 0 ? Mixins.popup-item.selected-background : Colors.transparent, separator-before: false },
+        { text: "应用链 2", enabled: true, dot-color: root.current-chain-index == 1 ? Mixins.popup-item.selected-background : Colors.transparent, separator-before: false },
+    ];
+
+    // 占位：新建时选中第一条链
+    changed chain-editing => {
+        if root.chain-editing {
+            root.current-chain-index = 0;
+        }
+    }
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+        center-mode: AreaHeaderCenterMode.chain;
+        chain-items: root.app-chain-items;
+        current-chain-index: root.current-chain-index;
+        chain-editing <=> root.chain-editing;
+        chain-selected(index) => {
+            root.current-chain-index = index;
+        }
+        // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
+        right-actions: [
+            { icon: @image-url("../../assets/icons/keep.svg") },
+            { icon: @image-url("../../assets/icons/grid_4x4.svg") },
+            { icon: @image-url("../../assets/icons/grid_on.svg") },
+        ];
+    }
+}

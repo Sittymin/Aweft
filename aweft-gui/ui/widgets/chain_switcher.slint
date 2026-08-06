@@ -1,0 +1,77 @@
+// 样式链/应用链选择器（标题栏中间）：显示当前链名，点击弹出链列表菜单切换。
+// 链列表数据为占位（真实数据来自 Rust 侧），通过 items 传入、chain-selected 回调上报。
+import { ContextMenu, ContextMenuItem } from "../widgets/context_menu.slint";
+import { Theme } from "../theme/index.slint";
+
+export component ChainSwitcher inherits Rectangle {
+    // 当前链名（显示）
+    in property <string> current-name: "";
+    // 链列表菜单项
+    in property <[ContextMenuItem]> items;
+    // 所在容器尺寸（用于菜单外点击关闭的背景层）
+    in property <length> container-width: 0px;
+    in property <length> container-height: 0px;
+    callback chain-selected(index: int);
+
+    private property <bool> menu-open: false;
+
+    // 尺寸跟随内容（按钮宽度由文字撑开）
+    width: content.preferred-width;
+    height: Theme.data.area-type-switcher.height;
+    background: Theme.data.area-type-switcher.background;
+    border-radius: Theme.data.area-type-switcher.border-radius;
+    border-width: Theme.data.area-type-switcher.border-width;
+    border-color: Theme.data.area-type-switcher.border-color;
+
+    content := HorizontalLayout {
+        padding-left: Theme.data.area-type-switcher.layout-padding-horizontal;
+        padding-right: Theme.data.area-type-switcher.layout-padding-horizontal;
+        spacing: Theme.data.area-type-switcher.popup.item-spacing;
+        alignment: center;
+
+        Text {
+            text: root.current-name;
+            color: Theme.data.area-type-switcher.popup.item-text-color;
+            vertical-alignment: center;
+        }
+
+        Image {
+            source: @image-url("../assets/icons/arrow_drop_down.svg");
+            width: Theme.data.area-type-switcher.popup-icon-size;
+            height: Theme.data.area-type-switcher.popup-icon-size;
+            vertical-alignment: center;
+        }
+    }
+
+    button := TouchArea {
+        clicked => {
+            root.menu-open = true;
+        }
+    }
+
+    // 菜单打开时覆盖所在容器的背景层：点外部关闭（位于按钮与菜单之间）
+    backdrop := TouchArea {
+        visible: root.menu-open;
+        x: -root.x;
+        y: -root.y;
+        width: root.container-width;
+        height: root.container-height;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.menu-open = false;
+            }
+        }
+    }
+
+    // 链列表菜单：落到按钮下方，不做位置夹取
+    ContextMenu {
+        open <=> root.menu-open;
+        items: root.items;
+        menu-x: 0px;
+        menu-y: self.height;
+        clamp-position: false;
+        item-selected(index) => {
+            root.chain-selected(index);
+        }
+    }
+}

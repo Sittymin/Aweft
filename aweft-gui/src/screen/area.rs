@@ -52,6 +52,10 @@ pub enum AreaType {
     Viewport,
     // 像视频轨道一样使用长方形填充占用的时间部分
     Timeline,
+    // 样式链编辑器（aweft-model 的 node_graph）
+    StyleGraphEditor,
+    // 应用图编辑器（aweft-model 的 application_graph）
+    AppGraphEditor,
     // StyleManager,
     // FileBrowser,
 
