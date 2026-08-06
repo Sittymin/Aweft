@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use aweft_libass::types::Image;
-use slint::wgpu_27::wgpu;
+use slint::wgpu_29::wgpu;
 use wgpu::util::DeviceExt; // NOTE: 实例化渲染需要用到 create_buffer_init
 
 // 实例化渲染：每个字幕图块的实例数据
@@ -175,7 +175,7 @@ impl SubtitleRenderer {
     // 3. 【初始化动作】在 `new` 方法中执行一次性的资源创建。
     pub fn new(graphics_api: &slint::GraphicsAPI<'_>) -> Self {
         match graphics_api {
-            slint::GraphicsAPI::WGPU27 { device, queue, .. } => {
+            slint::GraphicsAPI::WGPU29 { device, queue, .. } => {
                 let wgpu_device = device.clone();
                 let wgpu_queue = queue.clone();
 
@@ -259,7 +259,7 @@ impl SubtitleRenderer {
             // NOTE: 由于 libass 当中包含抗锯齿且字幕不会渲染出来之后放大缩小，所以这里直接使用临近采样
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
 
             ..Default::default()
         })
@@ -308,8 +308,8 @@ impl SubtitleRenderer {
     ) -> wgpu::PipelineLayout {
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Subtitle Pipeline Layout"),
-            bind_group_layouts: &[bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(bind_group_layout)],
+            immediate_size: 0,
         })
     }
 
@@ -347,7 +347,7 @@ impl SubtitleRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         })
     }

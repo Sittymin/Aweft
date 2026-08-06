@@ -5,7 +5,7 @@ use crate::store::reducers::media::initialize_media;
 use anyhow::{Context, Result};
 use aweft_model::structure::GroupData;
 use slint::ComponentHandle;
-use slint::wgpu_27::{WGPUConfiguration, WGPUSettings};
+use slint::wgpu_29::{WGPUConfiguration, WGPUSettings};
 use std::{cell::RefCell, rc::Rc};
 
 /// 简化的应用窗口管理器
@@ -24,7 +24,7 @@ impl AppWindowManager {
             let res = sel
                 .backend_name("winit".into())
                 // 使用 WGPU 渲染以支持视频显示
-                .require_wgpu_27(WGPUConfiguration::Automatic(WGPUSettings::default()))
+                .require_wgpu_29(WGPUConfiguration::Automatic(WGPUSettings::default()))
                 .select();
             if let Err(e) = res {
                 eprintln!("Slint 后端选择失败: {:?}", e);

@@ -4,38 +4,38 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bitflags = "2.9.1"
-slint = { version = "1.14.1", features = [
+bitflags = "2.13.1"
+slint = { version = "1.17.1", features = [
     "backend-winit",
     "renderer-femtovg-wgpu",
     "unstable-winit-030",
-    "unstable-wgpu-27",
+    "unstable-wgpu-29",
     "live-preview",
 ] }
-wgpu = { version = "27", package = "wgpu", features = ["wgsl"] }
-slotmap = "1.0.7"
-tokio = { version = "1.47.0", features = ["full"] }
-anyhow = "1.0"
-log = "0.4.28"
-env_logger = "0.11.8"
-gstreamer = { version = "0.23", package = "gstreamer" }
-gstreamer-app = { version = "0.23", package = "gstreamer-app" }
-gstreamer-video = { version = "0.23", package = "gstreamer-video" }
-gstreamer-gl = { version = "0.23", package = "gstreamer-gl" }
-gstreamer-gl-egl = { version = "0.23", package = "gstreamer-gl-egl" }
+wgpu = { version = "29", package = "wgpu", features = ["wgsl"] }
+slotmap = "1.1.1"
+tokio = { version = "1.53.1", features = ["full"] }
+anyhow = "1.0.104"
+log = "0.4.33"
+env_logger = "0.11.11"
+gstreamer = { version = "0.25", package = "gstreamer" }
+gstreamer-app = { version = "0.25", package = "gstreamer-app" }
+gstreamer-video = { version = "0.25", package = "gstreamer-video" }
+gstreamer-gl = { version = "0.25", package = "gstreamer-gl" }
+gstreamer-gl-egl = { version = "0.25", package = "gstreamer-gl-egl" }
 glutin_egl_sys = "0.7.1"
-url = "2.5"
-futures = "0.3.31"
+url = "2.5.8"
+futures = "0.3.33"
 aweft-libass = { path = "../aweft-libass" }
 aweft-model = { path = "../aweft-model" }
-bytemuck = "1.23.2"
-uuid = { version = "1.18.1", features = [
+bytemuck = "1.25.2"
+uuid = { version = "1.24.0", features = [
     "v4",
 ]}
-chrono = "0.4.42"
-serde = "1"
-serde_json = "1"
-arboard = "3"
+chrono = "0.4.45"
+serde = "1.0.229"
+serde_json = "1.0.151"
+arboard = "3.6.1"
 
 [build-dependencies]
-slint-build = "1.14.1"
+slint-build = "1.17.1"

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::library::{Library, MessageLevel};
+pub use crate::library::{Library, MessageLevel};
 use crate::renderer::{DefaultFontProvider, RenderResult, Renderer};
 use crate::track::{Track, TrackType};
 use std::path::Path;

@@ -4,19 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.99"
+anyhow = "1.0.104"
 nom = "8.0.0"
 # 用于语言字段
 isolang = { version = "2.4.0", features = ["list_languages"] }
 # 由于需要负数时间
-chrono = "0.4.41"
+chrono = "0.4.45"
 # 多线程读取解析
 num_cpus = "1.17.0"
-crossbeam-channel = "0.5.15"
-rayon = "1.11.0"
+crossbeam-channel = "0.5.16"
+rayon = "1.12.0"
 aweft-libass = { path = "../aweft-libass" }
-proptest = "1.7.0"
-log = "0.4.27"
-thiserror = "2.0.17"
-slotmap = "1.0.7"
-serde = "1.0.228"
+proptest = "1.11.0"
+log = "0.4.33"
+thiserror = "2.0.19"
+slotmap = "1.1.1"
+serde = "1.0.229"

@@ -1,4 +1,4 @@
-use crate::error::{AlignmentParseError, LibassError, Result};
+use crate::error::{AlignmentParseError, Result};
 use crate::ffi;
 use bitflags::bitflags;
 use palette::{Srgb, Srgba, WithAlpha};

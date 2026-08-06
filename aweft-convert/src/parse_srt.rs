@@ -7,12 +7,12 @@ use nom::{
     character::complete::{char, digit1, line_ending, not_line_ending},
     combinator::map_res,
     multi::many1,
-    sequence::{separated_pair, terminated, tuple},
-    IResult,
+    sequence::{separated_pair, terminated},
+    IResult, Parser,
 };
 
 fn parse_timestamp(input: &str) -> IResult<&str, (u16, u8, u8, u16)> {
-    let (input, (mut hours, _, mut minutes, _, mut seconds, _, milliseconds)) = tuple((
+    let (input, (mut hours, _, mut minutes, _, mut seconds, _, milliseconds)) = (
         map_res(digit1, |s: &str| s.parse::<u32>()),
         char(':'),
         map_res(digit1, |s: &str| s.parse::<u32>()),
@@ -20,7 +20,8 @@ fn parse_timestamp(input: &str) -> IResult<&str, (u16, u8, u8, u16)> {
         map_res(digit1, |s: &str| s.parse::<u32>()),
         char(','),
         map_res(digit1, |s: &str| s.parse::<u32>()),
-    ))(input)?;
+    )
+        .parse(input)?;
 
     seconds += milliseconds / 1000;
     let milliseconds = milliseconds % 1000;
@@ -35,17 +36,17 @@ fn parse_timestamp(input: &str) -> IResult<&str, (u16, u8, u8, u16)> {
 }
 
 fn parse_srt(input: &str) -> IResult<&str, Event> {
-    let (input, _index) = terminated(digit1, line_ending)(input)?;
+    let (input, _index) = terminated(digit1, line_ending).parse(input)?;
     let (
         input,
         (
             (start_hours, start_minutes, start_seconds, start_milliseconds),
             (end_hours, end_minutes, end_seconds, end_milliseconds),
         ),
-    ) = separated_pair(parse_timestamp, tag(" --> "), parse_timestamp)(input)?;
+    ) = separated_pair(parse_timestamp, tag(" --> "), parse_timestamp).parse(input)?;
 
     // remove \n after timestamp
-    let (mut rest, _) = line_ending(input)?;
+    let (mut rest, _) = line_ending.parse(input)?;
     let mut subtitle_lines = Vec::new();
 
     loop {
@@ -53,7 +54,7 @@ fn parse_srt(input: &str) -> IResult<&str, Event> {
             break;
         }
 
-        match terminated(not_line_ending, line_ending)(rest) {
+        match terminated(not_line_ending, line_ending).parse(rest) {
             Ok((new_rest, line)) => {
                 if line.trim().is_empty() {
                     rest = new_rest;
@@ -109,7 +110,7 @@ fn parse_srt(input: &str) -> IResult<&str, Event> {
 }
 
 pub fn parse_srt_file(content: &str) -> IResult<&str, Vec<Event>> {
-    let (rest, events) = many1(parse_srt)(content)?;
+    let (rest, events) = many1(parse_srt).parse(content)?;
     Ok((rest, events))
 }
 

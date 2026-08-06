@@ -135,7 +135,7 @@ impl Track {
     }
 
     // 创建新样式
-    pub fn create_style(&mut self, name: &str, font_name: &str) -> Result<StyleHandle> {
+    pub fn create_style(&mut self, name: &str, font_name: &str) -> Result<StyleHandle<'_>> {
         unsafe {
             let style_id = ffi::ass_alloc_style(self.ptr);
             if style_id < 0 {
@@ -168,7 +168,7 @@ impl Track {
     }
 
     /// 获取默认样式的可变引用（Rust风格的安全API）
-    pub fn default_style_mut(&mut self) -> Result<StyleHandle> {
+    pub fn default_style_mut(&mut self) -> Result<StyleHandle<'_>> {
         unsafe {
             if (*self.ptr).styles.is_null() || (*self.ptr).n_styles == 0 {
                 return Err(LibassError::ResourceUnavailable {
@@ -188,7 +188,7 @@ impl Track {
         }
     }
 
-    pub fn style_mut(&mut self, id: StyleId) -> Result<StyleHandle> {
+    pub fn style_mut(&mut self, id: StyleId) -> Result<StyleHandle<'_>> {
         if id.0 < 0 || id.0 >= self.style_count() {
             return Err(LibassError::InvalidId {
                 resource_type: "样式".to_string(),
@@ -227,7 +227,7 @@ impl Track {
     // void ass_set_check_readorder(ASS_Track *track, int check_readorder);
 
     /// 创建新事件
-    pub fn create_event(&mut self, text: &str, style_id: StyleId) -> Result<EventHandle> {
+    pub fn create_event(&mut self, text: &str, style_id: StyleId) -> Result<EventHandle<'_>> {
         unsafe {
             let event_id = ffi::ass_alloc_event(self.ptr);
             if event_id < 0 {

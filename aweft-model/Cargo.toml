@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.100"
-chrono = { version = "0.4.42", features = [ "serde" ] }
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = [ "serde" ] }
 nom = "8.0.0"
-serde = "1.0.228"
-uuid = { version = "1.19.0", features = [ "serde", "v4" ] }
-log = "0.4.28"
-thiserror = "2"
-palette = { version = "0.7.6", features = [ "serializing" ] }
+serde = "1.0.229"
+uuid = { version = "1.24.0", features = [ "serde", "v4" ] }
+log = "0.4.33"
+thiserror = "2.0.19"
+palette = { version = "0.7.7", features = [ "serializing" ] }
 proptest = "1.11.0"
-regex = "1.12.1"
+regex = "1.13.1"

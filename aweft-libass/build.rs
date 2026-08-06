@@ -37,6 +37,7 @@ fn main() {
     cc::Build::new()
         .file("wrapper.c")
         .include(format!("{}/include", dst.display()))
+        .opt_level(1)
         .compile("wrapper");
 
     // Linker instructions for Cargo.
