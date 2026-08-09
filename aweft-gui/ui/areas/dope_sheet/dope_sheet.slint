@@ -1,0 +1,167 @@
+// 摄影表（Dope Sheet / Action Editor）：
+//  - 布局参照 Blender：左侧通道列表 + 顶部时间标尺 + 主画布（每通道一行，按时间铺开关键帧）
+//  - 与曲线编辑器共用同一份数据（AnimationState.channels），选中态共享
+//  - 交互：滚轮水平缩放（时间轴）、中键平移；关键帧点击选中、横向拖拽调整时间偏移；
+//    通道可见性/静音开关
+import { SlintFCurveChannel, SlintRulerTick } from "../../core/animation_types.slint";
+import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { TimeRuler } from "../graph_editor/ruler.slint";
+import { ChannelList } from "../graph_editor/channel_list.slint";
+import { DopeKeyframe } from "elements.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component DopeSheet inherits Rectangle {
+    in property <[SlintFCurveChannel]> channels;
+    in property <[SlintRulerTick]> time-ticks;
+    in property <float> current-time;
+    // 当前激活通道（行文字变黄、非当前行关键帧弱化）
+    in property <int> current-channel: 0;
+
+    // 通道列表 / 标尺尺寸（主题）
+    private property <length> channel-width: Theme.data.animation-editor.channel-list-width;
+    private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+    private property <length> row-height: Theme.data.animation-editor.channel-row-height;
+
+    // 导航状态（画布、通道列表与标尺共享；仅时间轴缩放）
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-pan-y: 0.0;
+    private property <float> nav-zoom: 30.0;
+
+    // 左上角（通道列表头部占位，与时间标尺同层）
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.channel-width;
+        height: root.ruler-height;
+        background: Theme.data.animation-editor.ruler-background;
+        Text {
+            text: "摄影表";
+            x: 8px;
+            width: parent.width - 16px;
+            height: 100%;
+            vertical-alignment: center;
+            color: Theme.data.animation-editor.ruler-text;
+            font-size: 11px;
+        }
+    }
+
+    // 通道列表（左，与画布行同步纵向滚动）
+    ChannelList {
+        x: 0;
+        y: root.ruler-height;
+        width: root.channel-width;
+        height: root.height - root.ruler-height;
+        channels: root.channels;
+        pan-y: root.nav-pan-y;
+        row-height: root.row-height;
+        current-channel: root.current-channel;
+        toggle-visible(i) => {
+            AnimationCallbacks.channel-toggle-visible(i);
+        }
+        toggle-modifier(i) => {
+            AnimationCallbacks.channel-toggle-modifier(i);
+        }
+        toggle-active(i) => {
+            AnimationCallbacks.channel-toggle-active(i);
+        }
+        toggle-editable(i) => {
+            AnimationCallbacks.channel-toggle-editable(i);
+        }
+    }
+
+    // 顶部时间标尺（位于画布上方、通道列表右侧）
+    TimeRuler {
+        x: root.channel-width;
+        y: 0;
+        width: root.width - root.channel-width;
+        height: root.ruler-height;
+        ticks: root.time-ticks;
+        view-zoom: root.nav-zoom;
+        pan-x: root.nav-pan-x;
+        current-time: root.current-time;
+        time-picked(time) => {
+            AnimationCallbacks.set-current-time(time);
+        }
+    }
+
+    // 主画布
+    canvas := Rectangle {
+        x: root.channel-width;
+        y: root.ruler-height;
+        width: root.width - root.channel-width;
+        height: root.height - root.ruler-height;
+        clip: true;
+        background: Theme.data.animation-editor.canvas-background;
+
+        // 行背景（与通道列表对齐）
+        for ch[i] in root.channels: Rectangle {
+            y: i * root.row-height + root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            background: Math.mod(i, 2) == 0 ? Theme.data.animation-editor.lane-even : Theme.data.animation-editor.lane-odd;
+        }
+
+        // 垂直时间线（与标尺刻度对齐）
+        for t in root.time-ticks: Rectangle {
+            width: 100%;
+            height: 100%;
+            if t.value * root.nav-zoom + root.nav-pan-x >= 0 && t.value * root.nav-zoom + root.nav-pan-x <= root.width / 1px: Rectangle {
+                x: t.value * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+                y: 0px;
+                width: 1px;
+                height: 100%;
+                background: Theme.data.animation-editor.grid-color;
+            }
+        }
+
+        // 导航（背景交互：滚轮缩放 / 中键平移 / 空白点击取消选中）
+        CanvasNavigation {
+            pan-x <=> root.nav-pan-x;
+            pan-y <=> root.nav-pan-y;
+            zoom-x <=> root.nav-zoom;
+            zoom-y <=> root.nav-zoom;
+            background-pressed => {
+                AnimationCallbacks.dope-keyframe-deselect-all();
+            }
+        }
+
+        // 每行关键帧（在导航之上，可交互）
+        for ch[i] in root.channels: Rectangle {
+            y: i * root.row-height + root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+
+            for key[j] in ch.keyframes: DopeKeyframe {
+                visible: ch.visible;
+                opacity: (i == root.current-channel && ch.active) ? 1.0 : 0.35;
+                time: key.time;
+                marker-color: ch.color;
+                selected: key.selected;
+                view-zoom: root.nav-zoom;
+                pan-x: root.nav-pan-x;
+                row-height: root.row-height;
+                pressed(additive) => {
+                    AnimationCallbacks.dope-keyframe-pressed(i, j, additive);
+                }
+                dragged(dt) => {
+                    AnimationCallbacks.dope-keyframe-dragged(i, j, dt);
+                }
+                released => {
+                    AnimationCallbacks.dope-keyframe-released(i, j);
+                }
+            }
+        }
+
+        // 当前时间线（播放头，置顶但不拦截事件）
+        Rectangle {
+            x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: Theme.data.animation-editor.playhead;
+        }
+    }
+}

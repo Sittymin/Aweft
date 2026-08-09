@@ -13,7 +13,7 @@ pub struct Project {
     pub meta: ProjectMetadata,
     pub library: ProjectLibrary,
     pub structure: ProjectStructure,
-    /// 样式应用层：按优先级排列的应用图列表
+    /// 样式应用层：按优先级排列的应用图列表（应用图编辑器编辑）
     pub style_layer: ApplicationLayer,
 }
 

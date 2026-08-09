@@ -32,13 +32,18 @@ export component AreaHeader inherits Rectangle {
     in property <[AreaHeaderIconAction]> left-actions: [];
     in property <[AreaHeaderIconAction]> right-actions: [];
 
+    // 中区纯文本（如曲线编辑器的 Action 名称）；非空时居中显示
+    in property <string> center-text: "";
+
     // 中区内容
     in property <AreaHeaderCenterMode> center-mode: AreaHeaderCenterMode.none;
-    // 链选择器（center-mode == chain 时用；节点图专用，占位数据）
+    // 链选择器（center-mode == chain 时用；节点图专用）
     in property <[ContextMenuItem]> chain-items;
     in property <int> current-chain-index: 0;
     in-out property <bool> chain-editing: false;
     callback chain-selected(index: int);
+    // 新增链（Blender 式"+"按钮）
+    callback new-chain();
 
     private property <string> current-chain-name: root.current-chain-index >= 0 && root.current-chain-index < root.chain-items.length ? root.chain-items[root.current-chain-index].text : "";
 
@@ -77,6 +82,22 @@ export component AreaHeader inherits Rectangle {
         }
     }
 
+    // 中区纯文本（如 Action 名称）：整行居中，叠在主行之上
+    if root.center-text != "": Rectangle {
+        x: max(0px, (parent.width - self.width) / 2);
+        y: (parent.height - self.height) / 2;
+        width: center-label.preferred-width;
+        height: center-label.preferred-height;
+
+        center-label := Text {
+            text: root.center-text;
+            color: Theme.data.area-header.title-text;
+            font-size: Theme.data.area-header.title-font-size;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
     // 中区：整行居中（绝对定位，画在主行之上）
     if root.center-mode == AreaHeaderCenterMode.chain: center-box := Rectangle {
         x: max(0px, (parent.width - self.width) / 2);
@@ -111,14 +132,37 @@ export component AreaHeader inherits Rectangle {
                 }
             }
 
-            // 编辑链：链选择器
+            // 编辑链：链选择器 + 新增按钮
             if root.chain-editing: ChainSwitcher {
                 current-name: root.current-chain-name;
+                current-index: root.current-chain-index;
                 items: root.chain-items;
-                container-width: root.width;
-                container-height: root.height;
                 chain-selected(index) => {
                     root.chain-selected(index);
+                }
+            }
+
+            // 编辑链：新增链按钮（Blender 式"+"）
+            if root.chain-editing: Rectangle {
+                width: Theme.data.area-type-switcher.height;
+                height: Theme.data.area-type-switcher.height;
+                background: Theme.data.area-type-switcher.background;
+                border-radius: Theme.data.area-type-switcher.border-radius;
+                border-width: Theme.data.area-type-switcher.border-width;
+                border-color: Theme.data.area-type-switcher.border-color;
+                TouchArea {
+                    clicked => {
+                        root.new-chain();
+                    }
+                    Text {
+                        text: "+";
+                        width: 100%;
+                        height: 100%;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: Theme.data.area-type-switcher.popup.item-text-color;
+                        font-size: 16px;
+                    }
                 }
             }
         }

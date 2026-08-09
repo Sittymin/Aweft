@@ -1,0 +1,81 @@
+// NLA 编辑器左侧轨道列表：轨道名 + 独奏/静音开关。
+import { SlintNlaTrack } from "../../core/animation_types.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component TrackList inherits Rectangle {
+    in property <[SlintNlaTrack]> tracks;
+    in property <float> pan-y: 0.0;
+    in property <length> row-height: 28px;
+    callback toggle-muted(index: int);
+    callback toggle-solo(index: int);
+
+    clip: true;
+    background: Theme.data.animation-editor.channel-list-background;
+
+    // 与画布泳道同步纵向滚动
+    for t[i] in root.tracks: Rectangle {
+        y: i * root.row-height + root.pan-y * 1px;
+        x: 0px;
+        width: 100%;
+        height: root.row-height;
+        border-radius: 3px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            padding-left: 8px;
+            padding-right: 4px;
+
+            // 轨道名
+            Text {
+                text: t.name;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: t.muted ? Theme.data.animation-editor.channel-muted-text : Theme.data.animation-editor.channel-text;
+                font-size: 12px;
+                overflow: elide;
+            }
+
+            // 独奏开关
+            Rectangle {
+                width: 18px;
+                height: root.row-height;
+                TouchArea {
+                    clicked => {
+                        root.toggle-solo(i);
+                    }
+                    Text {
+                        text: "S";
+                        width: 100%;
+                        height: 100%;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: t.solo ? #f2c14e : Theme.data.animation-editor.channel-muted-text;
+                        font-size: 11px;
+                        font-weight: t.solo ? 700 : 400;
+                    }
+                }
+            }
+
+            // 静音开关
+            Rectangle {
+                width: 18px;
+                height: root.row-height;
+                TouchArea {
+                    clicked => {
+                        root.toggle-muted(i);
+                    }
+                    Text {
+                        text: "M";
+                        width: 100%;
+                        height: 100%;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: t.muted ? #f26d78 : Theme.data.animation-editor.channel-muted-text;
+                        font-size: 11px;
+                        font-weight: t.muted ? 700 : 400;
+                    }
+                }
+            }
+        }
+    }
+}

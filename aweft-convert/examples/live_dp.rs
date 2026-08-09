@@ -357,6 +357,8 @@ fn main() {
             });
             let anim = AnimData {
                 id: AnimDataId::new(), name: "a".into(),
+                unique_action: None,
+                temporary_edit: None,
                 tracks: vec![NlaTrack {
                     name: "t".into(), muted: false, solo: false,
                     strips: vec![NlaStrip::new_action("s", aid)],

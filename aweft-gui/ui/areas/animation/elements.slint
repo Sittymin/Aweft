@@ -1,0 +1,115 @@
+// NLA 编辑器基础元素：轨道泳道 + 片断。
+import { SlintStripType, SlintNlaStrip } from "../../core/animation_types.slint";
+import { Theme } from "../../theme/index.slint";
+
+// 单个 NLA 片断：时间定位的彩色矩形条（Action/Transition/Meta），可选中、横向拖拽。
+export component NlaStripComponent inherits Rectangle {
+    in property <string> strip-name;
+    in property <SlintStripType> strip-type;
+    in property <float> start: 0.0;
+    in property <float> end: 1.0;
+    in property <color> strip-color;
+    in property <bool> selected: false;
+    in property <bool> muted: false;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <length> lane-height: 28px;
+
+    callback pressed(additive: bool);
+    callback dragged(delta-x: float);
+    callback released();
+
+    private property <bool> dragging: false;
+    private property <float> press-world-x: 0.0;
+
+    // 片断类型标签（Transition=▽, Meta=□；Action 无标记）
+    private property <string> type-mark: root.strip-type == SlintStripType.transition ? "▽" : (root.strip-type == SlintStripType.meta ? "▣" : "");
+
+    x: root.start * root.view-zoom * 1px + root.pan-x * 1px;
+    y: 1px;
+    width: max(6px, (root.end - root.start) * root.view-zoom * 1px);
+    height: root.lane-height - 2px;
+    border-radius: 3px;
+    background: root.muted ? root.strip-color.darker(0.5) : root.strip-color;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? #ffffff : Theme.data.animation-editor.strip-outline;
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 4px;
+
+        Text {
+            text: root.type-mark;
+            vertical-alignment: center;
+            color: Theme.data.animation-editor.strip-text;
+            font-size: 10px;
+            visible: root.type-mark != "";
+        }
+        Text {
+            text: root.strip-name;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            color: Theme.data.animation-editor.strip-text;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+
+    function world-x() -> float {
+        return (ta.mouse-x / 1px - root.pan-x) / root.view-zoom;
+    }
+
+    ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.dragging = true;
+                root.press-world-x = root.world-x();
+                root.pressed(event.modifiers.shift || event.modifiers.control);
+            } else if (event.kind == PointerEventKind.move && root.dragging) {
+                root.dragged(root.world-x() - root.press-world-x);
+            } else if (event.kind == PointerEventKind.up) {
+                if root.dragging {
+                    root.released();
+                }
+                root.dragging = false;
+            }
+        }
+    }
+}
+
+// 轨道泳道：一行轨道，内含按时间定位的片断。
+export component TrackLane inherits Rectangle {
+    in property <[SlintNlaStrip]> strips;
+    in property <color> lane-color;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+
+    callback strip-pressed(strip-index: int, additive: bool);
+    callback strip-dragged(strip-index: int, delta-x: float);
+    callback strip-released(strip-index: int);
+
+    background: root.lane-color;
+
+    for s[j] in root.strips: NlaStripComponent {
+        strip-name: s.name;
+        strip-type: s.strip-type;
+        start: s.start;
+        end: s.end;
+        strip-color: s.color;
+        selected: s.selected;
+        muted: s.muted;
+        view-zoom: root.view-zoom;
+        pan-x: root.pan-x;
+        lane-height: root.height;
+        pressed(additive) => {
+            root.strip-pressed(j, additive);
+        }
+        dragged(dx) => {
+            root.strip-dragged(j, dx);
+        }
+        released => {
+            root.strip-released(j);
+        }
+    }
+}

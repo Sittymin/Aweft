@@ -1,26 +1,19 @@
-// 应用图标题栏：向通用 AreaHeader 传入应用链数据（占位）与右侧操作按钮。
-import { SlintKey, SlintAreaType } from "../../core/types.slint";
+// 应用图标题栏：链列表/当前链索引来自 Rust 全局，向通用 AreaHeader 传入，并接入加载回调。
+import { SlintKey, SlintAreaType, GraphType } from "../../core/types.slint";
 import { AreaHeader, AreaHeaderCenterMode } from "../area_header.slint";
-import { ContextMenuItem } from "../../widgets/context_menu.slint";
-import { Mixins } from "../../theme/mixins.slint";
+import { NodeGraphCallbacks } from "../../bridge/callbacks.slint";
+import { NodeGraphState } from "../../bridge/state.slint";
 
 export component AppGraphToolbar inherits Rectangle {
     in property <SlintKey> area-key;
     in property <SlintAreaType> area-type;
     in-out property <bool> chain-editing: false;
 
-    // 当前应用链索引（占位，真实数据来自 Rust 侧）
-    private property <int> current-chain-index: 0;
-    // 应用链候选（占位）
-    private property <[ContextMenuItem]> app-chain-items: [
-        { text: "应用链 1", enabled: true, dot-color: root.current-chain-index == 0 ? Mixins.popup-item.selected-background : Colors.transparent, separator-before: false },
-        { text: "应用链 2", enabled: true, dot-color: root.current-chain-index == 1 ? Mixins.popup-item.selected-background : Colors.transparent, separator-before: false },
-    ];
-
-    // 占位：新建时选中第一条链
+    // 新建链：切到第 0 条并加载（数据在 Rust 侧）
     changed chain-editing => {
         if root.chain-editing {
-            root.current-chain-index = 0;
+            NodeGraphState.app-current-chain = 0;
+            NodeGraphCallbacks.load-chain(GraphType.app-graph, 0);
         }
     }
 
@@ -30,11 +23,15 @@ export component AppGraphToolbar inherits Rectangle {
         area-key: root.area-key;
         area-type: root.area-type;
         center-mode: AreaHeaderCenterMode.chain;
-        chain-items: root.app-chain-items;
-        current-chain-index: root.current-chain-index;
+        chain-items: NodeGraphState.app-chain-items;
+        current-chain-index: NodeGraphState.app-current-chain;
         chain-editing <=> root.chain-editing;
         chain-selected(index) => {
-            root.current-chain-index = index;
+            NodeGraphState.app-current-chain = index;
+            NodeGraphCallbacks.load-chain(GraphType.app-graph, index);
+        }
+        new-chain => {
+            NodeGraphState.app-current-chain = NodeGraphCallbacks.new-chain(GraphType.app-graph);
         }
         // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
         right-actions: [

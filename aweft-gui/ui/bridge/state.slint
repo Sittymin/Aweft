@@ -1,6 +1,15 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
 import { SlintSubtitleRow } from "../core/types.slint";
+import { GraphLink, GraphNode, NodeSocketData } from "../areas/node_graph/node_frame.slint";
+import { ContextMenuItem } from "../widgets/context_menu.slint";
+import {
+    SlintFCurveChannel,
+    SlintCurveSegment,
+    SlintHandleMarker,
+    SlintNlaTrack,
+    SlintRulerTick,
+} from "../core/animation_types.slint";
 
 export global VideoState {
     in property <image> current-video-frame;
@@ -9,4 +18,49 @@ export global VideoState {
 export global SubtitleState {
     in property <image> current-subtitle-frame;
     in property <[SlintSubtitleRow]> rows: [];
+}
+
+// 节点图编辑器状态：样式图/应用图各一组模型，由 Rust 侧驱动。
+// 节点/连线模型为 Rust 持有的 VecModel（增删节点重建、拖动节点局部更新）。
+export global NodeGraphState {
+    // 样式图：链列表 / 当前链索引 / 节点 / 连线 / 右键菜单项
+    in property <[ContextMenuItem]> style-chain-items: [];
+    in property <int> style-current-chain: 0;
+    in property <[GraphNode]> style-nodes: [];
+    in property <[GraphLink]> style-links: [];
+    in property <[ContextMenuItem]> style-menu-items: [];
+    // 应用图
+    in property <[ContextMenuItem]> app-chain-items: [];
+    in property <int> app-current-chain: 0;
+    in property <[GraphNode]> app-nodes: [];
+    in property <[GraphLink]> app-links: [];
+    in property <[ContextMenuItem]> app-menu-items: [];
+}
+
+// 动画编辑器状态：曲线编辑器（通道/曲线段/控制柄/刻度）与 NLA 编辑器（轨道）。
+// 模型由 Rust 侧持有（VecModel），Slint 只渲染并上报事件。
+export global AnimationState {
+    // 曲线编辑器
+    in property <[SlintFCurveChannel]> channels: [];
+    in property <[SlintCurveSegment]> segments: [];
+    in property <[SlintHandleMarker]> handles: [];
+    in property <[SlintRulerTick]> time-ticks: [];
+    in property <[SlintRulerTick]> value-ticks: [];
+    // NLA 编辑器
+    in property <[SlintNlaTrack]> nla-tracks: [];
+    // 共享：当前时间（播放头）
+    in property <float> current-time: 0.0;
+    // 当前 Action 名称（header 栏中区显示）
+    in property <string> action-name: "";
+    // 共享：Action 时长范围（画布上用于明暗分段，时长内亮 / 时长外暗）
+    in property <float> action-start: 0.0;
+    in property <float> action-end: 0.0;
+    // 共享：当前激活通道（-1 = 无激活；侧边栏判断当前是哪一条曲线）
+    in property <int> current-channel: -1;
+    // 侧边栏：选中关键帧数量（0 = 未选中关键帧，插值面板禁用）
+    in property <int> selected-keyframes: 0;
+    // 首个选中关键帧的插值类型（0=贝塞尔，1=线性，2=常量；无选中时忽略）
+    in property <int> selected-interpolation: 0;
+    // 手柄拖拽时相邻软钳制的有效控制点预览
+    in property <[SlintHandleMarker]> preview-handles: [];
 }

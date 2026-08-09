@@ -1,0 +1,21 @@
+// NLA 动画编辑器标题栏：通用 AreaHeader + 右侧操作按钮（占位）。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AreaHeader } from "../area_header.slint";
+
+export component AnimationToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+        // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
+        right-actions: [
+            { icon: @image-url("../../assets/icons/animation.svg") },
+            { icon: @image-url("../../assets/icons/grid_4x4.svg") },
+            { icon: @image-url("../../assets/icons/keep.svg") },
+        ];
+    }
+}

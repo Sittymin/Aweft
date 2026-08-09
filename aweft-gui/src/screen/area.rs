@@ -56,6 +56,12 @@ pub enum AreaType {
     StyleGraphEditor,
     // 应用图编辑器（aweft-model 的 application_graph）
     AppGraphEditor,
+    // 曲线编辑器（aweft-model 的 animation::Action/FCurve）
+    GraphEditor,
+    // NLA 动画编辑器（aweft-model 的 animation::AnimData/NlaTrack/NlaStrip）
+    Animation,
+    // 摄影表 / 动作编辑器（Dope Sheet：每通道一行按时间铺开关键帧）
+    DopeSheet,
     // StyleManager,
     // FileBrowser,
 

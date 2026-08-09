@@ -1,0 +1,232 @@
+// 通用节点图编辑器（样式图/应用图共用）：
+//  - nodes/links/menu-items 为 in 属性（由 area_container 从 NodeGraphState 全局绑定，数据由 Rust 持有）
+//  - 渲染用声明式 for 循环；所有图结构操作（加/删节点、连线重连、命中检测）走 NodeGraphCallbacks 到 Rust
+//  - 本组件仅保留拖拽瞬态（rubber band 连线、菜单、选中），不持有图数据
+// 滚轮以光标为中心缩放，中键拖拽平移；端口可拖拽重连；画布空白右键加节点、节点右键删除。
+import { GraphLink, GraphNavigation, GraphNode, GraphNodeLink, LatticeGrid, NodeFrame, NodeSocketType } from "node_frame.slint";
+import { ContextMenu, ContextMenuItem } from "../../widgets/context_menu.slint";
+import { GraphType } from "../../core/types.slint";
+import { NodeGraphCallbacks } from "../../bridge/callbacks.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component NodeGraphEditor inherits Rectangle {
+    background: Theme.data.node-editor.canvas-background;
+    clip: true;
+
+    in property <GraphType> graph-type;
+    // 是否正在编辑链（false=空状态：背景为叉叉、不显示节点）
+    in property <bool> chain-editing: true;
+    // 节点/连线/右键菜单（Rust 持有）
+    in property <[GraphNode]> nodes;
+    in property <[GraphLink]> links;
+    in property <[ContextMenuItem]> menu-items;
+    // 点阵贴图与形状（样式图=方形，应用图=三角）
+    in property <image> lattice-tile;
+    in property <bool> lattice-triangular: false;
+
+    // 右键菜单状态
+    private property <bool> menu-open: false;
+    // 0=画布空白右键（增加节点），1=节点右键（删除节点）
+    private property <int> menu-mode: 0;
+    private property <length> menu-screen-x: 0px;
+    private property <length> menu-screen-y: 0px;
+    // 右键处的世界坐标（新节点放置位置）
+    private property <length> menu-world-x: 0px;
+    private property <length> menu-world-y: 0px;
+
+    // 当前选中节点（-1 表示未选中；点节点选中、点空白取消）
+    private property <int> selected-node: -1;
+
+    // 拖拽连接瞬态：被拖的端口（drag-node/socket）与 rubber band 源端点（drag-from-*）。
+    // 拖输入端=拿下喂给该输入的连线（drag-link-index 指向它，仅用于隐藏它）；
+    // 拖输出端=拉新线（drag-link-index=-1）。具体断开/重连交给 Rust 在松开时处理。
+    private property <bool> link-dragging: false;
+    private property <int> drag-node: 0;
+    private property <int> drag-socket: 0;
+    private property <bool> drag-is-input: false;
+    private property <int> drag-from-node: 0;
+    private property <int> drag-from-socket: 0;
+    private property <int> drag-link-index: -1;
+    private property <NodeSocketType> drag-type: NodeSocketType.style;
+    private property <length> drag-x: 0px;
+    private property <length> drag-y: 0px;
+
+    // 第 i 个端口垂直中心相对节点顶部的偏移
+    function socket-offset(idx: int) -> length {
+        return Theme.data.node-editor.node-header-height + idx * Theme.data.node-editor.node-socket-row-height + Theme.data.node-editor.node-socket-row-height / 2;
+    }
+
+    // 背景点阵（Blender 式层级）；未编辑链时切换为灰色叉叉背景（空状态）
+    LatticeGrid {
+        pan-x: nav.pan-x;
+        pan-y: nav.pan-y;
+        zoom: nav.zoom;
+        tile-source: root.chain-editing ? root.lattice-tile : @image-url("../../assets/textures/grid_cross.svg");
+        tile-size: Theme.data.node-editor.lattice-base-spacing;
+        triangular: root.lattice-triangular;
+        dot-color: Theme.data.node-editor.lattice-color;
+    }
+
+    // 导航层（垫底）：处理滚轮缩放与中键平移
+    nav := GraphNavigation {
+        context-menu-requested(at-x, at-y) => {
+            root.open-menu(at-x, at-y);
+        }
+        background-pressed => {
+            root.selected-node = -1;
+        }
+    }
+
+    // 连接线（屏幕坐标）：连接态，位于端口下层
+    for link[i] in root.links: GraphNodeLink {
+        visible: root.chain-editing && !(root.link-dragging && i == root.drag-link-index);
+        from-x: (nodes[link.from-node].x + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
+        from-y: (nodes[link.from-node].y + root.socket-offset(link.from-socket)) * nav.zoom + nav.pan-y;
+        to-x: nodes[link.to-node].x * nav.zoom + nav.pan-x;
+        to-y: (nodes[link.to-node].y + root.socket-offset(link.to-socket)) * nav.zoom + nav.pan-y;
+        data-type: link.data-type;
+        view-zoom: nav.zoom;
+    }
+
+    // 节点
+    for node[i] in root.nodes: NodeFrame {
+        visible: root.chain-editing;
+        node-x: node.x;
+        node-y: node.y;
+        view-pan-x: nav.pan-x;
+        view-pan-y: nav.pan-y;
+        view-zoom: nav.zoom;
+        title: node.title;
+        sockets: node.sockets;
+        selected: i == root.selected-node;
+        press-requested => {
+            root.selected-node = i;
+        }
+        drag-moved(delta-x, delta-y) => {
+            NodeGraphCallbacks.node-dragged(root.graph-type, i, node.x + delta-x, node.y + delta-y);
+        }
+        socket-drag-started(idx, is-input, data-type, wx, wy) => {
+            root.on-socket-drag-started(i, idx, is-input, data-type, wx, wy);
+        }
+        socket-drag-moved(wx, wy) => { root.on-socket-drag-moved(wx, wy); }
+        socket-drag-ended(wx, wy) => { root.on-socket-drag-ended(wx, wy); }
+        socket-drag-canceled => { root.on-socket-drag-canceled(); }
+        right-pressed(wx, wy) => {
+            root.open-node-menu(i, wx, wy);
+        }
+        scroll-requested(delta, at-x, at-y) => { nav.apply-zoom(delta, at-x, at-y); }
+        pan-start-requested(at-x, at-y) => { nav.start-pan(at-x, at-y); }
+        pan-move-requested(at-x, at-y) => { nav.move-pan(at-x, at-y); }
+    }
+
+    // 拖拽中的连线（屏幕坐标）：位于端口上层，已连接端泛白、拖拽端接口色、中间渐变
+    if root.link-dragging: GraphNodeLink {
+        from-x: (nodes[root.drag-from-node].x + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
+        from-y: (nodes[root.drag-from-node].y + root.socket-offset(root.drag-from-socket)) * nav.zoom + nav.pan-y;
+        to-x: root.drag-x * nav.zoom + nav.pan-x;
+        to-y: root.drag-y * nav.zoom + nav.pan-y;
+        data-type: root.drag-type;
+        view-zoom: nav.zoom;
+        dragging: true;
+    }
+
+    // 菜单打开时的背景点击层：点菜单外任意处关闭
+    if root.menu-open: TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.menu-open = false;
+            }
+        }
+    }
+
+    // 自定义右键菜单：画布空白=增加节点，节点右键=删除节点
+    ContextMenu {
+        open <=> root.menu-open;
+        items: root.menu-mode == 0 ? root.menu-items : root.node-menu-items;
+        menu-x: root.menu-screen-x;
+        menu-y: root.menu-screen-y;
+        container-width: root.width;
+        container-height: root.height;
+        item-selected(index) => {
+            if root.menu-mode == 0 {
+                root.selected-node = NodeGraphCallbacks.add-node(root.graph-type, index, root.menu-world-x, root.menu-world-y);
+            } else {
+                NodeGraphCallbacks.delete-node(root.graph-type, root.selected-node);
+                root.selected-node = -1;
+            }
+        }
+    }
+
+    // 节点右键菜单（目前仅删除当前节点）
+    private property <[ContextMenuItem]> node-menu-items: [
+        { text: "删除当前节点", enabled: true, dot-color: Colors.transparent, separator-before: false },
+    ];
+
+    // ---- 右键菜单 ----
+
+    function open-menu(at-x: length, at-y: length) {
+        if !root.chain-editing {
+            return;
+        }
+        menu-mode = 0;
+        menu-screen-x = at-x;
+        menu-screen-y = at-y;
+        // 世界坐标：把画布本地屏幕坐标换算到世界层
+        menu-world-x = (at-x - nav.pan-x) / nav.zoom;
+        menu-world-y = (at-y - nav.pan-y) / nav.zoom;
+        menu-open = true;
+    }
+
+    // 节点右键：选中该节点并弹出节点菜单（删除）
+    function open-node-menu(node-id: int, wx: length, wy: length) {
+        selected-node = node-id;
+        menu-mode = 1;
+        // 屏幕坐标：把世界坐标换回画布
+        menu-screen-x = wx * nav.zoom + nav.pan-x;
+        menu-screen-y = wy * nav.zoom + nav.pan-y;
+        menu-open = true;
+    }
+
+    // ---- 端口拖拽瞬态（图操作在松开时交给 Rust） ----
+
+    function on-socket-drag-started(node-id: int, socket-index: int, is-input: bool, data-type: NodeSocketType, wx: length, wy: length) {
+        drag-node = node-id;
+        drag-socket = socket-index;
+        drag-is-input = is-input;
+        if is-input {
+            // 拖输入端：拿下喂给该输入的连线，rubber band 源 = 该连线的输出端
+            drag-link-index = NodeGraphCallbacks.find-link-for-input(root.graph-type, node-id, socket-index);
+            if drag-link-index < 0 {
+                return;
+            }
+            drag-from-node = links[drag-link-index].from-node;
+            drag-from-socket = links[drag-link-index].from-socket;
+        } else {
+            // 拖输出端：拉新线
+            drag-link-index = -1;
+            drag-from-node = node-id;
+            drag-from-socket = socket-index;
+        }
+        drag-type = data-type;
+        drag-x = wx;
+        drag-y = wy;
+        link-dragging = true;
+    }
+
+    function on-socket-drag-moved(wx: length, wy: length) {
+        drag-x = wx;
+        drag-y = wy;
+    }
+
+    function on-socket-drag-ended(wx: length, wy: length) {
+        NodeGraphCallbacks.socket-drag-ended(root.graph-type, root.drag-node, root.drag-socket, root.drag-is-input, wx, wy);
+        link-dragging = false;
+        drag-link-index = -1;
+    }
+
+    // 拖拽中按右键：取消本次拖拽（Rust 未做任何修改，原连接保持不变）
+    function on-socket-drag-canceled() {
+        link-dragging = false;
+        drag-link-index = -1;
+    }
+}

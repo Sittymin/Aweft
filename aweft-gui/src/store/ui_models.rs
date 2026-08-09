@@ -8,7 +8,10 @@ use crate::bridge::types::{
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
+use crate::store::curve_editor::CurveEditorState;
+use crate::store::graph_editor::GraphEditorState;
 use crate::store::line_editor::LineEditorState;
+use crate::store::nla_editor::NlaEditorState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
 /// 目前只包含字幕编辑器的行模型，后续可以加入 screen/edge 等模型。
@@ -21,6 +24,13 @@ pub struct UiModels {
     // 显示的 Edge 是合并过后的，所以可能存在 多个 Key 对应一个 Index 的情况
     pub scredge_touch_display_index_map: HashMap<ScrEdgeKey, usize>,
     pub scredge_touch_index_map: HashMap<ScrEdgeKey, usize>,
+    // 节点图编辑器状态（样式图 / 应用图）
+    pub style_graph: GraphEditorState,
+    pub app_graph: GraphEditorState,
+    // 曲线编辑器状态（Graph Editor / FCurve）
+    pub curve_editor: CurveEditorState,
+    // NLA 动画编辑器状态
+    pub nla_editor: NlaEditorState,
 }
 
 impl UiModels {
@@ -33,6 +43,10 @@ impl UiModels {
             scrarea_index_map: HashMap::new(),
             scredge_touch_display_index_map: HashMap::new(),
             scredge_touch_index_map: HashMap::new(),
+            style_graph: GraphEditorState::default(),
+            app_graph: GraphEditorState::default(),
+            curve_editor: CurveEditorState::default(),
+            nla_editor: NlaEditorState::default(),
         }
     }
 

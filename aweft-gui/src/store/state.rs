@@ -46,7 +46,7 @@ pub enum DragOperation {
 /// 应用状态和逻辑的唯一管理者
 pub struct AppState {
     // 单一持久化数据源
-    pub project: Project,
+    pub(crate) project: Project,
 
     pub screen_map: ScrAreaMap,
     pub theme_settings: ThemeSettings,

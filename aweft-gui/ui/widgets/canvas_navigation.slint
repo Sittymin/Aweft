@@ -1,0 +1,77 @@
+// 画布导航（曲线编辑器 / NLA 编辑器共用）：
+// 滚轮以光标为中心缩放（X/Y 可独立），中键拖拽平移。
+// pan/zoom 均为浮点像素 + 缩放系数（世界坐标 = 浮点，屏幕 = world*zoom + pan）。
+export component CanvasNavigation inherits TouchArea {
+    in-out property <float> pan-x: 0.0;
+    in-out property <float> pan-y: 0.0;
+    in-out property <float> zoom-x: 1.0;
+    in-out property <float> zoom-y: 1.0;
+
+    private property <float> min-zoom: 0.1;
+    private property <float> max-zoom: 200.0;
+    private property <float> zoom-step: 1.2;
+    private property <bool> panning: false;
+    private property <float> pan-start-world-x: 0.0;
+    private property <float> pan-start-world-y: 0.0;
+
+    // 画布空白处左键按下（编辑器据此清除选中）
+    callback background-pressed();
+    // 视图缩放变化（滚轮）：编辑器据此重算刻度步长（放大细化坐标轴）
+    callback view-changed();
+
+    function world-x() -> float {
+        return (self.mouse-x / 1px - root.pan-x) / root.zoom-x;
+    }
+    function world-y() -> float {
+        return (self.mouse-y / 1px - root.pan-y) / root.zoom-y;
+    }
+
+    scroll-event(event) => {
+        let factor: float = event.delta-y > 0px ? root.zoom-step : 1.0 / root.zoom-step;
+        // 光标处的世界坐标（缩放前，保持其屏幕位置不变）
+        let wx: float = root.world-x();
+        let wy: float = root.world-y();
+        // 两轴同比例缩放
+        let nx = root.zoom-x * factor;
+        let ny = root.zoom-y * factor;
+        // 触限时保持纵横比：任一轴到顶/到底，另一轴同步停下。
+        // 否则 X 基数大先到上限，之后只有 Y 继续放大 → 曲线/坐标轴被单独拉长。
+        let final-x = nx > root.max-zoom || ny > root.max-zoom
+            ? root.zoom-x * (root.max-zoom / max(root.zoom-x, root.zoom-y))
+            : (nx < root.min-zoom || ny < root.min-zoom
+                ? root.zoom-x * (root.min-zoom / min(root.zoom-x, root.zoom-y))
+                : nx);
+        let final-y = nx > root.max-zoom || ny > root.max-zoom
+            ? root.zoom-y * (root.max-zoom / max(root.zoom-x, root.zoom-y))
+            : (nx < root.min-zoom || ny < root.min-zoom
+                ? root.zoom-y * (root.min-zoom / min(root.zoom-x, root.zoom-y))
+                : ny);
+        // 以光标为中心缩放：pan += world * (old - new) 使光标下的世界点固定
+        root.pan-x += wx * (root.zoom-x - final-x);
+        root.pan-y += wy * (root.zoom-y - final-y);
+        root.zoom-x = final-x;
+        root.zoom-y = final-y;
+        root.view-changed();
+        return EventResult.accept;
+    }
+
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            root.background-pressed();
+        } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.middle) {
+            root.panning = true;
+            root.pan-start-world-x = root.world-x();
+            root.pan-start-world-y = root.world-y();
+        } else if (event.kind == PointerEventKind.move && root.panning) {
+            // pan-start-world 为拖动开始时的固定世界坐标，更新会导致反馈回路
+            root.pan-x += (root.world-x() - root.pan-start-world-x) * root.zoom-x;
+            root.pan-y += (root.world-y() - root.pan-start-world-y) * root.zoom-y;
+        } else if (event.kind == PointerEventKind.up) {
+            if root.panning {
+                // 平移结束：刻度可见范围随平移变化，通知编辑器重建
+                root.view-changed();
+            }
+            root.panning = false;
+        }
+    }
+}

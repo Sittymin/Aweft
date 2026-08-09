@@ -3,7 +3,9 @@ import {
     ActionZoneCorner,
     SlintAreaType,
     SlintSubtitleRow,
+    GraphType,
 } from "../core/types.slint";
+import { NodeSocketType, SocketHit } from "../areas/node_graph/node_frame.slint";
 
 export global DragCallbacks {
     callback actionzone-drag(area-key: SlintKey, corner: ActionZoneCorner, offset-x: length, offset-y: length);
@@ -48,4 +50,72 @@ export global LineEditorCallbacks {
     callback delete-selected-items();
 
     callback ungroups(group-item-id: string);
+}
+
+// 节点图编辑回调：编辑器只做渲染与拖拽瞬态，全部图数据操作走 Rust。
+export global NodeGraphCallbacks {
+    // 拖动节点：上报新的世界坐标（UI 位置数据，不改图结构）
+    callback node-dragged(graph-type: GraphType, node-index: int, x: length, y: length);
+    // 在右键位置添加节点，返回新节点在 nodes 模型中的下标
+    callback add-node(graph-type: GraphType, template-index: int, x: length, y: length) -> int;
+    // 删除节点（Rust 一并断开相关连线并重建模型）
+    callback delete-node(graph-type: GraphType, node-index: int);
+    // 拖输入端时，找喂给该输入端的那条连线（模型下标，-1 无）；用于拖拽时隐藏它
+    callback find-link-for-input(graph-type: GraphType, node-index: int, socket-index: int) -> int;
+    // 找拖拽释放位置命中的、类型匹配的输入端口（世界坐标）
+    callback find-drop-socket(graph-type: GraphType, x: length, y: length, data-type: NodeSocketType) -> SocketHit;
+    // 端口拖拽松开：由 Rust 按拖拽语义完成断开/重连（node/socket 为被拖的端口）
+    callback socket-drag-ended(graph-type: GraphType, node-index: int, socket-index: int, is-input: bool, x: length, y: length);
+    // 切换/新建链：加载第 index 条链到编辑器模型
+    callback load-chain(graph-type: GraphType, index: int);
+    // 新建一条默认链并切换到它，返回新链在切换菜单中的下标
+    callback new-chain(graph-type: GraphType) -> int;
+}
+
+// 动画编辑器回调（曲线编辑器 + NLA 编辑器）：编辑器只做渲染与拖拽瞬态，
+// 全部数据操作走 Rust（当前为 UI 测试数据，暂未接线 model）。
+export global AnimationCallbacks {
+    // —— 曲线编辑器：关键帧 ——
+    // 按下（选中）：additive=true 表示 Shift/Ctrl 追加选择
+    callback keyframe-pressed(curve-index: int, key-index: int, additive: bool);
+    // 拖拽移动（delta 相对按下起点，世界坐标）
+    callback keyframe-dragged(curve-index: int, key-index: int, delta-time: float, delta-value: float);
+    callback keyframe-released(curve-index: int, key-index: int);
+    // 画布空白点击：清除关键帧选中
+    callback keyframe-deselect-all();
+    // —— 曲线编辑器：贝塞尔控制柄 ——
+    callback handle-pressed(curve-index: int, key-index: int, is-in: bool);
+    // mode: 0=Ctrl 自由，1=默认对齐（角度一致长度独立），2=Shift 原点对称
+    callback handle-dragged(curve-index: int, key-index: int, is-in: bool, delta-time: float, delta-value: float, mode: int);
+    callback handle-released(curve-index: int, key-index: int, is-in: bool);
+    // —— 曲线编辑器：通道 ——
+    // 通道/曲线按下：mode 0=普通（只选该通道），1=Shift 区间，2=Ctrl 切换
+    callback channel-pressed(curve-index: int, mode: int);
+    // 画布空白点击：清除激活通道与选中
+    callback channel-deselect-all();
+    // 侧边栏：设置曲线颜色来源（0=自动彩虹，1=用户设置）
+    callback curve-color-mode-changed(curve-index: int, mode: int);
+    // 侧边栏：设置选中关键帧的插值类型（0=贝塞尔，1=线性，2=常量）
+    callback keyframe-interpolation-changed(interp: int);
+    callback channel-toggle-visible(curve-index: int);
+    callback channel-toggle-modifier(curve-index: int);
+    callback channel-toggle-active(curve-index: int);
+    callback channel-toggle-editable(curve-index: int);
+    // —— NLA 编辑器：片断 ——
+    callback strip-pressed(track-index: int, strip-index: int, additive: bool);
+    callback strip-dragged(track-index: int, strip-index: int, delta-x: float);
+    callback strip-released(track-index: int, strip-index: int);
+    callback strip-deselect-all();
+    // —— NLA 编辑器：轨道 ——
+    callback track-toggle-muted(track-index: int);
+    callback track-toggle-solo(track-index: int);
+    // —— 摄影表（Dope Sheet）：关键帧（共用曲线编辑器的选中/数据，拖拽只调时间） ——
+    callback dope-keyframe-pressed(curve-index: int, key-index: int, additive: bool);
+    callback dope-keyframe-dragged(curve-index: int, key-index: int, delta-time: float);
+    callback dope-keyframe-released(curve-index: int, key-index: int);
+    callback dope-keyframe-deselect-all();
+    // —— 共享：当前时间（播放头） ——
+    callback set-current-time(time: float);
+    // —— 共享：视图变化（缩放/平移/画布尺寸）——按可见范围重算刻度步长（放大细化、铺满画布、数量有界）——
+    callback view-changed(zoom-x: float, zoom-y: float, pan-x: float, pan-y: float, width: float, height: float);
 }

@@ -1,11 +1,16 @@
 import { Theme } from "../../theme/index.slint";
 
-// 端口数据类型，决定端口与连接线的颜色。
+// 端口数据类型，决定端口与连接线的颜色。与 aweft-model 的 SocketType 一一对应。
 export enum NodeSocketType {
     style,
+    float,
+    bool,
+    color,
     text,
     int,
-    bool,
+    vec2,
+    vec3,
+    clip-rect,
     animation,
 }
 
@@ -20,9 +25,8 @@ export struct NodeSocketData {
 
 // 一条节点连接：数据流方向固定 from（输出端）→ to（输入端）。
 // 端口索引均为"节点内索引"（与 NodeFrame.sockets 的下标一致）。
+// 节点/端口下标均为编辑器 nodes 模型的下标（与 Rust 侧模型一致，增删节点后重建）。
 export struct GraphLink {
-    // 定长槽位标记：true 表示这条连接有效（编辑器只增不减，重连仅改写端点）
-    active: bool,
     // 输出端：节点索引 + 端口索引
     from-node: int,
     from-socket: int,
@@ -39,19 +43,12 @@ export struct SocketHit {
     socket: int,
 }
 
-// 画布上的一个节点实例（编辑器内定长槽位管理，active 标记是否有效）。
+// 画布上的一个节点实例（位置 x/y 为 UI 数据，由 Rust 侧编辑器模型持有）。
 export struct GraphNode {
-    active: bool,
     title: string,
     // 世界坐标（左上角）
     x: length,
     y: length,
-    sockets: [NodeSocketData],
-}
-
-// 节点类型模板（右键菜单里的可选节点）。
-export struct NodeTemplate {
-    title: string,
     sockets: [NodeSocketData],
 }
 
@@ -282,6 +279,9 @@ export component NodeFrame inherits Rectangle {
 
     // 端口类型 -> 颜色
     function socket-color(data-type: NodeSocketType) -> color {
+        if data-type == NodeSocketType.float {
+            return Theme.data.node-editor.socket-float-color;
+        }
         if data-type == NodeSocketType.text {
             return Theme.data.node-editor.socket-text-color;
         }
@@ -290,6 +290,18 @@ export component NodeFrame inherits Rectangle {
         }
         if data-type == NodeSocketType.bool {
             return Theme.data.node-editor.socket-bool-color;
+        }
+        if data-type == NodeSocketType.color {
+            return Theme.data.node-editor.socket-color-color;
+        }
+        if data-type == NodeSocketType.vec2 {
+            return Theme.data.node-editor.socket-vec2-color;
+        }
+        if data-type == NodeSocketType.vec3 {
+            return Theme.data.node-editor.socket-vec3-color;
+        }
+        if data-type == NodeSocketType.clip-rect {
+            return Theme.data.node-editor.socket-clip-rect-color;
         }
         if data-type == NodeSocketType.animation {
             return Theme.data.node-editor.socket-animation-color;
@@ -369,6 +381,9 @@ export component GraphNodeLink inherits Path {
     }
 
     function link-color(data-type: NodeSocketType) -> color {
+        if data-type == NodeSocketType.float {
+            return Theme.data.node-editor.socket-float-color;
+        }
         if data-type == NodeSocketType.text {
             return Theme.data.node-editor.socket-text-color;
         }
@@ -377,6 +392,18 @@ export component GraphNodeLink inherits Path {
         }
         if data-type == NodeSocketType.bool {
             return Theme.data.node-editor.socket-bool-color;
+        }
+        if data-type == NodeSocketType.color {
+            return Theme.data.node-editor.socket-color-color;
+        }
+        if data-type == NodeSocketType.vec2 {
+            return Theme.data.node-editor.socket-vec2-color;
+        }
+        if data-type == NodeSocketType.vec3 {
+            return Theme.data.node-editor.socket-vec3-color;
+        }
+        if data-type == NodeSocketType.clip-rect {
+            return Theme.data.node-editor.socket-clip-rect-color;
         }
         if data-type == NodeSocketType.animation {
             return Theme.data.node-editor.socket-animation-color;

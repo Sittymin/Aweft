@@ -66,6 +66,21 @@ impl ApplicationNodeKind {
     pub fn is_static(&self) -> bool {
         !matches!(self, ApplicationNodeKind::AppRef(_))
     }
+
+    /// 节点显示名（应用图编辑器标题栏用）。
+    pub fn title(&self) -> &'static str {
+        match self {
+            ApplicationNodeKind::ContextInput => "上下文输入",
+            ApplicationNodeKind::MatchActor => "匹配角色",
+            ApplicationNodeKind::MatchText => "匹配文本",
+            ApplicationNodeKind::IntEq => "整数相等",
+            ApplicationNodeKind::And => "与",
+            ApplicationNodeKind::Or => "或",
+            ApplicationNodeKind::Not => "非",
+            ApplicationNodeKind::AppRef(_) => "样式引用",
+            ApplicationNodeKind::Apply => "应用",
+        }
+    }
 }
 
 // ── ApplicationGraphNode ─────────────────────────────────────────────────────────────
@@ -256,7 +271,7 @@ macro_rules! define_application_nodes {
             }
         )*
 
-        fn get_application_socket_decls(
+        pub fn get_application_socket_decls(
             kind: &$crate::application_graph::ApplicationNodeKind,
         ) -> Option<(Vec<$crate::node_graph::SocketDecl>, Vec<$crate::node_graph::SocketDecl>)> {
             $(
@@ -481,6 +496,48 @@ impl ApplicationGraph {
             }
             let dest_node = self.socket(input_socket_id).node;
             self.mark_dirty(dest_node);
+        }
+    }
+
+    /// 删除节点并断开其所有连线、移除其端口。
+    pub fn remove_node(&mut self, node_id: NodeId) {
+        if let Some(node) = self.nodes.get(&node_id) {
+            let inputs: Vec<SocketId> = node.inputs.clone();
+            let outputs: Vec<SocketId> = node.outputs.clone();
+            for sid in inputs {
+                self.disconnect_input(sid);
+            }
+            for sid in outputs {
+                self.disconnect_output(sid);
+            }
+        }
+
+        if let Some(node) = self.nodes.remove(&node_id) {
+            for input_id in &node.inputs {
+                self.sockets.remove(input_id);
+            }
+            for output_id in &node.outputs {
+                self.sockets.remove(output_id);
+            }
+        }
+
+        if let Some(cache) = &mut self.cache {
+            cache.node_styles.remove(&node_id);
+            cache
+                .socket_values
+                .retain(|sid, _| self.sockets.contains_key(sid));
+        }
+        self.dirty.remove(&node_id);
+    }
+
+    fn disconnect_output(&mut self, output_socket_id: SocketId) {
+        if let Some(tos) = self.output_link_map.remove(&output_socket_id) {
+            for &to in &tos {
+                self.input_link_map.remove(&to);
+                self.links.retain(|l| l.to != to);
+                let dest_node = self.socket(to).node;
+                self.mark_dirty(dest_node);
+            }
         }
     }
 

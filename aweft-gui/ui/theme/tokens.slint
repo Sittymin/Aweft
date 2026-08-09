@@ -73,12 +73,57 @@ export struct NodeEditorPalette {
     node-muted-text: color,
     socket-outline: color,
     socket-style: color,
+    socket-float: color,
     socket-text: color,
     socket-int: color,
     socket-bool: color,
+    socket-color: color,
+    socket-vec2: color,
+    socket-vec3: color,
+    socket-clip-rect: color,
     socket-animation: color,
     link: color,
     lattice: color,
+}
+
+// 动画编辑器（曲线编辑器 + NLA 编辑器）
+export struct AnimationEditorPalette {
+    canvas-background: color,
+    // 左侧列表面板（比属性行稍亮，衬托出最暗的行）
+    channel-list-background: color,
+    // 属性行背景（最暗）
+    channel-row-background: color,
+    // 通道行选中背景（多选高亮）
+    channel-row-selected: color,
+    // Action 时长之外区域的遮罩色（半透明，置于网格之上）
+    action-outside: color,
+    channel-text: color,
+    channel-muted-text: color,
+    ruler-background: color,
+    ruler-tick: color,
+    ruler-text: color,
+    lane-even: color,
+    lane-odd: color,
+    lane-active: color,
+    strip-outline: color,
+    strip-text: color,
+    playhead: color,
+    // 移动关键帧时预览的“钳制后”有效控制点颜色
+    preview-handle: color,
+    grid: color,
+    // 次要网格线（Blender 主/次两级网格：主刻度用 grid，次刻度用 grid-minor）
+    grid-minor: color,
+    // 右侧边栏（Blender N 面板风格）
+    sidebar-background: color,
+    sidebar-border: color,
+    sidebar-header-text: color,
+    sidebar-muted-text: color,
+    // 面板区块：头部略亮、主体略暗（Blender 面板样式）
+    panel-header-background: color,
+    panel-background: color,
+    // 单选/展开项高亮
+    option-selected: color,
+    option-hover: color,
 }
 
 export struct SpacingTokens {
@@ -121,6 +166,16 @@ export struct ControlTokens {
     node-editor-title-font-size: length,
     node-editor-socket-font-size: length,
     node-editor-lattice-base: length,
+    channel-row-height: length,
+    track-row-height: length,
+    ruler-height: length,
+    channel-list-width: length,
+    track-list-width: length,
+    value-ruler-width: length,
+    // 右侧边栏：分类 Tab 条宽度（竖排文字）/单个 Tab 高度/内容区宽度
+    sidebar-tab-width: length,
+    sidebar-tab-height: length,
+    sidebar-content-width: length,
 }
 
 export struct LayoutTokens {
@@ -143,6 +198,7 @@ export struct ThemeTokens {
     edge: EdgePalette,
     table: TablePalette,
     node-editor: NodeEditorPalette,
+    animation-editor: AnimationEditorPalette,
     spacing: SpacingTokens,
     border: BorderTokens,
     control: ControlTokens,
@@ -220,6 +276,8 @@ export global Tokens {
             socket-outline: #0e0e11,
             // style(样式链)
             socket-style: #63c763,
+            // float(浮点)
+            socket-float: #ffd166,
             // animation(动画)
             socket-animation: #ed9e5c,
             // text(文本)
@@ -228,8 +286,54 @@ export global Tokens {
             socket-int: #598c5c,
             // bool(布尔)
             socket-bool: #cca6d6,
+            // color(颜色)
+            socket-color: #f26d78,
+            // vec2(向量2)
+            socket-vec2: #4ecdc4,
+            // vec3(向量3)
+            socket-vec3: #45b7d1,
+            // clip-rect(裁剪区域)
+            socket-clip-rect: #b8a6d9,
             link: #63c763,
             lattice: #3a3a40,
+        },
+        animation-editor: {
+            // 可用区（时长内）最亮，但不过曝
+            canvas-background: #202026,
+            // 列表面板稍亮，衬托最暗的属性行
+            channel-list-background: #151519,
+            // 属性行背景（最暗）
+            channel-row-background: #0c0c0f,
+            // 选中行背景（比普通行亮，突出多选）
+            channel-row-selected: #232330,
+            // Action 时长之外：比行亮、比时长内暗（半透明遮罩，盖在网格上）
+            action-outside: rgba(0, 0, 0, 0.35),
+            channel-text: #d6d6dc,
+            channel-muted-text: #8a8a92,
+            ruler-background: #202026,
+            ruler-tick: #5c5c66,
+            ruler-text: #a9adb8,
+            lane-even: #26262b,
+            lane-odd: #2b2b31,
+            lane-active: #34343c,
+            strip-outline: #101014,
+            strip-text: #18181c,
+            playhead: #e6a23c,
+            // 预览钳制控制点：亮青色，与普通手柄区分
+            preview-handle: #4ecdc4,
+            grid: #2e2e34,
+            // 次要网格线：比画布亮、比主网格线暗
+            grid-minor: #27272d,
+            // 右侧边栏（Blender N 面板风格）：略深于画布、浅于通道列表
+            sidebar-background: #141418,
+            sidebar-border: #2e2e34,
+            sidebar-header-text: #d6d6dc,
+            sidebar-muted-text: #8a8a92,
+            // 面板区块：头部略亮、主体略暗
+            panel-header-background: #232327,
+            panel-background: #1c1c20,
+            option-selected: #4772b3,
+            option-hover: rgba(255, 255, 255, 0.08),
         },
         spacing: {
             xs: 4px,
@@ -269,6 +373,15 @@ export global Tokens {
             node-editor-title-font-size: 13px,
             node-editor-socket-font-size: 12px,
             node-editor-lattice-base: 28px,
+            channel-row-height: 24px,
+            track-row-height: 28px,
+            ruler-height: 22px,
+            channel-list-width: 170px,
+            track-list-width: 170px,
+            value-ruler-width: 46px,
+            sidebar-tab-width: 24px,
+            sidebar-tab-height: 64px,
+            sidebar-content-width: 200px,
         },
         layout: {
             main-border-width: 2px,

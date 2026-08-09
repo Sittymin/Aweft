@@ -1,13 +1,20 @@
-import { SlintKey, SlintAreaType, ActionZoneCorner } from "../core/types.slint";
+import { SlintKey, SlintAreaType, ActionZoneCorner, GraphType } from "../core/types.slint";
 import { ActionZone } from "action_zone.slint";
 import { AreaHeader } from "../areas/area_header.slint";
 import { LineEditor } from "../areas/line_editor/view.slint";
 import { VideoPlayer } from "../areas/viewport/view.slint";
 import { StyleGraphToolbar } from "../areas/style_graph/toolbar.slint";
 import { AppGraphToolbar } from "../areas/app_graph/toolbar.slint";
-import { StyleGraphEditor } from "../areas/style_graph/view.slint";
-import { AppGraphEditor } from "../areas/app_graph/view.slint";
+import { NodeGraphEditor } from "../areas/node_graph/editor.slint";
+import { GraphEditorToolbar } from "../areas/graph_editor/toolbar.slint";
+import { GraphEditor } from "../areas/graph_editor/graph_editor.slint";
+import { AnimationToolbar } from "../areas/animation/toolbar.slint";
+import { NlaEditor } from "../areas/animation/nla_editor.slint";
+import { DopeSheetToolbar } from "../areas/dope_sheet/toolbar.slint";
+import { DopeSheet } from "../areas/dope_sheet/dope_sheet.slint";
 import { VideoState } from "../bridge/state.slint";
+import { NodeGraphState } from "../bridge/state.slint";
+import { AnimationState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
 
 // Area 容器组件：包含 Area 的边框、ActionZone 和内容
@@ -50,16 +57,65 @@ export component SlintScrArea inherits Rectangle {
             area-type: area-type;
             chain-editing <=> root.chain-editing;
         }
+        if area-type == SlintAreaType.graph-editor: GraphEditorToolbar {
+            area-key: area-key;
+            area-type: area-type;
+        }
+        if area-type == SlintAreaType.animation: AnimationToolbar {
+            area-key: area-key;
+            area-type: area-type;
+        }
+        if area-type == SlintAreaType.dope-sheet: DopeSheetToolbar {
+            area-key: area-key;
+            area-type: area-type;
+        }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
         if area-type == SlintAreaType.viewport: VideoPlayer {
             video-frame: VideoState.current-video-frame;
         }
-        if area-type == SlintAreaType.style-graph-editor: StyleGraphEditor {
+        if area-type == SlintAreaType.style-graph-editor: NodeGraphEditor {
+            graph-type: GraphType.style-graph;
             chain-editing: root.chain-editing;
+            nodes: NodeGraphState.style-nodes;
+            links: NodeGraphState.style-links;
+            menu-items: NodeGraphState.style-menu-items;
+            lattice-tile: @image-url("../assets/textures/grid_square.svg");
+            lattice-triangular: false;
         }
-        if area-type == SlintAreaType.app-graph-editor: AppGraphEditor {
+        if area-type == SlintAreaType.app-graph-editor: NodeGraphEditor {
+            graph-type: GraphType.app-graph;
             chain-editing: root.chain-editing;
+            nodes: NodeGraphState.app-nodes;
+            links: NodeGraphState.app-links;
+            menu-items: NodeGraphState.app-menu-items;
+            lattice-tile: @image-url("../assets/textures/grid_triangle.svg");
+            lattice-triangular: true;
+        }
+        if area-type == SlintAreaType.graph-editor: GraphEditor {
+            channels: AnimationState.channels;
+            segments: AnimationState.segments;
+            handles: AnimationState.handles;
+            time-ticks: AnimationState.time-ticks;
+            value-ticks: AnimationState.value-ticks;
+            current-time: AnimationState.current-time;
+            action-start: AnimationState.action-start;
+            action-end: AnimationState.action-end;
+            current-channel: AnimationState.current-channel;
+            preview-handles: AnimationState.preview-handles;
+            selected-keyframes: AnimationState.selected-keyframes;
+            selected-interpolation: AnimationState.selected-interpolation;
+        }
+        if area-type == SlintAreaType.animation: NlaEditor {
+            tracks: AnimationState.nla-tracks;
+            time-ticks: AnimationState.time-ticks;
+            current-time: AnimationState.current-time;
+        }
+        if area-type == SlintAreaType.dope-sheet: DopeSheet {
+            channels: AnimationState.channels;
+            time-ticks: AnimationState.time-ticks;
+            current-time: AnimationState.current-time;
+            current-channel: AnimationState.current-channel;
         }
     }
 

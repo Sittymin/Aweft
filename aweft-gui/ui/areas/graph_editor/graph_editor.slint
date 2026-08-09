@@ -1,0 +1,377 @@
+// 曲线编辑器（Graph Editor）：
+//  - 布局参照 Blender：左侧通道列表 + 顶部时间标尺 + 左侧值标尺 + 主画布
+//  - 数据全部来自 Rust 侧 AnimationState 全局（通道/曲线段/控制柄/刻度）
+//  - 交互：滚轮缩放（以光标为中心）、中键平移（CanvasNavigation）；关键帧点击选中、
+//    拖拽移动；贝塞尔控制柄拖拽调整；通道可见性/静音开关
+//  - X 轴（时间）与 Y 轴（值）独立缩放：默认值让测试数据范围可见、标尺刻度可读
+import {
+    SlintFCurveChannel,
+    SlintCurveSegment,
+    SlintHandleMarker,
+    SlintRulerTick,
+    SlintSegmentKind,
+} from "../../core/animation_types.slint";
+import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { CurveSegment, KeyframeMarker, HandleMarker, HoldStep, ExtrapolationLine, PreviewHandle } from "elements.slint";
+import { TimeRuler, ValueAxisLabels, GraphGrid } from "ruler.slint";
+import { ChannelList } from "channel_list.slint";
+import { RightSidebar } from "sidebar.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component GraphEditor inherits Rectangle {
+    in property <[SlintFCurveChannel]> channels;
+    in property <[SlintCurveSegment]> segments;
+    in property <[SlintHandleMarker]> handles;
+    in property <[SlintRulerTick]> time-ticks;
+    in property <[SlintRulerTick]> value-ticks;
+    in property <float> current-time;
+    // Action 时长范围（时长内亮、时长外暗）
+    in property <float> action-start: 0.0;
+    in property <float> action-end: 0.0;
+    // 当前激活通道（-1 = 无激活）
+    in property <int> current-channel: -1;
+    // 手柄拖拽时相邻软钳制的有效控制点预览
+    in property <[SlintHandleMarker]> preview-handles;
+    // 侧边栏：选中关键帧数量 / 首个选中关键帧插值（0=贝塞尔 1=线性 2=常量）
+    in property <int> selected-keyframes: 0;
+    in property <int> selected-interpolation: 0;
+
+    // 通道列表 / 标尺尺寸（主题）
+    private property <length> channel-width: Theme.data.animation-editor.channel-list-width;
+    private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+
+    // 右侧边栏（通用 Sidebar：分类 Tab 条 + 内容区）：默认收起为分类 Tab 条；
+    // 展开时预留 Tab + 内容宽度
+    in-out property <bool> sidebar-open: false;
+    private property <length> sidebar-tab-w: Theme.data.animation-editor.sidebar-tab-width;
+    private property <length> sidebar-content-w: Theme.data.animation-editor.sidebar-content-width;
+    private property <length> sidebar-w: root.sidebar-open ? root.sidebar-tab-w + root.sidebar-content-w : root.sidebar-tab-w;
+
+    // 导航状态（画布与标尺共享；X/Y 独立缩放）
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-pan-y: 100.0;
+    private property <float> nav-zoom-x: 30.0;
+    private property <float> nav-zoom-y: 2.0;
+
+    // 通道列表（左）
+    ChannelList {
+        x: 0;
+        y: 0;
+        width: root.channel-width;
+        height: root.height;
+        channels: root.channels;
+        current-channel: root.current-channel;
+        toggle-visible(curve) => {
+            AnimationCallbacks.channel-toggle-visible(curve);
+        }
+        toggle-modifier(curve) => {
+            AnimationCallbacks.channel-toggle-modifier(curve);
+        }
+        toggle-active(curve) => {
+            AnimationCallbacks.channel-toggle-active(curve);
+        }
+        toggle-editable(curve) => {
+            AnimationCallbacks.channel-toggle-editable(curve);
+        }
+        channel-pressed(curve, mode) => {
+            AnimationCallbacks.channel-pressed(curve, mode);
+        }
+    }
+
+    // 顶部时间标尺（左缘与画布对齐，刻度才与画布网格/曲线对齐；右缘让位侧边栏）。
+    // 左侧没有独立的“值标尺”条带（Blender：值数字直接叠在画布上，见画布内 ValueAxisLabels）
+    TimeRuler {
+        x: root.channel-width;
+        y: 0;
+        width: root.width - root.channel-width - root.sidebar-w;
+        height: root.ruler-height;
+        ticks: root.time-ticks;
+        view-zoom: root.nav-zoom-x;
+        pan-x: root.nav-pan-x;
+        current-time: root.current-time;
+        time-picked(time) => {
+            AnimationCallbacks.set-current-time(time);
+        }
+    }
+
+    // 主画布（左侧不再预留“值标尺”宽度：值标签直接叠在画布左侧）
+    canvas := Rectangle {
+        x: root.channel-width;
+        y: root.ruler-height;
+        width: root.width - root.channel-width - root.sidebar-w;
+        height: root.height - root.ruler-height;
+        clip: true;
+        background: Theme.data.animation-editor.canvas-background;
+
+        // 网格（轴线与标尺刻度对齐）
+        GraphGrid {
+            time-ticks: root.time-ticks;
+            value-ticks: root.value-ticks;
+            zoom-x: root.nav-zoom-x;
+            zoom-y: root.nav-zoom-y;
+            pan-x: root.nav-pan-x;
+            pan-y: root.nav-pan-y;
+            line-color: Theme.data.animation-editor.grid-color;
+            minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        // 值轴标签（Blender 风格：不占宽度，直接叠在网格左侧，随缩放/平移滚动）。
+        // 宽度不设固定值，随最宽标签自适应。
+        ValueAxisLabels {
+            y: 0px;
+            x: 0px;
+            height: 100%;
+            ticks: root.value-ticks;
+            view-zoom: root.nav-zoom-y;
+            pan-y: root.nav-pan-y;
+        }
+
+        // Action 时长之外区域（比时长内暗，但比左侧属性行亮；半透明遮罩盖在网格上）
+        Rectangle {
+            x: 0px;
+            width: max(0px, min(parent.width, root.action-start * root.nav-zoom-x * 1px + root.nav-pan-x * 1px));
+            height: 100%;
+            background: Theme.data.animation-editor.action-outside;
+        }
+        Rectangle {
+            x: max(0px, root.action-end * root.nav-zoom-x * 1px + root.nav-pan-x * 1px);
+            width: max(0px, parent.width - max(0px, root.action-end * root.nav-zoom-x * 1px + root.nav-pan-x * 1px));
+            height: 100%;
+            background: Theme.data.animation-editor.action-outside;
+        }
+
+        // 导航（背景交互：滚轮缩放 / 中键平移 / 空白点击取消选中）
+        // 置于曲线之下，曲线段自带 TouchArea 命中（点击激活通道）
+        CanvasNavigation {
+            width: 100%;
+            height: 100%;
+            pan-x <=> root.nav-pan-x;
+            pan-y <=> root.nav-pan-y;
+            zoom-x <=> root.nav-zoom-x;
+            zoom-y <=> root.nav-zoom-y;
+            background-pressed => {
+                root.deselect-all();
+            }
+            view-changed() => {
+                AnimationCallbacks.view-changed(
+                    root.nav-zoom-x,
+                    root.nav-zoom-y,
+                    root.nav-pan-x,
+                    root.nav-pan-y,
+                    canvas.width / 1px,
+                    canvas.height / 1px
+                );
+            }
+        }
+
+        // 曲线（逐段 Path；眼睛控制显示，当前通道+复选框控制弱化；点击激活通道）。
+        // 注意：不用整段 opacity（那会让 Slint 为整段开离屏 layer，而段的尺寸=世界跨度×缩放，
+        // 放大后会超出 wgpu 纹理上限 16384 而崩溃），改为直接给描边颜色加 alpha，效果一致。
+        for seg in root.segments: CurveSegment {
+            visible: root.channels[seg.curve-index].visible;
+            x0: seg.x0;
+            y0: seg.y0;
+            cx1: seg.cx1;
+            cy1: seg.cy1;
+            cx2: seg.cx2;
+            cy2: seg.cy2;
+            x1: seg.x1;
+            y1: seg.y1;
+            kind: seg.kind;
+            stroke-color: root.channels[seg.curve-index].selected
+                ? seg.color
+                : seg.color.with-alpha(0.35);
+            view-zoom-x: root.nav-zoom-x;
+            view-zoom-y: root.nav-zoom-y;
+            pan-x: root.nav-pan-x;
+            pan-y: root.nav-pan-y;
+            pressed(mode) => {
+                AnimationCallbacks.channel-pressed(seg.curve-index, mode);
+            }
+        }
+
+        // 外推线：首/末关键帧水平延伸到视口边缘（比主曲线暗，非当前通道更暗）。
+        // 用颜色 alpha 代替 opacity，避免任何离屏 layer。
+        for curve[i] in root.channels: Rectangle {
+            width: 100%;
+            height: 100%;
+
+            if curve.visible && curve.keyframes.length > 0: ExtrapolationLine {
+                left-side: true;
+                area-width: parent.width;
+                key-time: curve.keyframes[0].time;
+                key-value: curve.keyframes[0].value;
+                view-zoom-x: root.nav-zoom-x;
+                view-zoom-y: root.nav-zoom-y;
+                pan-x: root.nav-pan-x;
+                pan-y: root.nav-pan-y;
+                line-color: curve.selected
+                    ? curve.color
+                    : curve.color.with-alpha(0.18);
+            }
+            if curve.visible && curve.keyframes.length > 0: ExtrapolationLine {
+                left-side: false;
+                area-width: parent.width;
+                key-time: curve.keyframes[curve.keyframes.length - 1].time;
+                key-value: curve.keyframes[curve.keyframes.length - 1].value;
+                view-zoom-x: root.nav-zoom-x;
+                view-zoom-y: root.nav-zoom-y;
+                pan-x: root.nav-pan-x;
+                pan-y: root.nav-pan-y;
+                line-color: curve.selected
+                    ? curve.color
+                    : curve.color.with-alpha(0.18);
+            }
+        }
+
+        // Hold 保持线的瞬变竖直虚线（连接保持线末端与下一个关键帧）。
+        // 与曲线段同理：不用整段 opacity（段的竖直高度=值差×缩放，放大后会开超大离屏 layer 崩溃），
+        // 用颜色 alpha 弱化虚线贴图。
+        for seg in root.segments: HoldStep {
+            visible: root.channels[seg.curve-index].visible && seg.kind == SlintSegmentKind.hold;
+            step-x: seg.x1;
+            y0: seg.y1;
+            y1: seg.step-value;
+            line-color: root.channels[seg.curve-index].selected
+                ? seg.color
+                : seg.color.with-alpha(0.35);
+            view-zoom-x: root.nav-zoom-x;
+            view-zoom-y: root.nav-zoom-y;
+            pan-x: root.nav-pan-x;
+            pan-y: root.nav-pan-y;
+        }
+
+        // 贝塞尔控制柄（随通道眼睛/当前通道/复选框一并隐藏、弱化；拖拽时自高亮；
+        // 移动关键帧时被钳制的手柄以 preview 替换）。
+        // 与曲线段同理：不用整段 opacity（会开离屏 layer），用颜色 alpha 弱化。
+        for h in root.handles: HandleMarker {
+            visible: root.channels[h.curve-index].visible;
+            key-time: h.key-time;
+            key-value: h.key-value;
+            handle-time: h.handle-time;
+            handle-value: h.handle-value;
+            handle-color: root.channels[h.curve-index].selected
+                ? h.color
+                : h.color.with-alpha(0.35);
+            preview: h.preview;
+            view-zoom-x: root.nav-zoom-x;
+            view-zoom-y: root.nav-zoom-y;
+            pan-x: root.nav-pan-x;
+            pan-y: root.nav-pan-y;
+            pressed => {
+                AnimationCallbacks.handle-pressed(h.curve-index, h.keyframe-index, h.is-in);
+            }
+            dragged(dt, dv, mode) => {
+                AnimationCallbacks.handle-dragged(h.curve-index, h.keyframe-index, h.is-in, dt, dv, mode);
+            }
+            released => {
+                AnimationCallbacks.handle-released(h.curve-index, h.keyframe-index, h.is-in);
+            }
+        }
+
+        // 手柄拖拽时相邻软钳制的有效控制点预览（亮青色，与原始手柄并存）
+        for h in root.preview-handles: PreviewHandle {
+            key-time: h.key-time;
+            key-value: h.key-value;
+            handle-time: h.handle-time;
+            handle-value: h.handle-value;
+            marker-color: Theme.data.animation-editor.preview-handle;
+            view-zoom-x: root.nav-zoom-x;
+            view-zoom-y: root.nav-zoom-y;
+            pan-x: root.nav-pan-x;
+            pan-y: root.nav-pan-y;
+        }
+
+        // 关键帧标记（双层循环：通道 × 关键帧；选中通道的标记不弱化）
+        for curve[i] in root.channels: Rectangle {
+            width: 100%;
+            height: 100%;
+
+            for key[j] in curve.keyframes: KeyframeMarker {
+                visible: curve.visible;
+                time: key.time;
+                value: key.value;
+                marker-color: curve.selected
+                    ? curve.color
+                    : curve.color.with-alpha(0.35);
+                selected: key.selected;
+                view-zoom-x: root.nav-zoom-x;
+                view-zoom-y: root.nav-zoom-y;
+                pan-x: root.nav-pan-x;
+                pan-y: root.nav-pan-y;
+                pressed(additive) => {
+                    AnimationCallbacks.keyframe-pressed(i, j, additive);
+                }
+                dragged(dt, dv) => {
+                    AnimationCallbacks.keyframe-dragged(i, j, dt, dv);
+                }
+                released => {
+                    AnimationCallbacks.keyframe-released(i, j);
+                }
+            }
+        }
+
+        // 当前时间线（播放头，置顶但不拦截事件）
+        Rectangle {
+            x: root.current-time * root.nav-zoom-x * 1px + root.nav-pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: Theme.data.animation-editor.playhead;
+        }
+    }
+
+    // 右侧边栏（默认收起为 Tab；置后绘制，位于画布右缘之上）
+    RightSidebar {
+        x: root.width - root.sidebar-w;
+        y: 0px;
+        width: root.sidebar-w;
+        height: root.height;
+        open <=> root.sidebar-open;
+        current-channel: root.current-channel;
+        channels: root.channels;
+        selected-keyframes: root.selected-keyframes;
+        selected-interpolation: root.selected-interpolation;
+        color-mode-changed(mode) => {
+            AnimationCallbacks.curve-color-mode-changed(root.current-channel, mode);
+        }
+        interpolation-changed(interp) => {
+            AnimationCallbacks.keyframe-interpolation-changed(interp);
+        }
+    }
+
+    // 清空选中（画布空白点击）：清除关键帧选中 + 清除激活通道
+    function deselect-all() {
+        AnimationCallbacks.keyframe-deselect-all();
+        AnimationCallbacks.channel-deselect-all();
+    }
+
+    // 启动时上报初始视图：让 Rust 按当前缩放/平移生成首屏刻度。
+    // init 时画布尺寸可能尚未确定，用一次性 Timer 在布局就绪后再校准一次。
+    init => {
+        root.sync-view();
+        calibrate-timer.start();
+    }
+
+    // 一次性校准定时器：init 后画布尺寸才真正确定，等一帧再同步刻度
+    calibrate-timer := Timer {
+        interval: 120ms;
+        running: false;
+        triggered => {
+            root.sync-view();
+            self.running = false;
+        }
+    }
+
+    function sync-view() {
+        AnimationCallbacks.view-changed(
+            root.nav-zoom-x,
+            root.nav-zoom-y,
+            root.nav-pan-x,
+            root.nav-pan-y,
+            canvas.width / 1px,
+            canvas.height / 1px
+        );
+    }
+}

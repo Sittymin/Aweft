@@ -224,6 +224,8 @@ pub struct StripControlCurves {
 ///
 /// Strips within a track are ordered by their time placement (not necessarily
 /// in index order — the evaluation engine resolves the active strip at each time).
+// TODO: NOTE: 或许当中的时间、局部文字索引可以下拉菜单改为外部输入（多个时间对），这样可能就可以在应用图当中建立节点来实现逐字的卡拉OK动画（每个字的时间点都是播放一遍动画）
+// 但是估计 converter 也需要依字拟合了
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NlaTrack {
     pub name: String,
@@ -292,22 +294,25 @@ pub fn compute_strip_influence(
 
 /// Find the active strip in a track at the given event time.
 ///
-/// Returns `None` if no strip is active (all are out of range and extendmode
-/// doesn't cover the gap).
+/// `exclude` 指定一个被忽略的片断下标（如 NLA 中正处于临时编辑的片断，
+/// 它的求值改由编辑工作区以绝对时间提供）。返回 `None` 表示没有活动片断。
 pub fn find_active_strip(
     track: &NlaTrack,
     evaltime: f64,
     target_duration: f64,
+    exclude: Option<usize>,
 ) -> Option<ActiveStrip> {
     if track.muted {
         return None;
     }
 
-    // Resolve all strip placements
+    // Resolve all strip placements (skip the excluded strip)
     let resolved: Vec<(&NlaStrip, f64, f64)> = track
         .strips
         .iter()
-        .map(|s| {
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != exclude)
+        .map(|(_, s)| {
             let (start, end) = s.placement.resolve(target_duration);
             (s, start, end)
         })

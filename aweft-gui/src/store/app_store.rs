@@ -14,8 +14,8 @@ use chrono::TimeDelta;
 
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
-    state: AppState,
-    ui_models: UiModels,
+    pub(crate) state: AppState,
+    pub(crate) ui_models: UiModels,
     clipboard: Clipboard,
 }
 
@@ -25,9 +25,24 @@ impl AppStore {
         use slint::ComponentHandle;
 
         let theme_settings = crate::bridge::types::ThemeSettings::from_main_window(main_window);
+        let mut ui_models = UiModels::new();
+        // 节点图端口命中/布局所需主题量
+        {
+            let ne = main_window
+                .global::<crate::bridge::types::Theme>()
+                .get_data()
+                .node_editor;
+            let metrics = crate::store::graph_editor::EditorMetrics {
+                header: ne.node_header_height as f32,
+                row: ne.node_socket_row_height as f32,
+                radius: ne.socket_size as f32,
+            };
+            ui_models.style_graph.metrics = metrics;
+            ui_models.app_graph.metrics = metrics;
+        }
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
-            ui_models: UiModels::new(),
+            ui_models,
             clipboard: Clipboard::new(),
         }
     }

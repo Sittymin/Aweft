@@ -12,6 +12,18 @@ export enum SlintAreaType {
     style-graph-editor,
     // 应用图（application_graph）
     app-graph-editor,
+    // 曲线编辑器（Graph Editor / FCurve）
+    graph-editor,
+    // NLA 动画编辑器
+    animation,
+    // 动画摄影表（Dope Sheet）：每通道一行，按时间轴铺开关键帧
+    dope-sheet,
+}
+
+// 节点图类型：样式图（node_graph）与应用图（application_graph）
+export enum GraphType {
+    style-graph,
+    app-graph,
 }
 
 export struct IconAndText {

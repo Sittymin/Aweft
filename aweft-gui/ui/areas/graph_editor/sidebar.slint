@@ -1,0 +1,268 @@
+// 曲线编辑器右侧边栏：基于通用 Sidebar 组件组合而成。
+//  - 分类 Tab：函数曲线（收起时 Tab 条仍显示分类文字）；
+//  - 展开后的面板区块（SidebarPanel，Blender 式）：曲线颜色（自动彩虹/用户设置）、
+//    关键帧插值（贝塞尔/常量/线性，需先选中关键帧）。
+import { SlintFCurveChannel } from "../../core/animation_types.slint";
+import { Sidebar, SidebarPanel } from "../../widgets/sidebar.slint";
+import { Theme } from "../../theme/index.slint";
+
+// 单选行：圆形选中点 + 标签；disabled 时置灰不可点
+component RadioRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <bool> disabled: false;
+    callback clicked();
+
+    height: 26px;
+    background: touch.has-hover && !root.disabled
+        ? Theme.data.animation-editor.option-hover
+        : transparent;
+    touch := TouchArea {
+        enabled: !root.disabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        padding-left: 14px;
+        padding-right: 8px;
+
+        // 外圈：充满单元格高度，圆点垂直居中
+        Rectangle {
+            width: 18px;
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: self.height / 2;
+                border-width: 2px;
+                border-color: root.disabled
+                    ? Theme.data.animation-editor.sidebar-muted-text
+                    : (root.selected
+                        ? Theme.data.animation-editor.option-selected
+                        : Theme.data.animation-editor.sidebar-muted-text);
+                // 中心实心点（选中时点亮）
+                Rectangle {
+                    width: 5px;
+                    height: 5px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.height / 2;
+                    background: root.selected && !root.disabled
+                        ? Theme.data.animation-editor.option-selected
+                        : transparent;
+                }
+            }
+        }
+
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            color: root.disabled
+                ? Theme.data.animation-editor.sidebar-muted-text
+                : Theme.data.animation-editor.sidebar-header-text;
+            font-size: 12px;
+        }
+    }
+}
+
+// 曲线颜色面板（可拖拽排序）
+component ColorPanel inherits Rectangle {
+    in property <int> current-channel: -1;
+    in property <[SlintFCurveChannel]> channels;
+    callback color-mode-changed(mode: int);
+    callback drag-moved(dy: float);
+    callback drag-released();
+
+    vertical-stretch: 0;
+    SidebarPanel {
+        width: 100%;
+        title: "曲线颜色";
+        drag-moved(dy) => {
+            root.drag-moved(dy);
+        }
+        drag-released() => {
+            root.drag-released();
+        }
+        RadioRow {
+            label: "自动彩虹";
+            selected: root.channels[root.current-channel].color-mode == 0;
+            clicked => {
+                root.color-mode-changed(0);
+            }
+        }
+        RadioRow {
+            label: "用户设置";
+            selected: root.channels[root.current-channel].color-mode == 1;
+            clicked => {
+                root.color-mode-changed(1);
+            }
+        }
+        // 用户颜色调色盘尚未实现：目前“用户设置”仅回落到通道初始颜色（见 curve_editor.rs）
+        Text {
+            text: "用户设置：调色盘未实现，暂显示初始颜色";
+            horizontal-stretch: 1;
+            color: Theme.data.animation-editor.sidebar-muted-text;
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// 关键帧插值面板（需先选中关键帧；可拖拽排序）
+component InterpPanel inherits Rectangle {
+    in property <int> selected-keyframes: 0;
+    in property <int> selected-interpolation: 0;
+    callback interpolation-changed(interp: int);
+    callback drag-moved(dy: float);
+    callback drag-released();
+
+    vertical-stretch: 0;
+    SidebarPanel {
+        width: 100%;
+        title: "关键帧插值";
+        disabled: root.selected-keyframes <= 0;
+        drag-moved(dy) => {
+            root.drag-moved(dy);
+        }
+        drag-released() => {
+            root.drag-released();
+        }
+        RadioRow {
+            label: "贝塞尔";
+            selected: root.selected-interpolation == 0;
+            disabled: root.selected-keyframes <= 0;
+            clicked => {
+                root.interpolation-changed(0);
+            }
+        }
+        RadioRow {
+            label: "常量";
+            selected: root.selected-interpolation == 2;
+            disabled: root.selected-keyframes <= 0;
+            clicked => {
+                root.interpolation-changed(2);
+            }
+        }
+        RadioRow {
+            label: "线性";
+            selected: root.selected-interpolation == 1;
+            disabled: root.selected-keyframes <= 0;
+            clicked => {
+                root.interpolation-changed(1);
+            }
+        }
+    }
+}
+
+export component RightSidebar inherits Rectangle {
+    in-out property <bool> open: false;
+    // 激活通道下标（-1 = 无激活）
+    in property <int> current-channel: -1;
+    in property <[SlintFCurveChannel]> channels;
+    // 选中关键帧数量 / 首个选中关键帧插值（0=贝塞尔 1=线性 2=常量）
+    in property <int> selected-keyframes: 0;
+    in property <int> selected-interpolation: 0;
+    callback color-mode-changed(mode: int);
+    callback interpolation-changed(interp: int);
+
+    private property <bool> has-channel: root.current-channel >= 0 && root.current-channel < root.channels.length;
+    private property <color> muted-c: Theme.data.animation-editor.sidebar-muted-text;
+
+    // 面板顺序（0=曲线颜色，1=关键帧插值）；拖拽面板头部调整
+    in-out property <[int]> panel-order: [0, 1];
+    private property <float> drag-accum: 0.0;
+
+    function on-panel-drag(dy: float) {
+        root.drag-accum = dy;
+    }
+    function on-panel-drop(id: int) {
+        // 两个面板：顶部向下拖 / 底部向上拖 → 交换
+        let from: int = root.panel-order[0] == id ? 0 : 1;
+        if root.drag-accum > 12.0 && from == 0 {
+            root.panel-order = [root.panel-order[1], root.panel-order[0]];
+        } else if root.drag-accum < -12.0 && from == 1 {
+            root.panel-order = [root.panel-order[1], root.panel-order[0]];
+        }
+        root.drag-accum = 0.0;
+    }
+
+    // 通用侧边栏：分类 Tab“函数曲线”恒显示（右侧竖排文字）；面板仅在激活曲线后出现
+    Sidebar {
+        width: 100%;
+        height: 100%;
+        categories: ["函数曲线"];
+        open <=> root.open;
+
+        // 未激活曲线：提示
+        if !root.has-channel: SidebarPanel {
+            title: "函数曲线";
+            Text {
+                text: "未激活曲线";
+                vertical-alignment: center;
+                color: root.muted-c;
+                font-size: 12px;
+            }
+        }
+
+        // 按 panel-order 渲染两个可拖拽排序的面板
+        // （Slint 的 if 体不能直接是另一个 if，用 VerticalLayout 包一层）
+        if root.has-channel: VerticalLayout {
+            if root.panel-order[0] == 0: ColorPanel {
+                current-channel: root.current-channel;
+                channels: root.channels;
+                color-mode-changed(mode) => {
+                    root.color-mode-changed(mode);
+                }
+                drag-moved(dy) => {
+                    root.on-panel-drag(dy);
+                }
+                drag-released() => {
+                    root.on-panel-drop(0);
+                }
+            }
+            if root.panel-order[0] == 1: InterpPanel {
+                selected-keyframes: root.selected-keyframes;
+                selected-interpolation: root.selected-interpolation;
+                interpolation-changed(interp) => {
+                    root.interpolation-changed(interp);
+                }
+                drag-moved(dy) => {
+                    root.on-panel-drag(dy);
+                }
+                drag-released() => {
+                    root.on-panel-drop(1);
+                }
+            }
+            if root.panel-order[1] == 0: ColorPanel {
+                current-channel: root.current-channel;
+                channels: root.channels;
+                color-mode-changed(mode) => {
+                    root.color-mode-changed(mode);
+                }
+                drag-moved(dy) => {
+                    root.on-panel-drag(dy);
+                }
+                drag-released() => {
+                    root.on-panel-drop(0);
+                }
+            }
+            if root.panel-order[1] == 1: InterpPanel {
+                selected-keyframes: root.selected-keyframes;
+                selected-interpolation: root.selected-interpolation;
+                interpolation-changed(interp) => {
+                    root.interpolation-changed(interp);
+                }
+                drag-moved(dy) => {
+                    root.on-panel-drag(dy);
+                }
+                drag-released() => {
+                    root.on-panel-drop(1);
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,143 @@
+// NLA 动画编辑器：
+//  - 布局参照 Blender：左侧轨道列表 + 顶部时间标尺 + 主画布（轨道泳道 + 片断）
+//  - 数据来自 Rust 侧 AnimationState 全局（轨道 + 片断）
+//  - 交互：滚轮缩放、中键平移（CanvasNavigation）；片断点击选中、横向拖拽；
+//    轨道独奏/静音开关
+import {
+    SlintNlaTrack,
+    SlintRulerTick,
+} from "../../core/animation_types.slint";
+import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { LatticeGrid } from "../node_graph/node_frame.slint";
+import { TimeRuler } from "../graph_editor/ruler.slint";
+import { TrackLane } from "elements.slint";
+import { TrackList } from "track_list.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component NlaEditor inherits Rectangle {
+    in property <[SlintNlaTrack]> tracks;
+    in property <[SlintRulerTick]> time-ticks;
+    in property <float> current-time;
+
+    // 轨道列表 / 标尺尺寸（主题）
+    private property <length> track-list-width: Theme.data.animation-editor.track-list-width;
+    private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+    private property <length> row-height: Theme.data.animation-editor.track-row-height;
+
+    // 导航状态（画布、轨道列表与标尺共享；默认缩放使时间范围可读）
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-pan-y: 0.0;
+    private property <float> nav-zoom: 30.0;
+
+    // 左上角（轨道列表头部占位，与时间标尺同层）
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.track-list-width;
+        height: root.ruler-height;
+        background: Theme.data.animation-editor.ruler-background;
+        Text {
+            text: "NLA 轨道";
+            x: 8px;
+            width: parent.width - 16px;
+            height: 100%;
+            vertical-alignment: center;
+            color: Theme.data.animation-editor.ruler-text;
+            font-size: 11px;
+        }
+    }
+
+    // 轨道列表（左，与画布泳道同步纵向滚动）
+    TrackList {
+        x: 0;
+        y: root.ruler-height;
+        width: root.track-list-width;
+        height: root.height - root.ruler-height;
+        tracks: root.tracks;
+        pan-y: root.nav-pan-y;
+        row-height: root.row-height;
+        toggle-muted(i) => {
+            AnimationCallbacks.track-toggle-muted(i);
+        }
+        toggle-solo(i) => {
+            AnimationCallbacks.track-toggle-solo(i);
+        }
+    }
+
+    // 顶部时间标尺（位于画布上方、轨道列表右侧）
+    TimeRuler {
+        x: root.track-list-width;
+        y: 0;
+        width: root.width - root.track-list-width;
+        height: root.ruler-height;
+        ticks: root.time-ticks;
+        view-zoom: root.nav-zoom;
+        pan-x: root.nav-pan-x;
+        current-time: root.current-time;
+        time-picked(time) => {
+            AnimationCallbacks.set-current-time(time);
+        }
+    }
+
+    // 主画布
+    canvas := Rectangle {
+        x: root.track-list-width;
+        y: root.ruler-height;
+        width: root.width - root.track-list-width;
+        height: root.height - root.ruler-height;
+        clip: true;
+        background: Theme.data.animation-editor.canvas-background;
+
+        // 背景点阵网格
+        LatticeGrid {
+            pan-x: root.nav-pan-x * 1px;
+            pan-y: root.nav-pan-y * 1px;
+            zoom: root.nav-zoom;
+            tile-source: @image-url("../../assets/textures/grid_line.svg");
+            tile-size: Theme.data.node-editor.lattice-base-spacing;
+            dot-color: Theme.data.animation-editor.grid-color;
+        }
+
+        // 导航（背景交互，位于泳道之下）
+        CanvasNavigation {
+            pan-x <=> root.nav-pan-x;
+            pan-y <=> root.nav-pan-y;
+            zoom-x <=> root.nav-zoom;
+            zoom-y <=> root.nav-zoom;
+            background-pressed => {
+                AnimationCallbacks.strip-deselect-all();
+            }
+        }
+
+        // 轨道泳道（在导航之上，片断可交互）
+        for track[i] in root.tracks: TrackLane {
+            x: 0px;
+            y: i * root.row-height + root.nav-pan-y * 1px;
+            width: 100%;
+            height: root.row-height;
+            strips: track.strips;
+            lane-color: Math.mod(i, 2) == 0 ? Theme.data.animation-editor.lane-even : Theme.data.animation-editor.lane-odd;
+            view-zoom: root.nav-zoom;
+            pan-x: root.nav-pan-x;
+            strip-pressed(j, additive) => {
+                AnimationCallbacks.strip-pressed(i, j, additive);
+            }
+            strip-dragged(j, dx) => {
+                AnimationCallbacks.strip-dragged(i, j, dx);
+            }
+            strip-released(j) => {
+                AnimationCallbacks.strip-released(i, j);
+            }
+        }
+
+        // 当前时间线（播放头，置顶但不拦截事件）
+        Rectangle {
+            x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: Theme.data.animation-editor.playhead;
+        }
+    }
+}

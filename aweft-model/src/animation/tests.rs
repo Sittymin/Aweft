@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::animation::action::{Action, ActionCurve};
-use crate::animation::anim_data::{AnimData, BlendMode, PropertyPath};
+use crate::animation::anim_data::{AnimData, BlendMode, EditSource, PropertyPath};
 use crate::animation::fcurve::FCurve;
 use crate::animation::keyframe::{Extrapolation, Keyframe};
 use crate::animation::library::AnimationLibrary;
@@ -33,6 +33,8 @@ fn make_anim_data(name: &str, tracks: Vec<NlaTrack>) -> AnimData {
         id: AnimDataId::new(),
         name: name.to_string(),
         tracks,
+        unique_action: None,
+        temporary_edit: None,
     }
 }
 
@@ -878,4 +880,271 @@ fn blend_scalar_all_modes() {
     assert!((blend_scalar(10.0, 20.0, BlendMode::Multiply, 0.5) - 105.0).abs() < 1e-9);
     // Combine: 10*0.5 + 20*0.5 = 15
     assert!((blend_scalar(10.0, 20.0, BlendMode::Combine, 0.5) - 15.0).abs() < 1e-9);
+}
+
+// ── 编辑工作区（唯一 Action / NLA 临时编辑）────────────────────────────────
+
+#[test]
+fn unique_action_is_base_below_nla() {
+    let unique = make_action(
+        "unique",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 100.0)],
+        )],
+    );
+    let add = make_action(
+        "add",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 20.0)],
+        )],
+    );
+
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "nla".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip {
+                name: "add".into(),
+                blend_mode: BlendMode::Add,
+                ..NlaStrip::new_action("add", add.id)
+            }],
+        }],
+    );
+    clip.set_editing_unique(unique.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(unique);
+    lib.insert_action(add);
+    let id = lib.insert_anim_data(clip);
+
+    // t=0.5：唯一 Action 按绝对时间给 50（基础层），NLA Add +20 → 70
+    let map = lib.sample(id, 0.5, 1.0).unwrap();
+    assert!((map.get(&PropertyPath::PositionX).copied().unwrap() - 70.0).abs() < 1e-6);
+}
+
+#[test]
+fn nla_replace_overrides_unique_base() {
+    let unique = make_action(
+        "unique",
+        vec![make_acurve(
+            PropertyPath::FontSize,
+            vec![Keyframe::linear(0.0, 24.0)],
+        )],
+    );
+    let nla = make_action(
+        "nla",
+        vec![make_acurve(
+            PropertyPath::FontSize,
+            vec![Keyframe::linear(0.0, 48.0)],
+        )],
+    );
+
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "nla".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip::new_action("nla", nla.id)],
+        }],
+    );
+    clip.set_editing_unique(unique.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(unique);
+    lib.insert_action(nla);
+    let id = lib.insert_anim_data(clip);
+
+    // 唯一 Action 先给 24，NLA Replace 覆盖为 48
+    let map = lib.sample(id, 0.0, 1.0).unwrap();
+    assert_eq!(map.get(&PropertyPath::FontSize).copied(), Some(48.0));
+}
+
+#[test]
+fn temporary_strip_edit_is_absolute_and_skips_nla_strip() {
+    let action = make_action(
+        "editme",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 100.0)],
+        )],
+    );
+
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "main".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip {
+                name: "s".into(),
+                placement: StripPlacement::Absolute { start: 2.0, end: 5.0 },
+                ..NlaStrip::new_action("s", action.id)
+            }],
+        }],
+    );
+    clip.set_editing_strip(0, 0);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(action);
+    let id = lib.insert_anim_data(clip);
+
+    // 播放头在片断外（t=1.0）：编辑基础层按绝对时间仍给出 100
+    let map = lib.sample(id, 1.0, 5.0).unwrap();
+    assert_eq!(map.get(&PropertyPath::PositionX).copied(), Some(100.0));
+
+    // 播放头在片断内（t=3.0）：该片断在 NLA 中跳过，仅编辑层按绝对时间给 100
+    // （若未跳过，片断会把 clip_time 映射到 0.33 → 33.3，结果将是 33.3）
+    let map = lib.sample(id, 3.0, 5.0).unwrap();
+    assert_eq!(map.get(&PropertyPath::PositionX).copied(), Some(100.0));
+}
+
+#[test]
+fn cancel_temporary_edit_returns_to_original_unique() {
+    let unique = make_action("u", vec![]);
+    let strip_action = make_action("s", vec![]);
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "t".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip::new_action("s", strip_action.id)],
+        }],
+    );
+    clip.set_editing_unique(unique.id);
+
+    clip.set_editing_strip(0, 0);
+    assert_eq!(
+        clip.edit_source(),
+        Some(EditSource::NlaStrip { track: 0, strip: 0 })
+    );
+    // unique_action 未被临时编辑触碰
+    assert_eq!(clip.unique_action(), Some(unique.id));
+
+    clip.cancel_temporary_edit();
+    assert_eq!(clip.edit_source(), Some(EditSource::Unique(unique.id)));
+    assert!(clip.temporary_edit.is_none());
+}
+
+#[test]
+fn two_temp_edits_cancel_back_to_original_unique() {
+    let unique = make_action("u", vec![]);
+    let a = make_action("a", vec![]);
+    let b = make_action("b", vec![]);
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "t".into(),
+            muted: false,
+            solo: false,
+            strips: vec![
+                NlaStrip::new_action("a", a.id),
+                NlaStrip::new_action("b", b.id),
+            ],
+        }],
+    );
+    clip.set_editing_unique(unique.id);
+
+    // 第一次临时编辑片断 A，然后切换目标到片断 B
+    clip.set_editing_strip(0, 0);
+    clip.set_editing_strip(0, 1);
+    assert_eq!(
+        clip.edit_source(),
+        Some(EditSource::NlaStrip { track: 0, strip: 1 })
+    );
+
+    // 取消：直接回到全局唯一 Action，而不是第一次的临时编辑
+    clip.cancel_temporary_edit();
+    assert_eq!(clip.edit_source(), Some(EditSource::Unique(unique.id)));
+    assert_eq!(clip.unique_action(), Some(unique.id));
+}
+
+#[test]
+fn explicit_unique_edit_exits_temp_mode() {
+    let unique = make_action("u", vec![]);
+    let other = make_action("o", vec![]);
+    let strip_action = make_action("s", vec![]);
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "t".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip::new_action("s", strip_action.id)],
+        }],
+    );
+    clip.set_editing_unique(unique.id);
+
+    clip.set_editing_strip(0, 0);
+    clip.set_editing_unique(other.id);
+    assert!(clip.temporary_edit.is_none());
+    assert_eq!(clip.unique_action(), Some(other.id));
+}
+
+#[test]
+fn stale_edit_indices_fall_back_to_no_base() {
+    let mut clip = make_anim_data("clip", vec![]);
+    clip.set_editing_strip(99, 99);
+    let mut lib = AnimationLibrary::default();
+    let id = lib.insert_anim_data(clip);
+    let strips = lib.sample_tracks(id, 0.5, 1.0).unwrap();
+    assert!(strips.is_empty());
+}
+
+#[test]
+fn push_down_creates_strip_and_preserves_sampling() {
+    let unique = make_action(
+        "push",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 100.0)],
+        )],
+    );
+    let mut clip = make_anim_data("clip", vec![]);
+    clip.set_editing_unique(unique.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(unique);
+    let id = lib.insert_anim_data(clip);
+
+    let before = lib.sample(id, 0.4, 1.0).unwrap();
+    let v_before = before.get(&PropertyPath::PositionX).copied().unwrap();
+
+    let fresh = lib.push_down_editing_action(id).unwrap();
+
+    let ad = lib.anim_datas.get(&id).unwrap();
+    assert_eq!(ad.tracks.len(), 1);
+    assert_eq!(ad.unique_action(), Some(fresh));
+
+    // 新片断 no_time_map → 下压前后同一时刻采样一致
+    let after = lib.sample(id, 0.4, 1.0).unwrap();
+    let v_after = after.get(&PropertyPath::PositionX).copied().unwrap();
+    assert!((v_before - v_after).abs() < 1e-9);
+}
+
+#[test]
+fn push_down_requires_unique_edit_source() {
+    let action = make_action("a", vec![]);
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "t".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip::new_action("s", action.id)],
+        }],
+    );
+    clip.set_editing_strip(0, 0);
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(action);
+    let id = lib.insert_anim_data(clip);
+    assert!(matches!(
+        lib.push_down_editing_action(id),
+        Err(crate::animation::library::AnimationError::NoUniqueAction(_))
+    ));
 }

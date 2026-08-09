@@ -1,0 +1,161 @@
+// 曲线编辑器标尺：顶部时间标尺 + 左侧值标尺。
+// 刻度数据（世界坐标 + 标签）由 Rust 侧派生，Slint 按视口过滤绘制。
+//
+// 网格背景采用 Blender 的“主/次两级”样式：主刻度线较亮（grid-color），
+// 次刻度线较暗（grid-minor-color）；次要线在缩放太小时（像素间距 < 6px）
+// 自动隐藏，避免糊成一片，只保留主网格线。
+// 标尺背景与画布一致（Blender 的区域是统一的，网格贯穿标尺区，刻度叠于其上）。
+import { SlintRulerTick } from "../../core/animation_types.slint";
+import { Theme } from "../../theme/index.slint";
+
+// 时间标尺（水平，位于画布上方）。点击标尺可设置当前时间。
+export component TimeRuler inherits Rectangle {
+    in property <[SlintRulerTick]> ticks;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> current-time: 0.0;
+    callback time-picked(time: float);
+
+    // 次要刻度线的像素间距：小于阈值（网格过密）时只显示主网格线
+    private property <float> minor-px: root.ticks.length > 1
+        ? (root.ticks[1].value - root.ticks[0].value) * root.view-zoom
+        : 0.0;
+
+    clip: true;
+    background: Theme.data.animation-editor.ruler-background;
+
+    // 背景网格（与画布网格同色、同刻度）：主/次两级，贯通整个标尺区
+    for t in root.ticks: Rectangle {
+        width: 100%;
+        height: 100%;
+        if t.value * root.view-zoom + root.pan-x >= -20 && t.value * root.view-zoom + root.pan-x <= root.width / 1px + 20 && (t.major || root.minor-px >= 6.0): Rectangle {
+            x: t.value * root.view-zoom * 1px + root.pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: t.major ? Theme.data.animation-editor.grid-color : Theme.data.animation-editor.grid-minor-color;
+        }
+    }
+
+    // 每个刻度：一个占位 Rectangle，内部按视口过滤绘制刻度线与标签
+    for t in root.ticks: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        if t.value * root.view-zoom + root.pan-x >= -20 && t.value * root.view-zoom + root.pan-x <= root.width / 1px + 20: Rectangle {
+            x: t.value * root.view-zoom * 1px + root.pan-x * 1px;
+            y: t.major ? 4px : 15px;
+            width: 1px;
+            height: t.major ? 7px : 4px;
+            background: Theme.data.animation-editor.ruler-tick;
+        }
+
+        if t.major && t.value * root.view-zoom + root.pan-x >= -50 && t.value * root.view-zoom + root.pan-x <= root.width / 1px + 50: Text {
+            x: t.value * root.view-zoom * 1px + root.pan-x * 1px - 20px;
+            y: 0px;
+            width: 40px;
+            height: 100%;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: t.label;
+            color: Theme.data.animation-editor.ruler-text;
+            font-size: 9px;
+        }
+    }
+
+    // 当前时间游标
+    Rectangle {
+        x: root.current-time * root.view-zoom * 1px + root.pan-x * 1px;
+        y: 0px;
+        width: 1px;
+        height: 100%;
+        background: Theme.data.animation-editor.playhead;
+    }
+
+    // 点击设置当前时间
+    TouchArea {
+        clicked => {
+            root.time-picked((self.mouse-x / 1px - root.pan-x) / root.view-zoom);
+        }
+    }
+}
+
+// 值轴标签（Blender 风格：左侧没有独立的“值标尺”条带）。
+// 直接叠在画布左侧的网格之上：只画主刻度数字，随垂直缩放/平移滚动，
+// 透明背景、不拦截事件，也不占布局宽度。
+// 宽度不设固定值，而是按最宽标签自适应（Text 用自然宽度，盒子取子元素 preferred 宽度）。
+export component ValueAxisLabels inherits Rectangle {
+    in property <[SlintRulerTick]> ticks;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-y: 0.0;
+
+    clip: true;
+
+    for t in root.ticks: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        if t.major && t.value * root.view-zoom + root.pan-y >= -20 && t.value * root.view-zoom + root.pan-y <= root.height / 1px + 20: Text {
+            y: t.value * root.view-zoom * 1px + root.pan-y * 1px - 7px;
+            x: 0px;
+            height: 14px;
+            horizontal-alignment: left;
+            vertical-alignment: center;
+            text: t.label;
+            color: Theme.data.animation-editor.ruler-text;
+            font-size: 9px;
+        }
+    }
+}
+
+// 曲线编辑器画布网格：轴线与标尺刻度对齐（X 时间线 / Y 值线），
+// 支持 X/Y 独立缩放（与标尺、曲线使用同一套 zoom/pan）。
+// 主/次两级网格：主刻度线较亮（line-color）、次刻度线较暗（minor-line-color）；
+// 次要线在像素间距过小时自动隐藏（Blender 风格）。
+export component GraphGrid inherits Rectangle {
+    in property <[SlintRulerTick]> time-ticks;
+    in property <[SlintRulerTick]> value-ticks;
+    in property <float> zoom-x: 1.0;
+    in property <float> zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+    in property <color> line-color;
+    in property <color> minor-line-color;
+
+    // 次要线的像素间距：过密（缩得太小）时隐藏次要线，只留主网格线
+    private property <float> minor-x-px: root.time-ticks.length > 1
+        ? (root.time-ticks[1].value - root.time-ticks[0].value) * root.zoom-x
+        : 0.0;
+    private property <float> minor-y-px: root.value-ticks.length > 1
+        ? (root.value-ticks[1].value - root.value-ticks[0].value) * root.zoom-y
+        : 0.0;
+
+    width: 100%;
+    height: 100%;
+
+    // 垂直时间线
+    for t in root.time-ticks: Rectangle {
+        width: 100%;
+        height: 100%;
+        if t.value * root.zoom-x + root.pan-x >= 0 && t.value * root.zoom-x + root.pan-x <= root.width / 1px && (t.major || root.minor-x-px >= 6.0): Rectangle {
+            x: t.value * root.zoom-x * 1px + root.pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: t.major ? root.line-color : root.minor-line-color;
+        }
+    }
+
+    // 水平值线
+    for v in root.value-ticks: Rectangle {
+        width: 100%;
+        height: 100%;
+        if v.value * root.zoom-y + root.pan-y >= 0 && v.value * root.zoom-y + root.pan-y <= root.height / 1px && (v.major || root.minor-y-px >= 6.0): Rectangle {
+            y: v.value * root.zoom-y * 1px + root.pan-y * 1px;
+            x: 0px;
+            height: 1px;
+            width: 100%;
+            background: v.major ? root.line-color : root.minor-line-color;
+        }
+    }
+}

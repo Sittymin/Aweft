@@ -7,6 +7,9 @@ export global AreaTypeMetadata {
         { icon: @image-url("../assets/icons/viewport.svg"), text: "视口" },
         { icon: @image-url("../assets/icons/style_graph.svg"), text: "样式图" },
         { icon: @image-url("../assets/icons/app_graph.svg"), text: "应用图" },
+        { icon: @image-url("../assets/icons/graph_editor.svg"), text: "曲线编辑器" },
+        { icon: @image-url("../assets/icons/animation.svg"), text: "NLA 编辑器" },
+        { icon: @image-url("../assets/icons/dope_sheet.svg"), text: "摄影表" },
     ];
     
     // 转换函数：AreaType 枚举 -> 数组索引
@@ -20,6 +23,12 @@ export global AreaTypeMetadata {
             return 2;
         } else if area-type == SlintAreaType.app-graph-editor {
             return 3;
+        } else if area-type == SlintAreaType.graph-editor {
+            return 4;
+        } else if area-type == SlintAreaType.animation {
+            return 5;
+        } else if area-type == SlintAreaType.dope-sheet {
+            return 6;
         }
         return -1;  // 未知类型
     }
@@ -35,6 +44,12 @@ export global AreaTypeMetadata {
             return SlintAreaType.style-graph-editor;
         } else if index == 3 {
             return SlintAreaType.app-graph-editor;
+        } else if index == 4 {
+            return SlintAreaType.graph-editor;
+        } else if index == 5 {
+            return SlintAreaType.animation;
+        } else if index == 6 {
+            return SlintAreaType.dope-sheet;
         }
         return SlintAreaType.line-editor;
     }
