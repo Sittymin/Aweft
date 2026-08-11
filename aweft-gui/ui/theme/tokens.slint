@@ -107,9 +107,30 @@ export struct AnimationEditorPalette {
     lane-active: color,
     strip-outline: color,
     strip-text: color,
+    // 时间线分组头块（暖金棕，与激活绿区分）
+    strip-group: color,
+    // NLA 片断之间/前后的暗色延伸条带
+    strip-gap: color,
+    // NLA 未激活片断颜色（黑色）
+    strip-inactive: color,
+    // NLA 片断激活（选中）统一颜色（所有片断激活色一致，不随片断自身颜色）
+    strip-active: color,
+    // NLA 片断拖拽（移动）中的高亮颜色
+    strip-moving: color,
+    // NLA 全局 Action 轨上的只读关键帧标记颜色
+    action-keyframe: color,
+    // NLA 全局 Action 轨道（第一轨）亮色条带（Action 时间范围内）
+    action-strip: color,
+    // NLA 全局 Action 轨道（激活态）延伸条带颜色（Action 范围之外）
+    action-strip-gap: color,
     playhead: color,
+    // 播放头控制柄（标尺上的方形框）背景
+    playhead-handle-bg: color,
     // 移动关键帧时预览的“钳制后”有效控制点颜色
     preview-handle: color,
+    // 框选（marquee）矩形：填充 + 边框
+    marquee-fill: color,
+    marquee-border: color,
     grid: color,
     // 次要网格线（Blender 主/次两级网格：主刻度用 grid，次刻度用 grid-minor）
     grid-minor: color,
@@ -310,7 +331,8 @@ export global Tokens {
             action-outside: rgba(0, 0, 0, 0.35),
             channel-text: #d6d6dc,
             channel-muted-text: #8a8a92,
-            ruler-background: #202026,
+            // 时间标尺背景：比画布深（画布 #202026），衬托数字与播放头
+            ruler-background: #17171b,
             ruler-tick: #5c5c66,
             ruler-text: #a9adb8,
             lane-even: #26262b,
@@ -318,9 +340,30 @@ export global Tokens {
             lane-active: #34343c,
             strip-outline: #101014,
             strip-text: #18181c,
+            // NLA 片断空隙/延伸条带：比画布更暗的灰
+            strip-gap: #17171b,
+            // NLA 未激活片断：黑色（仅全局 Action 轨与选中/移动中片断有颜色）
+            strip-inactive: #232329,
+            // NLA 激活色：与全局 Action 轨同绿系，保证激活视觉统一
+            strip-active: #55a06a,
+            // 时间线分组头块：暖金棕色（与激活绿、未激活黑明显区分）
+            strip-group: #a17e2a,
+            // NLA 片断拖拽（移动）中的高亮颜色
+            strip-moving: #7fc1ff,
+            // NLA 全局 Action 轨上的只读关键帧标记（暗，区别于可编辑通道彩色）
+            action-keyframe: #3c3c46,
+            // NLA 全局 Action 轨亮色：中等绿（亮于空隙，暗于普通片断高亮）
+            action-strip: #3f7d4f,
+            // NLA 全局 Action 轨（激活态）延伸：带绿意的暗色，与普通空隙区分
+            action-strip-gap: #20291c,
             playhead: #e6a23c,
+            // 控制柄方形框背景：比标尺背景更暗，衬托数字
+            playhead-handle-bg: #0f0f13,
             // 预览钳制控制点：亮青色，与普通手柄区分
             preview-handle: #4ecdc4,
+            // 框选矩形：淡蓝填充 + 亮蓝边框
+            marquee-fill: rgba(80, 140, 255, 0.18),
+            marquee-border: #5a9dff,
             grid: #2e2e34,
             // 次要网格线：比画布亮、比主网格线暗
             grid-minor: #27272d,

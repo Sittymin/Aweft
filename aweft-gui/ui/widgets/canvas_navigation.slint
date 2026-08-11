@@ -1,24 +1,49 @@
-// 画布导航（曲线编辑器 / NLA 编辑器共用）：
+// 画布导航（曲线编辑器 / NLA 编辑器 / 摄影表共用）：
 // 滚轮以光标为中心缩放（X/Y 可独立），中键拖拽平移。
+// lock-y-zoom（摄影表）：滚轮只缩放 X，纵向保持 1.0；中键拖拽仍双向平移。
 // pan/zoom 均为浮点像素 + 缩放系数（世界坐标 = 浮点，屏幕 = world*zoom + pan）。
 export component CanvasNavigation inherits TouchArea {
     in-out property <float> pan-x: 0.0;
     in-out property <float> pan-y: 0.0;
     in-out property <float> zoom-x: 1.0;
     in-out property <float> zoom-y: 1.0;
+    // 锁住纵向缩放：滚轮只改 zoom-x（摄影表：时间轴缩放），zoom-y 恒为 1
+    in property <bool> lock-y-zoom: false;
+    // 纵向平移 clamp（摄影表：中键拖动上下不能超出内容范围，与列表滚动一致）
+    // 仅当 clamp-pan-y 为 true 时生效；范围 [clamp-pan-y-min, clamp-pan-y-max]（px）
+    in property <bool> clamp-pan-y: false;
+    in property <float> clamp-pan-y-min: 0.0;
+    in property <float> clamp-pan-y-max: 0.0;
+    // 最大缩放（px/单位）。摄影表时间轴需要放大到能看清毫秒（1ms≥数像素），
+    // 因此上层可覆盖更大的上限；曲线编辑器保持默认值。
+    in property <float> max-zoom: 200.0;
+    // 缩放步长（每格滚轮 ×/÷）。摄影表放大上限高，可用稍大步长快速到达毫秒级。
+    in property <float> zoom-step: 1.2;
 
     private property <float> min-zoom: 0.1;
-    private property <float> max-zoom: 200.0;
-    private property <float> zoom-step: 1.2;
     private property <bool> panning: false;
     private property <float> pan-start-world-x: 0.0;
     private property <float> pan-start-world-y: 0.0;
 
-    // 画布空白处左键按下（编辑器据此清除选中）
-    callback background-pressed();
+    // 框选（marquee）：摄影表在空白处左键拖拽画框选关键帧。
+    // 开启后左键按下不再立即触发 background-pressed，而是先记起点；
+    // 拖动超过阈值才进入框选（marquee-dragged/done），否则松开时按点击处理
+    // （background-pressed，保持行激活/清除选中语义）。
+    in property <bool> marquee-enabled: false;
+    callback marquee-dragged(x1: float, y1: float, x2: float, y2: float);
+    callback marquee-done(x1: float, y1: float, x2: float, y2: float, mode: int);
+    private property <bool> marquee-pressing: false;
+    private property <bool> marquee-active: false;
+    private property <float> marquee-start-x: 0.0;
+    private property <float> marquee-start-y: 0.0;
+    private property <int> press-mode: 0;
+
+    // 画布空白处左键按下（编辑器据此清除选中/按位置命中行）。mode 0=普通 1=Shift 2=Ctrl
+    callback background-pressed(mode: int);
     // 视图缩放变化（滚轮）：编辑器据此重算刻度步长（放大细化坐标轴）
     callback view-changed();
 
+    // 鼠标当前屏幕坐标 → 世界坐标（组件内部缩放/平移用）
     function world-x() -> float {
         return (self.mouse-x / 1px - root.pan-x) / root.zoom-x;
     }
@@ -28,45 +53,101 @@ export component CanvasNavigation inherits TouchArea {
 
     scroll-event(event) => {
         let factor: float = event.delta-y > 0px ? root.zoom-step : 1.0 / root.zoom-step;
-        // 光标处的世界坐标（缩放前，保持其屏幕位置不变）
-        let wx: float = root.world-x();
-        let wy: float = root.world-y();
-        // 两轴同比例缩放
-        let nx = root.zoom-x * factor;
-        let ny = root.zoom-y * factor;
-        // 触限时保持纵横比：任一轴到顶/到底，另一轴同步停下。
-        // 否则 X 基数大先到上限，之后只有 Y 继续放大 → 曲线/坐标轴被单独拉长。
-        let final-x = nx > root.max-zoom || ny > root.max-zoom
-            ? root.zoom-x * (root.max-zoom / max(root.zoom-x, root.zoom-y))
-            : (nx < root.min-zoom || ny < root.min-zoom
-                ? root.zoom-x * (root.min-zoom / min(root.zoom-x, root.zoom-y))
-                : nx);
-        let final-y = nx > root.max-zoom || ny > root.max-zoom
-            ? root.zoom-y * (root.max-zoom / max(root.zoom-x, root.zoom-y))
-            : (nx < root.min-zoom || ny < root.min-zoom
-                ? root.zoom-y * (root.min-zoom / min(root.zoom-x, root.zoom-y))
-                : ny);
-        // 以光标为中心缩放：pan += world * (old - new) 使光标下的世界点固定
-        root.pan-x += wx * (root.zoom-x - final-x);
-        root.pan-y += wy * (root.zoom-y - final-y);
-        root.zoom-x = final-x;
-        root.zoom-y = final-y;
+        if root.lock-y-zoom {
+            // 仅横向缩放：保持光标下的世界 X 位置固定，纵向不动
+            let wx: float = root.world-x();
+            let nx = root.zoom-x * factor;
+            let final-x = nx > root.max-zoom ? root.max-zoom : (nx < root.min-zoom ? root.min-zoom : nx);
+            root.pan-x += wx * (root.zoom-x - final-x);
+            root.zoom-x = final-x;
+        } else {
+            // 光标处的世界坐标（缩放前，保持其屏幕位置不变）
+            let wx: float = root.world-x();
+            let wy: float = root.world-y();
+            // 两轴同比例缩放
+            let nx = root.zoom-x * factor;
+            let ny = root.zoom-y * factor;
+            // 触限时保持纵横比：任一轴到顶/到底，另一轴同步停下。
+            // 否则 X 基数大先到上限，之后只有 Y 继续放大 → 曲线/坐标轴被单独拉长。
+            let final-x = nx > root.max-zoom || ny > root.max-zoom
+                ? root.zoom-x * (root.max-zoom / max(root.zoom-x, root.zoom-y))
+                : (nx < root.min-zoom || ny < root.min-zoom
+                    ? root.zoom-x * (root.min-zoom / min(root.zoom-x, root.zoom-y))
+                    : nx);
+            let final-y = nx > root.max-zoom || ny > root.max-zoom
+                ? root.zoom-y * (root.max-zoom / max(root.zoom-x, root.zoom-y))
+                : (nx < root.min-zoom || ny < root.min-zoom
+                    ? root.zoom-y * (root.min-zoom / min(root.zoom-x, root.zoom-y))
+                    : ny);
+            // 以光标为中心缩放：pan += world * (old - new) 使光标下的世界点固定
+            root.pan-x += wx * (root.zoom-x - final-x);
+            root.pan-y += wy * (root.zoom-y - final-y);
+            root.zoom-x = final-x;
+            root.zoom-y = final-y;
+        }
         root.view-changed();
         return EventResult.accept;
     }
 
     pointer-event(event) => {
         if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-            root.background-pressed();
+            if root.marquee-enabled {
+                // 记下起点与修饰键，等松开区分"点击"（行激活/清除选中）与"框选"
+                root.marquee-pressing = true;
+                root.marquee-active = false;
+                root.marquee-start-x = self.mouse-x / 1px;
+                root.marquee-start-y = self.mouse-y / 1px;
+                root.press-mode = event.modifiers.control ? 2 : (event.modifiers.shift ? 1 : 0);
+            } else {
+                root.background-pressed(event.modifiers.control ? 2 : (event.modifiers.shift ? 1 : 0));
+            }
         } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.middle) {
             root.panning = true;
             root.pan-start-world-x = root.world-x();
             root.pan-start-world-y = root.world-y();
+        } else if (event.kind == PointerEventKind.move && root.marquee-pressing) {
+            let mx: float = self.mouse-x / 1px;
+            let my: float = self.mouse-y / 1px;
+            // 超过阈值才进入框选，避免把轻微抖动当成框选
+            if !root.marquee-active {
+                let dx = mx - root.marquee-start-x;
+                let dy = my - root.marquee-start-y;
+                if dx * dx + dy * dy > 25.0 {
+                    root.marquee-active = true;
+                }
+            }
+            if root.marquee-active {
+                // 传原始点（起点, 当前）——框选矩形由消费方自行 min/max；
+                // 拖拽位移（NLA 片断）需要带符号的方向，不能给规范化后的坐标
+                root.marquee-dragged(root.marquee-start-x, root.marquee-start-y, mx, my);
+            }
         } else if (event.kind == PointerEventKind.move && root.panning) {
             // pan-start-world 为拖动开始时的固定世界坐标，更新会导致反馈回路
             root.pan-x += (root.world-x() - root.pan-start-world-x) * root.zoom-x;
             root.pan-y += (root.world-y() - root.pan-start-world-y) * root.zoom-y;
+            if root.clamp-pan-y {
+                // 纵向限制在内容范围内（与摄影表列表滚动一致）；横向时间轴仍可自由平移
+                root.pan-y = max(root.clamp-pan-y-min, min(root.clamp-pan-y-max, root.pan-y));
+            }
         } else if (event.kind == PointerEventKind.up) {
+            if root.marquee-pressing {
+                let mx: float = self.mouse-x / 1px;
+                let my: float = self.mouse-y / 1px;
+                if root.marquee-active {
+                    root.marquee-done(
+                        min(root.marquee-start-x, mx),
+                        min(root.marquee-start-y, my),
+                        max(root.marquee-start-x, mx),
+                        max(root.marquee-start-y, my),
+                        root.press-mode,
+                    );
+                } else {
+                    // 点击未拖动：保持原有"空白按下"行为（行激活/清除选中）
+                    root.background-pressed(root.press-mode);
+                }
+                root.marquee-pressing = false;
+                root.marquee-active = false;
+            }
             if root.panning {
                 // 平移结束：刻度可见范围随平移变化，通知编辑器重建
                 root.view-changed();

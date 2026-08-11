@@ -1,0 +1,198 @@
+// NLA 编辑器左侧轨道面板：顶部搜索栏（与摄影表左侧共用 EditorSearchBar）+ 轨道列表。
+// 轨道条目比摄影表通道简单：无颜色标、无眼睛，右边只有"启用"和"锁"。
+import { SlintNlaTrack } from "../../core/animation_types.slint";
+import { Theme } from "../../theme/index.slint";
+import { EditorSearchBar } from "../../widgets/editor_search_bar.slint";
+
+// 单个轨道开关按钮（图标 + 点亮/置灰）
+component NlaToggle inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    callback clicked();
+    width: 20px;
+    height: 20px;
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    Image {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        opacity: root.active ? 1.0 : 0.4;
+    }
+}
+
+// NLA 轨道列表（搜索过滤后的轨道；行使用绝对定位并支持 pan-y 纵向滚动）。
+export component NlaList inherits Rectangle {
+    in property <[SlintNlaTrack]> tracks;
+    in property <float> pan-y: 0.0;
+    in property <length> row-height;
+    // 开关回调传权威轨道下标（tracks 为过滤视图，orig-index 映射）
+    callback toggle-enabled(track-index: int);
+    callback toggle-locked(track-index: int);
+    // 全局 Action 轨：把当前 Action 作为片断向下插入 NLA（track-index = 权威下标）
+    callback push-down(track-index: int);
+    // 滚轮纵向滚动（delta 为像素；调用方按内容高度 clamp 到 pan-y）
+    callback scrolled(delta: float);
+
+    clip: true;
+    background: Theme.data.animation-editor.channel-list-background;
+
+    // 背景滚轮事件（置于行之下；行级 TouchArea 只处理点击不处理 scroll，事件上浮到此处）
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        scroll-event(event) => {
+            root.scrolled(event.delta-y / 1px);
+            return EventResult.accept;
+        }
+    }
+
+    // 行（tracks 为过滤压缩视图，全部匹配，无需再隐藏）
+    for t[i] in root.tracks: Rectangle {
+        y: i * root.row-height + root.pan-y * 1px;
+        x: 0px;
+        width: 100%;
+        height: root.row-height;
+        // 全局 Action 行背景与画布全局 Action 轨一致（带绿意的暗色延伸，非灰色泳道），
+        // 其余用轨道列表背景
+        background: t.is-action
+            ? Theme.data.animation-editor.action-strip-gap
+            : Theme.data.animation-editor.channel-row-background;
+
+        HorizontalLayout {
+            spacing: 4px;
+            padding-left: 8px;
+            padding-right: 5px;
+
+            // 全局 Action 行：摄影表图标标识"这是当前编辑的 Action"（区别于 NLA 轨道）。
+            // 用 20×20 容器 + 内部居中 Image（同 NlaToggle 结构，保证垂直居中）
+            if t.is-action: Rectangle {
+                width: 20px;
+                height: 20px;
+                Image {
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../../assets/icons/dope_sheet.svg");
+                    opacity: 0.8;
+                }
+            }
+
+            // 轨道名（禁用时置灰）
+            Text {
+                text: t.name;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: t.enabled
+                    ? Theme.data.animation-editor.channel-text
+                    : Theme.data.animation-editor.channel-muted-text;
+                font-size: 12px;
+                overflow: elide;
+            }
+
+            // 全局 Action 轨：没有启用/锁，只有"向下插入"（把当前 Action 作为片断加入 NLA）；
+            // 空 Action（无数据）时按钮隐藏。按钮始终亮色（动作可用，非置灰开关）。
+            if t.is-action && t.has-data: NlaToggle {
+                icon: @image-url("../../assets/icons/move_to_inbox.svg");
+                active: true;
+                clicked => {
+                    root.push-down(t.orig-index);
+                }
+            }
+
+            // 启用开关（普通轨道）
+            if !t.is-action: NlaToggle {
+                icon: t.enabled
+                    ? @image-url("../../assets/icons/check_box.svg")
+                    : @image-url("../../assets/icons/check_box_outline_blank.svg");
+                active: t.enabled;
+                clicked => {
+                    root.toggle-enabled(t.orig-index);
+                }
+            }
+
+            // 锁开关（锁定时点亮，轨道不可编辑）
+            if !t.is-action: NlaToggle {
+                icon: t.locked
+                    ? @image-url("../../assets/icons/lock.svg")
+                    : @image-url("../../assets/icons/lock_open.svg");
+                active: t.locked;
+                clicked => {
+                    root.toggle-locked(t.orig-index);
+                }
+            }
+        }
+    }
+}
+
+// NLA 左侧面板：搜索栏（复用 EditorSearchBar）+ 轨道列表。
+export component NlaPanel inherits Rectangle {
+    in property <[SlintNlaTrack]> tracks;
+    in property <float> pan-y: 0.0;
+    in property <length> row-height;
+    // 搜索框高度（与顶部时间标尺同高）
+    in property <length> search-height;
+    // 搜索遮罩激活镜像（由编辑器绑定 EditOverlayState.active）
+    in property <bool> search-active-mirror: false;
+
+    callback search-changed(text: string);
+    callback toggle-enabled(index: int);
+    callback toggle-locked(index: int);
+    callback push-down(index: int);
+    callback scrolled(delta: float);
+    // 搜索框聚焦变化（编辑器据此设置全窗口编辑遮罩，挖孔定位）
+    callback focus-changed(focused: bool);
+    // 搜索框在本组件内的位置与大小（供编辑器遮罩据此挖孔）
+    out property <length> search-box-x <=> search-bar.input-x;
+    out property <length> search-box-y <=> search-bar.input-y;
+    out property <length> search-box-width <=> search-bar.input-width;
+    out property <length> search-box-height <=> search-bar.input-height;
+
+    clip: true;
+
+    search-bar := EditorSearchBar {
+        // 必须显式定位：无 x/y 时 Slint(1.17) 会把隐式尺寸元素居中到父内，
+        // 搜索栏会跑到 NLA 编辑器中部、顶部变成空白占位行（见 editor_search_bar.slint 头注释）。
+        // 显式放顶部，与画布时间标尺同层、列表第一行与画布第一泳道对齐。
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        search-height: root.search-height;
+        search-active-mirror: root.search-active-mirror;
+        placeholder-text: "搜索轨道";
+        text-changed(text) => {
+            root.search-changed(text);
+        }
+        focus-changed(focused) => {
+            root.focus-changed(focused);
+        }
+    }
+
+    NlaList {
+        x: 0;
+        y: root.search-height;
+        width: 100%;
+        height: root.height - root.search-height;
+        tracks: root.tracks;
+        pan-y: root.pan-y;
+        row-height: root.row-height;
+        toggle-enabled(i) => {
+            root.toggle-enabled(i);
+        }
+        toggle-locked(i) => {
+            root.toggle-locked(i);
+        }
+        push-down(i) => {
+            root.push-down(i);
+        }
+        scrolled(delta) => {
+            root.scrolled(delta);
+        }
+    }
+}

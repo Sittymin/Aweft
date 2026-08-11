@@ -1,67 +1,108 @@
 // NLA 动画编辑器：
 //  - 布局参照 Blender：左侧轨道列表 + 顶部时间标尺 + 主画布（轨道泳道 + 片断）
 //  - 数据来自 Rust 侧 AnimationState 全局（轨道 + 片断）
-//  - 交互：滚轮缩放、中键平移（CanvasNavigation）；片断点击选中、横向拖拽；
-//    轨道独奏/静音开关
+//  - 交互：滚轮仅横向缩放时间轴 / 中键双向平移（纵向随内容 clamp）——与摄影表一致；
+//    片断点击选中、横向拖拽；轨道独奏/静音开关
+//  - 画布网格：与摄影表一致用 VerticalGrid 刻度网格（固定槽位即时计算，见 ruler.slint），
+//    不再用节点图点阵；行背景、网格、片断分层绘制（行在最下、网格居中、片断最上）
 import {
     SlintNlaTrack,
-    SlintRulerTick,
+    SlintSummaryKeyframe,
 } from "../../core/animation_types.slint";
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
-import { LatticeGrid } from "../node_graph/node_frame.slint";
-import { TimeRuler } from "../graph_editor/ruler.slint";
-import { TrackLane } from "elements.slint";
-import { TrackList } from "track_list.slint";
+import { TimeRuler, VerticalGrid } from "../graph_editor/ruler.slint";
+import { TrackLane, NlaActionKeyframe } from "elements.slint";
+import { NlaPanel } from "nla_panel.slint";
 import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { EditOverlayState } from "../../bridge/state.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component NlaEditor inherits Rectangle {
     in property <[SlintNlaTrack]> tracks;
-    in property <[SlintRulerTick]> time-ticks;
+    // 全局 Action 轨的关键帧：复用摄影表汇总（按整数毫秒聚合当前 Action
+    // 全部通道同一时刻的关键帧，见 curve_editor.rs rebuild_summary）。
+    // 只读视觉：统一暗色，不随通道彩色。
+    in property <[SlintSummaryKeyframe]> summary-keyframes;
     in property <float> current-time;
+    // 当前 Action 时间范围（第一轨全局 Action 亮色条带，1:1 时间对应）
+    in property <float> action-start: 0.0;
+    in property <float> action-end: 0.0;
+    // 编辑器在 MainWindow 中的位置（area_container 传入，搜索框遮罩挖孔定位）
+    in property <length> window-x: 0px;
+    in property <length> window-y: 0px;
 
     // 轨道列表 / 标尺尺寸（主题）
     private property <length> track-list-width: Theme.data.animation-editor.track-list-width;
     private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
     private property <length> row-height: Theme.data.animation-editor.track-row-height;
 
-    // 导航状态（画布、轨道列表与标尺共享；默认缩放使时间范围可读）
+    // 导航状态（画布、轨道列表与标尺共享；仅时间轴缩放 + 双向平移）
     private property <float> nav-pan-x: 0.0;
     private property <float> nav-pan-y: 0.0;
     private property <float> nav-zoom: 30.0;
 
-    // 左上角（轨道列表头部占位，与时间标尺同层）
-    Rectangle {
+    // 可见时间范围（世界坐标）：标尺刻度槽位与轨道片断视口裁剪共用。
+    // 刻度为固定槽位即时计算（见 ruler.slint 顶部注释），pan/zoom 变化时
+    // 只重算这些绑定，不重建任何元素。
+    private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    private property <float> view-time-hi: ((root.width - root.track-list-width) - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+
+    // 纵向滚动范围：只能滚到 [-(内容高-视口高), 0]，内容不足空间时不动（与摄影表一致）。
+    function content-height-px() -> float {
+        return root.tracks.length * (root.row-height / 1px);
+    }
+    function view-height-px() -> float {
+        return canvas.height / 1px;
+    }
+    function max-scroll-y() -> float {
+        return max(0.0, root.content-height-px() - root.view-height-px());
+    }
+    // 左侧轨道列表滚轮：按内容高度 clamp 到 pan-y（与画布中键平移同一套范围）
+    function scroll-nla-list(delta: float) -> float {
+        return min(0.0, max(-root.max-scroll-y(), root.nav-pan-y + delta));
+    }
+
+    // 画布级 TouchArea 处理左键（marquee 机制）：当前拖拽的片断（-1 = 未命中）
+    private property <int> press-track: -1;
+    private property <int> press-strip: -1;
+    private property <bool> strip-dragging: false;
+
+    // 左侧轨道面板（与摄影表共用搜索栏：搜索栏与顶部时间标尺同层对齐，
+    // 列表第一行 = 画布第一泳道，条目为启用/锁开关，与画布泳道同步纵向滚动）
+    nla-panel := NlaPanel {
         x: 0;
         y: 0;
         width: root.track-list-width;
-        height: root.ruler-height;
-        background: Theme.data.animation-editor.ruler-background;
-        Text {
-            text: "NLA 轨道";
-            x: 8px;
-            width: parent.width - 16px;
-            height: 100%;
-            vertical-alignment: center;
-            color: Theme.data.animation-editor.ruler-text;
-            font-size: 11px;
-        }
-    }
-
-    // 轨道列表（左，与画布泳道同步纵向滚动）
-    TrackList {
-        x: 0;
-        y: root.ruler-height;
-        width: root.track-list-width;
-        height: root.height - root.ruler-height;
+        height: root.height;
         tracks: root.tracks;
         pan-y: root.nav-pan-y;
         row-height: root.row-height;
-        toggle-muted(i) => {
-            AnimationCallbacks.track-toggle-muted(i);
+        search-height: root.ruler-height;
+        search-changed(text) => {
+            AnimationCallbacks.nla-search-changed(text);
         }
-        toggle-solo(i) => {
-            AnimationCallbacks.track-toggle-solo(i);
+        toggle-enabled(i) => {
+            AnimationCallbacks.track-toggle-enabled(i);
+        }
+        toggle-locked(i) => {
+            AnimationCallbacks.track-toggle-locked(i);
+        }
+        push-down(i) => {
+            AnimationCallbacks.track-push-down(i);
+        }
+        scrolled(delta) => {
+            root.nav-pan-y = root.scroll-nla-list(delta);
+        }
+        // 搜索框聚焦：设置全窗口编辑遮罩（挖孔 = 搜索框的窗口坐标）
+        search-active-mirror: EditOverlayState.active;
+        focus-changed(focused) => {
+            if focused {
+                EditOverlayState.active = true;
+                EditOverlayState.hole-x = root.window-x + nla-panel.x + nla-panel.search-box-x;
+                EditOverlayState.hole-y = root.window-y + nla-panel.y + nla-panel.search-box-y;
+                EditOverlayState.hole-width = nla-panel.search-box-width;
+                EditOverlayState.hole-height = nla-panel.search-box-height;
+            }
         }
     }
 
@@ -71,8 +112,9 @@ export component NlaEditor inherits Rectangle {
         y: 0;
         width: root.width - root.track-list-width;
         height: root.ruler-height;
-        ticks: root.time-ticks;
-        view-zoom: root.nav-zoom;
+        view-lo: root.view-time-lo;
+        view-hi: root.view-time-hi;
+        zoom-x: root.nav-zoom;
         pan-x: root.nav-pan-x;
         current-time: root.current-time;
         time-picked(time) => {
@@ -89,46 +131,124 @@ export component NlaEditor inherits Rectangle {
         clip: true;
         background: Theme.data.animation-editor.canvas-background;
 
-        // 背景点阵网格
-        LatticeGrid {
-            pan-x: root.nav-pan-x * 1px;
-            pan-y: root.nav-pan-y * 1px;
-            zoom: root.nav-zoom;
-            tile-source: @image-url("../../assets/textures/grid_line.svg");
-            tile-size: Theme.data.node-editor.lattice-base-spacing;
-            dot-color: Theme.data.animation-editor.grid-color;
+        // 轨道行背景（交替明暗；网格画在其上，与摄影表通道行同构）
+        for track[i] in root.tracks: Rectangle {
+            y: i * root.row-height + root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            background: Math.mod(i, 2) == 0
+                ? Theme.data.animation-editor.lane-even
+                : Theme.data.animation-editor.lane-odd;
         }
 
-        // 导航（背景交互，位于泳道之下）
-        CanvasNavigation {
-            pan-x <=> root.nav-pan-x;
-            pan-y <=> root.nav-pan-y;
-            zoom-x <=> root.nav-zoom;
-            zoom-y <=> root.nav-zoom;
-            background-pressed => {
-                AnimationCallbacks.strip-deselect-all();
+        // 垂直时间线（与标尺刻度对齐；固定槽位即时计算，同摄影表/曲线编辑器）
+        VerticalGrid {
+            width: 100%;
+            height: 100%;
+            view-lo: root.view-time-lo;
+            view-hi: root.view-time-hi;
+            zoom-x: root.nav-zoom;
+            pan-x: root.nav-pan-x;
+            line-color: Theme.data.animation-editor.grid-color;
+            minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        // 全局 Action 轨（第一轨）：亮色条带 = action 时间范围（1:1 时间对应），
+        // 之外为暗色延伸条带（无穷延伸：左段到视口左缘、右段到视口右缘）；
+        // 激活态延伸用 action-strip-gap（区别于普通空隙 strip-gap）。
+        // 只能看不能编辑（strip-pick 命中直接返回 -1）。
+        if root.tracks.length > 0 && root.tracks[0].is-action: Rectangle {
+            y: root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            // 暗色延伸：左段 [视口左缘, action-start]（无穷）
+            Rectangle {
+                x: 0px;
+                width: max(0px, root.action-start * root.nav-zoom * 1px + root.nav-pan-x * 1px);
+                height: 100%;
+                background: Theme.data.animation-editor.action-strip-gap;
+            }
+            // 亮色条带 [action-start, action-end]
+            Rectangle {
+                x: root.action-start * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+                width: max(0px, (root.action-end - root.action-start) * root.nav-zoom * 1px);
+                height: 100%;
+                background: Theme.data.animation-editor.action-strip;
+            }
+            // 暗色延伸：右段 [action-end, 视口右缘]（无穷）
+            Rectangle {
+                x: root.action-end * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+                width: max(0px, parent.width - (root.action-end * root.nav-zoom * 1px + root.nav-pan-x * 1px));
+                height: 100%;
+                background: Theme.data.animation-editor.action-strip-gap;
+            }
+            // 关键帧标记：复用摄影表汇总（summary-keyframes，按整数毫秒聚合），
+            // 1:1 时间，纯渲染只看不编辑。只读视觉：统一暗色（action-keyframe）。
+            for sk in root.summary-keyframes: Rectangle {
+                width: 100%;
+                height: 100%;
+                if sk.time >= root.view-time-lo && sk.time <= root.view-time-hi: NlaActionKeyframe {
+                    time: sk.time;
+                    count: sk.count;
+                    selected: sk.selected;
+                    all-selected: sk.all-selected;
+                    marker-color: Theme.data.animation-editor.action-keyframe;
+                    view-zoom: root.nav-zoom;
+                    pan-x: root.nav-pan-x;
+                    row-height: root.row-height;
+                }
             }
         }
 
-        // 轨道泳道（在导航之上，片断可交互）
+        // 导航（背景交互，位于泳道之下；与摄影表一致：滚轮仅横向缩放 /
+        // 中键双向平移但纵向随内容 clamp，不能随意上下移动）。
+        // 片断点击/拖拽由这一个画布级 TouchArea 处理（复用 marquee 机制，同摄影表）：
+        // 片断自身不带 TouchArea（Slint TouchArea 会吞任意按钮按下、含中键），
+        // 因此中键平移在片断上方同样可用。marquee 拖动时若起点命中片断则改拖片断。
+        nav := CanvasNavigation {
+            pan-x <=> root.nav-pan-x;
+            pan-y <=> root.nav-pan-y;
+            zoom-x <=> root.nav-zoom;
+            lock-y-zoom: true;
+            // 时间轴放大到能看清毫秒级跳动（同摄影表）
+            max-zoom: 12000.0;
+            zoom-step: 1.5;
+            clamp-pan-y: true;
+            clamp-pan-y-min: -root.max-scroll-y();
+            clamp-pan-y-max: 0.0;
+            marquee-enabled: true;
+            marquee-dragged(x1, y1, x2, y2) => {
+                root.nav-marquee-drag(x1, y1, x2, y2);
+            }
+            marquee-done(x1, y1, x2, y2, mode) => {
+                root.nav-marquee-end(x1, y1, x2, y2, mode);
+            }
+            background-pressed(mode) => {
+                // 点击（未拖成框选）：按位置命中片断选中；未命中清除选中
+                let t: float = (nav.mouse-x / 1px - root.nav-pan-x) / root.nav-zoom;
+                let row: int = floor((nav.mouse-y / 1px - root.nav-pan-y) / (root.row-height / 1px));
+                let hit: int = AnimationCallbacks.strip-pick(t, row, mode);
+                if hit < 0 {
+                    AnimationCallbacks.strip-deselect-all();
+                }
+            }
+        }
+
+        // 轨道泳道（纯渲染层：片断点击/拖拽由导航的 marquee 机制命中优先处理；
+        // 背景已由画布行绘制，此处透明）
         for track[i] in root.tracks: TrackLane {
             x: 0px;
             y: i * root.row-height + root.nav-pan-y * 1px;
             width: 100%;
             height: root.row-height;
             strips: track.strips;
-            lane-color: Math.mod(i, 2) == 0 ? Theme.data.animation-editor.lane-even : Theme.data.animation-editor.lane-odd;
+            show-lane-background: false;
             view-zoom: root.nav-zoom;
             pan-x: root.nav-pan-x;
-            strip-pressed(j, additive) => {
-                AnimationCallbacks.strip-pressed(i, j, additive);
-            }
-            strip-dragged(j, dx) => {
-                AnimationCallbacks.strip-dragged(i, j, dx);
-            }
-            strip-released(j) => {
-                AnimationCallbacks.strip-released(i, j);
-            }
+            view-time-lo: root.view-time-lo;
+            view-time-hi: root.view-time-hi;
         }
 
         // 当前时间线（播放头，置顶但不拦截事件）
@@ -139,5 +259,34 @@ export component NlaEditor inherits Rectangle {
             height: 100%;
             background: Theme.data.animation-editor.playhead;
         }
+    }
+
+    // marquee 拖动中：首次拖动判定起点是否命中片断——命中则进入片断拖拽
+    // （选中由 strip-pick 内部完成），否则保持空白无操作（NLA 无框选）。
+    function nav-marquee-drag(x1: float, y1: float, x2: float, y2: float) {
+        if !root.strip-dragging {
+            let t: float = (x1 - root.nav-pan-x) / root.nav-zoom;
+            let row: int = floor((y1 - root.nav-pan-y) / (root.row-height / 1px));
+            let hit: int = AnimationCallbacks.strip-pick(t, row, 0);
+            if hit >= 0 {
+                root.strip-dragging = true;
+                root.press-track = hit / 10000;
+                root.press-strip = Math.mod(hit, 10000);
+            }
+        }
+        if root.strip-dragging {
+            // delta-row = 像素位移 / 行高；Rust 在片段中心越过轨道边界时瞬间跳轨（模型驱动）
+            AnimationCallbacks.strip-dragged(root.press-track, root.press-strip, (x2 - x1) / root.nav-zoom, (y2 - y1) / (root.row-height / 1px));
+        }
+    }
+
+    // marquee 结束（松开）：片断拖拽收尾
+    function nav-marquee-end(x1: float, y1: float, x2: float, y2: float, mode: int) {
+        if root.strip-dragging {
+            AnimationCallbacks.strip-released(root.press-track, root.press-strip);
+            root.strip-dragging = false;
+        }
+        root.press-track = -1;
+        root.press-strip = -1;
     }
 }

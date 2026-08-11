@@ -17,7 +17,7 @@ use aweft_model::{
         NodeKind, Socket, SocketDecl, SocketType, StyleOpKind,
     },
 };
-use slint::{Color, Model, ModelRc, VecModel};
+use slint::{Color, Model, ModelRc, SharedString, VecModel};
 
 use crate::{
     bridge::types::{ContextMenuItem, GraphLink, GraphNode, NodeSocketData, NodeSocketType, SocketHit},
@@ -51,6 +51,10 @@ pub struct GraphEditorState {
     pub current_chain: usize,
     /// 样式链显示顺序（UI 数据：模型侧为 id-keyed map，链切换器的顺序在这里派生）
     pub style_order: Vec<NodeGraphId>,
+    /// 样式链名字（与 style_order 一一对应，用于样式引用节点下拉菜单）
+    pub style_chain_names: Vec<String>,
+    /// 角色名字列表（按名排序；匹配角色 pattern 的下拉候选，含"新建角色"尾项）
+    pub actor_names: Vec<String>,
     /// 节点位置（UI 数据，世界坐标，逻辑像素）
     positions: HashMap<NodeId, (f32, f32)>,
     /// 节点模型顺序：下标 → NodeId（增删节点后重建）
@@ -67,6 +71,8 @@ impl Default for GraphEditorState {
             chain_items: Rc::new(VecModel::default()),
             current_chain: 0,
             style_order: Vec::new(),
+            style_chain_names: Vec::new(),
+            actor_names: Vec::new(),
             positions: HashMap::new(),
             order: Vec::new(),
             metrics: EditorMetrics::default(),
@@ -114,28 +120,101 @@ impl GraphEditorState {
             .map(|(i, &id)| {
                 let n = g.node(id);
                 let (x, y) = self.pos(id, i);
-                let mut sockets = Vec::with_capacity(G::inputs(n).len() + G::outputs(n).len());
-                for &sid in G::inputs(n) {
+                // 端口全局行号：输入从顶部先排（0..），输出接着输入往下排
+                // （输入在上、输出在下）
+                let in_count = G::inputs(n).len();
+                let mut sockets = Vec::with_capacity(in_count + G::outputs(n).len());
+                for (row, &sid) in G::inputs(n).iter().enumerate() {
                     let s = g.socket(sid);
+                    let connected = g.links().iter().any(|l| l.to == sid);
+                    let is_actor = G::actor_dropdown(n, true, row);
+                    let selected = if is_actor {
+                        match &s.default_value {
+                            Some(aweft_model::node_graph::SocketValue::Text(t)) => self
+                                .actor_names
+                                .iter()
+                                .position(|a| a == t)
+                                .map_or(-1, |i| i as i32),
+                            _ => -1,
+                        }
+                    } else {
+                        -1
+                    };
                     sockets.push(NodeSocketData {
                         name: s.name.clone().into(),
                         is_input: true,
                         data_type: socket_type_to_slint(s.data_type),
+                        row: row as i32,
+                        menu_items: if is_actor {
+                            actor_menu_items(&self.actor_names)
+                        } else {
+                            ModelRc::from(Rc::new(VecModel::default()))
+                        },
+                        selected,
+                        connected,
+                        input: false,
+                        input_text: SharedString::default(),
                     });
                 }
-                for &sid in G::outputs(n) {
+                for (row, &sid) in G::outputs(n).iter().enumerate() {
                     let s = g.socket(sid);
+                    let connected = g.links().iter().any(|l| l.from == sid);
+                    let is_editor = G::text_editor(n, false, row);
+                    let input_text = if is_editor {
+                        match &s.default_value {
+                            Some(aweft_model::node_graph::SocketValue::Text(t)) => t.clone().into(),
+                            _ => SharedString::default(),
+                        }
+                    } else {
+                        SharedString::default()
+                    };
                     sockets.push(NodeSocketData {
                         name: s.name.clone().into(),
                         is_input: false,
                         data_type: socket_type_to_slint(s.data_type),
+                        row: in_count as i32 + row as i32,
+                        menu_items: ModelRc::from(Rc::new(VecModel::default())),
+                        selected: -1,
+                        connected,
+                        input: is_editor,
+                        input_text,
                     });
                 }
+                // 样式引用节点：生成下拉菜单行数据（标签 + 样式链选项 + 当前选中）
+                let (menu_label, menu_options, menu_selected) = match G::reference_chain_id(n) {
+                    Some(ref_id) => {
+                        let selected = self
+                            .style_order
+                            .iter()
+                            .position(|&x| x == ref_id)
+                            .map_or(-1, |i| i as i32);
+                        let opts: Vec<SharedString> = self
+                            .style_chain_names
+                            .iter()
+                            .cloned()
+                            .map(SharedString::from)
+                            .collect();
+                        (
+                            SharedString::from("样式链"),
+                            ModelRc::from(Rc::new(VecModel::from(opts))),
+                            selected,
+                        )
+                    }
+                    None => (
+                        SharedString::default(),
+                        ModelRc::from(Rc::new(VecModel::default())),
+                        0,
+                    ),
+                };
                 GraphNode {
                     title: g.title(n).into(),
                     x,
                     y,
                     sockets: Rc::new(VecModel::from(sockets)).into(),
+                    socket_rows: (G::inputs(n).len() + G::outputs(n).len()) as i32,
+                    menu_label,
+                    menu_options,
+                    menu_selected,
                 }
             })
             .collect();
@@ -147,9 +226,12 @@ impl GraphEditorState {
             .filter_map(|l| {
                 let fi = self.order.iter().position(|&id| id == g.socket(l.from).node)?;
                 let ti = self.order.iter().position(|&id| id == g.socket(l.to).node)?;
-                let fs = G::outputs(g.node(self.order[fi]))
-                    .iter()
-                    .position(|&s| s == l.from)?;
+                // 端口下标 = 全局行号（输入先排 0..，输出接着排 inputs.len()..）：
+                // 输入端下标即 inputs 内下标；输出端加输入端口数量。
+                let fs = G::inputs(g.node(self.order[fi])).len()
+                    + G::outputs(g.node(self.order[fi]))
+                        .iter()
+                        .position(|&s| s == l.from)?;
                 let ts = G::inputs(g.node(self.order[ti])).iter().position(|&s| s == l.to)?;
                 Some(GraphLink {
                     from_node: fi as i32,
@@ -203,6 +285,13 @@ pub trait GraphEditable: Sized {
     fn outputs(n: &Self::Node) -> &[SocketId];
     /// 节点类型的 socket 声明（用于菜单色点）
     fn kind_decls(kind: &Self::Kind) -> (Vec<SocketDecl>, Vec<SocketDecl>);
+    /// 样式引用节点（Reference / AppRef）引用的样式链 id；非引用节点返回 None。
+    fn reference_chain_id(n: &Self::Node) -> Option<NodeGraphId>;
+    /// 该端口是否需要"角色下拉"（候选 = 当前所有 actor，含"新建角色"项）；
+    /// 如匹配角色的 pattern 输入。idx 为端口在输入/输出列内的下标。
+    fn actor_dropdown(n: &Self::Node, is_input: bool, idx: usize) -> bool;
+    /// 该端口行是否内嵌文本输入框（如字符串常量的输出端口）。
+    fn text_editor(n: &Self::Node, is_input: bool, idx: usize) -> bool;
 }
 
 impl GraphEditable for NodeGraph {
@@ -247,6 +336,18 @@ impl GraphEditable for NodeGraph {
     }
     fn kind_decls(kind: &NodeKind) -> (Vec<SocketDecl>, Vec<SocketDecl>) {
         get_socket_decls(kind).unwrap_or_default()
+    }
+    fn reference_chain_id(n: &ModelGraphNode) -> Option<NodeGraphId> {
+        match n.kind {
+            NodeKind::Reference(id) => Some(id),
+            _ => None,
+        }
+    }
+    fn actor_dropdown(_n: &ModelGraphNode, _is_input: bool, _idx: usize) -> bool {
+        false
+    }
+    fn text_editor(_n: &ModelGraphNode, _is_input: bool, _idx: usize) -> bool {
+        false
     }
 }
 
@@ -293,6 +394,20 @@ impl GraphEditable for ApplicationGraph {
     fn kind_decls(kind: &ApplicationNodeKind) -> (Vec<SocketDecl>, Vec<SocketDecl>) {
         aweft_model::application_graph::get_application_socket_decls(kind).unwrap_or_default()
     }
+    fn reference_chain_id(n: &ApplicationGraphNode) -> Option<NodeGraphId> {
+        match n.kind {
+            ApplicationNodeKind::AppRef(id) => Some(id),
+            _ => None,
+        }
+    }
+    fn actor_dropdown(n: &ApplicationGraphNode, is_input: bool, idx: usize) -> bool {
+        // 匹配角色的 pattern 输入（第 1 个输入）用角色下拉
+        is_input && idx == 1 && matches!(n.kind, ApplicationNodeKind::MatchActor)
+    }
+    fn text_editor(n: &ApplicationGraphNode, is_input: bool, idx: usize) -> bool {
+        // 字符串常量的输出端口：无输入，端口行内嵌文本输入框
+        !is_input && idx == 0 && matches!(n.kind, ApplicationNodeKind::TextConst)
+    }
 }
 
 // ── 图操作（原 Slint 逐槽位展开逻辑，现用循环） ───────────────────────────────
@@ -322,6 +437,27 @@ fn flow_depth<G: GraphEditable>(
     d
 }
 
+/// 角色下拉菜单项：当前所有 actor + 末尾"新建角色"。
+/// 返回 (menu-items, 有效角色数)；末尾"新建角色"项由调用方识别。
+fn actor_menu_items(actor_names: &[String]) -> ModelRc<ContextMenuItem> {
+    let mut items: Vec<ContextMenuItem> = actor_names
+        .iter()
+        .map(|n| ContextMenuItem {
+            text: n.clone().into(),
+            enabled: true,
+            dot_color: Color::from_argb_u8(0, 0, 0, 0),
+            separator_before: false,
+        })
+        .collect();
+    items.push(ContextMenuItem {
+        text: "+ 新建角色".into(),
+        enabled: true,
+        dot_color: Color::from_argb_u8(0, 0, 0, 0),
+        separator_before: !items.is_empty(),
+    });
+    ModelRc::from(Rc::new(VecModel::from(items)))
+}
+
 /// 创建默认样式链：样式源 -> 组输出（新链/测试数据用）。
 pub fn new_style_chain(name: impl Into<String>) -> NodeGraph {
     let mut g = NodeGraph::new(name);
@@ -332,15 +468,50 @@ pub fn new_style_chain(name: impl Into<String>) -> NodeGraph {
     g
 }
 
-/// 创建默认应用链：上下文输入 -> 匹配角色 -> 应用。
-pub fn new_app_chain(name: impl Into<String>) -> ApplicationGraph {
+/// 创建默认应用链：上下文输入 -> 匹配角色 -> 应用匹配 -> 组输出。
+/// 应用匹配的样式必须明确连接——默认链引用一条样式链（`style_ref`），
+/// 若调用方没有可引用的样式链则传 `None`（用户随后手动连接样式来源）。
+/// `default_actor`：匹配角色 pattern 的默认角色名（未连字符串节点时用它匹配）。
+pub fn new_app_chain(
+    name: impl Into<String>,
+    style_ref: Option<NodeGraphId>,
+    default_actor: Option<&str>,
+) -> ApplicationGraph {
     let mut g = ApplicationGraph::new(name);
     let ctx = g.add_node::<NodeId>(ApplicationNodeKind::ContextInput, &[], &[]).unwrap();
     let m = g.add_node::<NodeId>(ApplicationNodeKind::MatchActor, &[], &[]).unwrap();
-    let ap = g.add_node::<NodeId>(ApplicationNodeKind::Apply, &[], &[]).unwrap();
+    let ap = g.add_node::<NodeId>(ApplicationNodeKind::ApplyMatch, &[], &[]).unwrap();
+    let out = g
+        .add_node::<NodeId>(
+            ApplicationNodeKind::GroupOutput,
+            &[SocketDecl::input("application", SocketType::Application)],
+            &[],
+        )
+        .unwrap();
     g.connect_raw(g.nodes[&ctx].outputs[0], g.nodes[&m].inputs[0])
         .unwrap();
+    // 匹配角色的 pattern（第 1 输入）默认角色（实际连接数据，非硬编码预设）
+    if let Some(actor) = default_actor {
+        g.set_socket_value(
+            g.nodes[&m].inputs[1],
+            Some(aweft_model::node_graph::SocketValue::Text(actor.into())),
+        )
+        .unwrap();
+    }
     g.connect_raw(g.nodes[&m].outputs[0], g.nodes[&ap].inputs[1])
+        .unwrap();
+    if let Some(style_id) = style_ref {
+        let appref = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::AppRef(style_id),
+                &[],
+                &[SocketDecl::output("style", SocketType::Style)],
+            )
+            .unwrap();
+        g.connect_raw(g.nodes[&appref].outputs[0], g.nodes[&ap].inputs[0])
+            .unwrap();
+    }
+    g.connect_raw(g.nodes[&ap].outputs[0], g.nodes[&out].inputs[0])
         .unwrap();
     g
 }
@@ -378,6 +549,7 @@ pub fn find_link_for_input<G: GraphEditable>(
     let Some(id) = st.id_at(node_index) else {
         return -1;
     };
+    // sock 为输入端口全局行号（输入在前，等于 inputs 内下标）
     let Some(&sid) = G::inputs(g.node(id)).get(sock) else {
         return -1;
     };
@@ -403,6 +575,7 @@ pub fn find_drop_socket<G: GraphEditable>(
             if s.data_type != want {
                 continue;
             }
+            // 输入端口在前，全局行号 = 输入内下标
             let cy = ny + st.metrics.header + si as f32 * st.metrics.row + st.metrics.row / 2.0;
             if (x - nx).abs() < st.metrics.radius && (y - cy).abs() < st.metrics.radius {
                 return SocketHit {
@@ -436,10 +609,13 @@ pub fn socket_drag_ended<G: GraphEditable>(
         return;
     };
     let n = g.node(id);
+    // 上报的端口下标 = 全局行号（输入先排 0..，输出接着排 inputs.len()..）
     let dragged = if is_input {
         G::inputs(n).get(sock).copied()
     } else {
-        G::outputs(n).get(sock).copied()
+        G::outputs(n)
+            .get(sock.saturating_sub(G::inputs(n).len()))
+            .copied()
     };
     let Some(dragged_sid) = dragged else {
         return;
@@ -472,6 +648,7 @@ fn target_socket<G: GraphEditable>(g: &G, st: &GraphEditorState, hit: &SocketHit
         return None;
     }
     let id = st.id_at(hit.node as usize)?;
+    // hit.socket 为输入端口全局行号（输入在前，等于 inputs 内下标）
     G::inputs(g.node(id)).get(hit.socket as usize).copied()
 }
 
@@ -504,7 +681,10 @@ fn app_templates() -> Vec<ApplicationNodeKind> {
         ApplicationNodeKind::And,
         ApplicationNodeKind::Or,
         ApplicationNodeKind::Not,
-        ApplicationNodeKind::Apply,
+        ApplicationNodeKind::TextConst,
+        ApplicationNodeKind::ApplyMatch,
+        ApplicationNodeKind::ApplyAnimation,
+        ApplicationNodeKind::GroupOutput,
     ]
 }
 
@@ -522,6 +702,7 @@ pub fn socket_type_to_slint(t: SocketType) -> NodeSocketType {
         SocketType::Vec3 => NodeSocketType::Vec3,
         SocketType::ClipRect => NodeSocketType::ClipRect,
         SocketType::Animation => NodeSocketType::Animation,
+        SocketType::Application => NodeSocketType::Application,
     }
 }
 
@@ -537,6 +718,7 @@ pub fn socket_type_from_slint(t: NodeSocketType) -> SocketType {
         NodeSocketType::Vec3 => SocketType::Vec3,
         NodeSocketType::ClipRect => SocketType::ClipRect,
         NodeSocketType::Animation => SocketType::Animation,
+        NodeSocketType::Application => SocketType::Application,
     }
 }
 
@@ -616,6 +798,146 @@ impl AppStore {
             }
             crate::bridge::types::GraphType::AppGraph => {
                 self.with_app(|g, st| delete_node(g, st, index));
+            }
+        }
+    }
+
+    /// 端口角色下拉选择：把该端口的默认值设为所选角色名（未连接时生效）。
+    pub fn socket_option_selected(
+        &mut self,
+        gt: crate::bridge::types::GraphType,
+        node: usize,
+        socket_row: usize,
+        option_index: usize,
+    ) {
+        // 候选 = 当前 actor 名字；末尾"新建角色"项由 UI 处理，不在此设置
+        let actor_names = match gt {
+            crate::bridge::types::GraphType::StyleGraph => {
+                self.ui_models.style_graph.actor_names.clone()
+            }
+            crate::bridge::types::GraphType::AppGraph => {
+                self.ui_models.app_graph.actor_names.clone()
+            }
+        };
+        let Some(name) = actor_names.get(option_index).cloned() else {
+            return;
+        };
+        self.set_socket_text_default(gt, node, socket_row, &name);
+    }
+
+    /// 角色下拉"新建角色"：创建角色并把该端口默认值设为新角色名。
+    pub fn create_actor(
+        &mut self,
+        gt: crate::bridge::types::GraphType,
+        node: usize,
+        socket_row: usize,
+        name: SharedString,
+    ) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        use aweft_model::library::Actor;
+        use aweft_model::ids::ActorId;
+        self.state_mut().project.library.insert_actor(Actor {
+            id: ActorId::new(),
+            name: name.clone(),
+        });
+        self.refresh_actors();
+        self.set_socket_text_default(gt, node, socket_row, &name);
+    }
+
+    /// 把某输入端口默认值设为文本（角色名/字符串常量），并重新同步视图。
+    pub fn set_socket_text_default(
+        &mut self,
+        gt: crate::bridge::types::GraphType,
+        node: usize,
+        socket_row: usize,
+        text: &str,
+    ) {
+        let value = Some(aweft_model::node_graph::SocketValue::Text(text.to_string()));
+        // socket_row 是全局行号（输入在前 0..inputs.len()，输出接着排）：
+        // 对输入端口用 inputs，对输出端口（如字符串常量的 text）用 outputs。
+        match gt {
+            crate::bridge::types::GraphType::StyleGraph => {
+                self.with_style(|g, st| {
+                    let Some(nid) = st.id_at(node) else { return };
+                    let in_len = g.nodes[&nid].inputs.len();
+                    let sid = if socket_row < in_len {
+                        g.nodes[&nid].inputs.get(socket_row).copied()
+                    } else {
+                        g.nodes[&nid]
+                            .outputs
+                            .get(socket_row - in_len)
+                            .copied()
+                    };
+                    if let Some(sid) = sid {
+                        let _ = g.set_socket_value(sid, value.clone());
+                    }
+                    st.sync(g);
+                });
+            }
+            crate::bridge::types::GraphType::AppGraph => {
+                self.with_app(|g, st| {
+                    let Some(nid) = st.id_at(node) else { return };
+                    let in_len = g.nodes[&nid].inputs.len();
+                    let sid = if socket_row < in_len {
+                        g.nodes[&nid].inputs.get(socket_row).copied()
+                    } else {
+                        g.nodes[&nid]
+                            .outputs
+                            .get(socket_row - in_len)
+                            .copied()
+                    };
+                    if let Some(sid) = sid {
+                        let _ = g.set_socket_value(sid, value.clone());
+                    }
+                    st.sync(g);
+                });
+            }
+        }
+    }
+
+    /// 刷新角色名字列表（按名排序，样式图/应用图共用）。
+    pub fn refresh_actors(&mut self) {
+        let mut names: Vec<String> = self
+            .state
+            .project
+            .library
+            .actors
+            .values()
+            .map(|a| a.name.clone())
+            .collect();
+        names.sort();
+        self.ui_models.style_graph.actor_names = names.clone();
+        self.ui_models.app_graph.actor_names = names;
+    }
+
+    /// 样式引用节点下拉菜单选择样式链：把节点引用的样式链换成所选。
+    pub fn menu_selected(&mut self, gt: crate::bridge::types::GraphType, node: usize, menu_index: usize) {
+        let Some(style_id) = self.ui_models.style_graph.style_order.get(menu_index).copied() else {
+            return;
+        };
+        match gt {
+            crate::bridge::types::GraphType::StyleGraph => {
+                self.with_style(|g, st| {
+                    if let Some(nid) = st.id_at(node) {
+                        if let Some(n) = g.nodes.get_mut(&nid) {
+                            n.kind = NodeKind::Reference(style_id);
+                        }
+                    }
+                    st.sync(g);
+                });
+            }
+            crate::bridge::types::GraphType::AppGraph => {
+                self.with_app(|g, st| {
+                    if let Some(nid) = st.id_at(node) {
+                        if let Some(n) = g.nodes.get_mut(&nid) {
+                            n.kind = ApplicationNodeKind::AppRef(style_id);
+                        }
+                    }
+                    st.sync(g);
+                });
             }
         }
     }
@@ -715,6 +1037,11 @@ impl AppStore {
             .collect();
         pairs.sort_by(|a, b| a.1.cmp(&b.1));
         ui_models.style_graph.style_order = pairs.iter().map(|(id, _)| *id).collect();
+        // 应用图也要 style_order（sync 时用它算样式引用节点的当前选中下标）
+        ui_models.app_graph.style_order = pairs.iter().map(|(id, _)| *id).collect();
+        ui_models.style_graph.style_chain_names = pairs.iter().map(|(_, name)| name.clone()).collect();
+        // 应用图里 AppRef 节点的下拉菜单也用同一份样式链名字（sync 时读 app_graph 状态）
+        ui_models.app_graph.style_chain_names = pairs.iter().map(|(_, name)| name.clone()).collect();
         let items: Vec<ContextMenuItem> = pairs
             .into_iter()
             .map(|(_, name)| ContextMenuItem {
@@ -766,11 +1093,21 @@ impl AppStore {
             }
             crate::bridge::types::GraphType::AppGraph => {
                 let n = self.state.project.style_layer.graphs.len() + 1;
-                let graph = new_app_chain(format!("应用链 {n}"));
+                // 默认引用第一条样式链作为应用匹配的样式来源（无样式链时留空手动连）
+                let style_ref = self.ui_models.style_graph.style_order.first().copied();
+                self.refresh_actors();
+                let first_actor = self.ui_models.app_graph.actor_names.first().cloned();
+                let graph = new_app_chain(
+                    format!("应用链 {n}"),
+                    style_ref,
+                    first_actor.as_deref(),
+                );
                 self.state.project.style_layer.graphs.push(graph);
                 self.refresh_app_chain_menu();
                 let idx = self.state.project.style_layer.graphs.len() - 1;
                 self.load_chain(crate::bridge::types::GraphType::AppGraph, idx);
+                // 新建默认链也按固定四列布局
+                self.layout_default_app_chain();
                 idx as i32
             }
         }
@@ -785,6 +1122,8 @@ impl AppStore {
         // 链菜单（显示顺序在 GUI 派生）
         self.refresh_style_chain_menu();
         self.refresh_app_chain_menu();
+        // 角色下拉候选（匹配角色 pattern）
+        self.refresh_actors();
 
         // 右键菜单（色点 = 节点主端口类型颜色）
         let style_menu: Vec<ContextMenuItem> = style_templates()
@@ -829,6 +1168,30 @@ impl AppStore {
 
         self.load_chain(crate::bridge::types::GraphType::StyleGraph, 0);
         self.load_chain(crate::bridge::types::GraphType::AppGraph, 0);
+        // 默认应用链固定四列布局（初始化时）
+        self.layout_default_app_chain();
+    }
+
+    /// 默认应用链固定四列布局（用户要求）：
+    ///   列1 上下文输入 | 列2 样式链引用(上)/匹配角色(下) | 列3 应用匹配 | 列4 组输出。
+    /// 只对"当前应用链"设置，其余节点保留自动/已有位置。
+    pub fn layout_default_app_chain(&mut self) {
+        self.with_app(|g, st| {
+            let mut pos: HashMap<NodeId, (f32, f32)> = HashMap::new();
+            for (nid, n) in &g.nodes {
+                let p = match &n.kind {
+                    ApplicationNodeKind::ContextInput => (40.0, 40.0),
+                    ApplicationNodeKind::AppRef(_) => (260.0, 40.0),
+                    ApplicationNodeKind::MatchActor => (260.0, 120.0),
+                    ApplicationNodeKind::ApplyMatch => (480.0, 40.0),
+                    ApplicationNodeKind::GroupOutput => (700.0, 40.0),
+                    _ => continue,
+                };
+                pos.insert(*nid, p);
+            }
+            st.positions = pos;
+            st.sync(g);
+        });
     }
 }
 
@@ -865,10 +1228,24 @@ mod tests {
         }
     }
 
-    // 节点 i 的第 s 个输入端口中心（世界坐标）：node 左缘 + 端口偏移
+    // 节点 i 的第 sock 个输入端口中心（世界坐标）：node 左缘 + 端口全局行号偏移。
+    // 行号从 sockets 视图模型取（输出先排，输入在输出之后）。
     fn input_center(st: &GraphEditorState, node: usize, sock: usize) -> (f32, f32) {
         let (nx, ny) = st.nodes.row_data(node).map(|r| (r.x, r.y)).unwrap();
-        (nx, ny + st.metrics.header + sock as f32 * st.metrics.row + st.metrics.row / 2.0)
+        let sockets = st.nodes.row_data(node).unwrap().sockets;
+        let mut in_idx = 0usize;
+        let mut row = sock as i32;
+        for i in 0..sockets.row_count() {
+            let s = sockets.row_data(i).unwrap();
+            if s.is_input {
+                if in_idx == sock {
+                    row = s.row;
+                    break;
+                }
+                in_idx += 1;
+            }
+        }
+        (nx, ny + st.metrics.header + row as f32 * st.metrics.row + st.metrics.row / 2.0)
     }
 
     // 按标题查节点下标（自动布局顺序与插入序无关，用标题定位更稳）
@@ -1037,25 +1414,26 @@ mod tests {
 
     #[test]
     fn default_app_chain_layout_source_left() {
-        let g = new_app_chain("t");
+        let g = new_app_chain("t", Some(NodeGraphId::new()), None);
         let mut st = GraphEditorState::default();
         st.metrics = metrics();
         st.sync(&g);
 
-        assert_eq!(st.nodes.row_count(), 3);
-        assert_eq!(idx_by_title(&st, "上下文输入"), idx_by_title(&st, "上下文输入"));
+        assert_eq!(st.nodes.row_count(), 5);
         let ctx = idx_by_title(&st, "上下文输入");
-        let apply = idx_by_title(&st, "应用");
+        let apply = idx_by_title(&st, "应用匹配");
+        let out = idx_by_title(&st, "组输出");
         assert_eq!(st.nodes.row_data(ctx).unwrap().x, 40.0);
         assert_eq!(st.nodes.row_data(apply).unwrap().x, 480.0);
-        assert_eq!(st.links.row_count(), 2);
+        assert!(st.nodes.row_data(apply).unwrap().x < st.nodes.row_data(out).unwrap().x);
+        assert_eq!(st.links.row_count(), 4);
     }
 
     #[test]
     fn sync_is_deterministic_across_switches() {
         // 切换链（加载另一条图再回来）后布局与顺序都保持不变
         let g1 = new_style_chain("a");
-        let g2 = new_app_chain("b");
+        let g2 = new_app_chain("b", None, None);
         let mut st = GraphEditorState::default();
         st.metrics = metrics();
         st.sync(&g1);

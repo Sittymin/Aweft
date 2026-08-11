@@ -1,4 +1,6 @@
 import { Theme } from "../../theme/index.slint";
+import { ContextMenuItem } from "../../widgets/context_menu.slint";
+import { InputBox } from "../../widgets/input_box.slint";
 
 // 端口数据类型，决定端口与连接线的颜色。与 aweft-model 的 SocketType 一一对应。
 export enum NodeSocketType {
@@ -12,6 +14,7 @@ export enum NodeSocketType {
     vec3,
     clip-rect,
     animation,
+    application,
 }
 
 // 节点上一个端口的描述。
@@ -21,6 +24,20 @@ export struct NodeSocketData {
     // true 为左侧输入端口，false 为右侧输出端口
     is-input: bool,
     data-type: NodeSocketType,
+    // 端口在其所在列（输入列/输出列）中的行号（从 0 起）：
+    // 输入/输出各自从节点顶部独立排列（Blender 式），渲染/连线/命中全用它。
+    row: int,
+    // 端口预设下拉（如匹配角色的 pattern 输入）：非空且未连接时显示下拉按钮，
+    // 从预设里选值作为端口默认数据；连接后隐藏下拉、使用连线的数据。
+    menu-items: [ContextMenuItem],
+    // 预设下拉当前选中下标（-1 无；按钮显示 menu-items[selected].text）
+    selected: int,
+    // 端口是否已被连线连接
+    connected: bool,
+    // 该端口行内嵌文本输入框（如字符串常量的输出端口：无输入，行内直接输入文本）
+    input: bool,
+    // 内嵌输入框的当前值（端口默认值）
+    input-text: string,
 }
 
 // 一条节点连接：数据流方向固定 from（输出端）→ to（输入端）。
@@ -50,6 +67,13 @@ export struct GraphNode {
     x: length,
     y: length,
     sockets: [NodeSocketData],
+    // 端口列最大行数 = max(输入数, 输出数)，决定节点高度（两列并排，取高的一列）
+    socket-rows: int,
+    // 样式引用节点的下拉菜单行：menu-label 非空时在标题栏下显示
+    // "标签 + 下拉菜单"（选择引用的样式链）
+    menu-label: string,
+    menu-options: [string],
+    menu-selected: int,
 }
 
 // 单个节点：Blender 风格，深色圆角矩形，顶部标题栏，两侧端口，可被拖拽。
@@ -61,6 +85,8 @@ export struct GraphNode {
 export component NodeFrame inherits Rectangle {
     in property <string> title;
     in property <[NodeSocketData]> sockets;
+    // 端口列最大行数（决定节点高度）
+    in property <int> socket-rows: 0;
     in property <length> node-x;
     in property <length> node-y;
     // 视图平移/缩放（来自画布导航）
@@ -69,6 +95,10 @@ export component NodeFrame inherits Rectangle {
     in property <float> view-zoom: 1.0;
     // 选中状态：整圈描边换成高亮色并加粗（Blender 用主题 select 色画节点轮廓）
     in property <bool> selected: false;
+    // 样式引用下拉菜单行（menu-label 非空才显示）
+    in property <string> menu-label: "";
+    in property <[string]> menu-options;
+    in property <int> menu-selected: -1;
     callback drag-moved(delta-x: length, delta-y: length);
     // 左键按下节点主体（未命中端口）时上报，编辑器据此更新选中状态
     callback press-requested();
@@ -85,6 +115,16 @@ export component NodeFrame inherits Rectangle {
     callback socket-drag-canceled();
     // 右键按下节点主体（未在端口拖拽中）：编辑据此弹出节点菜单（世界坐标）
     callback right-pressed(at-world-x: length, at-world-y: length);
+    // 点击样式引用下拉按钮：编辑据此在按钮位置弹出样式链选择菜单
+    callback menu-requested();
+    // 点击端口预设下拉按钮（socket-index 为组合数组下标）：编辑据此弹出预设菜单
+    callback socket-menu-requested(socket-index: int);
+    // 内嵌文本输入框提交（字符串常量输出端口）：编辑据此更新端口默认值
+    callback socket-input-changed(socket-index: int, text: string);
+    // 内嵌文本输入框聚焦变化：编辑据此设置全窗口编辑遮罩（挖孔定位）
+    callback socket-input-focused(socket-index: int, focused: bool);
+    // 编辑遮罩激活镜像（由编辑器绑定 EditOverlayState.active，避免本组件依赖 bridge/state）
+    in property <bool> edit-active-mirror: false;
 
     // 按 view-zoom 缩放后的几何量
     private property <length> node-width: Theme.data.node-editor.node-width * view-zoom;
@@ -94,11 +134,13 @@ export component NodeFrame inherits Rectangle {
     private property <length> node-radius: Theme.data.node-editor.node-border-radius * view-zoom;
     private property <length> title-font-size: Theme.data.node-editor.node-title-font-size * view-zoom;
     private property <length> socket-font-size: Theme.data.node-editor.node-socket-font-size * view-zoom;
+    // 下拉菜单行（仅样式引用节点）：标题栏与端口行之间的额外一行
+    private property <length> menu-row-height: root.menu-label == "" ? 0px : socket-row-height;
 
     x: node-x * view-zoom + view-pan-x;
     y: node-y * view-zoom + view-pan-y;
     width: node-width;
-    height: header-height + self.sockets.length * socket-row-height;
+    height: header-height + root.menu-row-height + root.socket-rows * socket-row-height;
     background: Theme.data.node-editor.node-background;
     border-radius: node-radius;
     // 描边由独立的 border-overlay 覆盖层绘制（位于标题栏之上、端口之下，
@@ -137,9 +179,9 @@ export component NodeFrame inherits Rectangle {
         border-color: selected ? Theme.data.node-editor.node-selected-outline : Theme.data.node-editor.node-border;
     }
 
-    // 端口行
+    // 端口行：输入/输出各自从顶部按 row 排列（Blender 式，互不影响）
     for socket[i] in root.sockets: Rectangle {
-        y: header-height + i * socket-row-height;
+        y: header-height + root.menu-row-height + socket.row * socket-row-height;
         width: 100%;
         height: socket-row-height;
 
@@ -166,8 +208,9 @@ export component NodeFrame inherits Rectangle {
             border-color: Theme.data.node-editor.socket-outline;
         }
 
-        // 端口名：输入靠左，输出靠右
+        // 端口名：输入靠左，输出靠右（字符串常量的输出行改由内嵌输入框呈现，不显示名字）
         Text {
+            visible: !socket.input;
             text: socket.name;
             width: parent.width - socket-size - 8px * view-zoom;
             height: 100%;
@@ -204,7 +247,7 @@ export component NodeFrame inherits Rectangle {
         let cx: length = root.sockets[socket-index].is-input
             ? -socket-size / 2
             : node-width - socket-size / 2;
-        let cy: length = header-height + socket-index * socket-row-height + socket-row-height / 2;
+        let cy: length = header-height + root.menu-row-height + root.sockets[socket-index].row * socket-row-height + socket-row-height / 2;
         let r: length = socket-size;
         return x > cx - r && x < cx + r && y > cy - r && y < cy + r;
     }
@@ -234,8 +277,9 @@ export component NodeFrame inherits Rectangle {
                 let hit-index = root.find-socket-at(self.mouse-x - ta-overhang, self.mouse-y);
                 if (hit-index >= 0) {
                     root.socket-dragging = true;
+                    // 上报行号（独立列内下标，与连线端点/命中同源），Rust 用它定位端口
                     root.socket-drag-started(
-                        hit-index,
+                        root.sockets[hit-index].row,
                         root.sockets[hit-index].is-input,
                         root.sockets[hit-index].data-type,
                         root.world-cursor-x(),
@@ -277,6 +321,133 @@ export component NodeFrame inherits Rectangle {
         }
     }
 
+    // 端口预设下拉按钮层（在节点拖拽 TouchArea 之上，避免被抢事件）：
+    // 未连接且有预设的端口显示"当前值 ▾"按钮，点击从预设里选值（连上后隐藏、用连线数据）
+    for socket[i] in root.sockets: Rectangle {
+        y: header-height + root.menu-row-height + socket.row * socket-row-height;
+        width: 100%;
+        height: socket-row-height;
+        if socket.menu-items.length > 0 && !socket.connected: Rectangle {
+            x: parent.width - socket-size - 58px * view-zoom;
+            y: 3px * view-zoom;
+            width: 56px * view-zoom;
+            height: socket-row-height - 6px * view-zoom;
+            border-radius: 3px * view-zoom;
+            background: Theme.data.node-editor.node-header-background;
+            border-width: 1px * view-zoom;
+            border-color: Theme.data.node-editor.node-border;
+            Text {
+                text: socket.selected >= 0 && socket.selected < socket.menu-items.length
+                    ? socket.menu-items[socket.selected].text + " ▾"
+                    : "选择 ▾";
+                x: 4px * view-zoom;
+                width: parent.width - 8px * view-zoom;
+                height: 100%;
+                vertical-alignment: center;
+                color: Theme.data.node-editor.node-text;
+                font-size: socket-font-size;
+                overflow: elide;
+            }
+            port-btn-ta := TouchArea {
+                clicked => {
+                    root.socket-menu-requested(i);
+                }
+            }
+        }
+    }
+
+    // 内嵌文本输入框层（字符串常量输出端口；在节点拖拽 TouchArea 之上才能被点击激活）。
+    // 用 InputBox（带背景/边框/Escape/失焦语义）；与节点边界的间距四周统一。
+    // 失焦时提交当前输入（保留内容）；text-changed 跟踪当前文本供失焦读取。
+    private property <string> edit-text: "";
+    for socket[i] in root.sockets: Rectangle {
+        y: header-height + root.menu-row-height + socket.row * socket-row-height;
+        width: 100%;
+        height: socket-row-height;
+        if socket.input: InputBox {
+            x: 6px * view-zoom;
+            y: 4px * view-zoom;
+            width: parent.width - socket-size - 12px * view-zoom;
+            height: socket-row-height - 8px * view-zoom;
+            background: Theme.data.node-editor.canvas-background;
+            border-radius: 3px * view-zoom;
+            border-width: 1px * view-zoom;
+            border-color: Theme.data.node-editor.node-border;
+            search-overlay: true;
+            active-mirror: root.edit-active-mirror;
+            text: socket.input-text;
+            placeholder-text: "字符串";
+            font-size: socket-font-size;
+            text-color: Theme.data.node-editor.node-text;
+            placeholder-color: Theme.data.node-editor.node-muted-text;
+            text-changed(t) => {
+                root.edit-text = t;
+            }
+            focus-changed(focused) => {
+                root.socket-input-focused(i, focused);
+            }
+            accepted(text) => {
+                root.socket-input-changed(i, text);
+            }
+            lost-focus => {
+                root.socket-input-changed(i, root.edit-text);
+            }
+        }
+    }
+
+    // 样式引用下拉菜单行：标题栏下"标签 + 下拉菜单"选择引用的样式链。
+    // 声明在节点拖拽 TouchArea（ta）之后，避免按钮点击被 ta 抢走。
+    if root.menu-label != "": Rectangle {
+        y: header-height;
+        x: 0px;
+        width: 100%;
+        height: socket-row-height;
+
+        // 左边标签
+        Text {
+            text: root.menu-label;
+            x: socket-size + 6px * view-zoom;
+            width: parent.width / 2 - socket-size;
+            height: 100%;
+            vertical-alignment: center;
+            color: Theme.data.node-editor.node-muted-text;
+            font-size: socket-font-size;
+            overflow: elide;
+        }
+
+        // 右边下拉按钮（显示当前选中项）
+        drop-btn := Rectangle {
+            x: parent.width / 2;
+            y: 3px * view-zoom;
+            width: parent.width / 2 - socket-size - 2px * view-zoom;
+            height: socket-row-height - 6px * view-zoom;
+            border-radius: 3px * view-zoom;
+            background: Theme.data.node-editor.node-header-background;
+            border-width: 1px * view-zoom;
+            border-color: Theme.data.node-editor.node-border;
+            Text {
+                text: root.menu-options.length > 0 && root.menu-selected >= 0 && root.menu-selected < root.menu-options.length
+                    ? root.menu-options[root.menu-selected]
+                    : "选择样式链";
+                x: 6px * view-zoom;
+                width: parent.width - 12px * view-zoom;
+                height: 100%;
+                vertical-alignment: center;
+                color: Theme.data.node-editor.node-text;
+                font-size: socket-font-size;
+                overflow: elide;
+            }
+            btn-ta := TouchArea {
+                clicked => {
+                    // 下拉列表由编辑器统一弹出（ContextMenu 浮层）；
+                    // 不在节点内用 PopupWindow——repeater 里 PopupWindow 会触发
+                    // Slint "accessing deleted parent (#6426)" 崩溃。
+                    root.menu-requested();
+                }
+            }
+        }
+    }
+
     // 端口类型 -> 颜色
     function socket-color(data-type: NodeSocketType) -> color {
         if data-type == NodeSocketType.float {
@@ -304,6 +475,9 @@ export component NodeFrame inherits Rectangle {
             return Theme.data.node-editor.socket-clip-rect-color;
         }
         if data-type == NodeSocketType.animation {
+            return Theme.data.node-editor.socket-animation-color;
+        }
+        if data-type == NodeSocketType.application {
             return Theme.data.node-editor.socket-animation-color;
         }
         return Theme.data.node-editor.socket-style-color;

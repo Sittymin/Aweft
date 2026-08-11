@@ -25,7 +25,24 @@ export component ContextMenu inherits Rectangle {
     in property <length> container-height: 0px;
     // false 时不夹取位置（用于要落在容器外的下拉菜单）
     in property <bool> clamp-position: true;
+    // 当前选中项（菜单里对应项用半激活背景标识；-1 不高亮）
+    in property <int> current-index: -1;
+    // 选择该项后保持菜单打开（-1 表示总是关闭；用于"新建角色"原位替换输入框）
+    in property <int> no-close-index: -1;
+    // 该项内容临时消失但保留占位、不可点击（-1 无；如"新建角色"输入模式时原位隐藏）
+    in property <int> hide-index: -1;
     callback item-selected(index: int);
+
+    // 样式可自定义（默认用 popup 混入主题）：外部可按需覆盖
+    in property <color> surface-background: Mixins.popup-surface.background;
+    in property <color> surface-border-color: Mixins.popup-surface.border-color;
+    in property <length> surface-radius: Mixins.popup-surface.border-radius;
+    in property <length> surface-border-width: Mixins.popup-surface.border-width;
+    in property <color> text-color: Mixins.popup-item.text-color;
+    in property <color> highlight-color: Mixins.popup-item.highlight-color;
+    in property <color> selected-background: Mixins.popup-item.selected-background;
+    in property <color> separator-color: Mixins.popup-surface.border-color;
+    in property <length> min-item-height: Mixins.popup-item.min-height;
 
     // 固定菜单宽度（配合容器夹取时稳定）
     private property <length> menu-width: 180px;
@@ -35,10 +52,10 @@ export component ContextMenu inherits Rectangle {
     y: clamp-position ? min(menu-y, max(0px, container-height - self.height)) : menu-y;
     width: menu-width;
     height: content.preferred-height;
-    background: Mixins.popup-surface.background;
-    border-radius: Mixins.popup-surface.border-radius;
-    border-width: Mixins.popup-surface.border-width;
-    border-color: Mixins.popup-surface.border-color;
+    background: root.surface-background;
+    border-radius: root.surface-radius;
+    border-width: root.surface-border-width;
+    border-color: root.surface-border-color;
     drop-shadow-blur: 6px;
     drop-shadow-color: rgba(0, 0, 0, 0.45);
 
@@ -50,23 +67,32 @@ export component ContextMenu inherits Rectangle {
             // 分隔线
             if item.separator-before: Rectangle {
                 height: 1px;
-                background: Mixins.popup-surface.border-color;
+                background: root.separator-color;
             }
 
             item-area := TouchArea {
-                // 禁用项不响应点击
-                enabled: item.enabled;
+                // 禁用项不响应点击；hide-index 项在输入模式下同样不可点
+                enabled: item.enabled && i != root.hide-index;
                 clicked => {
                     root.item-selected(i);
-                    root.open = false;
+                    // no-close-index 对应项（如角色下拉的"新建角色"）保持菜单打开
+                    if i != root.no-close-index {
+                        root.open = false;
+                    }
                 }
 
                 item-box := Rectangle {
-                    min-height: Mixins.popup-item.min-height;
+                    min-height: root.min-item-height;
                     border-radius: Mixins.popup-item.border-radius;
-                    background: item-area.has-hover && item.enabled ? Mixins.popup-item.highlight-color : transparent;
+                    // 当前选中项：半激活背景；其余项悬停高亮（hide 项透明、不参与）
+                    background: i == root.hide-index
+                        ? transparent
+                        : (i == root.current-index
+                            ? root.selected-background.mix(root.surface-background, 0.5)
+                            : (item-area.has-hover && item.enabled ? root.highlight-color : transparent));
 
-                    HorizontalLayout {
+                    // hide 项内容消失（保留占位高度）；其余项正常显示
+                    if i != root.hide-index: HorizontalLayout {
                         padding-left: Mixins.popup-item.padding-horizontal;
                         padding-right: Mixins.popup-item.padding-horizontal;
                         spacing: Mixins.popup-item.spacing;
@@ -84,7 +110,7 @@ export component ContextMenu inherits Rectangle {
                         Text {
                             text: item.text;
                             // 禁用项向表面背景色混合，呈现灰显
-                            color: item.enabled ? Mixins.popup-item.text-color : Mixins.popup-item.text-color.mix(Mixins.popup-surface.background, 0.6);
+                            color: item.enabled ? root.text-color : root.text-color.mix(root.surface-background, 0.6);
                             vertical-alignment: center;
                         }
                     }

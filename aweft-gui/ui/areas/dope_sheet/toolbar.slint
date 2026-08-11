@@ -1,6 +1,8 @@
-// 摄影表标题栏：通用 AreaHeader + 右侧操作按钮（占位）。
+// 摄影表标题栏：通用 AreaHeader + 中区 Action 下拉菜单 + 右侧操作按钮（占位）。
 import { SlintKey, SlintAreaType } from "../../core/types.slint";
-import { AreaHeader } from "../area_header.slint";
+import { AreaHeader, AreaHeaderCenterMode } from "../area_header.slint";
+import { AnimationState } from "../../bridge/state.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
 
 export component DopeSheetToolbar inherits Rectangle {
     in property <SlintKey> area-key;
@@ -11,6 +13,13 @@ export component DopeSheetToolbar inherits Rectangle {
         height: 100%;
         area-key: root.area-key;
         area-type: root.area-type;
+        // 中区：Action 选择下拉菜单（同样式图/应用图链选择器的位置与样式）
+        center-mode: AreaHeaderCenterMode.dropdown;
+        dropdown-items: AnimationState.action-items;
+        current-dropdown-index: AnimationState.current-action;
+        dropdown-selected(i) => {
+            AnimationCallbacks.action-selected(i);
+        }
         // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
         right-actions: [
             { icon: @image-url("../../assets/icons/dope_sheet.svg") },

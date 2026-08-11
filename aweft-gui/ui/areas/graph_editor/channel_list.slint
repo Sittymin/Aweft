@@ -39,10 +39,23 @@ export component ChannelList inherits Rectangle {
     callback toggle-editable(index: int);
     // 点击行空白处（非开关按钮）选中所在通道；mode 0=普通 1=Shift 区间 2=Ctrl 切换
     callback channel-pressed(index: int, mode: int);
+    // 滚轮纵向滚动（delta 为像素；调用方按内容高度 clamp 到 pan-y）
+    callback scrolled(delta: float);
 
     clip: true;
     background: Theme.data.animation-editor.channel-list-background;
 
+    // 背景滚轮事件（置于行之下；行级 TouchArea 只处理点击不处理 scroll，事件上浮到此处）
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        scroll-event(event) => {
+            root.scrolled(event.delta-y / 1px);
+            return EventResult.accept;
+        }
+    }
+
+    // 行（channels 为过滤压缩视图，全部匹配，无需再隐藏）
     for c[i] in root.channels: Rectangle {
         y: i * root.row-height + root.pan-y * 1px;
         x: 0px;
@@ -59,7 +72,7 @@ export component ChannelList inherits Rectangle {
             height: 100%;
             pointer-event(event) => {
                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                    root.channel-pressed(i, event.modifiers.control ? 2 : (event.modifiers.shift ? 1 : 0));
+                    root.channel-pressed(c.curve-index, event.modifiers.control ? 2 : (event.modifiers.shift ? 1 : 0));
                 }
             }
         }
@@ -85,7 +98,7 @@ export component ChannelList inherits Rectangle {
                     : @image-url("../../assets/icons/visibility_off.svg");
                 active: c.visible;
                 clicked => {
-                    root.toggle-visible(i);
+                    root.toggle-visible(c.curve-index);
                 }
             }
 
@@ -104,7 +117,7 @@ export component ChannelList inherits Rectangle {
                 icon: @image-url("../../assets/icons/build.svg");
                 active: c.modifier-enabled;
                 clicked => {
-                    root.toggle-modifier(i);
+                    root.toggle-modifier(c.curve-index);
                 }
             }
 
@@ -115,7 +128,7 @@ export component ChannelList inherits Rectangle {
                     : @image-url("../../assets/icons/check_box_outline_blank.svg");
                 active: c.active;
                 clicked => {
-                    root.toggle-active(i);
+                    root.toggle-active(c.curve-index);
                 }
             }
 
@@ -126,7 +139,7 @@ export component ChannelList inherits Rectangle {
                     : @image-url("../../assets/icons/lock.svg");
                 active: !c.editable;
                 clicked => {
-                    root.toggle-editable(i);
+                    root.toggle-editable(c.curve-index);
                 }
             }
         }

@@ -5,8 +5,11 @@
 // 滚轮以光标为中心缩放，中键拖拽平移；端口可拖拽重连；画布空白右键加节点、节点右键删除。
 import { GraphLink, GraphNavigation, GraphNode, GraphNodeLink, LatticeGrid, NodeFrame, NodeSocketType } from "node_frame.slint";
 import { ContextMenu, ContextMenuItem } from "../../widgets/context_menu.slint";
+import { InputBox } from "../../widgets/input_box.slint";
 import { GraphType } from "../../core/types.slint";
 import { NodeGraphCallbacks } from "../../bridge/callbacks.slint";
+import { NodeGraphState, EditOverlayState } from "../../bridge/state.slint";
+import { Mixins } from "../../theme/mixins.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component NodeGraphEditor inherits Rectangle {
@@ -23,16 +26,30 @@ export component NodeGraphEditor inherits Rectangle {
     // 点阵贴图与形状（样式图=方形，应用图=三角）
     in property <image> lattice-tile;
     in property <bool> lattice-triangular: false;
+    // 编辑器在 MainWindow 中的位置（area_container 传入，用于输入框遮罩挖孔定位）
+    in property <length> window-x: 0px;
+    in property <length> window-y: 0px;
 
     // 右键菜单状态
     private property <bool> menu-open: false;
-    // 0=画布空白右键（增加节点），1=节点右键（删除节点）
+    // 0=画布空白右键（增加节点），1=节点右键（删除节点），2=样式引用下拉（选样式链），3=端口预设下拉
     private property <int> menu-mode: 0;
     private property <length> menu-screen-x: 0px;
     private property <length> menu-screen-y: 0px;
     // 右键处的世界坐标（新节点放置位置）
     private property <length> menu-world-x: 0px;
     private property <length> menu-world-y: 0px;
+    // 样式引用下拉：当前打开下拉的节点下标（-1 无）
+    private property <int> chain-menu-node: -1;
+    // 端口预设下拉：节点下标 + 端口组合数组下标 + 端口全局行号
+    private property <int> socket-menu-node: -1;
+    private property <int> socket-menu-idx: 0;
+    private property <int> socket-menu-row: 0;
+    // 角色下拉"新建角色"输入框
+    private property <bool> actor-input-open: false;
+    private property <string> actor-input-text: "";
+    // 输入框相对菜单左上角的垂直偏移（= 最后一项"新建角色"的位置）
+    private property <length> actor-input-offset: 0px;
 
     // 当前选中节点（-1 表示未选中；点节点选中、点空白取消）
     private property <int> selected-node: -1;
@@ -51,9 +68,11 @@ export component NodeGraphEditor inherits Rectangle {
     private property <length> drag-x: 0px;
     private property <length> drag-y: 0px;
 
-    // 第 i 个端口垂直中心相对节点顶部的偏移
-    function socket-offset(idx: int) -> length {
-        return Theme.data.node-editor.node-header-height + idx * Theme.data.node-editor.node-socket-row-height + Theme.data.node-editor.node-socket-row-height / 2;
+    // 第 i 个端口垂直中心相对节点顶部的偏移。
+    // 样式引用节点多一行下拉菜单（menu-label 非空），端口整体下移一格。
+    function socket-offset(node-idx: int, idx: int) -> length {
+        let menu: length = root.nodes[node-idx].menu-label != "" ? Theme.data.node-editor.node-socket-row-height : 0px;
+        return Theme.data.node-editor.node-header-height + menu + idx * Theme.data.node-editor.node-socket-row-height + Theme.data.node-editor.node-socket-row-height / 2;
     }
 
     // 背景点阵（Blender 式层级）；未编辑链时切换为灰色叉叉背景（空状态）
@@ -81,9 +100,9 @@ export component NodeGraphEditor inherits Rectangle {
     for link[i] in root.links: GraphNodeLink {
         visible: root.chain-editing && !(root.link-dragging && i == root.drag-link-index);
         from-x: (nodes[link.from-node].x + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
-        from-y: (nodes[link.from-node].y + root.socket-offset(link.from-socket)) * nav.zoom + nav.pan-y;
+        from-y: (nodes[link.from-node].y + root.socket-offset(link.from-node, link.from-socket)) * nav.zoom + nav.pan-y;
         to-x: nodes[link.to-node].x * nav.zoom + nav.pan-x;
-        to-y: (nodes[link.to-node].y + root.socket-offset(link.to-socket)) * nav.zoom + nav.pan-y;
+        to-y: (nodes[link.to-node].y + root.socket-offset(link.to-node, link.to-socket)) * nav.zoom + nav.pan-y;
         data-type: link.data-type;
         view-zoom: nav.zoom;
     }
@@ -98,7 +117,26 @@ export component NodeGraphEditor inherits Rectangle {
         view-zoom: nav.zoom;
         title: node.title;
         sockets: node.sockets;
+        socket-rows: node.socket-rows;
+        menu-label: node.menu-label;
+        menu-options: node.menu-options;
+        menu-selected: node.menu-selected;
         selected: i == root.selected-node;
+        menu-requested => {
+            root.open-chain-menu(i);
+        }
+        socket-menu-requested(socket-idx) => {
+            root.open-socket-menu(i, socket-idx);
+        }
+        socket-input-changed(socket-idx, text) => {
+            NodeGraphCallbacks.socket-input-changed(root.graph-type, i, root.nodes[i].sockets[socket-idx].row, text);
+        }
+        socket-input-focused(socket-idx, focused) => {
+            if focused {
+                root.set-edit-overlay(i, socket-idx);
+            }
+        }
+        edit-active-mirror: EditOverlayState.active;
         press-requested => {
             root.selected-node = i;
         }
@@ -122,7 +160,7 @@ export component NodeGraphEditor inherits Rectangle {
     // 拖拽中的连线（屏幕坐标）：位于端口上层，已连接端泛白、拖拽端接口色、中间渐变
     if root.link-dragging: GraphNodeLink {
         from-x: (nodes[root.drag-from-node].x + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
-        from-y: (nodes[root.drag-from-node].y + root.socket-offset(root.drag-from-socket)) * nav.zoom + nav.pan-y;
+        from-y: (nodes[root.drag-from-node].y + root.socket-offset(root.drag-from-node, root.drag-from-socket)) * nav.zoom + nav.pan-y;
         to-x: root.drag-x * nav.zoom + nav.pan-x;
         to-y: root.drag-y * nav.zoom + nav.pan-y;
         data-type: root.drag-type;
@@ -135,25 +173,95 @@ export component NodeGraphEditor inherits Rectangle {
         pointer-event(event) => {
             if event.kind == PointerEventKind.down {
                 root.menu-open = false;
+                root.actor-input-open = false;
             }
         }
     }
 
-    // 自定义右键菜单：画布空白=增加节点，节点右键=删除节点
+    // 自定义右键菜单：画布空白=增加节点，节点右键=删除节点，样式引用=选样式链，端口预设=选值
     ContextMenu {
         open <=> root.menu-open;
-        items: root.menu-mode == 0 ? root.menu-items : root.node-menu-items;
+        items: root.menu-mode == 0
+            ? root.menu-items
+            : (root.menu-mode == 1
+                ? root.node-menu-items
+                : (root.menu-mode == 2
+                    ? NodeGraphState.style-chain-items
+                    : root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].menu-items));
         menu-x: root.menu-screen-x;
         menu-y: root.menu-screen-y;
         container-width: root.width;
         container-height: root.height;
+        // 样式引用/端口预设下拉不夹取（菜单可落在按钮下方，靠近容器边缘时略出界无妨）
+        clamp-position: root.menu-mode == 0 || root.menu-mode == 1;
+        // 下拉菜单高亮当前选中：样式引用 = 引用的样式链；角色下拉 = 端口当前选中的角色
+        current-index: root.menu-mode == 2 && root.chain-menu-node >= 0
+            ? root.nodes[root.chain-menu-node].menu-selected
+            : (root.menu-mode == 3 && root.socket-menu-node >= 0
+                ? root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].selected
+                : -1);
+        // 角色下拉：最后一项"新建角色"保持菜单打开（原位替换输入框）
+        no-close-index: root.menu-mode == 3 && root.socket-menu-node >= 0
+            ? root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].menu-items.length - 1
+            : -1;
+        // 输入模式时"新建角色"内容消失、占位且不可点（取消输入即恢复）
+        hide-index: root.actor-input-open && root.menu-mode == 3 && root.socket-menu-node >= 0
+            ? root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].menu-items.length - 1
+            : -1;
         item-selected(index) => {
             if root.menu-mode == 0 {
                 root.selected-node = NodeGraphCallbacks.add-node(root.graph-type, index, root.menu-world-x, root.menu-world-y);
-            } else {
+            } else if root.menu-mode == 1 {
                 NodeGraphCallbacks.delete-node(root.graph-type, root.selected-node);
                 root.selected-node = -1;
+            } else if root.menu-mode == 2 {
+                NodeGraphCallbacks.menu-selected(root.graph-type, root.chain-menu-node, index);
+            } else {
+                // 角色下拉：末尾"新建角色"项原位替换为输入框，否则设端口默认角色
+                // （选择普通角色时同时关闭输入框，菜单随后由 ContextMenu 关闭）
+                root.actor-input-open = false;
+                let items = root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].menu-items;
+                if index == items.length - 1 {
+                    root.menu-open = true;
+                    root.open-actor-input();
+                } else {
+                    NodeGraphCallbacks.socket-option-selected(root.graph-type, root.socket-menu-node, root.socket-menu-row, index);
+                }
             }
+        }
+    }
+
+    // 角色下拉"新建角色"输入框：不关闭菜单，原位替换菜单最后一项（透明背景、菜单背景透出）。
+    // 声明在 ContextMenu 之后（z 更高，覆盖"新建角色"项）；回车确认 → 创建并关闭菜单；
+    // Escape/失焦 → 仅取消输入、恢复菜单原样。
+    if root.actor-input-open: InputBox {
+        x: root.menu-screen-x + 15px;
+        y: root.menu-screen-y + root.actor-input-offset;
+        width: 150px;
+        height: 28px;
+        // 用菜单表面背景/边框盖住原"新建角色"项，形成原位替换
+        background: Mixins.popup-surface.background;
+        border-radius: Mixins.popup-surface.border-radius;
+        border-width: Mixins.popup-surface.border-width;
+        border-color: Mixins.popup-surface.border-color;
+        text: root.actor-input-text;
+        placeholder-text: "输入角色名";
+        font-size: Theme.data.node-editor.node-socket-font-size;
+        text-color: Theme.data.node-editor.node-text;
+        placeholder-color: Theme.data.node-editor.node-muted-text;
+        accepted(text) => {
+            root.menu-open = false;
+            root.actor-input-open = false;
+            NodeGraphCallbacks.create-actor(root.graph-type, root.socket-menu-node, root.socket-menu-row, text);
+        }
+        escaped => {
+            root.actor-input-open = false;
+        }
+        lost-focus => {
+            root.actor-input-open = false;
+        }
+        init => {
+            self.focus();
         }
     }
 
@@ -185,6 +293,55 @@ export component NodeGraphEditor inherits Rectangle {
         menu-screen-x = wx * nav.zoom + nav.pan-x;
         menu-screen-y = wy * nav.zoom + nav.pan-y;
         menu-open = true;
+    }
+
+    // 样式引用下拉：在节点下拉按钮位置弹出样式链选择菜单
+    function open-chain-menu(node-id: int) {
+        chain-menu-node = node-id;
+        menu-mode = 2;
+        // 按钮位于节点右侧中部（菜单行内），下拉菜单在其下方
+        let n = root.nodes[node-id];
+        menu-screen-x = (n.x + Theme.data.node-editor.node-width / 2) * nav.zoom + nav.pan-x;
+        menu-screen-y = (n.y + Theme.data.node-editor.node-header-height + Theme.data.node-editor.node-socket-row-height) * nav.zoom + nav.pan-y;
+        menu-open = true;
+    }
+
+    // 端口预设下拉：在端口下拉按钮下方弹出预设菜单（与样式引用同款：按钮下方）
+    function open-socket-menu(node-id: int, socket-idx: int) {
+        socket-menu-node = node-id;
+        socket-menu-idx = socket-idx;
+        socket-menu-row = root.nodes[node-id].sockets[socket-idx].row;
+        menu-mode = 3;
+        let n = root.nodes[node-id];
+        let s = n.sockets[socket-idx];
+        // 左对齐端口下拉按钮（节点右缘 - socket - 按钮宽 58px），菜单从其下方弹出
+        menu-screen-x = (n.x + Theme.data.node-editor.node-width - Theme.data.node-editor.socket-size - 58px) * nav.zoom + nav.pan-x;
+        // 按钮位于端口行内，菜单从其下方弹出（+ 一行行高）
+        menu-screen-y = (n.y + Theme.data.node-editor.node-header-height + (s.row + 1) * Theme.data.node-editor.node-socket-row-height) * nav.zoom + nav.pan-y;
+        menu-open = true;
+    }
+
+    // 角色下拉选"新建角色"：不关闭菜单，输入框原位替换菜单最后一项。
+    // offset = 外层 padding(5) + (项数-1) * (项高28 + 间距5)
+    function open-actor-input() {
+        actor-input-text = "";
+        let items = root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].menu-items;
+        actor-input-offset = 5px + (items.length - 1) * 33px;
+        actor-input-open = true;
+    }
+
+    // 内嵌文本输入框聚焦：计算输入框的 MainWindow 窗口坐标，激活全窗口编辑遮罩（挖孔）。
+    function set-edit-overlay(node-id: int, socket-idx: int) {
+        let n = root.nodes[node-id];
+        let s = n.sockets[socket-idx];
+        let menu: length = n.menu-label != "" ? Theme.data.node-editor.node-socket-row-height : 0px;
+        EditOverlayState.hole-x = root.window-x + n.x * nav.zoom + nav.pan-x + 6px * nav.zoom;
+        EditOverlayState.hole-y = root.window-y + n.y * nav.zoom + nav.pan-y
+            + (Theme.data.node-editor.node-header-height + menu + s.row * Theme.data.node-editor.node-socket-row-height) * nav.zoom
+            + 4px * nav.zoom;
+        EditOverlayState.hole-width = (Theme.data.node-editor.node-width - Theme.data.node-editor.socket-size - 12px) * nav.zoom;
+        EditOverlayState.hole-height = (Theme.data.node-editor.node-socket-row-height - 8px) * nav.zoom;
+        EditOverlayState.active = true;
     }
 
     // ---- 端口拖拽瞬态（图操作在松开时交给 Rust） ----

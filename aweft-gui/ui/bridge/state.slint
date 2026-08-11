@@ -1,6 +1,6 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
-import { SlintSubtitleRow } from "../core/types.slint";
+import { SlintSubtitleRow, SlintTimelineSubBlock } from "../core/types.slint";
 import { GraphLink, GraphNode, NodeSocketData } from "../areas/node_graph/node_frame.slint";
 import { ContextMenuItem } from "../widgets/context_menu.slint";
 import {
@@ -8,16 +8,32 @@ import {
     SlintCurveSegment,
     SlintHandleMarker,
     SlintNlaTrack,
-    SlintRulerTick,
+    SlintDopeConnection,
+    SlintSummaryKeyframe,
 } from "../core/animation_types.slint";
 
 export global VideoState {
     in property <image> current-video-frame;
 }
 
+// 通用"文本编辑/搜索遮罩"状态：任何输入框（搜索框、字符串常量等）聚焦时，
+// MainWindow 顶层显示差集遮罩（挖去输入框窗口区域），点击输入框外任意处取消输入。
+// 坐标均为相对 MainWindow 的逻辑坐标。
+export global EditOverlayState {
+    in-out property <bool> active: false;
+    in-out property <length> hole-x: 0px;
+    in-out property <length> hole-y: 0px;
+    in-out property <length> hole-width: 0px;
+    in-out property <length> hole-height: 0px;
+}
+
 export global SubtitleState {
     in property <image> current-subtitle-frame;
+    // 可见行（FilterModel：折叠分组的子行被过滤掉）
     in property <[SlintSubtitleRow]> rows: [];
+    // 时间线根级收起时显示的"全部字幕行片段块"（Rust 侧全量事件模型；
+    // 与分组收起显示的 child-blocks 共用同一渲染组件）
+    in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];
 }
 
 // 节点图编辑器状态：样式图/应用图各一组模型，由 Rust 侧驱动。
@@ -42,16 +58,28 @@ export global NodeGraphState {
 export global AnimationState {
     // 曲线编辑器
     in property <[SlintFCurveChannel]> channels: [];
+    // 曲线编辑器 / 摄影表各自的过滤压缩视图（Rust FilterModel，按各自搜索词过滤）
+    in property <[SlintFCurveChannel]> graph-channels: [];
+    in property <[SlintFCurveChannel]> dope-channels: [];
+    // 曲线编辑器画布：只含匹配搜索通道的段/手柄（FilterModel）
+    in property <[SlintCurveSegment]> graph-segments: [];
+    in property <[SlintHandleMarker]> graph-handles: [];
     in property <[SlintCurveSegment]> segments: [];
     in property <[SlintHandleMarker]> handles: [];
-    in property <[SlintRulerTick]> time-ticks: [];
-    in property <[SlintRulerTick]> value-ticks: [];
+    // 摄影表：线性/常量插值段的连接线（扁平模型，Rust 派生）
+    in property <[SlintDopeConnection]> dope-connections: [];
+    // 摄影表：汇总条带关键帧（按整数毫秒时间聚合所有通道，Rust 派生）
+    in property <[SlintSummaryKeyframe]> dope-summary-keyframes: [];
     // NLA 编辑器
     in property <[SlintNlaTrack]> nla-tracks: [];
     // 共享：当前时间（播放头）
     in property <float> current-time: 0.0;
     // 当前 Action 名称（header 栏中区显示）
     in property <string> action-name: "";
+    // Action 选择下拉菜单项（摄影表 Header 中区）
+    in property <[ContextMenuItem]> action-items: [];
+    // 当前选中的 Action 下标（-1 = 无）
+    in property <int> current-action: 0;
     // 共享：Action 时长范围（画布上用于明暗分段，时长内亮 / 时长外暗）
     in property <float> action-start: 0.0;
     in property <float> action-end: 0.0;

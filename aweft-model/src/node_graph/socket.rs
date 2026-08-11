@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{AnimDataId, SocketId};
 
 use super::math::{ClipRect, Vec2, Vec3};
+use super::style::StyleResult;
 
 // ── Socket 类型系统 ────────────────────────────────────────────────────────────
 
@@ -19,6 +20,10 @@ pub enum SocketType {
     Vec3,
     ClipRect,
     Animation,
+    /// 应用单元：应用匹配 / 应用动画的输出，组输出的输入。
+    /// 承载一组"待应用"内容（静态样式 + 是否命中 + 可选动画），
+    /// 由组输出按连接端口顺序收集合并。只有组输出的输入能接这种类型。
+    Application,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +37,7 @@ pub enum SocketValue {
     Vec3 { x: f64, y: f64, z: f64 },
     ClipRect(ClipRect),
     Animation(AnimDataId),
+    Application(ApplicationUnit),
 }
 
 impl SocketValue {
@@ -46,8 +52,20 @@ impl SocketValue {
             SocketValue::Vec3 { .. } => SocketType::Vec3,
             SocketValue::ClipRect(_) => SocketType::ClipRect,
             SocketValue::Animation(_) => SocketType::Animation,
+            SocketValue::Application(_) => SocketType::Application,
         }
     }
+}
+
+/// 应用图的一个"待应用单元"：由 应用匹配 / 应用动画 节点产出，组输出按连接端口
+/// 顺序收集后合并应用。`condition` 为真才生效。
+/// `style` 为**明确连接的静态样式**：应用匹配 / 应用动画都必须连接样式来源
+/// （样式链引用；想要默认样式就连接默认样式链），不提供"可选贡献"——缺失即报错。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ApplicationUnit {
+    pub style: StyleResult,
+    pub condition: bool,
+    pub animation: Option<AnimDataId>,
 }
 
 // ── 类型化 Socket 引用 ────────────────────────────────────────────────────────
@@ -129,6 +147,15 @@ pub struct AnimationSocket;
 impl private::Sealed for AnimationSocket {}
 impl SocketTypeInfo for AnimationSocket {
     const SOCKET_TYPE: SocketType = SocketType::Animation;
+}
+
+/// 应用单元端口（应用匹配 / 应用动画的输出，组输出的输入）。
+/// 计算结果类型，不能作为默认值输入（同 Style）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ApplicationSocket;
+impl private::Sealed for ApplicationSocket {}
+impl SocketTypeInfo for ApplicationSocket {
+    const SOCKET_TYPE: SocketType = SocketType::Application;
 }
 
 // ── Socket 声明 & 实例 ────────────────────────────────────────────────────────

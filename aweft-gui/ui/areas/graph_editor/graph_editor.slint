@@ -1,14 +1,14 @@
 // 曲线编辑器（Graph Editor）：
 //  - 布局参照 Blender：左侧通道列表 + 顶部时间标尺 + 左侧值标尺 + 主画布
-//  - 数据全部来自 Rust 侧 AnimationState 全局（通道/曲线段/控制柄/刻度）
+//  - 数据全部来自 Rust 侧 AnimationState 全局（通道/曲线段/控制柄）
 //  - 交互：滚轮缩放（以光标为中心）、中键平移（CanvasNavigation）；关键帧点击选中、
 //    拖拽移动；贝塞尔控制柄拖拽调整；通道可见性/静音开关
 //  - X 轴（时间）与 Y 轴（值）独立缩放：默认值让测试数据范围可见、标尺刻度可读
+//  - 标尺/网格刻度为纯 Slint 固定槽位即时计算（见 ruler.slint），pan/zoom 不重建任何元素
 import {
     SlintFCurveChannel,
     SlintCurveSegment,
     SlintHandleMarker,
-    SlintRulerTick,
     SlintSegmentKind,
 } from "../../core/animation_types.slint";
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
@@ -21,10 +21,12 @@ import { Theme } from "../../theme/index.slint";
 
 export component GraphEditor inherits Rectangle {
     in property <[SlintFCurveChannel]> channels;
+    // 过滤压缩视图（FilterModel，只含匹配搜索的通道/段/手柄；元素带真实 curve-index）
+    in property <[SlintFCurveChannel]> graph-channels;
     in property <[SlintCurveSegment]> segments;
+    in property <[SlintCurveSegment]> graph-segments;
     in property <[SlintHandleMarker]> handles;
-    in property <[SlintRulerTick]> time-ticks;
-    in property <[SlintRulerTick]> value-ticks;
+    in property <[SlintHandleMarker]> graph-handles;
     in property <float> current-time;
     // Action 时长范围（时长内亮、时长外暗）
     in property <float> action-start: 0.0;
@@ -53,6 +55,32 @@ export component GraphEditor inherits Rectangle {
     private property <float> nav-pan-y: 100.0;
     private property <float> nav-zoom-x: 30.0;
     private property <float> nav-zoom-y: 2.0;
+
+    // 可见世界范围（时间×值）：标尺/网格/曲线/关键帧共用。
+    // 纯 Slint 即时派生（见 ruler.slint 顶部注释）——pan/zoom 变化时只重算这些绑定，
+    // 刻度槽位位置随之更新，不重建任何元素，pan 到任何位置都有标尺。
+    private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom-x * 1px);
+    private property <float> view-time-hi: ((root.width - root.channel-width - root.sidebar-w) - root.nav-pan-x * 1px) / (root.nav-zoom-x * 1px);
+    private property <float> view-value-lo: (0px - root.nav-pan-y * 1px) / (root.nav-zoom-y * 1px);
+    private property <float> view-value-hi: ((root.height - root.ruler-height) - root.nav-pan-y * 1px) / (root.nav-zoom-y * 1px);
+
+    // 框选矩形状态（画布局部像素坐标；visible 时渲染半透明选框）
+    private property <bool> marquee-visible: false;
+    private property <float> marquee-x1: 0.0;
+    private property <float> marquee-y1: 0.0;
+    private property <float> marquee-x2: 0.0;
+    private property <float> marquee-y2: 0.0;
+
+    // 空白处框选结束：把选框换算成世界坐标（时间 × 值）上报 Rust 选中关键帧与控制柄；
+    // 曲线本身被框住也会选中所在通道（Rust 判断线段与框相交）
+    function marquee-select(x1: float, y1: float, x2: float, y2: float, mode: int) {
+        root.marquee-visible = false;
+        let x-lo: float = (x1 - root.nav-pan-x) / root.nav-zoom-x;
+        let x-hi: float = (x2 - root.nav-pan-x) / root.nav-zoom-x;
+        let y-lo: float = (y1 - root.nav-pan-y) / root.nav-zoom-y;
+        let y-hi: float = (y2 - root.nav-pan-y) / root.nav-zoom-y;
+        AnimationCallbacks.graph-marquee-select(x-lo, x-hi, y-lo, y-hi, mode);
+    }
 
     // 通道列表（左）
     ChannelList {
@@ -86,8 +114,9 @@ export component GraphEditor inherits Rectangle {
         y: 0;
         width: root.width - root.channel-width - root.sidebar-w;
         height: root.ruler-height;
-        ticks: root.time-ticks;
-        view-zoom: root.nav-zoom-x;
+        view-lo: root.view-time-lo;
+        view-hi: root.view-time-hi;
+        zoom-x: root.nav-zoom-x;
         pan-x: root.nav-pan-x;
         current-time: root.current-time;
         time-picked(time) => {
@@ -104,10 +133,31 @@ export component GraphEditor inherits Rectangle {
         clip: true;
         background: Theme.data.animation-editor.canvas-background;
 
-        // 网格（轴线与标尺刻度对齐）
+        // 当前可见时间范围（世界坐标）：曲线段/手柄/保持线/关键帧据此做视口裁剪，
+        // 只实例化可见部分，避免巨量元素全部创建拖垮 Slint。刻度（标尺/网格）不再用
+        // 这份裁剪——刻度是固定槽位即时计算（见 ruler.slint 顶部注释）。
+        //
+        // Slint 的 `for` 会把**子元素**按模型行数全部实例化（元素数 = 数据量，与缩放无关）；
+        // `visible: false` 只影响绘制、不影响实例化，救不了元素数量。
+        // 真正的裁剪手段：把 `for` 的子元素写成**便宜容器**（空 Rectangle），把昂贵的交互
+        // 元素（Path/手柄/关键帧标记）放进 `if 条件` 里。Slint 的条件元素（if）是一个
+        // 以布尔为模型的独立子组件，**惰性创建**——条件为假时不实例化其内容。
+        //
+        // 注：Slint 1.17 CHANGELOG 说 "for/if 元素改为 eager 实例化"，但实测（用
+        // ElementHandle::find_by_element_type_name 计数）确认：`for x in m: Rect { if cond: Marker }`
+        // 在 cond=false 时 Marker 数量为 0，cond=true 时才创建。那条 changelog 指的是
+        // 条件被**求值**的时机（构建期立即求值、修复 init 递归），不是两个分支都实例化。
+        // 因此下面这种"便宜容器 + if 惰性创建"模式真实有效，且由 tests/viewport_cull.rs 守护。
+        //
+        // 代价：每个模型行仍多一个空 Rectangle 容器（廉价），换来昂贵元素数量从
+        // O(总数据量) 降到 O(可见数量)——放大到毫秒级时画面上只有当前可见那几条。
+
+        // 网格（轴线与标尺刻度对齐，同一套即时派生刻度）
         GraphGrid {
-            time-ticks: root.time-ticks;
-            value-ticks: root.value-ticks;
+            time-lo: root.view-time-lo;
+            time-hi: root.view-time-hi;
+            value-lo: root.view-value-lo;
+            value-hi: root.view-value-hi;
             zoom-x: root.nav-zoom-x;
             zoom-y: root.nav-zoom-y;
             pan-x: root.nav-pan-x;
@@ -122,8 +172,9 @@ export component GraphEditor inherits Rectangle {
             y: 0px;
             x: 0px;
             height: 100%;
-            ticks: root.value-ticks;
-            view-zoom: root.nav-zoom-y;
+            view-lo: root.view-value-lo;
+            view-hi: root.view-value-hi;
+            zoom-y: root.nav-zoom-y;
             pan-y: root.nav-pan-y;
         }
 
@@ -141,16 +192,37 @@ export component GraphEditor inherits Rectangle {
             background: Theme.data.animation-editor.action-outside;
         }
 
-        // 导航（背景交互：滚轮缩放 / 中键平移 / 空白点击取消选中）
-        // 置于曲线之下，曲线段自带 TouchArea 命中（点击激活通道）
-        CanvasNavigation {
+        // 导航（背景交互：滚轮缩放 / 中键平移 / 左键点击或框选）。
+        // 曲线段不带 TouchArea（矩形命中与贝塞尔曲线形状不符），左键统一由这里处理：
+        // 拖动 → 框选（Rust 判定关键帧/手柄/曲线命中，选中判定对齐 Blender：框内关键帧
+        // 优先，框住曲线本身也选中所在通道）；原地点击 → 空白清除选中。中键平移
+        // 在曲线附近同样生效（没有上层 TouchArea 吞事件）。
+        nav := CanvasNavigation {
             width: 100%;
             height: 100%;
             pan-x <=> root.nav-pan-x;
             pan-y <=> root.nav-pan-y;
             zoom-x <=> root.nav-zoom-x;
             zoom-y <=> root.nav-zoom-y;
-            background-pressed => {
+            // 时间轴放大到能看清毫秒级跳动（1ms = zoom/1000 px，至少数像素可见）；
+            // 上限高，用稍大步长快速滚到毫秒级
+            max-zoom: 12000.0;
+            zoom-step: 1.5;
+            marquee-enabled: true;
+            marquee-dragged(x1, y1, x2, y2) => {
+                // 回调传原始点（起点, 当前），框选矩形需规范化
+                root.marquee-x1 = min(x1, x2);
+                root.marquee-y1 = min(y1, y2);
+                root.marquee-x2 = max(x1, x2);
+                root.marquee-y2 = max(y1, y2);
+                root.marquee-visible = true;
+            }
+            marquee-done(x1, y1, x2, y2, mode) => {
+                root.marquee-select(x1, y1, x2, y2, mode);
+            }
+            background-pressed(mode) => {
+                // 左键原地点击（未拖动成框选）：空白点击清除选中。
+                // 不在此做"点曲线激活"——选中统一交给框选/点关键帧。
                 root.deselect-all();
             }
             view-changed() => {
@@ -165,35 +237,49 @@ export component GraphEditor inherits Rectangle {
             }
         }
 
+        // 框选矩形（置顶可见但不拦截事件）
+        Rectangle {
+            visible: root.marquee-visible;
+            x: root.marquee-x1 * 1px;
+            y: root.marquee-y1 * 1px;
+            width: (root.marquee-x2 - root.marquee-x1) * 1px;
+            height: (root.marquee-y2 - root.marquee-y1) * 1px;
+            background: Theme.data.animation-editor.marquee-fill;
+            border-width: 1px;
+            border-color: Theme.data.animation-editor.marquee-border;
+        }
+
         // 曲线（逐段 Path；眼睛控制显示，当前通道+复选框控制弱化；点击激活通道）。
         // 注意：不用整段 opacity（那会让 Slint 为整段开离屏 layer，而段的尺寸=世界跨度×缩放，
         // 放大后会超出 wgpu 纹理上限 16384 而崩溃），改为直接给描边颜色加 alpha，效果一致。
-        for seg in root.segments: CurveSegment {
-            visible: root.channels[seg.curve-index].visible;
-            x0: seg.x0;
-            y0: seg.y0;
-            cx1: seg.cx1;
-            cy1: seg.cy1;
-            cx2: seg.cx2;
-            cy2: seg.cy2;
-            x1: seg.x1;
-            y1: seg.y1;
-            kind: seg.kind;
-            stroke-color: root.channels[seg.curve-index].selected
-                ? seg.color
-                : seg.color.with-alpha(0.35);
-            view-zoom-x: root.nav-zoom-x;
-            view-zoom-y: root.nav-zoom-y;
-            pan-x: root.nav-pan-x;
-            pan-y: root.nav-pan-y;
-            pressed(mode) => {
-                AnimationCallbacks.channel-pressed(seg.curve-index, mode);
+        // 只渲染匹配搜索通道的段（graph-segments = segments 的 FilterModel），且视口裁剪。
+        // 选中由框选/点关键帧完成（对齐 Blender），曲线本身不拦截事件，这里只渲染。
+        for seg in root.graph-segments: Rectangle {
+            width: 100%;
+            height: 100%;
+            if root.channels[seg.curve-index].visible && seg.x1 >= root.view-time-lo && seg.x0 <= root.view-time-hi: CurveSegment {
+                x0: seg.x0;
+                y0: seg.y0;
+                cx1: seg.cx1;
+                cy1: seg.cy1;
+                cx2: seg.cx2;
+                cy2: seg.cy2;
+                x1: seg.x1;
+                y1: seg.y1;
+                kind: seg.kind;
+                stroke-color: root.channels[seg.curve-index].selected
+                    ? seg.color
+                    : seg.color.with-alpha(0.35);
+                view-zoom-x: root.nav-zoom-x;
+                view-zoom-y: root.nav-zoom-y;
+                pan-x: root.nav-pan-x;
+                pan-y: root.nav-pan-y;
             }
         }
 
         // 外推线：首/末关键帧水平延伸到视口边缘（比主曲线暗，非当前通道更暗）。
         // 用颜色 alpha 代替 opacity，避免任何离屏 layer。
-        for curve[i] in root.channels: Rectangle {
+        for curve in root.graph-channels: Rectangle {
             width: 100%;
             height: 100%;
 
@@ -227,46 +313,54 @@ export component GraphEditor inherits Rectangle {
 
         // Hold 保持线的瞬变竖直虚线（连接保持线末端与下一个关键帧）。
         // 与曲线段同理：不用整段 opacity（段的竖直高度=值差×缩放，放大后会开超大离屏 layer 崩溃），
-        // 用颜色 alpha 弱化虚线贴图。
-        for seg in root.segments: HoldStep {
-            visible: root.channels[seg.curve-index].visible && seg.kind == SlintSegmentKind.hold;
-            step-x: seg.x1;
-            y0: seg.y1;
-            y1: seg.step-value;
-            line-color: root.channels[seg.curve-index].selected
-                ? seg.color
-                : seg.color.with-alpha(0.35);
-            view-zoom-x: root.nav-zoom-x;
-            view-zoom-y: root.nav-zoom-y;
-            pan-x: root.nav-pan-x;
-            pan-y: root.nav-pan-y;
+        // 用颜色 alpha 弱化虚线贴图。视口裁剪：只在 x1 可见时实例化。
+        for seg in root.graph-segments: Rectangle {
+            width: 100%;
+            height: 100%;
+            if root.channels[seg.curve-index].visible && seg.kind == SlintSegmentKind.hold && seg.x1 >= root.view-time-lo && seg.x1 <= root.view-time-hi: HoldStep {
+                step-x: seg.x1;
+                y0: seg.y1;
+                y1: seg.step-value;
+                line-color: root.channels[seg.curve-index].selected
+                    ? seg.color
+                    : seg.color.with-alpha(0.35);
+                view-zoom-x: root.nav-zoom-x;
+                view-zoom-y: root.nav-zoom-y;
+                pan-x: root.nav-pan-x;
+                pan-y: root.nav-pan-y;
+            }
         }
 
         // 贝塞尔控制柄（随通道眼睛/当前通道/复选框一并隐藏、弱化；拖拽时自高亮；
         // 移动关键帧时被钳制的手柄以 preview 替换）。
         // 与曲线段同理：不用整段 opacity（会开离屏 layer），用颜色 alpha 弱化。
-        for h in root.handles: HandleMarker {
-            visible: root.channels[h.curve-index].visible;
-            key-time: h.key-time;
-            key-value: h.key-value;
-            handle-time: h.handle-time;
-            handle-value: h.handle-value;
-            handle-color: root.channels[h.curve-index].selected
-                ? h.color
-                : h.color.with-alpha(0.35);
-            preview: h.preview;
-            view-zoom-x: root.nav-zoom-x;
-            view-zoom-y: root.nav-zoom-y;
-            pan-x: root.nav-pan-x;
-            pan-y: root.nav-pan-y;
-            pressed => {
-                AnimationCallbacks.handle-pressed(h.curve-index, h.keyframe-index, h.is-in);
-            }
-            dragged(dt, dv, mode) => {
-                AnimationCallbacks.handle-dragged(h.curve-index, h.keyframe-index, h.is-in, dt, dv, mode);
-            }
-            released => {
-                AnimationCallbacks.handle-released(h.curve-index, h.keyframe-index, h.is-in);
+        // 只渲染匹配搜索通道的手柄（graph-handles = handles 的 FilterModel），且视口裁剪
+        // （手柄连线在 key-time 与 handle-time 之间，任一端可见即渲染）。
+        for h in root.graph-handles: Rectangle {
+            width: 100%;
+            height: 100%;
+            if root.channels[h.curve-index].visible && ((h.key-time >= root.view-time-lo && h.key-time <= root.view-time-hi) || (h.handle-time >= root.view-time-lo && h.handle-time <= root.view-time-hi)): HandleMarker {
+                key-time: h.key-time;
+                key-value: h.key-value;
+                handle-time: h.handle-time;
+                handle-value: h.handle-value;
+                handle-color: root.channels[h.curve-index].selected
+                    ? h.color
+                    : h.color.with-alpha(0.35);
+                preview: h.preview;
+                view-zoom-x: root.nav-zoom-x;
+                view-zoom-y: root.nav-zoom-y;
+                pan-x: root.nav-pan-x;
+                pan-y: root.nav-pan-y;
+                pressed(additive) => {
+                    AnimationCallbacks.handle-pressed(h.curve-index, h.keyframe-index, h.is-in, additive);
+                }
+                dragged(dt, dv, mode) => {
+                    AnimationCallbacks.handle-dragged(h.curve-index, h.keyframe-index, h.is-in, dt, dv, mode);
+                }
+                released(moved) => {
+                    AnimationCallbacks.handle-released(h.curve-index, h.keyframe-index, h.is-in, moved);
+                }
             }
         }
 
@@ -283,31 +377,36 @@ export component GraphEditor inherits Rectangle {
             pan-y: root.nav-pan-y;
         }
 
-        // 关键帧标记（双层循环：通道 × 关键帧；选中通道的标记不弱化）
-        for curve[i] in root.channels: Rectangle {
+        // 关键帧标记（双层循环：过滤压缩视图通道 × 关键帧；选中通道的标记不弱化）。
+        // graph-channels 为 FilterModel（无搜索空位），回调用元素携带的真实 curve-index。
+        // 内层 for 子元素为便宜容器，`if` 视口裁剪：只实例化可见时间范围内的标记。
+        for curve[i] in root.graph-channels: Rectangle {
             width: 100%;
             height: 100%;
 
-            for key[j] in curve.keyframes: KeyframeMarker {
-                visible: curve.visible;
-                time: key.time;
-                value: key.value;
-                marker-color: curve.selected
-                    ? curve.color
-                    : curve.color.with-alpha(0.35);
-                selected: key.selected;
-                view-zoom-x: root.nav-zoom-x;
-                view-zoom-y: root.nav-zoom-y;
-                pan-x: root.nav-pan-x;
-                pan-y: root.nav-pan-y;
-                pressed(additive) => {
-                    AnimationCallbacks.keyframe-pressed(i, j, additive);
-                }
-                dragged(dt, dv) => {
-                    AnimationCallbacks.keyframe-dragged(i, j, dt, dv);
-                }
-                released => {
-                    AnimationCallbacks.keyframe-released(i, j);
+            for key[j] in curve.keyframes: Rectangle {
+                width: 100%;
+                height: 100%;
+                if curve.visible && key.time >= root.view-time-lo && key.time <= root.view-time-hi: KeyframeMarker {
+                    time: key.time;
+                    value: key.value;
+                    marker-color: curve.selected
+                        ? curve.color
+                        : curve.color.with-alpha(0.35);
+                    selected: key.selected;
+                    view-zoom-x: root.nav-zoom-x;
+                    view-zoom-y: root.nav-zoom-y;
+                    pan-x: root.nav-pan-x;
+                    pan-y: root.nav-pan-y;
+                    pressed(additive) => {
+                        AnimationCallbacks.keyframe-pressed(curve.curve-index, j, additive);
+                    }
+                    dragged(dt, dv, mode) => {
+                        AnimationCallbacks.keyframe-dragged(curve.curve-index, j, dt, dv, mode);
+                    }
+                    released(moved) => {
+                        AnimationCallbacks.keyframe-released(curve.curve-index, j, moved);
+                    }
                 }
             }
         }
@@ -347,14 +446,15 @@ export component GraphEditor inherits Rectangle {
         AnimationCallbacks.channel-deselect-all();
     }
 
-    // 启动时上报初始视图：让 Rust 按当前缩放/平移生成首屏刻度。
-    // init 时画布尺寸可能尚未确定，用一次性 Timer 在布局就绪后再校准一次。
+    // 启动时同步一次视图缩放：让 Rust 命中检测容差与初始 zoom 一致
+    // （刻度已在 Slint 侧即时计算，见 ruler.slint；init 时画布尺寸可能未定，
+    // 用一次性 Timer 在布局就绪后再校准一次）。
     init => {
         root.sync-view();
         calibrate-timer.start();
     }
 
-    // 一次性校准定时器：init 后画布尺寸才真正确定，等一帧再同步刻度
+    // 一次性校准定时器：init 后布局才真正确定，等一帧再同步一次
     calibrate-timer := Timer {
         interval: 120ms;
         running: false;

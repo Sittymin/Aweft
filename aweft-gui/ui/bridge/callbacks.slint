@@ -18,6 +18,11 @@ export global AreaCallbacks {
     callback switch-area-type(area-key: SlintKey, area-type: SlintAreaType);
 }
 
+// 视口回调：打开视频等媒体操作（Rust 侧处理）
+export global VideoCallbacks {
+    callback open-video();
+}
+
 export global LineEditorCallbacks {
     callback toggle-group-collapsed(group-id: string);
     callback increment-timecode(item-id: string, is-start-time: bool, is_batch: bool);
@@ -70,6 +75,14 @@ export global NodeGraphCallbacks {
     callback load-chain(graph-type: GraphType, index: int);
     // 新建一条默认链并切换到它，返回新链在切换菜单中的下标
     callback new-chain(graph-type: GraphType) -> int;
+    // 样式引用节点下拉菜单选择样式链（node-index 为节点下标，menu-index 为样式链菜单下标）
+    callback menu-selected(graph-type: GraphType, node-index: int, menu-index: int);
+    // 端口预设下拉选择（socket-row 为端口全局行号，option-index 为预设下标）
+    callback socket-option-selected(graph-type: GraphType, node-index: int, socket-row: int, option-index: int);
+    // 角色下拉"新建角色"：创建新角色并设端口默认值
+    callback create-actor(graph-type: GraphType, node-index: int, socket-row: int, name: string);
+    // 内嵌文本输入框提交（字符串常量）：设端口默认值
+    callback socket-input-changed(graph-type: GraphType, node-index: int, socket-row: int, text: string);
 }
 
 // 动画编辑器回调（曲线编辑器 + NLA 编辑器）：编辑器只做渲染与拖拽瞬态，
@@ -78,21 +91,31 @@ export global AnimationCallbacks {
     // —— 曲线编辑器：关键帧 ——
     // 按下（选中）：additive=true 表示 Shift/Ctrl 追加选择
     callback keyframe-pressed(curve-index: int, key-index: int, additive: bool);
-    // 拖拽移动（delta 相对按下起点，世界坐标）
-    callback keyframe-dragged(curve-index: int, key-index: int, delta-time: float, delta-value: float);
-    callback keyframe-released(curve-index: int, key-index: int);
+    // 拖拽移动（delta 相对按下起点，世界坐标）。mode: 0=普通移动全部选中，1=Shift 拖出手柄
+    callback keyframe-dragged(curve-index: int, key-index: int, delta-time: float, delta-value: float, mode: int);
+    // 松开：moved=false（单击）时折叠为单选
+    callback keyframe-released(curve-index: int, key-index: int, moved: bool);
     // 画布空白点击：清除关键帧选中
     callback keyframe-deselect-all();
     // —— 曲线编辑器：贝塞尔控制柄 ——
-    callback handle-pressed(curve-index: int, key-index: int, is-in: bool);
+    // 按下（选中手柄）：additive=true 表示 Shift/Ctrl 追加选择
+    callback handle-pressed(curve-index: int, key-index: int, is-in: bool, additive: bool);
     // mode: 0=Ctrl 自由，1=默认对齐（角度一致长度独立），2=Shift 原点对称
     callback handle-dragged(curve-index: int, key-index: int, is-in: bool, delta-time: float, delta-value: float, mode: int);
-    callback handle-released(curve-index: int, key-index: int, is-in: bool);
+    // 松开：moved=false（单击）时折叠为单选该手柄
+    callback handle-released(curve-index: int, key-index: int, is-in: bool, moved: bool);
+    // 画布空白框选（世界时间范围 × 值范围；可同时选中关键帧与控制柄；mode 0=替换，非0=追加）
+    callback graph-marquee-select(x-lo: float, x-hi: float, y-lo: float, y-hi: float, mode: int);
     // —— 曲线编辑器：通道 ——
     // 通道/曲线按下：mode 0=普通（只选该通道），1=Shift 区间，2=Ctrl 切换
     callback channel-pressed(curve-index: int, mode: int);
     // 画布空白点击：清除激活通道与选中
     callback channel-deselect-all();
+    // 左侧搜索框：曲线编辑器 / 摄影表各自独立过滤（空串恢复全部）
+    callback graph-search-changed(text: string);
+    callback dope-search-changed(text: string);
+    // 摄影表压缩视图中的一行被点击（显示行 → Rust 映射回真实通道）
+    callback dope-channel-pressed(view-row: int, mode: int);
     // 侧边栏：设置曲线颜色来源（0=自动彩虹，1=用户设置）
     callback curve-color-mode-changed(curve-index: int, mode: int);
     // 侧边栏：设置选中关键帧的插值类型（0=贝塞尔，1=线性，2=常量）
@@ -103,19 +126,37 @@ export global AnimationCallbacks {
     callback channel-toggle-editable(curve-index: int);
     // —— NLA 编辑器：片断 ——
     callback strip-pressed(track-index: int, strip-index: int, additive: bool);
-    callback strip-dragged(track-index: int, strip-index: int, delta-x: float);
+    // delta-x 为世界时间位移；delta-row 为垂直位移（行数，正=向下，片段中心越过
+    // 轨道边界即切换显示轨道）
+    callback strip-dragged(track-index: int, strip-index: int, delta-x: float, delta-row: float);
     callback strip-released(track-index: int, strip-index: int);
     callback strip-deselect-all();
+    // 画布级 TouchArea 左键命中检测（世界时间 x + 行号）：命中返回编码
+    // （track*10000+strip），并完成选中与拖拽起点记录；未命中返回 -1。
+    callback strip-pick(x: float, row: int, mode: int) -> int;
     // —— NLA 编辑器：轨道 ——
-    callback track-toggle-muted(track-index: int);
-    callback track-toggle-solo(track-index: int);
+    // 轨道开关（index 为过滤视图行号；锁定轨道不能编辑）
+    callback track-toggle-enabled(track-index: int);
+    callback track-toggle-locked(track-index: int);
+    // 全局 Action 轨：把当前 Action 作为片断向下插入 NLA
+    callback track-push-down(track-index: int);
+    // 轨道列表搜索（空 = 全部）
+    callback nla-search-changed(text: string);
     // —— 摄影表（Dope Sheet）：关键帧（共用曲线编辑器的选中/数据，拖拽只调时间） ——
     callback dope-keyframe-pressed(curve-index: int, key-index: int, additive: bool);
     callback dope-keyframe-dragged(curve-index: int, key-index: int, delta-time: float);
-    callback dope-keyframe-released(curve-index: int, key-index: int);
+    callback dope-keyframe-released(curve-index: int, key-index: int, moved: bool);
     callback dope-keyframe-deselect-all();
+    // 空白处框选（世界时间范围 + 行区间；mode 0=替换 1/2=追加）
+    callback dope-marquee-select(x-lo: float, x-hi: float, row-lo: int, row-hi: int, mode: int);
+    // —— 摄影表：汇总条带（聚合所有通道同一时刻的关键帧；拖拽跨通道同步移动） ——
+    callback dope-summary-pressed(index: int, additive: bool);
+    callback dope-summary-dragged(index: int, delta-time: float);
+    callback dope-summary-released(index: int, moved: bool);
     // —— 共享：当前时间（播放头） ——
     callback set-current-time(time: float);
-    // —— 共享：视图变化（缩放/平移/画布尺寸）——按可见范围重算刻度步长（放大细化、铺满画布、数量有界）——
+    // —— 摄影表 Header：Action 选择下拉菜单 ——
+    callback action-selected(index: int);
+    // —— 共享：视图缩放变化 —— 更新命中检测容差依据（刻度已 Slint 侧即时计算）——
     callback view-changed(zoom-x: float, zoom-y: float, pan-x: float, pan-y: float, width: float, height: float);
 }

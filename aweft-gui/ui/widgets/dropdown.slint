@@ -1,0 +1,119 @@
+// 通用下拉菜单组件：显示当前选中项文本 + 箭头，点击弹出列表菜单选择。
+// 由样式链选择器 ChainSwitcher 提炼而来，任何"从列表里选一项"的场景都可复用
+// （如摄影表 Header 中区的 Action 选择）。
+// 用 PopupWindow 承载菜单：浮动在窗口顶层，不会被下方编辑器 Area 覆盖。
+import { ContextMenuItem } from "../widgets/context_menu.slint";
+import { Mixins } from "../theme/mixins.slint";
+import { Theme } from "../theme/index.slint";
+
+export component Dropdown inherits Rectangle {
+    // 菜单项（文本/色点/分隔线/禁用）
+    in property <[ContextMenuItem]> items;
+    // 当前选中项文本（按钮上显示）
+    in property <string> current-text: "";
+    // 当前选中项下标（菜单里对应项用半激活背景标识；越界时不高亮）
+    in property <int> current-index: 0;
+    // 用户选择某一行
+    callback selected(index: int);
+
+    // 尺寸跟随内容（按钮宽度由文字撑开）
+    width: content.preferred-width;
+    height: Theme.data.area-type-switcher.height;
+    background: Theme.data.area-type-switcher.background;
+    border-radius: Theme.data.area-type-switcher.border-radius;
+    border-width: Theme.data.area-type-switcher.border-width;
+    border-color: Theme.data.area-type-switcher.border-color;
+
+    content := HorizontalLayout {
+        padding-left: Theme.data.area-type-switcher.layout-padding-horizontal;
+        padding-right: Theme.data.area-type-switcher.layout-padding-horizontal;
+        spacing: Theme.data.area-type-switcher.popup.item-spacing;
+        alignment: center;
+
+        Text {
+            text: root.current-text;
+            color: Theme.data.area-type-switcher.popup.item-text-color;
+            vertical-alignment: center;
+        }
+
+        Image {
+            source: @image-url("../assets/icons/arrow_drop_down.svg");
+            width: Theme.data.area-type-switcher.popup-icon-size;
+            height: Theme.data.area-type-switcher.popup-icon-size;
+            vertical-alignment: center;
+        }
+    }
+
+    button := TouchArea {
+        clicked => {
+            popup.show();
+        }
+    }
+
+    // 列表菜单：浮在按钮下方；点外部由 PopupWindow 自动关闭
+    popup := PopupWindow {
+        x: 0;
+        y: root.height;
+        width: layout.preferred-width;
+        height: layout.preferred-height;
+
+        Rectangle {
+            background: Mixins.popup-surface.background;
+            border-radius: Mixins.popup-surface.border-radius;
+            border-width: Mixins.popup-surface.border-width;
+            border-color: Mixins.popup-surface.border-color;
+
+            layout := VerticalLayout {
+                padding: Mixins.popup-surface.padding;
+                spacing: Mixins.popup-surface.spacing;
+
+                for item[i] in root.items: VerticalLayout {
+                    // 分隔线
+                    if item.separator-before: Rectangle {
+                        height: 1px;
+                        background: Mixins.popup-surface.border-color;
+                    }
+
+                    item-area := TouchArea {
+                        enabled: item.enabled;
+                        clicked => {
+                            root.selected(i);
+                            popup.close();
+                        }
+
+                        item-box := Rectangle {
+                            min-height: Mixins.popup-item.min-height;
+                            border-radius: Mixins.popup-item.border-radius;
+                            // 当前选中项：半激活背景（选中色向菜单背景混合）；其余项悬停高亮
+                            background: i == root.current-index
+                                ? Mixins.popup-item.selected-background.mix(Mixins.popup-surface.background, 0.5)
+                                : (item-area.has-hover && item.enabled ? Mixins.popup-item.highlight-color : transparent);
+
+                            HorizontalLayout {
+                                padding-left: Mixins.popup-item.padding-horizontal;
+                                padding-right: Mixins.popup-item.padding-horizontal;
+                                spacing: Mixins.popup-item.spacing;
+                                alignment: start;
+
+                                // 前导色点（Colors.transparent 表示不显示）
+                                if item.dot-color != Colors.transparent: Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: self.width / 2;
+                                    background: item.dot-color;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                Text {
+                                    text: item.text;
+                                    color: item.enabled ? Mixins.popup-item.text-color : Mixins.popup-item.text-color.mix(Mixins.popup-surface.background, 0.6);
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

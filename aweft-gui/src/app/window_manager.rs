@@ -44,7 +44,7 @@ impl AppWindowManager {
 
         // ===================================
         // 初始化字幕数据和过滤模型
-        let filter_model = {
+        let (filter_model, root_blocks_model) = {
             let mut store_mut = store.borrow_mut();
             {
                 // 先创建数据
@@ -52,7 +52,13 @@ impl AppWindowManager {
                 create_test_subtitle_data(&mut state.project);
             }
             // 然后初始化 LineEditorState（使用 UiModels 持有的模型）
-            store_mut.rebuild_line_editor_models()
+            let filter_model = store_mut.rebuild_line_editor_models();
+            // 根级收起用的全量字幕行片段块模型（重建时已派生）
+            let root_blocks_model = store_mut
+                .ui_models()
+                .line_editor_state
+                .timeline_root_blocks_model();
+            (filter_model, root_blocks_model)
         };
 
         // ===================================
@@ -75,6 +81,7 @@ impl AppWindowManager {
         // NOTE: 之后 UI 数据需要在 filtered_model 修改
         // 不应当再使用 set_rows 修改数据
         subtitle_state.set_rows(filter_model);
+        subtitle_state.set_timeline_root_blocks(slint::ModelRc::from(root_blocks_model));
 
         // 初始化模型并绑定给 Slint（占位空数组，后续通过 UIUpdater 刷新）
         {
@@ -114,13 +121,25 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     use aweft_model::structure::{EventData, ItemLocation};
     use chrono::TimeDelta;
 
+    // 测试角色（默认应用图的 pattern 预设第一个 = "Alice"，可匹配）
+    let alice_id = aweft_model::ids::ActorId::new();
+    let bob_id = aweft_model::ids::ActorId::new();
+    project.library.insert_actor(aweft_model::library::Actor {
+        id: alice_id,
+        name: "Alice".to_string(),
+    });
+    project.library.insert_actor(aweft_model::library::Actor {
+        id: bob_id,
+        name: "Bob".to_string(),
+    });
+
     let structure = &mut project.structure;
 
-    // 创建根级别的事件
+    // 创建根级别的事件（第一个字幕由 Alice 说出）
     let event1 = EventData {
         start_time: TimeDelta::try_milliseconds(0).unwrap(),
         end_time: TimeDelta::try_milliseconds(5000).unwrap(),
-        actor: None,
+        actor: Some(alice_id),
         text: "这是第一行字幕（根级别）".to_string(),
         segment_timing: None,
         style: "Default".to_string(),
@@ -311,9 +330,18 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
 /// 创建测试节点图数据：一条样式链 + 一条应用链（位置由编辑器自动排布）。
 fn create_test_graphs(project: &mut aweft_model::project::Project) {
     let style = crate::store::graph_editor::new_style_chain("样式链 1");
-    project.library.node_graphs.insert(style.id, style);
+    let style_id = style.id;
+    project.library.node_graphs.insert(style_id, style);
 
-    let app = crate::store::graph_editor::new_app_chain("应用链 1");
+    // 应用链引用刚建的样式链作为默认样式来源；pattern 默认匹配第一个角色（按名排序）
+    let mut names: Vec<String> = project.library.actors.values().map(|a| a.name.clone()).collect();
+    names.sort();
+    let first_actor = names.first().cloned();
+    let app = crate::store::graph_editor::new_app_chain(
+        "应用链 1",
+        Some(style_id),
+        first_actor.as_deref(),
+    );
     project.style_layer.graphs.push(app);
 }
 
@@ -384,82 +412,131 @@ fn create_test_animation_data(store: &mut AppStore) {
         }
     }
 
-    // ── 曲线编辑器：三条不同插值的通道 ──
+    // ── 曲线编辑器：每个 Action 一套通道数据（切换 Action 时按数据重建编辑器） ──
     let curve = &mut store.ui_models_mut().curve_editor;
 
-    curve.push_channel(
-        "FontSize",
-        Color::from_rgb_u8(242, 109, 120), // 红
-        vec![
-            bez(0.0, 30.0, 0.0, 0.0, 2.0, 18.0),
-            bez(3.0, 66.0, -1.0, -14.0, 1.2, 12.0),
-            bez(6.0, 52.0, -0.8, -10.0, 1.0, 16.0),
-            bez(9.0, 80.0, -0.9, -14.0, 1.4, 12.0),
-            bez(12.0, 44.0, -1.2, -16.0, 0.8, 8.0),
-            bez(15.0, 60.0, -0.8, -8.0, 0.0, 0.0),
-        ],
-    );
+    // 主 Action：四条通道（贝塞尔/线性/常量/线性混合）
+    let main_channels: Vec<(slint::SharedString, Color, Vec<SlintKeyframe>)> = vec![
+        (
+            "FontSize".into(),
+            Color::from_rgb_u8(242, 109, 120), // 红
+            vec![
+                bez(0.0, 30.0, 0.0, 0.0, 2.0, 18.0),
+                bez(3.0, 66.0, -1.0, -14.0, 1.2, 12.0),
+                bez(6.0, 52.0, -0.8, -10.0, 1.0, 16.0),
+                bez(9.0, 80.0, -0.9, -14.0, 1.4, 12.0),
+                bez(12.0, 44.0, -1.2, -16.0, 0.8, 8.0),
+                bez(15.0, 60.0, -0.8, -8.0, 0.0, 0.0),
+            ],
+        ),
+        (
+            "PositionX".into(),
+            Color::from_rgb_u8(112, 178, 255), // 蓝
+            vec![
+                lin(0.0, -0.5),
+                lin(2.5, 0.6),
+                lin(5.0, -0.2),
+                lin(7.5, 0.8),
+                lin(10.0, -0.6),
+                lin(12.5, 0.3),
+                lin(15.0, 0.0),
+            ],
+        ),
+        (
+            "Rotation".into(),
+            Color::from_rgb_u8(240, 193, 78), // 黄
+            vec![
+                hold(0.0, 0.0),
+                hold(4.0, 30.0),
+                hold(8.0, 60.0),
+                hold(12.0, 90.0),
+                hold(15.0, 120.0),
+            ],
+        ),
+        (
+            "BorderX".into(),
+            Color::from_rgb_u8(99, 199, 99), // 绿
+            vec![
+                lin(0.0, 2.0),
+                lin(3.0, 6.0),
+                lin(6.0, 3.0),
+                lin(9.0, 8.0),
+                lin(12.0, 4.0),
+                lin(15.0, 5.0),
+            ],
+        ),
+    ];
 
-    curve.push_channel(
-        "PositionX",
-        Color::from_rgb_u8(112, 178, 255), // 蓝
-        vec![
-            lin(0.0, -0.5),
-            lin(2.5, 0.6),
-            lin(5.0, -0.2),
-            lin(7.5, 0.8),
-            lin(10.0, -0.6),
-            lin(12.5, 0.3),
-            lin(15.0, 0.0),
-        ],
-    );
+    // 奔跑：节奏快、周期短、位移左右往返
+    let run_channels: Vec<(slint::SharedString, Color, Vec<SlintKeyframe>)> = vec![
+        (
+            "PositionX".into(),
+            Color::from_rgb_u8(112, 178, 255), // 蓝
+            vec![
+                lin(0.0, 0.0),
+                lin(0.5, 1.2),
+                lin(1.0, 0.0),
+                lin(1.5, -1.2),
+                lin(2.0, 0.0),
+            ],
+        ),
+        (
+            "PositionY".into(),
+            Color::from_rgb_u8(140, 140, 220), // 浅紫
+            vec![lin(0.0, 0.0), lin(0.5, 1.8), lin(1.0, 0.0), lin(1.5, 1.8), lin(2.0, 0.0)],
+        ),
+    ];
 
-    curve.push_channel(
-        "Rotation",
-        Color::from_rgb_u8(240, 193, 78), // 黄
-        vec![
-            hold(0.0, 0.0),
-            hold(4.0, 30.0),
-            hold(8.0, 60.0),
-            hold(12.0, 90.0),
-            hold(15.0, 120.0),
-        ],
-    );
+    // 跳跃：抛物线上升 + 落地 + 旋转
+    let jump_channels: Vec<(slint::SharedString, Color, Vec<SlintKeyframe>)> = vec![
+        (
+            "PositionY".into(),
+            Color::from_rgb_u8(140, 140, 220), // 浅紫
+            vec![
+                lin(0.0, 0.0),
+                bez(1.0, 3.0, -0.2, 0.0, 0.2, 0.0),
+                lin(2.0, 0.0),
+            ],
+        ),
+        (
+            "Rotation".into(),
+            Color::from_rgb_u8(240, 193, 78), // 黄
+            vec![
+                hold(0.0, 0.0),
+                hold(1.0, 90.0),
+                hold(2.0, 0.0),
+            ],
+        ),
+    ];
 
-    curve.push_channel(
-        "BorderX",
-        Color::from_rgb_u8(99, 199, 99), // 绿
-        vec![
-            lin(0.0, 2.0),
-            lin(3.0, 6.0),
-            lin(6.0, 3.0),
-            lin(9.0, 8.0),
-            lin(12.0, 4.0),
-            lin(15.0, 5.0),
-        ],
-    );
-
-    curve.action_name = "主 Action".into();
+    curve.actions = vec![
+        crate::store::curve_editor::ActionData {
+            name: "主 Action".into(),
+            channels: main_channels,
+        },
+        crate::store::curve_editor::ActionData {
+            name: "奔跑".into(),
+            channels: run_channels,
+        },
+        crate::store::curve_editor::ActionData {
+            name: "跳跃".into(),
+            channels: jump_channels,
+        },
+    ];
+    curve.action_names = curve.actions.iter().map(|a| a.name.clone()).collect();
+    curve.rebuild_action_menu();
     curve.current_time = 3.0;
-    curve.rebuild_all();
+    curve.load_action(0);
 
-    // ── NLA 编辑器：三条轨道 ──
+    // ── NLA 编辑器：全局 Action 轨 + 两条 NLA 轨道 ──
     let nla = &mut store.ui_models_mut().nla_editor;
-    let action = Color::from_rgb_u8(99, 199, 99);
-    let transition = Color::from_rgb_u8(169, 173, 184);
-    let meta = Color::from_rgb_u8(112, 178, 255);
 
+    // 第一轨：全局 Action（当前编辑的 Action，1:1 时间，只能看不能编辑；
+    // 亮色条带 = action-start..action-end，之外为暗色延伸，见 nla_editor.slint）
     nla.push_track(
-        "Base",
-        vec![SlintNlaStrip {
-            name: "基础动作".into(),
-            strip_type: SlintStripType::Action,
-            start: 0.0,
-            end: 15.0,
-            color: action,
-            muted: false,
-            selected: false,
-        }],
+        "全局 Action",
+        vec![],
+        true,
     );
 
     nla.push_track(
@@ -470,29 +547,30 @@ fn create_test_animation_data(store: &mut AppStore) {
                 strip_type: SlintStripType::Action,
                 start: 1.0,
                 end: 5.0,
-                color: action,
                 muted: false,
                 selected: false,
+                dragging: false,
             },
             SlintNlaStrip {
                 name: "过渡".into(),
                 strip_type: SlintStripType::Transition,
                 start: 5.0,
                 end: 7.0,
-                color: transition,
                 muted: false,
                 selected: false,
+                dragging: false,
             },
             SlintNlaStrip {
                 name: "Idle B".into(),
                 strip_type: SlintStripType::Action,
                 start: 7.0,
                 end: 12.0,
-                color: action,
                 muted: false,
                 selected: false,
+                dragging: false,
             },
         ],
+        false,
     );
 
     nla.push_track(
@@ -502,11 +580,22 @@ fn create_test_animation_data(store: &mut AppStore) {
             strip_type: SlintStripType::Meta,
             start: 2.0,
             end: 10.0,
-            color: meta,
             muted: false,
             selected: false,
+            dragging: false,
         }],
+        false,
     );
 
     nla.current_time = 3.0;
+
+    // 同步 NLA 全局 Action 轨：名称 = 当前实际 Action 名，是否有数据（决定"向下插入"按钮）
+    let (name, has) = {
+        let ce = &store.ui_models().curve_editor;
+        (ce.action_name.clone(), ce.has_keyframes())
+    };
+    store
+        .ui_models_mut()
+        .nla_editor
+        .set_global_action(name, has);
 }

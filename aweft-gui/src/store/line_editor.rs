@@ -14,7 +14,8 @@ use log::warn;
 use slint::{FilterModel, Model, ModelRc, SharedString, ToSharedString, VecModel};
 
 use crate::bridge::{
-    SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, format_time, parse_time,
+    SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, SlintTimelineSubBlock,
+    format_time, parse_time,
 };
 
 type SubtitleFilterModel =
@@ -33,6 +34,9 @@ pub struct LineEditorState {
     // 分组行数与组时间在当中查找
     all_rows: Rc<VecModel<SlintSubtitleRow>>,
     filter_model: Option<Rc<SubtitleFilterModel>>,
+    // 时间线根级收起时显示的"全部字幕行片段块"（派生自 all_rows 的 Event 行，
+    // 与分组收起显示的 child-blocks 同一渲染组件）
+    timeline_root_blocks: Rc<VecModel<SlintTimelineSubBlock>>,
     // 运行时折叠状态集合（共享引用，供 FilterModel 的闭包使用。索引到实际数据）
     collapsed_groups: Rc<std::cell::RefCell<HashSet<ItemId>>>,
 
@@ -60,6 +64,7 @@ impl LineEditorState {
         Self {
             all_rows: Rc::new(VecModel::default()),
             filter_model: None,
+            timeline_root_blocks: Rc::new(VecModel::default()),
             collapsed_groups: Rc::new(std::cell::RefCell::new(HashSet::new())),
             dirty_row_counts: HashSet::new(),
             directly_selected_items: HashSet::new(),
@@ -74,6 +79,32 @@ impl LineEditorState {
     /// 暴露底层 VecModel，便于其他持有方（如 UiModels）在 Slint 初始化时绑定。
     pub fn all_rows_model(&self) -> Rc<VecModel<SlintSubtitleRow>> {
         self.all_rows.clone()
+    }
+
+    /// 暴露根级收起用的全量字幕行片段块模型（派生自 all_rows 的 Event 行）。
+    pub fn timeline_root_blocks_model(&self) -> Rc<VecModel<SlintTimelineSubBlock>> {
+        self.timeline_root_blocks.clone()
+    }
+
+    /// 从全量行（all_rows）派生根级收起要显示的全部字幕行片段块。
+    /// 所有会改变 Event 行集合或时间的入口都应调用，保持与 all_rows 同步。
+    fn refresh_timeline_root_blocks(&mut self) {
+        let blocks: Vec<SlintTimelineSubBlock> = (0..self.all_rows.row_count())
+            .filter_map(|i| {
+                let row = self.all_rows.row_data(i)?;
+                if row.row_type == SlintSubtitleRowType::Event && row.end_sec > row.start_sec {
+                    Some(SlintTimelineSubBlock {
+                        item_id: row.item_id.clone(),
+                        name: row.text.clone(),
+                        start_sec: row.start_sec,
+                        end_sec: row.end_sec,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        self.timeline_root_blocks.set_vec(blocks);
     }
 
     /// 创建过滤模型
@@ -159,6 +190,7 @@ impl LineEditorState {
         // 仅限初始化使用，否则使用局部更新函数
         self.all_rows.set_vec(rows);
         self.dirty_row_counts.clear();
+        self.refresh_timeline_root_blocks();
     }
 
     // === 时间码更新 ===
@@ -189,10 +221,13 @@ impl LineEditorState {
             .collect();
         if is_start_time {
             row.start_time = format_time(time);
+            row.start_sec = time.num_milliseconds() as f32 / 1000.0;
         } else {
             row.end_time = format_time(time);
+            row.end_sec = time.num_milliseconds() as f32 / 1000.0;
         }
         self.all_rows.set_row_data(idx, row);
+        self.refresh_timeline_root_blocks();
         ancestor_ids
     }
 
@@ -253,13 +288,16 @@ impl LineEditorState {
 
         if let Some(start) = start_time {
             row.start_time = format_time(start);
+            row.start_sec = start.num_milliseconds() as f32 / 1000.0;
         }
 
         if let Some(end) = end_time {
             row.end_time = format_time(end);
+            row.end_sec = end.num_milliseconds() as f32 / 1000.0;
         }
 
         self.all_rows.set_row_data(ui_idx, row);
+        self.refresh_timeline_root_blocks();
     }
 
     pub fn toggle_group(&mut self, group_id: &str) {
@@ -708,6 +746,7 @@ impl LineEditorState {
             }
             self.all_rows.insert(insert_idx + i, row);
         }
+        self.refresh_timeline_root_blocks();
 
         // 标脏父级链 + 重算
         if let Some(pid) = project.structure.get(new_item_id).and_then(|i| i.parent) {
@@ -778,6 +817,7 @@ impl LineEditorState {
                 self.update_all_dirty_groups(project);
             }
         }
+        self.refresh_timeline_root_blocks();
 
         // 清理选中/高亮状态中已被删除的项（含被一同递归删掉的子项）
         let alive_ids: HashSet<ItemId> = self.item_id_to_ui_index.keys().copied().collect();
@@ -847,6 +887,7 @@ impl LineEditorState {
 
         // 3. 后续索引整体前移 1 位
         self.shift_indices_after(group_idx, -1);
+        self.refresh_timeline_root_blocks();
 
         // 4. 标脏父级链
         if let Some(&first) = new_ids.first() {
@@ -916,6 +957,7 @@ impl LineEditorState {
             // 批量插入 VecModel（同步循环，UI 帧内一次性看到结果）
             self.all_rows.insert(start_idx + i, row);
         }
+        self.refresh_timeline_root_blocks();
 
         // 标脏父级链
         if let Some(first_root) = new_root_ids.first() {
@@ -1060,17 +1102,17 @@ impl LineEditorState {
         let mut min_start: Option<TimeDelta> = None;
         let mut max_end: Option<TimeDelta> = None;
 
-        for child_id in children {
+        for child_id in &children {
             // 如果子项是 dirty 的 Group，先递归更新它
-            if self.dirty_row_counts.contains(&child_id) {
-                self.update_group_stats_recursive(project, child_id);
+            if self.dirty_row_counts.contains(child_id) {
+                self.update_group_stats_recursive(project, *child_id);
             }
 
             // 从 UI 或 Model 读取子项数据
             // 对于 Group，必须读 UI (因为那是聚合结果)
             // 对于 Event，可以直接读 Model (但也需要在 UI 中定位)
             // 统一通过 UI 索引查找
-            if let Some(&idx) = self.item_id_to_ui_index.get(&child_id) {
+            if let Some(&idx) = self.item_id_to_ui_index.get(child_id) {
                 if let Some(row) = self.all_rows.row_data(idx) {
                     // --- 聚合行数 ---
                     let child_rows = if row.row_type == SlintSubtitleRowType::GroupHeader {
@@ -1086,7 +1128,7 @@ impl LineEditorState {
                         // Event: 直接查 Model 更快且准确
                         project
                             .structure
-                            .get(child_id)
+                            .get(*child_id)
                             .and_then(|item| match &item.content {
                                 ItemContent::Event(e) => Some((e.start_time, e.end_time)),
                                 _ => None,
@@ -1115,11 +1157,16 @@ impl LineEditorState {
                 if let (Some(s), Some(e)) = (min_start, max_end) {
                     row.start_time = format_time(s).to_shared_string();
                     row.end_time = format_time(e).to_shared_string();
+                    row.start_sec = s.num_milliseconds() as f32 / 1000.0;
+                    row.end_sec = e.num_milliseconds() as f32 / 1000.0;
                 } else {
                     // 变成空组了，或者子项都没有时间
                     row.start_time = SharedString::new();
                     row.end_time = SharedString::new();
+                    row.start_sec = 0.0;
+                    row.end_sec = 0.0;
                 }
+                row.child_blocks = ModelRc::from(Rc::new(VecModel::from(collect_child_blocks(&children, &project.structure))));
                 self.all_rows.set_row_data(idx, row);
             }
         }
@@ -1272,6 +1319,9 @@ fn flatten_items(
                     ancestor_groups: ModelRc::from(ancestor_groups),
                     start_time: format_time(start).to_shared_string(),
                     end_time: format_time(end).to_shared_string(),
+                    start_sec: start.num_milliseconds() as f32 / 1000.0,
+                    end_sec: end.num_milliseconds() as f32 / 1000.0,
+                    child_blocks: ModelRc::from(Rc::new(VecModel::from(Vec::<SlintTimelineSubBlock>::new()))),
                     item_id: item_id.to_string().to_shared_string(),
                     selected: SlintSelectionState::Unselected,
                     text: event.text.to_shared_string(),
@@ -1292,6 +1342,9 @@ fn flatten_items(
                     ancestor_groups: ModelRc::from(ancestor_groups),
                     start_time: SharedString::new(),
                     end_time: SharedString::new(),
+                    start_sec: 0.0,
+                    end_sec: 0.0,
+                    child_blocks: ModelRc::from(Rc::new(VecModel::from(collect_child_blocks(&group.children, structure)))),
                     item_id: group_id_str.clone(),
                     selected: SlintSelectionState::Unselected,
                     text: SharedString::new(),
@@ -1319,6 +1372,8 @@ fn flatten_items(
                     max_end = Some(max_end.map_or(e, |me| me.max(e)));
                     output[group_idx].start_time = format_time(s);
                     output[group_idx].end_time = format_time(e);
+                    output[group_idx].start_sec = s.num_milliseconds() as f32 / 1000.0;
+                    output[group_idx].end_sec = e.num_milliseconds() as f32 / 1000.0;
                 }
                 output[group_idx].total_row_count = total_count;
             }
@@ -1330,6 +1385,35 @@ fn flatten_items(
         _ => None,
     };
     (range, row_count)
+}
+
+/// 递归收集分组内所有字幕行的时间块（时间线折叠组头时在组头泳道显示）。
+/// 嵌套分组递归展开；只收集有有效时间范围的字幕行。
+fn collect_child_blocks(children: &[ItemId], structure: &ProjectStructure) -> Vec<SlintTimelineSubBlock> {
+    let mut out: Vec<SlintTimelineSubBlock> = Vec::new();
+    for id in children {
+        let Some(item) = structure.get(*id) else {
+            continue;
+        };
+        match &item.content {
+            ItemContent::Event(event) => {
+                let start = event.start_time.num_milliseconds() as f32 / 1000.0;
+                let end = event.end_time.num_milliseconds() as f32 / 1000.0;
+                if end > start {
+                    out.push(SlintTimelineSubBlock {
+                        item_id: id.to_string().to_shared_string(),
+                        name: event.text.to_shared_string(),
+                        start_sec: start,
+                        end_sec: end,
+                    });
+                }
+            }
+            ItemContent::Group(group) => {
+                out.extend(collect_child_blocks(&group.children, structure));
+            }
+        }
+    }
+    out
 }
 
 type TimeBoundsCache = HashMap<ItemId, Option<(TimeDelta, TimeDelta)>>;

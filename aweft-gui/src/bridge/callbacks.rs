@@ -2,6 +2,7 @@ use crate::actions::line_editor::LineEditorAction;
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow,
+    VideoCallbacks,
 };
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
@@ -36,6 +37,15 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_ungroup_callbacks(instance, Rc::clone(&store));
     setup_node_graph_callbacks(instance, Rc::clone(&store));
     setup_animation_callbacks(instance, Rc::clone(&store));
+    setup_video_callbacks(instance, Rc::clone(&store));
+}
+
+/// 设置视口回调：打开视频（当前为占位——文件选择器接入后在此调用
+/// `initialize_media` 并连接 wgpu 输出）。
+fn setup_video_callbacks(instance: &MainWindow, _store: Rc<RefCell<AppStore>>) {
+    instance.global::<VideoCallbacks>().on_open_video(move || {
+        log::info!("打开视频：待接入文件选择对话框（rfd 等）后调用 initialize_media");
+    });
 }
 
 /// 设置节点图编辑器回调：图结构操作全部在 Rust 侧完成，Slint 只上报事件。
@@ -109,6 +119,53 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
             s.borrow_mut().new_chain(graph_type)
         },
     );
+
+    let s = Rc::clone(&store);
+    instance.global::<NodeGraphCallbacks>().on_menu_selected(
+        move |graph_type, node_index, menu_index| {
+            s.borrow_mut().menu_selected(
+                graph_type,
+                node_index as usize,
+                menu_index as usize,
+            );
+        },
+    );
+
+    let s = Rc::clone(&store);
+    instance.global::<NodeGraphCallbacks>().on_socket_option_selected(
+        move |graph_type, node_index, socket_row, option_index| {
+            s.borrow_mut().socket_option_selected(
+                graph_type,
+                node_index as usize,
+                socket_row as usize,
+                option_index as usize,
+            );
+        },
+    );
+
+    let s = Rc::clone(&store);
+    instance.global::<NodeGraphCallbacks>().on_create_actor(
+        move |graph_type, node_index, socket_row, name| {
+            s.borrow_mut().create_actor(
+                graph_type,
+                node_index as usize,
+                socket_row as usize,
+                name,
+            );
+        },
+    );
+
+    let s = Rc::clone(&store);
+    instance.global::<NodeGraphCallbacks>().on_socket_input_changed(
+        move |graph_type, node_index, socket_row, text| {
+            s.borrow_mut().set_socket_text_default(
+                graph_type,
+                node_index as usize,
+                socket_row as usize,
+                &text,
+            );
+        },
+    );
 }
 
 /// 设置动画编辑器回调（曲线编辑器 + NLA 编辑器）：数据操作全部在 Rust 侧完成。
@@ -137,6 +194,20 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
             }
         };
 
+    // 把曲线编辑器当前 Action 的名称与是否有数据同步到 NLA 全局 Action 轨
+    //（左侧列表第一行显示实际 Action 名；空 Action 时"向下插入"按钮隐藏）。
+    let sync_nla_global_action = |s: &Rc<RefCell<AppStore>>| {
+        let (name, has) = {
+            let s_ref = s.borrow();
+            let ce = &s_ref.ui_models().curve_editor;
+            (ce.action_name.clone(), ce.has_keyframes())
+        };
+        s.borrow_mut()
+            .ui_models_mut()
+            .nla_editor
+            .set_global_action(name, has);
+    };
+
     // ── 曲线编辑器：关键帧 ──
     {
         let s = Rc::clone(&store);
@@ -155,22 +226,22 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
     {
         let s = Rc::clone(&store);
         instance.global::<AnimationCallbacks>().on_keyframe_dragged(
-            move |curve, key, delta_time, delta_value| {
+            move |curve, key, delta_time, delta_value, mode| {
                 s.borrow_mut()
                     .ui_models_mut()
                     .curve_editor
-                    .keyframe_dragged(curve as usize, key as usize, delta_time, delta_value);
+                    .keyframe_dragged(curve as usize, key as usize, delta_time, delta_value, mode);
             },
         );
     }
     {
         let s = Rc::clone(&store);
         instance.global::<AnimationCallbacks>().on_keyframe_released(
-            move |curve, key| {
+            move |curve, key, moved| {
                 s.borrow_mut()
                     .ui_models_mut()
                     .curve_editor
-                    .keyframe_released(curve as usize, key as usize);
+                    .keyframe_released(curve as usize, key as usize, moved);
             },
         );
     }
@@ -187,11 +258,11 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         let s = Rc::clone(&store);
         let weak = instance.as_weak();
         instance.global::<AnimationCallbacks>().on_handle_pressed(
-            move |curve, key, is_in| {
+            move |curve, key, is_in, additive| {
                 s.borrow_mut()
                     .ui_models_mut()
                     .curve_editor
-                    .handle_pressed(curve as usize, key as usize, is_in);
+                    .handle_pressed(curve as usize, key as usize, is_in, additive);
                 sync_current_channel(&s, &weak);
             },
         );
@@ -214,11 +285,26 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
     {
         let s = Rc::clone(&store);
         instance.global::<AnimationCallbacks>().on_handle_released(
-            move |curve, key, is_in| {
+            move |curve, key, is_in, moved| {
                 s.borrow_mut()
                     .ui_models_mut()
                     .curve_editor
-                    .handle_released(curve as usize, key as usize, is_in);
+                    .handle_released(curve as usize, key as usize, is_in, moved);
+            },
+        );
+    }
+    {
+        // 曲线编辑器空白框选：按世界时间范围 × 值范围选中关键帧与控制柄
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_graph_marquee_select(
+            move |x_lo, x_hi, y_lo, y_hi, mode| {
+                s.borrow_mut()
+                    .ui_models_mut()
+                    .curve_editor
+                    .graph_marquee_select(x_lo, x_hi, y_lo, y_hi, mode);
+                sync_keyframe_selection(&s, &weak);
+                sync_current_channel(&s, &weak);
             },
         );
     }
@@ -243,6 +329,67 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 .ui_models_mut()
                 .curve_editor
                 .deselect_channel();
+            sync_current_channel(&s, &weak);
+        });
+    }
+    {
+        // 曲线编辑器搜索框：只过滤曲线编辑器自己的通道视图（重建 FilterModel 并重新绑定）
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_graph_search_changed(move |text| {
+            s.borrow_mut().ui_models_mut().curve_editor.set_graph_search(text.as_str());
+            if let Some(inst) = weak.upgrade() {
+                let s = s.borrow();
+                let ce = &s.ui_models().curve_editor;
+                inst.global::<AnimationState>()
+                    .set_graph_channels(ce.graph_filter.clone());
+                inst.global::<AnimationState>()
+                    .set_graph_segments(ce.graph_segments.clone());
+                inst.global::<AnimationState>()
+                    .set_graph_handles(ce.graph_handles.clone());
+            }
+        });
+    }
+    {
+        // 摄影表搜索框：只过滤摄影表自己的通道视图
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_dope_search_changed(move |text| {
+            s.borrow_mut().ui_models_mut().curve_editor.set_dope_search(text.as_str());
+            if let Some(inst) = weak.upgrade() {
+                let s = s.borrow();
+                inst.global::<AnimationState>()
+                    .set_dope_channels(s.ui_models().curve_editor.dope_filter.clone());
+            }
+        });
+    }
+    {
+        // 摄影表 Header 中区：Action 选择下拉菜单
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_action_selected(move |index| {
+            s.borrow_mut().ui_models_mut().curve_editor.select_action(index);
+            if let Some(inst) = weak.upgrade() {
+                let s = s.borrow();
+                let ce = &s.ui_models().curve_editor;
+                inst.global::<AnimationState>().set_action_name(ce.action_name.clone());
+                inst.global::<AnimationState>().set_current_action(ce.current_action);
+                inst.global::<AnimationState>().set_action_start(ce.action_start);
+                inst.global::<AnimationState>().set_action_end(ce.action_end);
+            }
+            // 同步 NLA 全局 Action 轨（名称 = 实际 Action 名 + 是否有数据）
+            sync_nla_global_action(&s);
+        });
+    }
+    {
+        // 摄影表压缩视图点击：显示行 → 真实通道下标
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_dope_channel_pressed(move |view_row, mode| {
+            s.borrow_mut()
+                .ui_models_mut()
+                .curve_editor
+                .dope_channel_pressed(view_row as usize, mode);
             sync_current_channel(&s, &weak);
         });
     }
@@ -317,12 +464,23 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
     }
     {
         let s = Rc::clone(&store);
-        instance.global::<AnimationCallbacks>().on_strip_dragged(
-            move |track, strip, delta_x| {
+        instance.global::<AnimationCallbacks>().on_strip_pick(
+            move |x, row, mode| -> i32 {
                 s.borrow_mut()
                     .ui_models_mut()
                     .nla_editor
-                    .strip_dragged(track as usize, strip as usize, delta_x);
+                    .strip_pick(x, row, mode)
+            },
+        );
+    }
+    {
+        let s = Rc::clone(&store);
+        instance.global::<AnimationCallbacks>().on_strip_dragged(
+            move |track, strip, delta_x, delta_row| {
+                s.borrow_mut()
+                    .ui_models_mut()
+                    .nla_editor
+                    .strip_dragged(track as usize, strip as usize, delta_x, delta_row);
             },
         );
     }
@@ -343,23 +501,62 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
             s.borrow_mut().ui_models_mut().nla_editor.deselect_all();
         });
     }
+    // ── 动画编辑器通用 ──
+
     // ── NLA 编辑器：轨道 ──
     {
         let s = Rc::clone(&store);
-        instance.global::<AnimationCallbacks>().on_track_toggle_muted(move |track| {
+        instance.global::<AnimationCallbacks>().on_track_toggle_enabled(move |track| {
             s.borrow_mut()
                 .ui_models_mut()
                 .nla_editor
-                .toggle_track_muted(track as usize);
+                .toggle_track_enabled(track as usize);
         });
     }
     {
         let s = Rc::clone(&store);
-        instance.global::<AnimationCallbacks>().on_track_toggle_solo(move |track| {
+        instance.global::<AnimationCallbacks>().on_track_toggle_locked(move |track| {
             s.borrow_mut()
                 .ui_models_mut()
                 .nla_editor
-                .toggle_track_solo(track as usize);
+                .toggle_track_locked(track as usize);
+        });
+    }
+    {
+        // 全局 Action 轨"向下插入"：把当前编辑 Action 作为片断加入 NLA，
+        // 然后重置全局 Action（开始新的空 Action）。
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_track_push_down(move |_track| {
+            let (name, start, end) = {
+                let s_ref = s.borrow();
+                let ce = &s_ref.ui_models().curve_editor;
+                (ce.action_name.clone(), ce.action_start, ce.action_end)
+            };
+            s.borrow_mut()
+                .ui_models_mut()
+                .nla_editor
+                .push_down(name, start, end);
+            if let Some(inst) = weak.upgrade() {
+                let mut s_mut = s.borrow_mut();
+                let ce = &mut s_mut.ui_models_mut().curve_editor;
+                ce.reset_action();
+                inst.global::<AnimationState>().set_action_name(ce.action_name.clone());
+                inst.global::<AnimationState>().set_current_action(ce.current_action);
+                inst.global::<AnimationState>().set_action_start(ce.action_start);
+                inst.global::<AnimationState>().set_action_end(ce.action_end);
+            }
+            // 下插后全局 Action 变空（名称保留、无数据 → 插入按钮隐藏）
+            sync_nla_global_action(&s);
+        });
+    }
+    {
+        let s = Rc::clone(&store);
+        instance.global::<AnimationCallbacks>().on_nla_search_changed(move |text| {
+            s.borrow_mut()
+                .ui_models_mut()
+                .nla_editor
+                .filter_tracks(text);
         });
     }
     // ── 摄影表（Dope Sheet）：与曲线编辑器共用数据/选中，拖拽只调时间 ──
@@ -384,18 +581,18 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 s.borrow_mut()
                     .ui_models_mut()
                     .curve_editor
-                    .keyframe_dragged(curve as usize, key as usize, delta_time, 0.0);
+                    .keyframe_dragged(curve as usize, key as usize, delta_time, 0.0, 0);
             },
         );
     }
     {
         let s = Rc::clone(&store);
         instance.global::<AnimationCallbacks>().on_dope_keyframe_released(
-            move |curve, key| {
+            move |curve, key, moved| {
                 s.borrow_mut()
                     .ui_models_mut()
                     .curve_editor
-                    .keyframe_released(curve as usize, key as usize);
+                    .keyframe_released(curve as usize, key as usize, moved);
             },
         );
     }
@@ -407,11 +604,70 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
             sync_keyframe_selection(&s, &weak);
         });
     }
+    {
+        // 摄影表空白处框选：按世界时间范围 + 行区间选中关键帧（mode 0=替换，非 0=追加）
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_dope_marquee_select(
+            move |x_lo, x_hi, row_lo, row_hi, mode| {
+                s.borrow_mut()
+                    .ui_models_mut()
+                    .curve_editor
+                    .dope_marquee_select(x_lo, x_hi, row_lo, row_hi, mode);
+                sync_keyframe_selection(&s, &weak);
+                sync_current_channel(&s, &weak);
+            },
+        );
+    }
+    // ── 摄影表：汇总条带（聚合所有通道同一时刻的关键帧；跨通道同步拖拽） ──
+    {
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_dope_summary_pressed(
+            move |index, additive| {
+                s.borrow_mut()
+                    .ui_models_mut()
+                    .curve_editor
+                    .summary_keyframe_pressed(index as usize, additive);
+                sync_current_channel(&s, &weak);
+                sync_keyframe_selection(&s, &weak);
+            },
+        );
+    }
+    {
+        let s = Rc::clone(&store);
+        instance.global::<AnimationCallbacks>().on_dope_summary_dragged(
+            move |index, delta_time| {
+                s.borrow_mut()
+                    .ui_models_mut()
+                    .curve_editor
+                    .summary_keyframe_dragged(index as usize, delta_time);
+            },
+        );
+    }
+    {
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance.global::<AnimationCallbacks>().on_dope_summary_released(
+            move |_index, moved| {
+                s.borrow_mut()
+                    .ui_models_mut()
+                    .curve_editor
+                    .summary_keyframe_released(moved);
+                sync_keyframe_selection(&s, &weak);
+            },
+        );
+    }
     // ── 共享：当前时间 ──
     {
         let s = Rc::clone(&store);
         let weak = instance.as_weak();
         instance.global::<AnimationCallbacks>().on_set_current_time(move |time| {
+            // 播放头按整数帧步进（Blender 风格，anim_ops.cc change_frame_apply）：
+            // frame = round(time * fps) / fps，fps 为高层属性（后续随视频/项目设置变化）。
+            // 这也保证拖动手柄时"一卡一卡"地对齐到帧。
+            let fps = s.borrow().state().fps.max(0.001);
+            let time = (time * fps).round() / fps;
             {
                 let mut store_mut = s.borrow_mut();
                 store_mut.ui_models_mut().curve_editor.current_time = time as f64;
@@ -423,7 +679,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         });
     }
     {
-        // 视图变化（缩放/平移/画布尺寸）：按可见范围重建刻度（放大细化、平移跟随、数量有界）
+        // 视图缩放变化（滚轮）：更新命中检测容差依据。
+        // 刻度已完全移到 Slint 侧即时计算（ruler.slint），pan/画布尺寸不再需要 Rust 状态。
         let s = Rc::clone(&store);
         instance
             .global::<AnimationCallbacks>()

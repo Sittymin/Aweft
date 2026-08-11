@@ -77,7 +77,14 @@ impl UiModels {
             let key: ScrAreaKey = slint_area_key_to_key(&area.area_key);
             self.scrarea_index_map.insert(key, idx);
         }
-        self.scrarea_model.set_vec(areas);
+        let old_count = self.scrarea_model.row_count();
+        if old_count == areas.len() {
+            for (idx, area) in areas.iter().enumerate() {
+                self.scrarea_model.set_row_data(idx, area.clone());
+            }
+        } else {
+            self.scrarea_model.set_vec(areas);
+        }
         println!("全量计算scrareas: {:#?}", self.scrarea_index_map);
     }
 

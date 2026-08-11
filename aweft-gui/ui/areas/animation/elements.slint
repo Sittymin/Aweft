@@ -2,25 +2,26 @@
 import { SlintStripType, SlintNlaStrip } from "../../core/animation_types.slint";
 import { Theme } from "../../theme/index.slint";
 
-// 单个 NLA 片断：时间定位的彩色矩形条（Action/Transition/Meta），可选中、横向拖拽。
+// 单个 NLA 片断：时间定位的矩形条（Action/Transition/Meta）。
+// 颜色语义（用户要求，简化多彩）：
+//   - 未激活（未选中、未拖拽）：黑色（strip-inactive）
+//   - 选中（激活）：统一激活色（strip-active，所有片断一致，不随片断自身颜色）
+//   - 拖拽移动中：统一"移动颜色"（strip-moving）
+// 交互（点击/拖拽）由画布级 TouchArea 统一处理（CanvasNavigation.target-* 命中优先，
+// 见 canvas_navigation.slint / nla_editor.slint）——片断自身不带 TouchArea，
+// 否则会吞掉中键平移（Slint TouchArea 抢走任意按钮的按下）。此处纯渲染。
 export component NlaStripComponent inherits Rectangle {
     in property <string> strip-name;
     in property <SlintStripType> strip-type;
     in property <float> start: 0.0;
     in property <float> end: 1.0;
-    in property <color> strip-color;
     in property <bool> selected: false;
     in property <bool> muted: false;
+    // 是否正在被拖拽（移动中）
+    in property <bool> dragging: false;
     in property <float> view-zoom: 1.0;
     in property <float> pan-x: 0.0;
     in property <length> lane-height: 28px;
-
-    callback pressed(additive: bool);
-    callback dragged(delta-x: float);
-    callback released();
-
-    private property <bool> dragging: false;
-    private property <float> press-world-x: 0.0;
 
     // 片断类型标签（Transition=▽, Meta=□；Action 无标记）
     private property <string> type-mark: root.strip-type == SlintStripType.transition ? "▽" : (root.strip-type == SlintStripType.meta ? "▣" : "");
@@ -30,9 +31,13 @@ export component NlaStripComponent inherits Rectangle {
     width: max(6px, (root.end - root.start) * root.view-zoom * 1px);
     height: root.lane-height - 2px;
     border-radius: 3px;
-    background: root.muted ? root.strip-color.darker(0.5) : root.strip-color;
-    border-width: root.selected ? 2px : 1px;
-    border-color: root.selected ? #ffffff : Theme.data.animation-editor.strip-outline;
+    background: root.muted
+        ? Theme.data.animation-editor.strip-inactive
+        : (root.dragging
+            ? Theme.data.animation-editor.strip-moving
+            : (root.selected ? Theme.data.animation-editor.strip-active : Theme.data.animation-editor.strip-inactive));
+    border-width: (root.selected || root.dragging) ? 2px : 1px;
+    border-color: root.dragging ? #ffffff : (root.selected ? #ffffff : Theme.data.animation-editor.strip-outline);
 
     HorizontalLayout {
         padding-left: 6px;
@@ -42,7 +47,10 @@ export component NlaStripComponent inherits Rectangle {
         Text {
             text: root.type-mark;
             vertical-alignment: center;
-            color: Theme.data.animation-editor.strip-text;
+            // 激活/移动中为深底深字，未激活黑底用浅灰字保证可读
+            color: (root.selected || root.dragging) && !root.muted
+                ? Theme.data.animation-editor.strip-text
+                : #9a9aa4;
             font-size: 10px;
             visible: root.type-mark != "";
         }
@@ -50,66 +58,180 @@ export component NlaStripComponent inherits Rectangle {
             text: root.strip-name;
             horizontal-stretch: 1;
             vertical-alignment: center;
-            color: Theme.data.animation-editor.strip-text;
+            color: (root.selected || root.dragging) && !root.muted
+                ? Theme.data.animation-editor.strip-text
+                : #9a9aa4;
             font-size: 11px;
             overflow: elide;
         }
     }
+}
 
-    function world-x() -> float {
-        return (ta.mouse-x / 1px - root.pan-x) / root.view-zoom;
+// NLA 全局 Action 轨上的关键帧标记：纯渲染菱形（无 TouchArea——
+// 全局 Action 只能看不能编辑，且 Slint TouchArea 会吞中键平移）。
+// 复用摄影表汇总数据（summary-keyframes）：
+//   - count<=5：垂直小距离堆叠多个菱形，每层对应一个通道，对应通道关键帧选中则高亮；
+//   - count>5：合并为一个大关键帧（内部写数字），仅全部通道关键帧都选中才高亮。
+export component NlaActionKeyframe inherits Rectangle {
+    in property <float> time: 0.0;
+    // 该时刻跨通道的关键帧总数
+    in property <int> count: 1;
+    // 逐通道选中掩码（长度=count）
+    in property <[bool]> selected: [];
+    // count>5 大关键帧是否全部选中
+    in property <bool> all-selected: false;
+    in property <color> marker-color;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <length> row-height: 24px;
+
+    private property <length> marker-size: 9px;
+    private property <length> big-size: 15px;
+
+    // 堆叠间距：默认 0.55×菱形尺寸，但按条带高度收敛（重叠多了不外溢行高）
+    function stack-step() -> length {
+        if root.count <= 1 {
+            return 0px;
+        }
+        let available: length = root.row-height - root.marker-size;
+        return min(root.marker-size * 0.55, available / (root.count - 1));
     }
 
-    ta := TouchArea {
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                root.dragging = true;
-                root.press-world-x = root.world-x();
-                root.pressed(event.modifiers.shift || event.modifiers.control);
-            } else if (event.kind == PointerEventKind.move && root.dragging) {
-                root.dragged(root.world-x() - root.press-world-x);
-            } else if (event.kind == PointerEventKind.up) {
-                if root.dragging {
-                    root.released();
-                }
-                root.dragging = false;
-            }
+    x: root.time * root.view-zoom * 1px + root.pan-x * 1px - root.marker-size / 2;
+    y: (root.row-height - root.marker-size) / 2;
+    width: root.marker-size;
+    height: root.marker-size;
+    background: transparent;
+
+    // 大关键帧：合并为一个菱形，内部写关键帧数（菱形 + 反旋数字保持水平）
+    if root.count > 5: Rectangle {
+        width: root.big-size;
+        height: root.big-size;
+        x: (root.marker-size - root.big-size) / 2;
+        y: (root.marker-size - root.big-size) / 2;
+        transform-origin: { x: root.big-size / 2, y: root.big-size / 2 };
+        transform-rotation: 45deg;
+        background: root.all-selected ? root.marker-color.brighter(0.3) : root.marker-color;
+        border-width: root.all-selected ? 2px : 1px;
+        border-color: root.all-selected ? #ffffff : #101014;
+    }
+    if root.count > 5: Text {
+        width: root.big-size;
+        height: root.big-size;
+        x: (root.marker-size - root.big-size) / 2;
+        y: (root.marker-size - root.big-size) / 2;
+        transform-origin: { x: root.big-size / 2, y: root.big-size / 2 };
+        transform-rotation: -45deg;
+        text: root.count;
+        font-size: 9px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: #d8d8de;
+    }
+
+    // 堆叠关键帧（count<=5）：count 个菱形垂直错开堆叠，每层对应一个通道
+    if root.count <= 5: Rectangle {
+        width: 100%;
+        height: 100%;
+        for i in root.count: Rectangle {
+            width: root.marker-size;
+            height: root.marker-size;
+            x: 0px;
+            y: (i * 1.0 - (root.count - 1) * 0.5) * root.stack-step();
+            transform-origin: { x: root.marker-size / 2, y: root.marker-size / 2 };
+            transform-rotation: 45deg;
+            background: root.selected[i] ? root.marker-color.brighter(0.3) : root.marker-color;
+            border-width: root.selected[i] ? 2px : 1px;
+            border-color: root.selected[i] ? #ffffff : #101014;
         }
     }
 }
 
 // 轨道泳道：一行轨道，内含按时间定位的片断。
+// 空隙显示延伸条带（无穷延伸，同 Blender NLA 的空槽视觉）：
+//   前导（第一个片断之前，前面没有其他片断）：从视口左缘（-∞）延伸到片断开头；
+//   中间（片断之间）：只延伸到下一个片断的开头；
+//   尾部（最后一个片断之后）：延伸到视口右缘（+∞）。
+// 延伸条带颜色跟随它所属片断的"当前状态色"并**提亮**（未激活：片段块黑色、
+// 延伸条带反而稍亮呈灰；激活/移动时延伸也相应提亮），不与片断颜色脱离。
 export component TrackLane inherits Rectangle {
     in property <[SlintNlaStrip]> strips;
-    in property <color> lane-color;
+    in property <color> lane-color: transparent;
+    // 是否绘制行背景（NLA 画布把行背景与网格分层绘制，此处可关闭避免盖住网格）
+    in property <bool> show-lane-background: true;
     in property <float> view-zoom: 1.0;
     in property <float> pan-x: 0.0;
+    // 视口裁剪（同曲线编辑器/摄影表）：只实例化可见时间范围内的片断，
+    // 巨量片断时避免 Slint 崩溃（`for` 子元素为便宜容器，`if` 条件惰性创建昂贵元素）。
+    in property <float> view-time-lo: 0.0;
+    in property <float> view-time-hi: 0.0;
 
-    callback strip-pressed(strip-index: int, additive: bool);
-    callback strip-dragged(strip-index: int, delta-x: float);
-    callback strip-released(strip-index: int);
+    background: root.show-lane-background ? root.lane-color : transparent;
 
-    background: root.lane-color;
-
-    for s[j] in root.strips: NlaStripComponent {
-        strip-name: s.name;
-        strip-type: s.strip-type;
-        start: s.start;
-        end: s.end;
-        strip-color: s.color;
-        selected: s.selected;
-        muted: s.muted;
-        view-zoom: root.view-zoom;
-        pan-x: root.pan-x;
-        lane-height: root.height;
-        pressed(additive) => {
-            root.strip-pressed(j, additive);
+    // 片断当前状态色（与 NlaStripComponent 渲染语义一致）
+    function strip-state-color(s: SlintNlaStrip) -> color {
+        return s.dragging
+            ? Theme.data.animation-editor.strip-moving
+            : (s.selected
+                ? Theme.data.animation-editor.strip-active
+                : Theme.data.animation-editor.strip-inactive);
+    }
+    // 延伸条带颜色：跟随所属片断当前状态色——
+    //   - 未激活：片段块黑色，延伸反而提亮（灰）
+    //   - 激活 / 移动中：延伸继续减暗（暗版，衬托片断块）
+    // 统一加透明度，让网格透出。
+    function extension-color(s: SlintNlaStrip) -> color {
+        if s.dragging {
+            return Theme.data.animation-editor.strip-moving.darker(0.6).with-alpha(0.8);
         }
-        dragged(dx) => {
-            root.strip-dragged(j, dx);
+        if s.selected {
+            return Theme.data.animation-editor.strip-active.darker(0.6).with-alpha(0.8);
         }
-        released => {
-            root.strip-released(j);
+        return Theme.data.animation-editor.strip-inactive.brighter(0.12).with-alpha(0.8);
+    }
+
+    for s[j] in root.strips: Rectangle {
+        width: 100%;
+        height: 100%;
+        // 空隙延伸条带：跟随所属片断状态色（非激活提亮灰 / 激活与移动继续减暗，带透明度）。
+        // 无限延伸（含负时间区域）：不做 0 边界限制，只按视口裁剪——
+        // 条带起点仍在视口内时，前导延伸从视口左缘（-∞）一直画到条带开头。
+        // 前导延伸：第一个片断之前（前面没有其他片断），从视口左缘（无穷）延伸到片断开头
+        if j == 0 && s.start >= root.view-time-lo: Rectangle {
+            x: 0px;
+            width: max(0px, s.start * root.view-zoom * 1px + root.pan-x * 1px);
+            y: 1px;
+            height: root.height - 2px;
+            background: root.extension-color(s);
+        }
+        // 片断后延伸：若有下一个片断，只延伸到其开头（空隙 [end, next.start]）
+        if j + 1 < root.strips.length && s.end < root.strips[j + 1].start
+            && root.strips[j + 1].start >= root.view-time-lo: Rectangle {
+            x: s.end * root.view-zoom * 1px + root.pan-x * 1px;
+            width: max(0px, (root.strips[j + 1].start - s.end) * root.view-zoom * 1px);
+            y: 1px;
+            height: root.height - 2px;
+            background: root.extension-color(s);
+        }
+        // 尾部延伸：最后一个片断之后，延伸到视口右缘（无穷）
+        if j + 1 == root.strips.length && s.end <= root.view-time-hi: Rectangle {
+            x: s.end * root.view-zoom * 1px + root.pan-x * 1px;
+            width: max(0px, parent.width - (s.end * root.view-zoom * 1px + root.pan-x * 1px));
+            y: 1px;
+            height: root.height - 2px;
+            background: root.extension-color(s);
+        }
+        if s.end >= root.view-time-lo && s.start <= root.view-time-hi: NlaStripComponent {
+            strip-name: s.name;
+            strip-type: s.strip-type;
+            start: s.start;
+            end: s.end;
+            selected: s.selected;
+            muted: s.muted;
+            dragging: s.dragging;
+            view-zoom: root.view-zoom;
+            pan-x: root.pan-x;
+            lane-height: root.height;
         }
     }
 }

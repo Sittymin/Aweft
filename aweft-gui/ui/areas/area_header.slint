@@ -7,6 +7,7 @@ import { SlintKey, SlintAreaType } from "../core/types.slint";
 import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
 import { IconComboBox } from "../widgets/area_type_switcher.slint";
 import { ChainSwitcher } from "../widgets/chain_switcher.slint";
+import { Dropdown } from "../widgets/dropdown.slint";
 import { IconToggleButton } from "../widgets/icon_toggle_button.slint";
 import { ContextMenuItem } from "../widgets/context_menu.slint";
 import { AreaCallbacks } from "../bridge/callbacks.slint";
@@ -17,6 +18,7 @@ import { Theme } from "../theme/index.slint";
 export enum AreaHeaderCenterMode {
     none,
     chain,
+    dropdown,
 }
 
 // 左区/右区的一个图标开关按钮（占位）
@@ -35,6 +37,10 @@ export component AreaHeader inherits Rectangle {
     // 中区纯文本（如曲线编辑器的 Action 名称）；非空时居中显示
     in property <string> center-text: "";
 
+    // 中区通用按钮（如视口的"打开视频"）：文本非空时居中显示一个按钮
+    in property <string> center-button-text: "";
+    callback center-button-clicked();
+
     // 中区内容
     in property <AreaHeaderCenterMode> center-mode: AreaHeaderCenterMode.none;
     // 链选择器（center-mode == chain 时用；节点图专用）
@@ -44,6 +50,10 @@ export component AreaHeader inherits Rectangle {
     callback chain-selected(index: int);
     // 新增链（Blender 式"+"按钮）
     callback new-chain();
+    // 通用下拉菜单（center-mode == dropdown 时用；如摄影表的 Action 选择）
+    in property <[ContextMenuItem]> dropdown-items;
+    in property <int> current-dropdown-index: 0;
+    callback dropdown-selected(index: int);
 
     private property <string> current-chain-name: root.current-chain-index >= 0 && root.current-chain-index < root.chain-items.length ? root.chain-items[root.current-chain-index].text : "";
 
@@ -163,6 +173,47 @@ export component AreaHeader inherits Rectangle {
                         color: Theme.data.area-type-switcher.popup.item-text-color;
                         font-size: 16px;
                     }
+                }
+            }
+        }
+    }
+
+    // 中区：通用下拉菜单（整行居中；如摄影表的 Action 选择）
+    if root.center-mode == AreaHeaderCenterMode.dropdown: Dropdown {
+        x: max(0px, (parent.width - self.width) / 2);
+        y: (parent.height - self.height) / 2;
+        items: root.dropdown-items;
+        current-text: root.current-dropdown-index >= 0 && root.current-dropdown-index < root.dropdown-items.length
+            ? root.dropdown-items[root.current-dropdown-index].text : "";
+        current-index: root.current-dropdown-index;
+        selected(i) => {
+            root.dropdown-selected(i);
+        }
+    }
+
+    // 中区：通用按钮（整行居中；如视口的"打开视频"）
+    if root.center-button-text != "": Rectangle {
+        x: max(0px, (parent.width - self.width) / 2);
+        y: (parent.height - self.height) / 2;
+        width: center-button-content.preferred-width;
+        height: center-button-content.preferred-height;
+        background: Mixins.popup-item.selected-background;
+        border-radius: Theme.data.area-type-switcher.border-radius;
+        TouchArea {
+            clicked => {
+                root.center-button-clicked();
+            }
+            center-button-content := HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 6px;
+                alignment: center;
+                Text {
+                    text: root.center-button-text;
+                    color: #ffffff;
+                    font-weight: 600;
+                    font-size: 12px;
+                    vertical-alignment: center;
                 }
             }
         }

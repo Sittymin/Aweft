@@ -1,0 +1,78 @@
+// 时间线编辑器基础元素：时间范围定位的块。
+// 颜色语义（同 NLA 片断的简化多彩）：
+//   - 字幕行块（event）：未选中黑（strip-inactive），选中绿（strip-active）
+//   - 分组头块（group）：绿色系（action-strip，覆盖组内所有行的时间范围），选中更亮
+// 交互（点击/拖拽）由画布级 TouchArea 统一处理——块自身不带 TouchArea，
+// 否则会吞掉中键平移（Slint TouchArea 抢走任意按钮的按下）。此处纯渲染。
+import { SlintSubtitleRowType, SlintTimelineSubBlock } from "../../core/types.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component TimelineBlock inherits Rectangle {
+    in property <string> name;
+    in property <SlintSubtitleRowType> row-type;
+    in property <float> start: 0.0;
+    in property <float> end: 1.0;
+    in property <bool> selected: false;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <length> lane-height: 28px;
+
+    x: root.start * root.view-zoom * 1px + root.pan-x * 1px;
+    y: 1px;
+    width: max(6px, (root.end - root.start) * root.view-zoom * 1px);
+    height: root.lane-height - 2px;
+    border-radius: 3px;
+    background: root.row-type == SlintSubtitleRowType.GroupHeader
+        ? (root.selected
+            ? Theme.data.animation-editor.strip-group.brighter(0.3)
+            : Theme.data.animation-editor.strip-group)
+        : (root.selected
+            ? Theme.data.animation-editor.strip-active
+            : Theme.data.animation-editor.strip-inactive);
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? #ffffff : Theme.data.animation-editor.strip-outline;
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+
+        Text {
+            text: root.name;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            color: root.selected
+                ? Theme.data.animation-editor.strip-text
+                : #9a9aa4;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+}
+
+// 收起容器的子块条带：把一组"字幕行片段块"按各自时间范围铺到当前泳道（可重叠）。
+// 分组收起（r.child-blocks）与根级收起（全部字幕行片段块）共用——
+// 收起后原本各自独立行的部分统一显示在容器头这一条泳道上。
+export component TimelineSubBlocks inherits Rectangle {
+    in property <[SlintTimelineSubBlock]> blocks;
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 1.0;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <length> lane-height: 28px;
+
+    for b[k] in root.blocks: Rectangle {
+        width: 100%;
+        height: 100%;
+        if b.end-sec > b.start-sec
+            && b.end-sec >= root.view-lo && b.start-sec <= root.view-hi: TimelineBlock {
+            name: b.name;
+            row-type: SlintSubtitleRowType.Event;
+            start: b.start-sec;
+            end: b.end-sec;
+            selected: false;
+            view-zoom: root.view-zoom;
+            pan-x: root.pan-x;
+            lane-height: root.lane-height;
+        }
+    }
+}

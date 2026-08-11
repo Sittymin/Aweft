@@ -64,6 +64,9 @@ pub struct AppState {
     pub subtitle_renderer: Option<crate::wgpu_subtitle_renderer::SubtitleRenderer>,
     // libass 字幕渲染器
     pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
+    // 播放头吸附的帧率（高层属性：后续根据使用的视频/项目设置变化）。
+    // 播放头拖动按整数帧步进（Blender 风格），frame = round(time * fps) / fps。
+    pub fps: f32,
 }
 
 impl AppState {
@@ -81,6 +84,7 @@ impl AppState {
             wgpu_sink: None,
             subtitle_renderer: None,
             libass_renderer: None,
+            fps: 24.0,
         }
     }
 

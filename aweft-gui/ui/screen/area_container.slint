@@ -12,7 +12,10 @@ import { AnimationToolbar } from "../areas/animation/toolbar.slint";
 import { NlaEditor } from "../areas/animation/nla_editor.slint";
 import { DopeSheetToolbar } from "../areas/dope_sheet/toolbar.slint";
 import { DopeSheet } from "../areas/dope_sheet/dope_sheet.slint";
+import { ViewportToolbar } from "../areas/viewport/toolbar.slint";
+import { TimelineEditor } from "../areas/timeline/timeline_editor.slint";
 import { VideoState } from "../bridge/state.slint";
+import { SubtitleState } from "../bridge/state.slint";
 import { NodeGraphState } from "../bridge/state.slint";
 import { AnimationState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
@@ -43,7 +46,7 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
-        if area-type == SlintAreaType.viewport: AreaHeader {
+        if area-type == SlintAreaType.viewport: ViewportToolbar {
             area-key: area-key;
             area-type: area-type;
         }
@@ -69,12 +72,16 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
+        if area-type == SlintAreaType.timeline: AreaHeader {
+            area-key: area-key;
+            area-type: area-type;
+        }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
         if area-type == SlintAreaType.viewport: VideoPlayer {
             video-frame: VideoState.current-video-frame;
         }
-        if area-type == SlintAreaType.style-graph-editor: NodeGraphEditor {
+        if area-type == SlintAreaType.style-graph-editor: style-editor := NodeGraphEditor {
             graph-type: GraphType.style-graph;
             chain-editing: root.chain-editing;
             nodes: NodeGraphState.style-nodes;
@@ -82,8 +89,11 @@ export component SlintScrArea inherits Rectangle {
             menu-items: NodeGraphState.style-menu-items;
             lattice-tile: @image-url("../assets/textures/grid_square.svg");
             lattice-triangular: false;
+            // 编辑器在窗口中的位置（输入框遮罩挖孔定位）
+            window-x: root.container-x + self.x;
+            window-y: root.container-y + self.y;
         }
-        if area-type == SlintAreaType.app-graph-editor: NodeGraphEditor {
+        if area-type == SlintAreaType.app-graph-editor: app-editor := NodeGraphEditor {
             graph-type: GraphType.app-graph;
             chain-editing: root.chain-editing;
             nodes: NodeGraphState.app-nodes;
@@ -91,13 +101,16 @@ export component SlintScrArea inherits Rectangle {
             menu-items: NodeGraphState.app-menu-items;
             lattice-tile: @image-url("../assets/textures/grid_triangle.svg");
             lattice-triangular: true;
+            window-x: root.container-x + self.x;
+            window-y: root.container-y + self.y;
         }
         if area-type == SlintAreaType.graph-editor: GraphEditor {
             channels: AnimationState.channels;
+            graph-channels: AnimationState.graph-channels;
             segments: AnimationState.segments;
+            graph-segments: AnimationState.graph-segments;
+            graph-handles: AnimationState.graph-handles;
             handles: AnimationState.handles;
-            time-ticks: AnimationState.time-ticks;
-            value-ticks: AnimationState.value-ticks;
             current-time: AnimationState.current-time;
             action-start: AnimationState.action-start;
             action-end: AnimationState.action-end;
@@ -108,20 +121,53 @@ export component SlintScrArea inherits Rectangle {
         }
         if area-type == SlintAreaType.animation: NlaEditor {
             tracks: AnimationState.nla-tracks;
-            time-ticks: AnimationState.time-ticks;
+            summary-keyframes: AnimationState.dope-summary-keyframes;
             current-time: AnimationState.current-time;
+            action-start: AnimationState.action-start;
+            action-end: AnimationState.action-end;
+            window-x: root.container-x + self.x;
+            window-y: root.container-y + self.y;
         }
-        if area-type == SlintAreaType.dope-sheet: DopeSheet {
-            channels: AnimationState.channels;
-            time-ticks: AnimationState.time-ticks;
+        if area-type == SlintAreaType.dope-sheet: dope-editor := DopeSheet {
+            channels: AnimationState.dope-channels;
+            dope-connections: AnimationState.dope-connections;
+            summary-keyframes: AnimationState.dope-summary-keyframes;
             current-time: AnimationState.current-time;
             current-channel: AnimationState.current-channel;
+            action-start: AnimationState.action-start;
+            action-end: AnimationState.action-end;
+            window-x: root.container-x + self.x;
+            window-y: root.container-y + self.y;
+        }
+        // 时间线：字幕行编辑器的另一种表示形式——左侧复用同一批可见行，
+        // 画布按时间范围定位为块（分组头块覆盖组内所有行时间范围，可重叠）。
+        // 根级收起时用全部字幕行片段块（SubtitleState.timeline-root-blocks）
+        // 在根级泳道显示，与分组收起的子块共用同一渲染组件。
+        if area-type == SlintAreaType.timeline: TimelineEditor {
+            rows: SubtitleState.rows;
+            timeline-root-blocks: SubtitleState.timeline-root-blocks;
+            current-time: AnimationState.current-time;
         }
     }
 
-    // 切换 Area 类型后复位链编辑状态（不同 Area 的链体系不同）
+    // 切换 Area 类型后复位链编辑状态（不同 Area 的链体系不同）。
+    // 切回样式图/应用图时若已有链数据则自动恢复编辑（无需重新点"新建"）。
+    // 组件重建（如调整窗口大小）时也走同一恢复逻辑，避免节点图回到"新建"。
+    init => {
+        root.restore-chain-editing();
+    }
     changed area-type => {
-        root.chain-editing = false;
+        root.restore-chain-editing();
+    }
+
+    function restore-chain-editing() {
+        if root.area-type == SlintAreaType.style-graph-editor {
+            root.chain-editing = NodeGraphState.style-chain-items.length > 0;
+        } else if root.area-type == SlintAreaType.app-graph-editor {
+            root.chain-editing = NodeGraphState.app-chain-items.length > 0;
+        } else {
+            root.chain-editing = false;
+        }
     }
 
     ActionZone {

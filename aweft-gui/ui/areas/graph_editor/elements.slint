@@ -5,7 +5,8 @@ import { Theme } from "../../theme/index.slint";
 
 // 一段曲线：相邻两个关键帧之间的三次贝塞尔（线性/保持也退化为贝塞尔）。
 // 与节点连线的 GraphNodeLink 同样使用 Path 源盒 + 1:1 fit 的渲染方案。
-// 外层包一层 Rectangle：Path 渲染 + TouchArea 命中（点击曲线激活所在通道）。
+// 外层包一层 Rectangle：Path 渲染。不带 TouchArea（不拦截中键平移），选中由
+// 画布级框选/点关键帧完成（对齐 Blender），这里只负责画。
 export component CurveSegment inherits Rectangle {
     in property <float> x0: 0.0;
     in property <float> y0: 0.0;
@@ -23,9 +24,6 @@ export component CurveSegment inherits Rectangle {
     in property <float> pan-x: 0.0;
     in property <float> pan-y: 0.0;
     in property <float> line-width: 1.5;
-
-    // 点击曲线本体（选中所在通道；mode 0=普通 1=Shift 区间 2=Ctrl 切换）
-    callback pressed(mode: int);
 
     // 屏幕坐标（世界→屏幕）
     private property <length> sx0: root.x0 * root.view-zoom-x * 1px + root.pan-x * 1px;
@@ -84,27 +82,7 @@ export component CurveSegment inherits Rectangle {
         }
     }
 
-    // 命中区域：两端关键帧屏幕包围盒 + 小 padding（不含控制点，避免空白处误触）。
-    // 命中框相对根元素定位（根位于 src 盒左上角）。
-    private property <length> hit-pad: 6px;
-    private property <length> hit-x: min(root.sx0, root.sx1) - root.src-x - root.hit-pad;
-    private property <length> hit-y: min(root.sy0, root.sy1) - root.src-y - root.hit-pad;
-    private property <length> hit-w: max(root.sx0, root.sx1) - min(root.sx0, root.sx1) + root.hit-pad * 2;
-    private property <length> hit-h: max(root.sy0, root.sy1) - min(root.sy0, root.sy1) + root.hit-pad * 2;
-
-    // 命中：点击曲线本体附近才选中该通道；远离曲线落到下方画布导航 → 空白取消选中
-    // mode：0=普通 1=Shift 区间 2=Ctrl 切换
-    TouchArea {
-        x: root.hit-x;
-        y: root.hit-y;
-        width: root.hit-w;
-        height: root.hit-h;
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                root.pressed(event.modifiers.control ? 2 : (event.modifiers.shift ? 1 : 0));
-            }
-        }
-    }
+    // 命中统一交给画布级框选/点关键帧（对齐 Blender），这里不设矩形命中区。
 }
 
 // 关键帧标记：菱形（选中时白边/泛白），可点击选中、拖拽移动。
@@ -120,8 +98,10 @@ export component KeyframeMarker inherits Rectangle {
     in property <float> pan-y: 0.0;
 
     callback pressed(additive: bool);
-    callback dragged(delta-time: float, delta-value: float);
-    callback released();
+    // mode: 0=普通移动，1=Shift 拖出手柄（从贝塞尔关键帧拉出控制柄）
+    callback dragged(delta-time: float, delta-value: float, mode: int);
+    // moved：是否发生过拖拽（false = 单击，编辑器据此折叠为单选）
+    callback released(moved: bool);
 
     private property <length> marker-size: 9px;
     // 命中区域比菱形视觉略大
@@ -129,6 +109,7 @@ export component KeyframeMarker inherits Rectangle {
     private property <length> cx: root.time * root.view-zoom-x * 1px + root.pan-x * 1px;
     private property <length> cy: root.value * root.view-zoom-y * 1px + root.pan-y * 1px;
     private property <bool> dragging: false;
+    private property <bool> moved: false;
     // 按下时的光标位置（标记本地像素），拖拽中保持不变，用于计算位移增量
     private property <float> press-mouse-x: 0.0;
     private property <float> press-mouse-y: 0.0;
@@ -156,18 +137,21 @@ export component KeyframeMarker inherits Rectangle {
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                 root.dragging = true;
+                root.moved = false;
                 root.press-mouse-x = self.mouse-x / 1px;
                 root.press-mouse-y = self.mouse-y / 1px;
                 root.pressed(event.modifiers.shift || event.modifiers.control);
             } else if (event.kind == PointerEventKind.move && root.dragging) {
                 // 增量 = 光标相对按下位置的位移 / 缩放（与节点拖拽一致，避免反馈振荡）
+                root.moved = true;
                 root.dragged(
                     (self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom-x,
-                    (self.mouse-y / 1px - root.press-mouse-y) / root.view-zoom-y
+                    (self.mouse-y / 1px - root.press-mouse-y) / root.view-zoom-y,
+                    event.modifiers.shift ? 1 : 0
                 );
-            } else if (event.kind == PointerEventKind.up) {
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                 if root.dragging {
-                    root.released();
+                    root.released(root.moved);
                 }
                 root.dragging = false;
             }
@@ -186,15 +170,17 @@ export component HandleMarker inherits Rectangle {
     in property <float> handle-value: 0.0;
     in property <color> handle-color;
     in property <bool> preview: false;
+    in property <bool> selected: false;
     in property <float> view-zoom-x: 1.0;
     in property <float> view-zoom-y: 1.0;
     in property <float> pan-x: 0.0;
     in property <float> pan-y: 0.0;
 
-    callback pressed();
+    callback pressed(additive: bool);
     // mode: 0=Ctrl 自由，1=默认对齐，2=Shift 原点对称
     callback dragged(delta-time: float, delta-value: float, mode: int);
-    callback released();
+    // moved：是否发生过拖拽（false = 单击，编辑器据此折叠为单选）
+    callback released(moved: bool);
 
     private property <length> ax: root.key-time * root.view-zoom-x * 1px + root.pan-x * 1px;
     private property <length> ay: root.key-value * root.view-zoom-y * 1px + root.pan-y * 1px;
@@ -210,11 +196,14 @@ export component HandleMarker inherits Rectangle {
     // 显示尺寸（拖拽时放大）
     private property <length> display-size: root.dragging ? root.handle-size + 4px : root.handle-size;
     private property <bool> dragging: false;
+    private property <bool> moved: false;
     private property <float> press-mouse-x: 0.0;
     private property <float> press-mouse-y: 0.0;
 
-    // 预览色（钳制后有效控制点）；普通为通道色
-    private property <color> line-color: root.preview ? Theme.data.animation-editor.preview-handle : root.handle-color;
+    // 预览色（钳制后有效控制点）；选中手柄为白色；普通为通道色
+    private property <color> line-color: root.preview
+        ? Theme.data.animation-editor.preview-handle
+        : (root.selected ? #ffffff : root.handle-color);
 
     // 根元素铺满画布（子元素以画布坐标绝对定位；无 TouchArea 不拦截事件）
     x: 0px;
@@ -260,19 +249,21 @@ export component HandleMarker inherits Rectangle {
             pointer-event(event) => {
                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                     root.dragging = true;
+                    root.moved = false;
                     root.press-mouse-x = self.mouse-x / 1px;
                     root.press-mouse-y = self.mouse-y / 1px;
-                    root.pressed();
+                    root.pressed(event.modifiers.shift || event.modifiers.control);
                 } else if (event.kind == PointerEventKind.move && root.dragging) {
+                    root.moved = true;
                     root.dragged(
                         (self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom-x,
                         (self.mouse-y / 1px - root.press-mouse-y) / root.view-zoom-y,
                         // 默认=对齐(1)，Shift=原点对称(2)，Ctrl=自由(0)
                         event.modifiers.control ? 0 : (event.modifiers.shift ? 2 : 1)
                     );
-                } else if (event.kind == PointerEventKind.up) {
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                     if root.dragging {
-                        root.released();
+                        root.released(root.moved);
                     }
                     root.dragging = false;
                 }

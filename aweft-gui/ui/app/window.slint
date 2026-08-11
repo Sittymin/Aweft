@@ -14,18 +14,20 @@ import { ScrEdgeDisplay } from "../screen/edges/edge_display.slint";
 import { ScrEdgeTouchArea } from "../screen/edges/edge_touch_area.slint";
 import { SlintScrArea } from "../screen/area_container.slint";
 import { SubtitleOverlay } from "../areas/subtitle.slint";
+import { DismissOverlay } from "../widgets/dismiss_overlay.slint";
 import {
     ScrEdgeTouchAreaDisplayData,
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
-import { VideoState, SubtitleState, NodeGraphState, AnimationState } from "../bridge/state.slint";
+import { VideoState, SubtitleState, NodeGraphState, AnimationState, EditOverlayState } from "../bridge/state.slint";
 import {
     DragCallbacks,
     AreaCallbacks,
     LineEditorCallbacks,
     NodeGraphCallbacks,
     AnimationCallbacks,
+    VideoCallbacks,
 } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -35,11 +37,13 @@ export {
     SubtitleState,
     NodeGraphState,
     AnimationState,
+    EditOverlayState,
     DragCallbacks,
     AreaCallbacks,
     LineEditorCallbacks,
     NodeGraphCallbacks,
     AnimationCallbacks,
+    VideoCallbacks,
     Theme
 }
 
@@ -94,5 +98,17 @@ export component MainWindow inherits Window {
         border-width: Theme.data.subtitle-overlay.border-width;
         border-color: Theme.data.subtitle-overlay.border-color;
         subtitle-frame: SubtitleState.current-subtitle-frame;
+    }
+
+    // 通用文本编辑遮罩（覆盖整个软件空间）：内嵌输入框聚焦时挖去输入框窗口区域，
+    // 点击输入框外任意处取消输入。
+    if EditOverlayState.active: DismissOverlay {
+        hole-x: EditOverlayState.hole-x;
+        hole-y: EditOverlayState.hole-y;
+        hole-width: EditOverlayState.hole-width;
+        hole-height: EditOverlayState.hole-height;
+        dismissed => {
+            EditOverlayState.active = false;
+        }
     }
 }

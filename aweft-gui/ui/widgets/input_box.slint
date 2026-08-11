@@ -1,0 +1,119 @@
+// 通用输入框组件：图标 + 占位提示 + 焦点/边界上报 + 回车确认 + Escape + 可编程聚焦。
+// 用法：
+//   - 搜索类输入框（search-overlay: true）：聚焦时把 SearchBoxState.active 置 true → 编辑器显示"差集"遮罩；
+//     遮罩把 active 置 false 时本组件自动 clear-focus；通过 input-x/y/width/height 上报输入框区域（父坐标系）。
+//   - 编辑类输入框（如 TimecodeEditor，search-overlay 保持 false）：不参与搜索遮罩联动；
+//     进入编辑时外部在 init 里调用 self.focus()（可选 self.select-all()）——与直接操作 TextInput 等价。
+//   - Enter 确认 → accepted(text)；Escape → escaped()；失焦 → lost-focus()。
+
+export component InputBox inherits Rectangle {
+    in-out property <string> text: "";
+    in property <string> placeholder-text: "";
+    in property <image> icon;
+    in property <bool> show-icon: false;
+    in property <length> font-size: 11px;
+    in property <color> text-color;
+    in property <color> placeholder-color;
+    // 文本水平对齐（通用性：TimecodeEditor 需要居中，搜索框靠左）
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    // 是否参与"搜索遮罩"联动（搜索框 true；编辑类输入框 false）
+    in property <bool> search-overlay: false;
+    // 外部镜像的"搜索激活"状态（搜索联动用；由使用方绑定 SearchBoxState.active，
+    // 避免本组件依赖 bridge/state 造成 import 循环）
+    in property <bool> active-mirror: false;
+
+    callback text-changed(text: string);
+    // Enter 确认提交
+    callback accepted(text: string);
+    // Escape 取消
+    callback escaped();
+    // 失焦（has-focus true -> false）
+    callback lost-focus();
+    // 聚焦状态变化（搜索联动用：使用方据此刻画"差集"遮罩）
+    callback focus-changed(focused: bool);
+
+    // 输入框区域在父坐标系内的边界（外层据此挖孔生成差集遮罩）
+    out property <length> input-x: 0px;
+    out property <length> input-y: 0px;
+    out property <length> input-width: self.width;
+    out property <length> input-height: self.height;
+    // 焦点状态镜像（父级可绑定/监听）
+    out property <bool> has-focus: input.has-focus;
+
+    // 可编程聚焦/取消聚焦：forward-focus 已让编译器自动生成对外的 focus()/clear-focus()（转发到内部 TextInput），
+    // 只需补 select-all()
+    public function select-all() {
+        input.select-all();
+    }
+
+    // 支持父级 forward-focus 链式转发到内部 TextInput（同 Slint 自带 LineEdit 的做法）
+    forward-focus: input;
+
+    private property <length> left-pad: 4px;
+    private property <length> icon-size: 16px;
+    private property <length> icon-gap: 6px;
+    private property <length> text-x: root.left-pad + (root.show-icon ? root.icon-size + root.icon-gap : 0px);
+
+    // 镜像全局激活状态：外部（遮罩）把 active 置 false 时本组件取消焦点（仅搜索联动模式）
+    changed active-mirror => {
+        if root.search-overlay && !root.active-mirror {
+            input.clear-focus();
+        }
+    }
+
+    // 图标
+    Image {
+        visible: root.show-icon;
+        x: root.left-pad;
+        y: (parent.height - root.icon-size) / 2;
+        width: root.icon-size;
+        height: root.icon-size;
+        source: root.icon;
+    }
+
+    // 占位提示（输入为空且未聚焦时显示）
+    Text {
+        x: root.text-x;
+        width: parent.width - root.text-x - 4px;
+        height: 100%;
+        vertical-alignment: center;
+        horizontal-alignment: left;
+        color: root.placeholder-color;
+        font-size: root.font-size;
+        text: root.placeholder-text;
+        visible: input.text == "" && !input.has-focus;
+    }
+
+    input := TextInput {
+        x: root.text-x;
+        y: 0px;
+        width: parent.width - root.text-x - 4px;
+        height: 100%;
+        font-size: root.font-size;
+        color: root.text-color;
+        horizontal-alignment: root.horizontal-alignment;
+        vertical-alignment: center;
+        text <=> root.text;
+        edited => {
+            root.text-changed(root.text);
+        }
+        accepted => {
+            root.accepted(root.text);
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.escaped();
+                return accept;
+            }
+            reject
+        }
+        changed has-focus => {
+            if root.search-overlay {
+                root.focus-changed(self.has-focus);
+            }
+            if !self.has-focus {
+                root.lost-focus();
+            }
+        }
+    }
+}

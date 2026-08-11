@@ -4,11 +4,11 @@
 
 // 更加详细参数的侧边栏需要根据当前宽度和高度自行选择左右布局、上下布局、堆叠布局
 
+import { InputBox } from "../widgets/input_box.slint";
 
 export component TimecodeEditor inherits Rectangle {
     in property <image> chevron_left: @image-url("../assets/icons/chevron_left.svg");
-    in property <image> chevron_right: @image-url("../assets/icons/chevron_right.svg");
-    // 拖动阈值（像素）
+    in property <image> chevron_right: @image-url("../assets/icons/chevron_right.svg");    // 拖动阈值（像素）
     private property <length> drag-threshold: 5px;
     // 按钮宽度
     private property <length> button-width: 16px;
@@ -53,52 +53,44 @@ export component TimecodeEditor inherits Rectangle {
         root.is-passive-editing = false;
     }
 
-    // 编辑模式：全宽输入框
+    // 编辑模式：全宽输入框（复用通用 InputBox：Enter 确认 / Escape 取消 / 失焦取消）
     if (root.is-editing || root.is-passive-editing): Rectangle {
         width: 100%;
         height: 100%;
         background: #222222;
         clip: true;
-        forward-focus: text-input;
+        forward-focus: edit-box;
         init => {
             // 避免被动编辑抢焦点
             if root.is-editing {
-                text-input.focus();
-                text-input.select-all();
+                edit-box.focus();
+                edit-box.select-all();
             }
         }
-        text-input := TextInput {
-            x: 4px;
-            width: parent.width - 8px;
+        edit-box := InputBox {
+            width: 100%;
             height: 100%;
             // 触发编辑时，此处连接会断裂
             text: root.is-passive-editing ? root.batch-text : root.text;
-            color: #ffffff;
             font-size: 11px;
-            vertical-alignment: center;
+            text-color: #ffffff;
             horizontal-alignment: center;
-            changed has-focus => {
-                if (!self.has-focus) {
-                    root.edit-canceled();
-                    reset_state();
-                }
-            }
-            edited => {
+            text-changed(text) => {
                 // TODO: HERE
-                debug("编辑了东西：", self.text);
-                root.editing-text-changed(self.text);
+                debug("编辑了东西：", text);
+                root.editing-text-changed(text);
             }
-            accepted => {
+            accepted(text) => {
                 root.is-editing = false;
-                root.timecode-input(self.text);
+                root.timecode-input(text);
                 reset_state();
             }
-            key-pressed(event) => {
-                if (event.text == Key.Escape) {
-                    root.is-editing = false;
-                    return accept;
-                }
-                reject
+            escaped => {
+                root.is-editing = false;
+            }
+            lost-focus => {
+                root.edit-canceled();
+                reset_state();
             }
         }
     }

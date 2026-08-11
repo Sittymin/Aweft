@@ -9,11 +9,10 @@ export component AppGraphToolbar inherits Rectangle {
     in property <SlintAreaType> area-type;
     in-out property <bool> chain-editing: false;
 
-    // 新建链：切到第 0 条并加载（数据在 Rust 侧）
+    // 进入编辑：加载当前选中的链（切 Area 回来自动恢复，无需重新点"新建"）
     changed chain-editing => {
         if root.chain-editing {
-            NodeGraphState.app-current-chain = 0;
-            NodeGraphCallbacks.load-chain(GraphType.app-graph, 0);
+            NodeGraphCallbacks.load-chain(GraphType.app-graph, NodeGraphState.app-current-chain);
         }
     }
 

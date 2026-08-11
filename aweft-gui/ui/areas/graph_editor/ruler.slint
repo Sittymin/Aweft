@@ -1,110 +1,445 @@
-// 曲线编辑器标尺：顶部时间标尺 + 左侧值标尺。
-// 刻度数据（世界坐标 + 标签）由 Rust 侧派生，Slint 按视口过滤绘制。
+// 曲线编辑器标尺：顶部时间标尺 + 左侧值标尺 + 网格背景。
 //
-// 网格背景采用 Blender 的“主/次两级”样式：主刻度线较亮（grid-color），
-// 次刻度线较暗（grid-minor-color）；次要线在缩放太小时（像素间距 < 6px）
-// 自动隐藏，避免糊成一片，只保留主网格线。
-// 标尺背景与画布一致（Blender 的区域是统一的，网格贯穿标尺区，刻度叠于其上）。
-import { SlintRulerTick } from "../../core/animation_types.slint";
+// 刻度全部「纯 Slint 即时计算」——对齐 Blender view2d 的每帧重算思路
+// （见 graph_select.cc / view2d_draw.cc）：
+//   * 不生成 Rust 刻度模型，改为「固定槽位 repeater + 属性驱动」：
+//     主刻度 `for i in 96` 是静态元素树，每个槽位的世界坐标由 view-lo/hi、zoom
+//     这些属性在 Slint 里即时算出。
+//   * 平移用「容器平移」而非「槽位绑定引用 pan」：整个刻度 repeater 包在一个
+//     容器里（`x: pan`），槽位内部绑定只算 `value * zoom`、不引用 pan。
+//     Slint 里父元素位置变化不会触发子元素绑定重算（子 x 是相对父的，渲染时整体
+//     平移），因此 pan 时**只有容器位置一个绑定重算**，所有槽位绑定零重算——
+//     这比每个槽位都引用 pan（每帧重算几千个绑定）快一个量级。
+//   * 裁剪靠外层 clip（容器平移后越界的刻度线被裁剪绘制），不设引用 pan 的 if 条件。
+//     注意：Slint 的 repeater 不会因窗口外而跳过实例化（tests 里元素变少是
+//     is_visible() 过滤的假象），因此这里 96 个槽位始终实例化——但 96 是固定小量，
+//     不是巨量数据，全实例化可接受；巨量数据（关键帧）仍必须用 if 裁剪。
+//   * 起始槽位对齐可见左边界（Math.floor(view-lo/step)*step），所以 pan 到任何位置
+//     第一根刻度都钉在视口左缘，永远铺满、不会出现"移出标尺区"的空白。
+//   * 数量恒有界：主刻度像素间距 ≥ min-major-px（72px），次刻度 ≥ 6px 才显示。
+//     次刻度并入主槽（每主间隔内 1/5..4/5 共 4 条，整数毫秒对齐关键帧），不设独立 repeater。
+//     注意：1/2/5×10^k nice 分级会让主刻度像素间距在缩放中波动（约 0.7x~1.5x），
+//     这是 Blender 的同类行为，72px 下限保证波动谷也不密。
+//   * 标签用内置 to-fixed(digits)，小数位按 step 自适应（同 Blender frame_to_string）。
+//
+// 复用结构（组件不内联，见下，故复用组件要"扁平"）：
+//   TickScale   —— 步长计算 + 槽位坐标（纯计算，各组件各自实例化一份缓存）
+//   TickAxis    —— 沿一个轴画主/次刻度线（方向/贯穿/颜色参数化），含平移容器
+//   TickLabels  —— 沿一个轴画主刻度数字（方向参数化），含平移容器
+//   TimeRuler = TickAxis + TickLabels + 播放头 + 点击设时间
+//   VerticalGrid / HorizontalGrid = TickAxis 薄包装（贯穿网格线）
+//   ValueAxisLabels = TickLabels
+//
+// 性能事实（Slint 1.17，Rust 生成默认 SLINT_INLINING=false，组件不内联）：
+//   每层组件实例 = 1 个 item + 属性转发，成本很小但存在，因此复用不要无限分层。
 import { Theme } from "../../theme/index.slint";
 
-// 时间标尺（水平，位于画布上方）。点击标尺可设置当前时间。
+// 刻度计算核心：1/2/5×10^k 的"漂亮"步长 + 槽位世界坐标。
+// 被 TickAxis / TickLabels 共用；所有 function 标 public 供子元素 target 调用，
+// 派生量（major/minor/show-minor）用 out property 缓存（依赖变化才重算）。
+export component TickScale inherits Rectangle {
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom: 1.0;
+    // 主刻度最小像素间距（Blender 的 v2d_min_gridsize 类似物）。
+    // 注意：1/2/5×10^k 的 nice 分级会让实际像素间距在缩放中波动（约 0.7x~1.5x），
+    // 值太小会在波动谷（≈0.7x）显得密集——72px 保证波动谷也 ≥ ~50px。
+    in property <float> min-major-px: 72.0;
+    // 主刻度数量安全网上限：极窄缩放时不让步长小于范围/120
+    in property <float> max-major-ticks: 120.0;
+    // 时间坐标最小刻度步长：1 毫秒（关键帧按整数毫秒对齐，刻度不能比它更细）
+    in property <float> min-step: 0.001;
+    // 次刻度最小像素间距：小于该值整个次刻度不显示（避免糊成一片）
+    in property <float> min-minor-px: 6.0;
+
+    // 1/2/5×10^k nice step：保证主刻度在屏幕上 ≥ min-major-px 像素
+    pure function major-step() -> float {
+        let z: float = max(root.zoom, 0.01);
+        let r: float = max(root.view-hi - root.view-lo, 0.1);
+        let raw: float = max(root.min-major-px / z, r / root.max-major-ticks);
+        let mag: float = Math.pow(10, Math.floor(Math.log(raw, 10)));
+        let norm: float = raw / mag;
+        let step: float = norm < 1.5 ? 1.0 : (norm < 3.5 ? 2.0 : (norm < 7.5 ? 5.0 : 10.0));
+        return max(root.min-step, step * mag);
+    }
+
+    out property <float> major: root.major-step();
+    // 次刻度数量/步长：
+    //   两位及以上小数步长（0.005~0.49s 的 nice step，label-digits()>=2）→ 4 条，
+    //   major/5 = 1/2/4/10/20/40/100ms，整数毫秒，关键帧可对齐次线；
+    //   整数/一位小数步长（≥0.5s）→ 1 条中线 major/2。
+    out property <int> minor-count: root.label-digits() >= 2 ? 4 : 1;
+    out property <float> minor: root.minor-count == 4
+        ? max(root.major / 5.0, root.min-step)
+        : max(root.major / 2.0, root.min-step);
+    out property <bool> show-minor: root.minor * root.zoom >= root.min-minor-px;
+
+    // 第 i 个主刻度槽位的世界坐标（对齐可见左边界）
+    public pure function major-value(i: int) -> float {
+        return Math.floor(root.view-lo / root.major) * root.major + i * root.major;
+    }
+    // 第 i 个主刻度间隔内的第 k 条次刻度线（两位小数步长 k=1..4 在 1/5..4/5 处；
+    // 其他步长只用 k=1，即正中的一条）
+    public pure function minor-value-of(i: int, k: int) -> float {
+        return root.major-value(i) + k * root.minor;
+    }
+    // 槽位像素位置（相对平移容器，不含 pan——pan 由容器整体平移承担，见文件头注释）
+    public pure function major-px(i: int) -> float {
+        return root.major-value(i) * root.zoom;
+    }
+    public pure function minor-px-of(i: int, k: int) -> float {
+        return root.minor-value-of(i, k) * root.zoom;
+    }
+    // 标签小数位：随 step 自适应（对齐 Blender frame_to_string：step≥1→0 位、
+    // ≥0.5→1 位、≥0.01→2 位，其余 3 位；step 是 1/2/5×10^k，无更细层级）
+    public pure function label-digits() -> int {
+        let s: float = root.major;
+        return s >= 1.0 ? 0 : (s >= 0.5 ? 1 : (s >= 0.01 ? 2 : 3));
+    }
+}
+
+// 沿一个轴绘制主/次刻度线（方向参数化）。
+// vertical=true：竖线沿 X 轴分布（时间轴；TimeRuler / VerticalGrid）；
+// vertical=false：横线沿 Y 轴分布（值轴；HorizontalGrid）。
+// 主/次刻度线可"贯穿"整个轴（网格，inset/length 传 0）或"短线"（标尺，传像素长度）。
+export component TickAxis inherits Rectangle {
+    in property <bool> vertical: true;
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom: 1.0;
+    in property <float> pan: 0.0;
+    in property <color> line-color;
+    in property <color> minor-line-color;
+    in property <length> major-inset: 0px;
+    in property <length> major-length: 0px;
+    in property <length> minor-inset: 0px;
+    in property <length> minor-length: 0px;
+
+    clip: true;
+
+    scale := TickScale {
+        view-lo: root.view-lo;
+        view-hi: root.view-hi;
+        zoom: root.zoom;
+    }
+
+    if root.vertical: Rectangle {
+        x: root.pan * 1px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+
+        for i in 96: Rectangle {
+            width: 100%;
+            height: 100%;
+            // 主刻度线（贯穿或短线）
+            Rectangle {
+                x: scale.major-px(i) * 1px;
+                y: root.major-inset;
+                width: 1px;
+                height: root.major-length == 0px ? parent.height : root.major-length;
+                background: root.line-color;
+            }
+            // 次刻度线：两位小数步长 4 条（整数毫秒对齐关键帧），其他步长 1 条中线
+            if scale.show-minor && scale.minor-count >= 1: Rectangle {
+                x: scale.minor-px-of(i, 1) * 1px;
+                y: root.minor-inset;
+                width: 1px;
+                height: root.minor-length == 0px ? parent.height : root.minor-length;
+                background: root.minor-line-color;
+            }
+            if scale.show-minor && scale.minor-count >= 2: Rectangle {
+                x: scale.minor-px-of(i, 2) * 1px;
+                y: root.minor-inset;
+                width: 1px;
+                height: root.minor-length == 0px ? parent.height : root.minor-length;
+                background: root.minor-line-color;
+            }
+            if scale.show-minor && scale.minor-count >= 3: Rectangle {
+                x: scale.minor-px-of(i, 3) * 1px;
+                y: root.minor-inset;
+                width: 1px;
+                height: root.minor-length == 0px ? parent.height : root.minor-length;
+                background: root.minor-line-color;
+            }
+            if scale.show-minor && scale.minor-count >= 4: Rectangle {
+                x: scale.minor-px-of(i, 4) * 1px;
+                y: root.minor-inset;
+                width: 1px;
+                height: root.minor-length == 0px ? parent.height : root.minor-length;
+                background: root.minor-line-color;
+            }
+        }
+    }
+    if !root.vertical: Rectangle {
+        y: root.pan * 1px;
+        x: 0px;
+        width: 100%;
+        height: 100%;
+
+        for i in 96: Rectangle {
+            width: 100%;
+            height: 100%;
+            Rectangle {
+                y: scale.major-px(i) * 1px;
+                x: root.major-inset;
+                height: 1px;
+                width: root.major-length == 0px ? parent.width : root.major-length;
+                background: root.line-color;
+            }
+            // 次刻度线：两位小数步长 4 条（整数毫秒对齐关键帧），其他步长 1 条中线
+            if scale.show-minor && scale.minor-count >= 1: Rectangle {
+                y: scale.minor-px-of(i, 1) * 1px;
+                x: root.minor-inset;
+                height: 1px;
+                width: root.minor-length == 0px ? parent.width : root.minor-length;
+                background: root.minor-line-color;
+            }
+            if scale.show-minor && scale.minor-count >= 2: Rectangle {
+                y: scale.minor-px-of(i, 2) * 1px;
+                x: root.minor-inset;
+                height: 1px;
+                width: root.minor-length == 0px ? parent.width : root.minor-length;
+                background: root.minor-line-color;
+            }
+            if scale.show-minor && scale.minor-count >= 3: Rectangle {
+                y: scale.minor-px-of(i, 3) * 1px;
+                x: root.minor-inset;
+                height: 1px;
+                width: root.minor-length == 0px ? parent.width : root.minor-length;
+                background: root.minor-line-color;
+            }
+            if scale.show-minor && scale.minor-count >= 4: Rectangle {
+                y: scale.minor-px-of(i, 4) * 1px;
+                x: root.minor-inset;
+                height: 1px;
+                width: root.minor-length == 0px ? parent.width : root.minor-length;
+                background: root.minor-line-color;
+            }
+        }
+    }
+}
+
+// 沿一个轴绘制主刻度数字（方向参数化）。
+// vertical=true：数字沿 X 轴分布、置于轴的起点端（TimeRuler 顶部）；
+// vertical=false：数字沿 Y 轴分布、置于轴的起点端（ValueAxisLabels 左侧）。
+export component TickLabels inherits Rectangle {
+    in property <bool> vertical: true;
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom: 1.0;
+    in property <float> pan: 0.0;
+    in property <color> label-color;
+
+    clip: true;
+
+    scale := TickScale {
+        view-lo: root.view-lo;
+        view-hi: root.view-hi;
+        zoom: root.zoom;
+    }
+
+    if root.vertical: Rectangle {
+        x: root.pan * 1px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        for i in 96: Rectangle {
+            width: 100%;
+            height: 100%;
+            Text {
+                x: scale.major-px(i) * 1px - 20px;
+                y: 0px;
+                width: 40px;
+                height: 100%;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                text: scale.major-value(i).to-fixed(scale.label-digits());
+                color: root.label-color;
+                font-size: 9px;
+            }
+        }
+    }
+    if !root.vertical: Rectangle {
+        y: root.pan * 1px;
+        x: 0px;
+        width: 100%;
+        height: 100%;
+        for i in 96: Rectangle {
+            width: 100%;
+            height: 100%;
+            Text {
+                y: scale.major-px(i) * 1px - 7px;
+                x: 0px;
+                height: 14px;
+                horizontal-alignment: left;
+                vertical-alignment: center;
+                text: scale.major-value(i).to-fixed(scale.label-digits());
+                color: root.label-color;
+                font-size: 9px;
+            }
+        }
+    }
+}
+
+// 垂直网格线（时间轴；曲线编辑器画布 + 摄影表画布共用）：贯穿整个轴的主/次线。
+export component VerticalGrid inherits Rectangle {
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom-x: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <color> line-color;
+    in property <color> minor-line-color;
+
+    width: 100%;
+    height: 100%;
+
+    TickAxis {
+        width: 100%;
+        height: 100%;
+        vertical: true;
+        view-lo: root.view-lo;
+        view-hi: root.view-hi;
+        zoom: root.zoom-x;
+        pan: root.pan-x;
+        line-color: root.line-color;
+        minor-line-color: root.minor-line-color;
+    }
+}
+
+// 水平网格线（值轴；仅曲线编辑器画布用）：贯穿整个轴的主/次线。
+export component HorizontalGrid inherits Rectangle {
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom-y: 1.0;
+    in property <float> pan-y: 0.0;
+    in property <color> line-color;
+    in property <color> minor-line-color;
+
+    width: 100%;
+    height: 100%;
+
+    TickAxis {
+        width: 100%;
+        height: 100%;
+        vertical: false;
+        view-lo: root.view-lo;
+        view-hi: root.view-hi;
+        zoom: root.zoom-y;
+        pan: root.pan-y;
+        line-color: root.line-color;
+        minor-line-color: root.minor-line-color;
+    }
+}
+
+// 时间标尺（水平，位于画布上方）：数字 + 播放头控制柄。
+// 只显示主刻度数字（横向刻度不再画小竖线——网格线在画布内已有）；
+// 播放头顶部有可拖拽的菱形控制柄，拖动标尺任意处或手柄都可调整当前时间。
 export component TimeRuler inherits Rectangle {
-    in property <[SlintRulerTick]> ticks;
-    in property <float> view-zoom: 1.0;
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom-x: 1.0;
     in property <float> pan-x: 0.0;
     in property <float> current-time: 0.0;
     callback time-picked(time: float);
 
-    // 次要刻度线的像素间距：小于阈值（网格过密）时只显示主网格线
-    private property <float> minor-px: root.ticks.length > 1
-        ? (root.ticks[1].value - root.ticks[0].value) * root.view-zoom
-        : 0.0;
+    private property <bool> dragging: false;
 
     clip: true;
     background: Theme.data.animation-editor.ruler-background;
 
-    // 背景网格（与画布网格同色、同刻度）：主/次两级，贯通整个标尺区
-    for t in root.ticks: Rectangle {
+    TickLabels {
         width: 100%;
         height: 100%;
-        if t.value * root.view-zoom + root.pan-x >= -20 && t.value * root.view-zoom + root.pan-x <= root.width / 1px + 20 && (t.major || root.minor-px >= 6.0): Rectangle {
-            x: t.value * root.view-zoom * 1px + root.pan-x * 1px;
-            y: 0px;
-            width: 1px;
-            height: 100%;
-            background: t.major ? Theme.data.animation-editor.grid-color : Theme.data.animation-editor.grid-minor-color;
-        }
+        vertical: true;
+        view-lo: root.view-lo;
+        view-hi: root.view-hi;
+        zoom: root.zoom-x;
+        pan: root.pan-x;
+        label-color: Theme.data.animation-editor.ruler-text;
     }
 
-    // 每个刻度：一个占位 Rectangle，内部按视口过滤绘制刻度线与标签
-    for t in root.ticks: Rectangle {
-        width: 100%;
-        height: 100%;
-
-        if t.value * root.view-zoom + root.pan-x >= -20 && t.value * root.view-zoom + root.pan-x <= root.width / 1px + 20: Rectangle {
-            x: t.value * root.view-zoom * 1px + root.pan-x * 1px;
-            y: t.major ? 4px : 15px;
-            width: 1px;
-            height: t.major ? 7px : 4px;
-            background: Theme.data.animation-editor.ruler-tick;
-        }
-
-        if t.major && t.value * root.view-zoom + root.pan-x >= -50 && t.value * root.view-zoom + root.pan-x <= root.width / 1px + 50: Text {
-            x: t.value * root.view-zoom * 1px + root.pan-x * 1px - 20px;
-            y: 0px;
-            width: 40px;
-            height: 100%;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            text: t.label;
-            color: Theme.data.animation-editor.ruler-text;
-            font-size: 9px;
-        }
-    }
-
-    // 当前时间游标
+    // 当前时间游标（贯穿标尺的竖线）
     Rectangle {
-        x: root.current-time * root.view-zoom * 1px + root.pan-x * 1px;
+        x: root.current-time * root.zoom-x * 1px + root.pan-x * 1px;
         y: 0px;
         width: 1px;
         height: 100%;
         background: Theme.data.animation-editor.playhead;
     }
 
-    // 点击设置当前时间
+    // 播放头控制柄（Blender 风格：标尺内的圆角方框 + 当前数字，框下小三角，可拖拽）
+    Rectangle {
+        x: (root.current-time * root.zoom-x * 1px + root.pan-x * 1px) - self.width / 2;
+        y: 2px;
+        width: max(46px, handle-text.preferred-width + 10px);
+        height: parent.height - 4px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Theme.data.animation-editor.playhead;
+        background: Theme.data.animation-editor.playhead-handle-bg;
+        handle-text := Text {
+            width: 100%;
+            height: 100%;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.current-time.to-fixed(3);
+            color: Theme.data.animation-editor.channel-text;
+            font-size: 9px;
+        }
+    }
+
+    // 框下小三角（尖端朝下，指向画布）
+    Path {
+        x: (root.current-time * root.zoom-x * 1px + root.pan-x * 1px) - 6px;
+        y: root.height - 4px;
+        width: 12px;
+        height: 5px;
+        viewbox-width: 12;
+        viewbox-height: 5;
+        fill: Theme.data.animation-editor.playhead;
+        MoveTo { x: 0; y: 0; }
+        LineTo { x: 12; y: 0; }
+        LineTo { x: 6; y: 5; }
+        LineTo { x: 0; y: 0; }
+    }
+
+    // 按下/拖拽设置当前时间：按下立即定位，拖动连续跟随
     TouchArea {
-        clicked => {
-            root.time-picked((self.mouse-x / 1px - root.pan-x) / root.view-zoom);
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.dragging = true;
+                root.time-picked((self.mouse-x / 1px - root.pan-x) / root.zoom-x);
+            } else if (event.kind == PointerEventKind.move && root.dragging) {
+                root.time-picked((self.mouse-x / 1px - root.pan-x) / root.zoom-x);
+            } else if (event.kind == PointerEventKind.up) {
+                root.dragging = false;
+            }
         }
     }
 }
 
-// 值轴标签（Blender 风格：左侧没有独立的“值标尺”条带）。
+// 值轴标签（Blender 风格：左侧没有独立的"值标尺"条带）。
 // 直接叠在画布左侧的网格之上：只画主刻度数字，随垂直缩放/平移滚动，
 // 透明背景、不拦截事件，也不占布局宽度。
-// 宽度不设固定值，而是按最宽标签自适应（Text 用自然宽度，盒子取子元素 preferred 宽度）。
 export component ValueAxisLabels inherits Rectangle {
-    in property <[SlintRulerTick]> ticks;
-    in property <float> view-zoom: 1.0;
+    in property <float> view-lo: 0.0;
+    in property <float> view-hi: 100.0;
+    in property <float> zoom-y: 1.0;
     in property <float> pan-y: 0.0;
 
-    clip: true;
+    width: 100%;
+    height: 100%;
 
-    for t in root.ticks: Rectangle {
+    TickLabels {
         width: 100%;
         height: 100%;
-
-        if t.major && t.value * root.view-zoom + root.pan-y >= -20 && t.value * root.view-zoom + root.pan-y <= root.height / 1px + 20: Text {
-            y: t.value * root.view-zoom * 1px + root.pan-y * 1px - 7px;
-            x: 0px;
-            height: 14px;
-            horizontal-alignment: left;
-            vertical-alignment: center;
-            text: t.label;
-            color: Theme.data.animation-editor.ruler-text;
-            font-size: 9px;
-        }
+        vertical: false;
+        view-lo: root.view-lo;
+        view-hi: root.view-hi;
+        zoom: root.zoom-y;
+        pan: root.pan-y;
+        label-color: Theme.data.animation-editor.ruler-text;
     }
 }
 
@@ -113,8 +448,10 @@ export component ValueAxisLabels inherits Rectangle {
 // 主/次两级网格：主刻度线较亮（line-color）、次刻度线较暗（minor-line-color）；
 // 次要线在像素间距过小时自动隐藏（Blender 风格）。
 export component GraphGrid inherits Rectangle {
-    in property <[SlintRulerTick]> time-ticks;
-    in property <[SlintRulerTick]> value-ticks;
+    in property <float> time-lo: 0.0;
+    in property <float> time-hi: 100.0;
+    in property <float> value-lo: 0.0;
+    in property <float> value-hi: 100.0;
     in property <float> zoom-x: 1.0;
     in property <float> zoom-y: 1.0;
     in property <float> pan-x: 0.0;
@@ -122,40 +459,28 @@ export component GraphGrid inherits Rectangle {
     in property <color> line-color;
     in property <color> minor-line-color;
 
-    // 次要线的像素间距：过密（缩得太小）时隐藏次要线，只留主网格线
-    private property <float> minor-x-px: root.time-ticks.length > 1
-        ? (root.time-ticks[1].value - root.time-ticks[0].value) * root.zoom-x
-        : 0.0;
-    private property <float> minor-y-px: root.value-ticks.length > 1
-        ? (root.value-ticks[1].value - root.value-ticks[0].value) * root.zoom-y
-        : 0.0;
-
     width: 100%;
     height: 100%;
 
-    // 垂直时间线
-    for t in root.time-ticks: Rectangle {
+    VerticalGrid {
         width: 100%;
         height: 100%;
-        if t.value * root.zoom-x + root.pan-x >= 0 && t.value * root.zoom-x + root.pan-x <= root.width / 1px && (t.major || root.minor-x-px >= 6.0): Rectangle {
-            x: t.value * root.zoom-x * 1px + root.pan-x * 1px;
-            y: 0px;
-            width: 1px;
-            height: 100%;
-            background: t.major ? root.line-color : root.minor-line-color;
-        }
+        view-lo: root.time-lo;
+        view-hi: root.time-hi;
+        zoom-x: root.zoom-x;
+        pan-x: root.pan-x;
+        line-color: root.line-color;
+        minor-line-color: root.minor-line-color;
     }
 
-    // 水平值线
-    for v in root.value-ticks: Rectangle {
+    HorizontalGrid {
         width: 100%;
         height: 100%;
-        if v.value * root.zoom-y + root.pan-y >= 0 && v.value * root.zoom-y + root.pan-y <= root.height / 1px && (v.major || root.minor-y-px >= 6.0): Rectangle {
-            y: v.value * root.zoom-y * 1px + root.pan-y * 1px;
-            x: 0px;
-            height: 1px;
-            width: 100%;
-            background: v.major ? root.line-color : root.minor-line-color;
-        }
+        view-lo: root.value-lo;
+        view-hi: root.value-hi;
+        zoom-y: root.zoom-y;
+        pan-y: root.pan-y;
+        line-color: root.line-color;
+        minor-line-color: root.minor-line-color;
     }
 }

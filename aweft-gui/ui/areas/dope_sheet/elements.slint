@@ -13,12 +13,14 @@ export component DopeKeyframe inherits Rectangle {
 
     callback pressed(additive: bool);
     callback dragged(delta-time: float);
-    callback released();
+    // moved：本次按下到松开是否发生过拖拽（false = 单击，编辑器据此折叠为单选）
+    callback released(moved: bool);
 
     private property <length> marker-size: 9px;
     // 命中区域比菱形视觉略大
     private property <length> hit-size: marker-size + 8px;
     private property <bool> dragging: false;
+    private property <bool> moved: false;
     private property <float> press-mouse-x: 0.0;
 
     // 菱形中心垂直居中于所在行
@@ -45,14 +47,123 @@ export component DopeKeyframe inherits Rectangle {
         pointer-event(event) => {
             if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
                 root.dragging = true;
+                root.moved = false;
                 root.press-mouse-x = self.mouse-x / 1px;
                 root.pressed(event.modifiers.shift || event.modifiers.control);
             } else if (event.kind == PointerEventKind.move && root.dragging) {
                 // 只沿时间轴拖动；增量 = 光标位移 / 缩放（与节点拖拽一致）
+                root.moved = true;
                 root.dragged((self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom);
-            } else if (event.kind == PointerEventKind.up) {
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                 if root.dragging {
-                    root.released();
+                    root.released(root.moved);
+                }
+                root.dragging = false;
+            }
+        }
+    }
+}
+
+// 摄影表汇总条带的关键帧标记：按整数毫秒时间聚合全部通道同一时刻的关键帧，
+// 拖拽它同时移动该时刻所有通道的关键帧（跨通道同步）。
+// count<=5 时垂直小距离堆叠多个菱形（每层对应一个通道，该通道关键帧选中则该层高亮）；
+// count>5 时合并为一个大关键帧（内部写数字，仅全部通道关键帧都选中才高亮）。
+// 交互上始终是单一汇总关键帧，整体一起按下/拖动。
+export component DopeSummaryKeyframe inherits Rectangle {
+    in property <float> time: 0.0;
+    // 该时刻跨通道的关键帧总数
+    in property <int> count: 1;
+    // 逐通道选中掩码（长度=count）
+    in property <[bool]> selected: [];
+    // count>5 大关键帧是否全部选中
+    in property <bool> all-selected: false;
+    in property <float> view-zoom: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <length> row-height: 24px;
+
+    callback pressed(additive: bool);
+    callback dragged(delta-time: float);
+    callback released(moved: bool);
+
+    private property <length> marker-size: 11px;
+    private property <length> big-size: 17px;
+    private property <length> hit-size: marker-size + 8px;
+    private property <bool> dragging: false;
+    private property <bool> moved: false;
+    private property <float> press-mouse-x: 0.0;
+
+    // 堆叠间距：默认 0.55×菱形尺寸，但按条带高度收敛（重叠多了不外溢行高）
+    function stack-step() -> length {
+        if root.count <= 1 {
+            return 0px;
+        }
+        let available: length = root.row-height - root.marker-size;
+        return min(root.marker-size * 0.55, available / (root.count - 1));
+    }
+
+    // 菱形中心垂直居中于所在行
+    x: root.time * root.view-zoom * 1px + root.pan-x * 1px - hit-size / 2;
+    y: (root.row-height - hit-size) / 2;
+    width: hit-size;
+    height: hit-size;
+    background: transparent;
+
+    // 大关键帧：合并为一个菱形，内部写关键帧数（菱形 + 反旋数字保持水平）
+    if root.count > 5: Rectangle {
+        width: root.big-size;
+        height: root.big-size;
+        x: (root.width - root.big-size) / 2;
+        y: (root.height - root.big-size) / 2;
+        transform-origin: { x: root.big-size / 2, y: root.big-size / 2 };
+        transform-rotation: 45deg;
+        background: root.all-selected ? #ffffff : #d8d8de;
+        border-width: root.all-selected ? 2px : 1px;
+        border-color: root.all-selected ? #ffffff : #101014;
+    }
+    if root.count > 5: Text {
+        width: root.big-size;
+        height: root.big-size;
+        x: (root.width - root.big-size) / 2;
+        y: (root.height - root.big-size) / 2;
+        transform-origin: { x: root.big-size / 2, y: root.big-size / 2 };
+        transform-rotation: -45deg;
+        text: root.count;
+        font-size: 9px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        color: #101014;
+    }
+
+    // 堆叠关键帧（count<=5）：count 个菱形垂直错开堆叠，每层对应一个通道
+    if root.count <= 5: Rectangle {
+        width: 100%;
+        height: 100%;
+        for i in root.count: Rectangle {
+            width: root.marker-size;
+            height: root.marker-size;
+            x: (root.width - root.marker-size) / 2;
+            y: (root.height - root.marker-size) / 2 + (i * 1.0 - (root.count - 1) * 0.5) * root.stack-step();
+            transform-origin: { x: root.marker-size / 2, y: root.marker-size / 2 };
+            transform-rotation: 45deg;
+            background: root.selected[i] ? #ffffff : #d8d8de;
+            border-width: root.selected[i] ? 2px : 1px;
+            border-color: root.selected[i] ? #ffffff : #101014;
+        }
+    }
+
+    ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.dragging = true;
+                root.moved = false;
+                root.press-mouse-x = self.mouse-x / 1px;
+                root.pressed(event.modifiers.shift || event.modifiers.control);
+            } else if (event.kind == PointerEventKind.move && root.dragging) {
+                root.moved = true;
+                root.dragged((self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom);
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                if root.dragging {
+                    root.released(root.moved);
                 }
                 root.dragging = false;
             }

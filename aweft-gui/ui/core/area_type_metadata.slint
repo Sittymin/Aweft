@@ -3,32 +3,35 @@ import { SlintAreaType, IconAndText } from "types.slint";
 
 export global AreaTypeMetadata {
     in property <[IconAndText]> items: [
-        { icon: @image-url("../assets/icons/line_editor.svg"), text: "字幕行编辑器" },
         { icon: @image-url("../assets/icons/viewport.svg"), text: "视口" },
-        { icon: @image-url("../assets/icons/style_graph.svg"), text: "样式图" },
-        { icon: @image-url("../assets/icons/app_graph.svg"), text: "应用图" },
+        { icon: @image-url("../assets/icons/line_editor.svg"), text: "字幕行编辑器" },
+        { icon: @image-url("../assets/icons/schedule.svg"), text: "时间线" },
+        { icon: @image-url("../assets/icons/dope_sheet.svg"), text: "摄影表" },
         { icon: @image-url("../assets/icons/graph_editor.svg"), text: "曲线编辑器" },
         { icon: @image-url("../assets/icons/animation.svg"), text: "NLA 编辑器" },
-        { icon: @image-url("../assets/icons/dope_sheet.svg"), text: "摄影表" },
+        { icon: @image-url("../assets/icons/style_graph.svg"), text: "样式图" },
+        { icon: @image-url("../assets/icons/app_graph.svg"), text: "应用图" },
     ];
     
     // 转换函数：AreaType 枚举 -> 数组索引
     pure callback area-type-to-index(SlintAreaType) -> int;
     area-type-to-index(area-type) => {
-        if area-type == SlintAreaType.line-editor {
+        if area-type == SlintAreaType.viewport {
             return 0;
-        } else if area-type == SlintAreaType.viewport {
+        } else if area-type == SlintAreaType.line-editor {
             return 1;
-        } else if area-type == SlintAreaType.style-graph-editor {
+        } else if area-type == SlintAreaType.timeline {
             return 2;
-        } else if area-type == SlintAreaType.app-graph-editor {
+        } else if area-type == SlintAreaType.dope-sheet {
             return 3;
         } else if area-type == SlintAreaType.graph-editor {
             return 4;
         } else if area-type == SlintAreaType.animation {
             return 5;
-        } else if area-type == SlintAreaType.dope-sheet {
+        } else if area-type == SlintAreaType.style-graph-editor {
             return 6;
+        } else if area-type == SlintAreaType.app-graph-editor {
+            return 7;
         }
         return -1;  // 未知类型
     }
@@ -37,20 +40,22 @@ export global AreaTypeMetadata {
     pure callback index-to-area-type(int) -> SlintAreaType;
     index-to-area-type(index) => {
         if index == 0 {
-            return SlintAreaType.line-editor;
-        } else if index == 1 {
             return SlintAreaType.viewport;
+        } else if index == 1 {
+            return SlintAreaType.line-editor;
         } else if index == 2 {
-            return SlintAreaType.style-graph-editor;
+            return SlintAreaType.timeline;
         } else if index == 3 {
-            return SlintAreaType.app-graph-editor;
+            return SlintAreaType.dope-sheet;
         } else if index == 4 {
             return SlintAreaType.graph-editor;
         } else if index == 5 {
             return SlintAreaType.animation;
         } else if index == 6 {
-            return SlintAreaType.dope-sheet;
+            return SlintAreaType.style-graph-editor;
+        } else if index == 7 {
+            return SlintAreaType.app-graph-editor;
         }
-        return SlintAreaType.line-editor;
+        return SlintAreaType.viewport;
     }
 }
