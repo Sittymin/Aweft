@@ -314,6 +314,24 @@ fn node_kind_title(kind: &NodeKind) -> &'static str {
     }
 }
 
+/// 应用节点显示名（应用图编辑器标题栏用）。属 UI 呈现层，不入 model。
+fn application_node_kind_title(kind: &ApplicationNodeKind) -> &'static str {
+    match kind {
+        ApplicationNodeKind::ContextInput => "上下文输入",
+        ApplicationNodeKind::MatchActor => "匹配角色",
+        ApplicationNodeKind::MatchText => "匹配文本",
+        ApplicationNodeKind::IntEq => "整数相等",
+        ApplicationNodeKind::And => "与",
+        ApplicationNodeKind::Or => "或",
+        ApplicationNodeKind::Not => "非",
+        ApplicationNodeKind::AppRef(_) => "样式链引用",
+        ApplicationNodeKind::TextConst => "字符串常量",
+        ApplicationNodeKind::ApplyMatch => "应用匹配",
+        ApplicationNodeKind::ApplyAnimation => "应用动画",
+        ApplicationNodeKind::GroupOutput => "组输出",
+    }
+}
+
 /// 让两种图（NodeGraph / ApplicationGraph）都能喂给通用编辑器逻辑。
 /// 全部通过公开字段访问模型数据，实现里仅做类型化转发。
 pub trait GraphEditable: Sized {
@@ -433,7 +451,7 @@ impl GraphEditable for ApplicationGraph {
         ApplicationGraph::remove_node(self, id);
     }
     fn title(&self, n: &ApplicationGraphNode) -> &'static str {
-        n.kind.title()
+        application_node_kind_title(&n.kind)
     }
     fn inputs(n: &ApplicationGraphNode) -> &[SocketId] {
         &n.inputs
@@ -1193,10 +1211,10 @@ impl AppStore {
             .map(|k| {
                 let dot = menu_dot_color_for(&theme, &ApplicationGraph::kind_decls(k));
                 ContextMenuItem {
-                    text: k.title().into(),
+                    text: application_node_kind_title(k).into(),
                     enabled: true,
                     dot_color: dot,
-                    separator_before: k.title() == "应用",
+                    separator_before: application_node_kind_title(k) == "应用",
                 }
             })
             .collect();

@@ -84,24 +84,6 @@ impl ApplicationNodeKind {
             ApplicationNodeKind::AppRef(_) | ApplicationNodeKind::GroupOutput
         )
     }
-
-    /// 节点显示名（应用图编辑器标题栏用）。
-    pub fn title(&self) -> &'static str {
-        match self {
-            ApplicationNodeKind::ContextInput => "上下文输入",
-            ApplicationNodeKind::MatchActor => "匹配角色",
-            ApplicationNodeKind::MatchText => "匹配文本",
-            ApplicationNodeKind::IntEq => "整数相等",
-            ApplicationNodeKind::And => "与",
-            ApplicationNodeKind::Or => "或",
-            ApplicationNodeKind::Not => "非",
-            ApplicationNodeKind::AppRef(_) => "样式链引用",
-            ApplicationNodeKind::TextConst => "字符串常量",
-            ApplicationNodeKind::ApplyMatch => "应用匹配",
-            ApplicationNodeKind::ApplyAnimation => "应用动画",
-            ApplicationNodeKind::GroupOutput => "组输出",
-        }
-    }
 }
 
 // ── ApplicationGraphNode ─────────────────────────────────────────────────────────────
