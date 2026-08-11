@@ -14,7 +14,7 @@ use aweft_model::{
     ids::{NodeGraphId, NodeId, SocketId},
     node_graph::{
         get_socket_decls, error::EvalError, ColorRole, GraphNode as ModelGraphNode, Link, NodeGraph,
-        NodeKind, Socket, SocketDecl, SocketType, StyleOpKind,
+        NodeKind, Socket, SocketDecl, SocketType, StyleOpKind, VecOpKind,
     },
 };
 use slint::{Color, Model, ModelRc, SharedString, VecModel};
@@ -264,6 +264,56 @@ impl GraphEditorState {
 
 // ── 图类型适配 ────────────────────────────────────────────────────────────────
 
+/// 节点显示名（节点图编辑器标题栏用）。属 UI 呈现层，不入 model。
+fn node_kind_title(kind: &NodeKind) -> &'static str {
+    match kind {
+        NodeKind::StyleSource => "样式源",
+        NodeKind::VecOp(kind) => match kind {
+            VecOpKind::CombineVec2 => "合并向量2D",
+            VecOpKind::SeparateVec2 => "分离向量2D",
+            VecOpKind::CombineVec3 => "合并向量3D",
+            VecOpKind::SeparateVec3 => "分离向量3D",
+        },
+        NodeKind::StyleOp(kind) => match kind {
+            StyleOpKind::SetFontName => "字体名称",
+            StyleOpKind::SetFontSize => "字号",
+            StyleOpKind::SetBold => "粗体",
+            StyleOpKind::SetItalic => "斜体",
+            StyleOpKind::SetUnderline => "下划线",
+            StyleOpKind::SetStrikeout => "删除线",
+            StyleOpKind::SetColor(role) => match role {
+                ColorRole::Primary => "颜色-主色",
+                ColorRole::Secondary => "颜色-副色",
+                ColorRole::Outline => "颜色-描边",
+                ColorRole::Back => "颜色-背景",
+                ColorRole::All => "颜色-全部",
+            },
+            StyleOpKind::SetAlpha(role) => match role {
+                ColorRole::Primary => "透明度-主色",
+                ColorRole::Secondary => "透明度-副色",
+                ColorRole::Outline => "透明度-描边",
+                ColorRole::Back => "透明度-背景",
+                ColorRole::All => "透明度-全部",
+            },
+            StyleOpKind::SetBorder => "描边",
+            StyleOpKind::SetShadow => "阴影",
+            StyleOpKind::SetFontScale => "字体缩放",
+            StyleOpKind::SetFontRotation => "字体旋转",
+            StyleOpKind::SetFactor => "系数",
+            StyleOpKind::SetBlur => "模糊",
+            StyleOpKind::SetBlurEdges => "边缘模糊",
+            StyleOpKind::SetPosition => "位置",
+            StyleOpKind::SetOrigin => "原点",
+            StyleOpKind::SetClipRect => "裁剪区域",
+        },
+        NodeKind::MergeStyle => "合并样式",
+        NodeKind::GroupInput => "组输入",
+        NodeKind::GroupOutput => "组输出",
+        NodeKind::Viewer => "查看器",
+        NodeKind::Reference(_) => "样式引用",
+    }
+}
+
 /// 让两种图（NodeGraph / ApplicationGraph）都能喂给通用编辑器逻辑。
 /// 全部通过公开字段访问模型数据，实现里仅做类型化转发。
 pub trait GraphEditable: Sized {
@@ -326,7 +376,7 @@ impl GraphEditable for NodeGraph {
         NodeGraph::remove_node(self, id);
     }
     fn title(&self, n: &ModelGraphNode) -> &'static str {
-        n.kind.title()
+        node_kind_title(&n.kind)
     }
     fn inputs(n: &ModelGraphNode) -> &[SocketId] {
         &n.inputs
@@ -1131,10 +1181,10 @@ impl AppStore {
             .map(|k| {
                 let dot = menu_dot_color_for(&theme, &NodeGraph::kind_decls(k));
                 ContextMenuItem {
-                    text: k.title().into(),
+                    text: node_kind_title(k).into(),
                     enabled: true,
                     dot_color: dot,
-                    separator_before: k.title() == "组输出",
+                    separator_before: node_kind_title(k) == "组输出",
                 }
             })
             .collect();

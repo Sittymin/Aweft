@@ -6,11 +6,7 @@ use crate::animation::AnimationLibrary;
 use crate::ids::{ActorId, NodeGraphId};
 use crate::node_graph::NodeGraph;
 
-/// 字幕角色（Actor）：应用图匹配/样式依据。
-///
-/// 只存主名字——匹配（`MatchActor` 的 source）直接用 `name`。
-/// 别名/颜色等属于更高层（UI/导入器）的呈现，不入 model；
-/// model 是比 Aegisub 更高层的抽象，不依赖外部字幕格式的导入归一。
+/// 字幕角色（Actor）：应用图匹配/样式依据，只存主名字。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
     pub id: ActorId,
