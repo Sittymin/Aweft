@@ -26,8 +26,8 @@ pub enum AnimationError {
     MissingAnimData(AnimDataId),
     #[error("动画动作 {0} 不存在")]
     MissingAction(ActionId),
-    #[error("动画数据 {0} 没有全局唯一编辑 Action，无法下压")]
-    NoUniqueAction(AnimDataId),
+    #[error("动画数据 {0} 没有基础编辑 Action，无法下压")]
+    NoBaseAction(AnimDataId),
 }
 
 impl AnimationLibrary {
@@ -74,15 +74,15 @@ impl AnimationLibrary {
         self.actions.get(&action_id)
     }
 
-    /// 把"全局唯一编辑 Action"下压为 NLA 轨道上的一个片断，并重置编辑工作区。
+    /// 把"基础编辑 Action"下压为 NLA 轨道上的一个片断，并重置编辑工作区。
     ///
-    /// - 要求 `anim_data.unique_action` 存在（`None` 时返回 `NoUniqueAction`）；
+    /// - 要求 `anim_data.base_action` 存在（`None` 时返回 `NoBaseAction`）；
     /// - 新建片断以 `no_time_map = true` 精确还原"按绝对时间求值"的行为，
     ///   保证下压前后同一时刻的采样结果一致；
-    /// - 片断压入最底层（底部）新轨道，随后 `set_editing_unique` 指向新建的
+    /// - 片断压入最底层（底部）新轨道，随后 `set_base_action` 指向新建的
     ///   空 Action，供继续下一段编辑。
     ///
-    /// 返回新的"全局唯一编辑 Action"的 `ActionId`。
+    /// 返回新的"基础编辑 Action"的 `ActionId`。
     pub fn push_down_editing_action(
         &mut self,
         anim_data_id: AnimDataId,
@@ -91,8 +91,8 @@ impl AnimationLibrary {
             .anim_datas
             .get(&anim_data_id)
             .ok_or(AnimationError::MissingAnimData(anim_data_id))?
-            .unique_action
-            .ok_or(AnimationError::NoUniqueAction(anim_data_id))?;
+            .base_action
+            .ok_or(AnimationError::NoBaseAction(anim_data_id))?;
 
         let action_name = self
             .actions
@@ -122,7 +122,7 @@ impl AnimationLibrary {
         let fresh_id = fresh.id;
         self.actions.insert(fresh_id, fresh);
         if let Some(anim_data) = self.anim_datas.get_mut(&anim_data_id) {
-            anim_data.set_editing_unique(fresh_id);
+            anim_data.set_base_action(fresh_id);
         }
 
         Ok(fresh_id)

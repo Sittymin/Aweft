@@ -294,25 +294,22 @@ pub fn compute_strip_influence(
 
 /// Find the active strip in a track at the given event time.
 ///
-/// `exclude` 指定一个被忽略的片断下标（如 NLA 中正处于临时编辑的片断，
-/// 它的求值改由编辑工作区以绝对时间提供）。返回 `None` 表示没有活动片断。
+/// Returns `None` if no strip is active (all are out of range and extendmode
+/// doesn't cover the gap).
 pub fn find_active_strip(
     track: &NlaTrack,
     evaltime: f64,
     target_duration: f64,
-    exclude: Option<usize>,
 ) -> Option<ActiveStrip> {
     if track.muted {
         return None;
     }
 
-    // Resolve all strip placements (skip the excluded strip)
+    // Resolve all strip placements
     let resolved: Vec<(&NlaStrip, f64, f64)> = track
         .strips
         .iter()
-        .enumerate()
-        .filter(|(i, _)| Some(*i) != exclude)
-        .map(|(_, s)| {
+        .map(|s| {
             let (start, end) = s.placement.resolve(target_duration);
             (s, start, end)
         })

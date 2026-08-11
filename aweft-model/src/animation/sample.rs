@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::animation::anim_data::{AnimData, BlendMode, EditSource, PropertyPath};
+use crate::animation::anim_data::{AnimData, BlendMode, PropertyPath};
 use crate::animation::strip::{
     compute_strip_influence, evaluate_transition, find_active_strip,
     ActiveStrip, ExtendMode, NlaStrip, StripType,
@@ -46,11 +46,6 @@ pub fn sample_anim_data(
 ) -> Vec<EvaluatedStrip> {
     let mut results = Vec::new();
 
-    // 编辑工作区作为最底层（所有 NLA 轨道之前）叠加，按绝对时间求值。
-    if let Some(base) = evaluate_editing_source(anim_data, anim_time, action_provider) {
-        results.push(base);
-    }
-
     let has_solo = anim_data.tracks.iter().any(|t| t.solo);
 
     for (track_idx, track) in anim_data.tracks.iter().enumerate() {
@@ -58,14 +53,8 @@ pub fn sample_anim_data(
             continue;
         }
 
-        // 临时编辑的片断在 NLA 中跳过（其求值由编辑工作区以绝对时间提供）
-        let exclude = match anim_data.edit_source() {
-            Some(EditSource::NlaStrip { track: t, strip: s }) if t == track_idx => Some(s),
-            _ => None,
-        };
-
         // Find the active strip in this track
-        if let Some(active) = find_active_strip(track, anim_time, target_duration, exclude) {
+        if let Some(active) = find_active_strip(track, anim_time, target_duration) {
             let strip_vals = evaluate_strip(
                 &active,
                 anim_time,
@@ -85,34 +74,35 @@ pub fn sample_anim_data(
         }
     }
 
+    // 基础编辑 Action 叠加在所有 NLA 轨道之上（优先级最高），按绝对时间求值，
+    // 保证用户编辑时总能看得到自己的改动。
+    // 临时编辑期间不叠加——此时编辑的就是 NLA 里片断引用的 Action，改动已
+    // 由 NLA 求值反映。
+    if !anim_data.is_temporary_editing() {
+        if let Some(base) = evaluate_base_action(anim_data, anim_time, action_provider) {
+            results.push(base);
+        }
+    }
+
     results
 }
 
-/// 求值编辑工作区：把当前编辑的 Action 按"绝对时间"采样为最底层片断。
+/// 求值基础编辑 Action：按"绝对时间"采样。
 ///
-/// - `Unique(action)`：直接采样该 Action；
-/// - `NlaStrip { track, strip }`：取片断引用的 Action 采样（附上片断自身的
-///   modifier），与 `Unique` 一样按绝对时间求值，保证编辑效果不受片断
-///   placement 影响；索引越界或片断不是 Action 类型时回退为 `None`。
-///
-/// 基础层以 `Replace` + 满 influence 混入，因此所有 NLA 轨道都会在其上叠加。
-fn evaluate_editing_source(
+/// 基础层以 `Replace` + 满 influence 混入，且叠加在所有 NLA 轨道**之上**
+/// （最后混入），因此会覆盖 NLA 的求值结果——用户编辑时看到的就是
+/// `base_action` 的当前值。仅当处于非临时编辑模式且有 `base_action` 时调用。
+fn evaluate_base_action(
     anim_data: &AnimData,
     anim_time: f64,
     action_provider: &dyn ActionProvider,
 ) -> Option<EvaluatedStrip> {
-    let (action_id, extra_modifiers) = match anim_data.edit_source()? {
-        EditSource::Unique(action) => (action, &[][..]),
-        EditSource::NlaStrip { track, strip } => {
-            let nla_strip = anim_data.tracks.get(track)?.strips.get(strip)?;
-            (nla_strip.action_id()?, &nla_strip.modifiers[..])
-        }
-    };
+    let action_id = anim_data.base_action()?;
 
     let fcurves = action_provider.get_fcurves(action_id)?;
     let mut values = HashMap::new();
     for (prop, fcurve) in &fcurves {
-        let value = evaluate_fcurve_with_extra_modifiers(fcurve, extra_modifiers, anim_time);
+        let value = evaluate_fcurve_with_extra_modifiers(fcurve, &[], anim_time);
         values.insert(prop.clone(), value);
     }
     if values.is_empty() {
