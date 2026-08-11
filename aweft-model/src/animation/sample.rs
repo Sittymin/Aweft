@@ -74,7 +74,45 @@ pub fn sample_anim_data(
         }
     }
 
+    // 基础编辑 Action 叠加在所有 NLA 轨道之上（优先级最高），按绝对时间求值，
+    // 保证用户编辑时总能看得到自己的改动。
+    // 临时编辑期间不叠加——此时编辑的就是 NLA 里片断引用的 Action，改动已
+    // 由 NLA 求值反映。
+    if !anim_data.is_temporary_editing() {
+        if let Some(base) = evaluate_base_action(anim_data, anim_time, action_provider) {
+            results.push(base);
+        }
+    }
+
     results
+}
+
+/// 求值基础编辑 Action：按"绝对时间"采样。
+///
+/// 基础层以 `Replace` + 满 influence 混入，且叠加在所有 NLA 轨道**之上**
+/// （最后混入），因此会覆盖 NLA 的求值结果——用户编辑时看到的就是
+/// `base_action` 的当前值。仅当处于非临时编辑模式且有 `base_action` 时调用。
+fn evaluate_base_action(
+    anim_data: &AnimData,
+    anim_time: f64,
+    action_provider: &dyn ActionProvider,
+) -> Option<EvaluatedStrip> {
+    let action_id = anim_data.base_action()?;
+
+    let fcurves = action_provider.get_fcurves(action_id)?;
+    let mut values = HashMap::new();
+    for (prop, fcurve) in &fcurves {
+        let value = evaluate_fcurve_with_extra_modifiers(fcurve, &[], anim_time);
+        values.insert(prop.clone(), value);
+    }
+    if values.is_empty() {
+        return None;
+    }
+    Some(EvaluatedStrip {
+        blend_mode: BlendMode::Replace,
+        influence: 1.0,
+        values,
+    })
 }
 
 /// Evaluate a single active strip, returning sampled property→value.

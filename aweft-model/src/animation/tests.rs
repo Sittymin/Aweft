@@ -33,6 +33,8 @@ fn make_anim_data(name: &str, tracks: Vec<NlaTrack>) -> AnimData {
         id: AnimDataId::new(),
         name: name.to_string(),
         tracks,
+        base_action: None,
+        temporary_edit: false,
     }
 }
 
@@ -878,4 +880,245 @@ fn blend_scalar_all_modes() {
     assert!((blend_scalar(10.0, 20.0, BlendMode::Multiply, 0.5) - 105.0).abs() < 1e-9);
     // Combine: 10*0.5 + 20*0.5 = 15
     assert!((blend_scalar(10.0, 20.0, BlendMode::Combine, 0.5) - 15.0).abs() < 1e-9);
+}
+
+// ── 基础编辑 Action（base_action）────────────────────────────────────────
+
+#[test]
+fn base_action_overrides_nla() {
+    let base = make_action(
+        "base",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 100.0)],
+        )],
+    );
+    let add = make_action(
+        "add",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 20.0)],
+        )],
+    );
+
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "nla".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip {
+                name: "add".into(),
+                blend_mode: BlendMode::Add,
+                ..NlaStrip::new_action("add", add.id)
+            }],
+        }],
+    );
+    clip.set_base_action(base.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(base);
+    lib.insert_action(add);
+    let id = lib.insert_anim_data(clip);
+
+    // t=0.5：NLA Add 先给 20，base Action 最后以 Replace 覆盖 → 50
+    let map = lib.sample(id, 0.5, 1.0).unwrap();
+    assert!((map.get(&PropertyPath::PositionX).copied().unwrap() - 50.0).abs() < 1e-6);
+}
+
+#[test]
+fn base_action_has_highest_priority() {
+    let base = make_action(
+        "base",
+        vec![make_acurve(
+            PropertyPath::FontSize,
+            vec![Keyframe::linear(0.0, 24.0)],
+        )],
+    );
+    let nla = make_action(
+        "nla",
+        vec![make_acurve(
+            PropertyPath::FontSize,
+            vec![Keyframe::linear(0.0, 48.0)],
+        )],
+    );
+
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "nla".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip::new_action("nla", nla.id)],
+        }],
+    );
+    clip.set_base_action(base.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(base);
+    lib.insert_action(nla);
+    let id = lib.insert_anim_data(clip);
+
+    // NLA Replace 先给 48，base Action 最后以 Replace 覆盖 → 24
+    let map = lib.sample(id, 0.0, 1.0).unwrap();
+    assert_eq!(map.get(&PropertyPath::FontSize).copied(), Some(24.0));
+}
+
+#[test]
+fn temporary_edit_deactivates_base_and_relies_on_nla() {
+    // 临时编辑期间 base_action 不垫底：求值完全由 NLA 轨道决定。
+    // base 动画 PositionX，NLA 动画 FontSize（不同属性，互不干扰）。
+    let base = make_action(
+        "base",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 999.0)],
+        )],
+    );
+    let strip_action = make_action(
+        "strip",
+        vec![make_acurve(
+            PropertyPath::FontSize,
+            vec![Keyframe::linear(0.0, 10.0), Keyframe::linear(1.0, 100.0)],
+        )],
+    );
+
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "main".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip {
+                name: "s".into(),
+                placement: StripPlacement::Absolute { start: 2.0, end: 5.0 },
+                ..NlaStrip::new_action("s", strip_action.id)
+            }],
+        }],
+    );
+    clip.set_base_action(base.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(base);
+    lib.insert_action(strip_action);
+
+    // 非临时编辑：base 垫底，PositionX = 999
+    let id = lib.insert_anim_data(clip.clone());
+    let map = lib.sample(id, 1.0, 5.0).unwrap();
+    assert_eq!(map.get(&PropertyPath::PositionX).copied(), Some(999.0));
+
+    // 进入临时编辑：base 不再垫底 → PositionX 无输出
+    clip.set_temporary_edit(true);
+    let id = lib.insert_anim_data(clip.clone());
+    let map = lib.sample(id, 1.0, 5.0).unwrap();
+    assert!(map.get(&PropertyPath::PositionX).is_none());
+
+    // 片断内（t=3.0）：NLA 按 placement 映射 clip_time=(3-2)/3*1 → 40
+    let map = lib.sample(id, 3.0, 5.0).unwrap();
+    assert!((map.get(&PropertyPath::FontSize).copied().unwrap() - 40.0).abs() < 1e-6);
+
+    // 退出临时编辑：回到 base
+    clip.set_temporary_edit(false);
+    let id = lib.insert_anim_data(clip);
+    let map = lib.sample(id, 1.0, 5.0).unwrap();
+    assert_eq!(map.get(&PropertyPath::PositionX).copied(), Some(999.0));
+}
+
+#[test]
+fn temporary_edit_preserves_base_action() {
+    // 临时编辑期间 base_action 不被触碰，取消后回到它（多次切换亦然）。
+    let base = make_action("u", vec![]);
+    let a = make_action("a", vec![]);
+    let b = make_action("b", vec![]);
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "t".into(),
+            muted: false,
+            solo: false,
+            strips: vec![
+                NlaStrip::new_action("a", a.id),
+                NlaStrip::new_action("b", b.id),
+            ],
+        }],
+    );
+    clip.set_base_action(base.id);
+
+    // 进入临时编辑：base_action 仍在（UI 侧负责记录当前编辑的是哪个片断的 Action）
+    clip.set_temporary_edit(true);
+    assert_eq!(clip.base_action(), Some(base.id));
+    assert!(clip.is_temporary_editing());
+
+    // 切换编辑目标（UI 多次调用 set_temporary_edit(true)）：base 依然不变
+    clip.set_temporary_edit(true);
+    assert_eq!(clip.base_action(), Some(base.id));
+
+    // 取消：直接回到 base
+    clip.set_temporary_edit(false);
+    assert_eq!(clip.base_action(), Some(base.id));
+    assert!(!clip.is_temporary_editing());
+}
+
+#[test]
+fn explicit_base_action_exits_temp_mode() {
+    let other = make_action("o", vec![]);
+    let mut clip = make_anim_data("clip", vec![]);
+    clip.set_temporary_edit(true);
+
+    clip.set_base_action(other.id);
+    assert!(!clip.is_temporary_editing());
+    assert_eq!(clip.base_action(), Some(other.id));
+}
+
+#[test]
+fn push_down_creates_strip_and_preserves_sampling() {
+    let base = make_action(
+        "push",
+        vec![make_acurve(
+            PropertyPath::PositionX,
+            vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 100.0)],
+        )],
+    );
+    let mut clip = make_anim_data("clip", vec![]);
+    clip.set_base_action(base.id);
+
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(base);
+    let id = lib.insert_anim_data(clip);
+
+    let before = lib.sample(id, 0.4, 1.0).unwrap();
+    let v_before = before.get(&PropertyPath::PositionX).copied().unwrap();
+
+    let fresh = lib.push_down_editing_action(id).unwrap();
+
+    let ad = lib.anim_datas.get(&id).unwrap();
+    assert_eq!(ad.tracks.len(), 1);
+    assert_eq!(ad.base_action(), Some(fresh));
+
+    // 新片断 no_time_map → 下压前后同一时刻采样一致
+    let after = lib.sample(id, 0.4, 1.0).unwrap();
+    let v_after = after.get(&PropertyPath::PositionX).copied().unwrap();
+    assert!((v_before - v_after).abs() < 1e-9);
+}
+
+#[test]
+fn push_down_requires_base_action() {
+    let action = make_action("a", vec![]);
+    let mut clip = make_anim_data(
+        "clip",
+        vec![NlaTrack {
+            name: "t".into(),
+            muted: false,
+            solo: false,
+            strips: vec![NlaStrip::new_action("s", action.id)],
+        }],
+    );
+    clip.set_temporary_edit(true);
+    let mut lib = AnimationLibrary::default();
+    lib.insert_action(action);
+    let id = lib.insert_anim_data(clip);
+    assert!(matches!(
+        lib.push_down_editing_action(id),
+        Err(crate::animation::library::AnimationError::NoBaseAction(_))
+    ));
 }

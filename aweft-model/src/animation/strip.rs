@@ -224,6 +224,8 @@ pub struct StripControlCurves {
 ///
 /// Strips within a track are ordered by their time placement (not necessarily
 /// in index order — the evaluation engine resolves the active strip at each time).
+// TODO: NOTE: 或许当中的时间、局部文字索引可以下拉菜单改为外部输入（多个时间对），这样可能就可以在应用图当中建立节点来实现逐字的卡拉OK动画（每个字的时间点都是播放一遍动画）
+// 但是估计 converter 也需要依字拟合了
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NlaTrack {
     pub name: String,
