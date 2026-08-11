@@ -733,7 +733,8 @@ mod tests {
         convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "a".into(), tracks: vec![NlaTrack {
+            &AnimData { id: AnimDataId::new(), name: "a".into(), base_action: None,
+                temporary_edit: false, tracks: vec![NlaTrack {
                 name: "t".into(), muted: false, solo: false,
                 strips: vec![NlaStrip::new_action("s", id)],
             }] },
@@ -821,7 +822,8 @@ mod tests {
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "p".into(), tracks: vec![NlaTrack {
+            &AnimData { id: AnimDataId::new(), name: "p".into(), base_action: None,
+                temporary_edit: false, tracks: vec![NlaTrack {
                 name: "t".into(), muted: false, solo: false,
                 strips: vec![NlaStrip::new_action("s", id)],
             }] },
@@ -874,7 +876,8 @@ mod tests {
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "c".into(), tracks: vec![NlaTrack {
+            &AnimData { id: AnimDataId::new(), name: "c".into(), base_action: None,
+                temporary_edit: false, tracks: vec![NlaTrack {
                 name: "t".into(), muted: false, solo: false,
                 strips: vec![NlaStrip::new_action("s", id)],
             }] },
@@ -903,7 +906,8 @@ mod tests {
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "cf".into(), tracks: vec![NlaTrack {
+            &AnimData { id: AnimDataId::new(), name: "cf".into(), base_action: None,
+                temporary_edit: false, tracks: vec![NlaTrack {
                 name: "t".into(), muted: false, solo: false,
                 strips: vec![NlaStrip::new_action("s", id)],
             }] },
@@ -938,7 +942,8 @@ mod tests {
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "2".into(), tracks: vec![NlaTrack {
+            &AnimData { id: AnimDataId::new(), name: "2".into(), base_action: None,
+                temporary_edit: false, tracks: vec![NlaTrack {
                 name: "t".into(), muted: false, solo: false,
                 strips: vec![
                     NlaStrip { placement: StripPlacement::Absolute{start:0.0,end:2.0}, ..NlaStrip::new_action("s1", r) },
@@ -969,6 +974,8 @@ mod tests {
         let aid = AnimDataId::new();
         lib.insert_anim_data(AnimData {
             id: aid, name: "d".into(),
+            base_action: None,
+            temporary_edit: false,
             tracks: vec![NlaTrack { name: "t".into(), muted: false, solo: false, strips: vec![NlaStrip::new_action("s", id)] }],
         });
         let result = match_to_ass_tags(

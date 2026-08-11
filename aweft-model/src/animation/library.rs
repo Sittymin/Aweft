@@ -7,6 +7,7 @@ use crate::animation::action::Action;
 use crate::animation::anim_data::AnimData;
 use crate::animation::fcurve::FCurve;
 use crate::animation::sample::{sample_anim_data, ActionProvider, EvaluatedStrip};
+use crate::animation::strip::{NlaStrip, NlaTrack, StripPlacement};
 use crate::animation::PropertyPath;
 use crate::ids::{ActionId, AnimDataId};
 
@@ -25,6 +26,8 @@ pub enum AnimationError {
     MissingAnimData(AnimDataId),
     #[error("动画动作 {0} 不存在")]
     MissingAction(ActionId),
+    #[error("动画数据 {0} 没有基础编辑 Action，无法下压")]
+    NoBaseAction(AnimDataId),
 }
 
 impl AnimationLibrary {
@@ -69,6 +72,60 @@ impl AnimationLibrary {
     /// Get an Action by ID.
     pub fn get_action(&self, action_id: ActionId) -> Option<&Action> {
         self.actions.get(&action_id)
+    }
+
+    /// 把"基础编辑 Action"下压为 NLA 轨道上的一个片断，并重置编辑工作区。
+    ///
+    /// - 要求 `anim_data.base_action` 存在（`None` 时返回 `NoBaseAction`）；
+    /// - 新建片断以 `no_time_map = true` 精确还原"按绝对时间求值"的行为，
+    ///   保证下压前后同一时刻的采样结果一致；
+    /// - 片断压入最底层（底部）新轨道，随后 `set_base_action` 指向新建的
+    ///   空 Action，供继续下一段编辑。
+    ///
+    /// 返回新的"基础编辑 Action"的 `ActionId`。
+    pub fn push_down_editing_action(
+        &mut self,
+        anim_data_id: AnimDataId,
+    ) -> Result<ActionId, AnimationError> {
+        let action_id = self
+            .anim_datas
+            .get(&anim_data_id)
+            .ok_or(AnimationError::MissingAnimData(anim_data_id))?
+            .base_action
+            .ok_or(AnimationError::NoBaseAction(anim_data_id))?;
+
+        let action_name = self
+            .actions
+            .get(&action_id)
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| "action".to_string());
+
+        let strip = NlaStrip {
+            name: action_name.clone(),
+            placement: StripPlacement::Full,
+            no_time_map: true,
+            ..NlaStrip::new_action(action_name.clone(), action_id)
+        };
+
+        if let Some(anim_data) = self.anim_datas.get_mut(&anim_data_id) {
+            let track = NlaTrack {
+                name: action_name.clone(),
+                muted: false,
+                solo: false,
+                strips: vec![strip],
+            };
+            anim_data.tracks.insert(0, track);
+        }
+
+        // 重置编辑工作区：新建一份空 Action 供继续编辑
+        let fresh = Action::new(action_name);
+        let fresh_id = fresh.id;
+        self.actions.insert(fresh_id, fresh);
+        if let Some(anim_data) = self.anim_datas.get_mut(&anim_data_id) {
+            anim_data.set_base_action(fresh_id);
+        }
+
+        Ok(fresh_id)
     }
 }
 
