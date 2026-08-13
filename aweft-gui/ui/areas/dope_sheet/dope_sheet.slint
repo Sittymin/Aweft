@@ -306,7 +306,6 @@ export component DopeSheet inherits Rectangle {
                 height: 2px;
 
                 // 前半段实线（线性整段实线；常量前半实线）。
-                // 注意：必须显式 x:0px，否则 Slint 会把设了宽度但没有 x 的子元素自动居中。
                 Rectangle {
                     x: 0px;
                     width: conn.is-hold ? parent.width / 2 : parent.width;
