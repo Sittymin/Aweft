@@ -1,4 +1,22 @@
-use anyhow::{Result, anyhow};
+//! 屏幕几何基础类型（矩形、向量、邻接关系）。
+//!
+//! # 坐标系约定（务必阅读，混用是历史上 bug 的根源）
+//!
+//! screen 层存在**三个坐标系**，语义完全不同，禁止混用：
+//!
+//! 1. **物理像素 · 原始顶点坐标（`geometry_rect`）**：`ScrVert` 的真实位置，
+//!    几何运算（创建/移动顶点、join/split 内部、`apply_verts_move`）一律用它。
+//! 2. **物理像素 · 布局坐标（`layout_rect`）**：`geometry_rect` 收缩 margin 后
+//!    的结果，即 `tot_rct`。UI 显示、命中检测（`find_area_at_position`）、
+//!    分割/合并预览用。二者差一个 margin（非全屏/非临时/非单 area 时）。
+//! 3. **逻辑像素**：最终写入 Slint 属性的坐标，物理像素 ÷ `scale_factor`。
+//!    converter 层（`bridge/converters`）负责转换，用 `ThemeSettings::to_logical_px`
+//!    / `to_physical_px`，不要手写 `as f64 / scale`。
+//!
+//! 引用 Blender：几何以物理像素存储（与 Blender 一致），仅在 UI 输出时换算
+//! 逻辑像素（对应 Slint 的 `LogicalLength`/`PhysicalLength` 区分）。
+
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Clone)]
 pub struct Vec2u32 {
@@ -74,10 +92,13 @@ impl Rcti {
     /// 获取矩形的宽度
     pub fn width(&self) -> u32 {
         if self.xmax < self.xmin {
-            eprintln!("错误：Rcti.width() 中 xmax < xmin!");
-            eprintln!(
+            log::error!("错误：Rcti.width() 中 xmax < xmin!");
+            log::error!(
                 "  矩形: xmin={}, xmax={}, ymin={}, ymax={}",
-                self.xmin, self.xmax, self.ymin, self.ymax
+                self.xmin,
+                self.xmax,
+                self.ymin,
+                self.ymax
             );
             panic!("xmax ({}) < xmin ({})", self.xmax, self.xmin);
         }
@@ -87,10 +108,13 @@ impl Rcti {
     /// 获取矩形的高度
     pub fn height(&self) -> u32 {
         if self.ymax < self.ymin {
-            eprintln!("错误：Rcti.height() 中 ymax < ymin!");
-            eprintln!(
+            log::error!("错误：Rcti.height() 中 ymax < ymin!");
+            log::error!(
                 "  矩形: xmin={}, xmax={}, ymin={}, ymax={}",
-                self.xmin, self.xmax, self.ymin, self.ymax
+                self.xmin,
+                self.xmax,
+                self.ymin,
+                self.ymax
             );
             panic!("ymax ({}) < ymin ({})", self.ymax, self.ymin);
         }

@@ -11,7 +11,7 @@ use super::{
 };
 
 /// 屏幕区域地图，管理所有的顶点、边和区域
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScrAreaMap {
     pub verts: SlotMap<ScrVertKey, ScrVert>, // 存储所有顶点
     pub edges: SlotMap<ScrEdgeKey, ScrEdge>, // 存储所有边
@@ -219,39 +219,6 @@ impl ScrAreaMap {
         self.create_edge(v1, v2)
     }
     /// 将所有顶点按窗口边缘吸附规则校正
-    pub fn enforce_window_edge_snap(&mut self, window_rect: &Rcti, theme_settings: &ThemeSettings) {
-        let d2 = theme_settings.get_edge_filter_boundary().round() as u32; // 2x
-        let d1 = theme_settings.get_edge_snap_target().round() as u32; // 1x
-
-        let top_line = window_rect.ymin.saturating_add(d1);
-        let bottom_line = window_rect.ymax.saturating_sub(d1);
-        let left_line = window_rect.xmin.saturating_add(d1);
-        let right_line = window_rect.xmax.saturating_sub(d1);
-
-        let top_thresh = window_rect.ymin.saturating_add(d2);
-        let bottom_thresh = window_rect.ymax.saturating_sub(d2);
-        let left_thresh = window_rect.xmin.saturating_add(d2);
-        let right_thresh = window_rect.xmax.saturating_sub(d2);
-
-        for (_, v) in &mut self.verts {
-            // 上
-            if v.vec.y < top_thresh {
-                v.vec.y = top_line;
-            }
-            // 右
-            if v.vec.x > right_thresh {
-                v.vec.x = right_line;
-            }
-            // 下
-            if v.vec.y > bottom_thresh {
-                v.vec.y = bottom_line;
-            }
-            // 左
-            if v.vec.x < left_thresh {
-                v.vec.x = left_line;
-            }
-        }
-    }
     pub fn new() -> Self {
         ScrAreaMap {
             verts: SlotMap::with_key(),
@@ -350,7 +317,7 @@ impl ScrAreaMap {
     /// 根据物理像素坐标查找鼠标所在的区域
     pub fn find_area_at_position(&self, x: u32, y: u32) -> Option<ScrAreaKey> {
         for (area_key, area) in &self.areas {
-            let (totrct, _, _) = area.geometry();
+            let (totrct, _, _) = area.layout_rect();
 
             // 使用物理像素坐标进行比较
             if x >= totrct.xmin && x <= totrct.xmax && y >= totrct.ymin && y <= totrct.ymax {
@@ -368,7 +335,7 @@ impl ScrAreaMap {
         area_type: Option<AreaType>,
     ) -> Option<ScrAreaKey> {
         for (area_key, area) in &self.areas {
-            let (totrct, _, _) = area.geometry();
+            let (totrct, _, _) = area.layout_rect();
 
             if x >= totrct.xmin as f32
                 && x <= totrct.xmax as f32

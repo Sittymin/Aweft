@@ -1,6 +1,5 @@
 use crate::{bridge::types::MainWindow, store::AppStore};
 use anyhow::{Context, Result};
-use futures::StreamExt;
 use gstreamer::prelude::*;
 use slint::ComponentHandle;
 use std::{cell::RefCell, rc::Rc, sync::OnceLock};
@@ -85,11 +84,11 @@ pub fn connect_video_to_wgpu(
             use gstreamer::MessageView;
             match msg.view() {
                 MessageView::Eos(..) => {
-                    println!("视频播放结束");
+                    log::info!("视频播放结束");
                     break;
                 }
                 MessageView::Error(err) => {
-                    eprintln!(
+                    log::error!(
                         "GStreamer 错误: {} (来自 {:?})",
                         err.error(),
                         err.src().map(|s| s.path_string())
@@ -97,7 +96,7 @@ pub fn connect_video_to_wgpu(
                     break;
                 }
                 MessageView::Warning(warning) => {
-                    eprintln!(
+                    log::warn!(
                         "GStreamer 警告: {} (来自 {:?})",
                         warning.error(),
                         warning.src().map(|s| s.path_string())
@@ -113,6 +112,6 @@ pub fn connect_video_to_wgpu(
     state.video_sink = Some(sink_element);
     state.wgpu_sink = Some(wgpu_sink);
 
-    println!("✅ 视频系统连接成功，开始播放");
+    log::info!("✅ 视频系统连接成功，开始播放");
     Ok(())
 }

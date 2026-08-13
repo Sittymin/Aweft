@@ -10,6 +10,15 @@ use crate::{
     },
 };
 
+/// join 产生的受影响区域集合（投影据此精确同步 UI）。
+#[derive(Debug, Default, Clone)]
+pub struct JoinAffected {
+    /// 被移除的 area key（主合并 + 递归空位填充删除）。
+    pub removed: Vec<ScrAreaKey>,
+    /// 新创建的 area key（对齐裁剪 split 产生）。
+    pub added: Vec<ScrAreaKey>,
+}
+
 impl ScrAreaMap {
     /// 辅助函数：检测邻接关系
     fn detect_adjacency(
@@ -78,7 +87,7 @@ impl ScrAreaMap {
             .areas
             .get(source_area_key)
             .context("找不到Area")?
-            .geometry();
+            .layout_rect();
         let mut join_highlight_overlay_data = JoinHighlightOverlayData {
             height: source_area_height as f32,
             width: source_area_width as f32,
@@ -274,7 +283,7 @@ impl ScrAreaMap {
                     });
                     join_highlight_overlay_data.y = right.ymin as f32;
                     join_highlight_overlay_data.height -= close_height as f32;
-                    println!("触发：{:#?}", left)
+                    log::debug!("触发：{:#?}", left)
                 }
 
                 // ░░░░░░░░░░░░░░░░░░░
@@ -377,7 +386,42 @@ impl ScrAreaMap {
 
     /// 合并两个相邻的区域
     /// 这个函数实现了Blender中screen_area_join_aligned的逻辑
+    ///
+    /// 返回受影响集合（投影精确同步 UI 用）：
+    /// - `removed`：被移除的 area key（主合并 + 递归空位填充删除）
+    /// - `added`：新创建的 area key（对齐裁剪 split 产生）
+    /// 投影据此 `row_removed`/`row_added` 精确增删，**不触发全量重建**
+    /// （存量 Area 组件连同内部面板完全复用）。
     pub fn apply_join_adjacent_areas(
+        &mut self,
+        source_area_key: ScrAreaKey,
+        target_area_key: ScrAreaKey,
+        adjacency: Adjacency,
+        theme_settings: &ThemeSettings,
+    ) -> Result<JoinAffected> {
+        // 事务性：先备份。join 过程会多次 split/改 vert，任一步失败时回滚，
+        // 避免 reducer 返回 Err 后 screen_map 残留部分修改（UI 与数据不一致）。
+        let before: std::collections::HashSet<ScrAreaKey> =
+            self.areas.iter().map(|(k, _)| k).collect();
+        let backup = self.clone();
+        let result = self.apply_join_adjacent_areas_inner(
+            source_area_key,
+            target_area_key,
+            adjacency,
+            theme_settings,
+        );
+        if let Err(e) = result {
+            *self = backup;
+            return Err(e);
+        }
+        let after: std::collections::HashSet<ScrAreaKey> =
+            self.areas.iter().map(|(k, _)| k).collect();
+        let removed: Vec<ScrAreaKey> = before.difference(&after).copied().collect();
+        let added: Vec<ScrAreaKey> = after.difference(&before).copied().collect();
+        Ok(JoinAffected { removed, added })
+    }
+
+    fn apply_join_adjacent_areas_inner(
         &mut self,
         source_area_key: ScrAreaKey,
         target_area_key: ScrAreaKey,
@@ -833,6 +877,7 @@ impl ScrAreaMap {
 
         Ok(())
     }
+
     fn fill_close_area(
         &mut self,
         close_area_key: ScrAreaKey,
@@ -861,21 +906,27 @@ impl ScrAreaMap {
             .areas
             .get(best_neighbor)
             .context(format!("源区域不存在: {:?}", best_neighbor))?
-            .get_raw_geometry(&self.verts);
+            .geometry_rect(&self.verts);
 
         let close_rect = self
             .areas
             .get(close_area_key)
             .context(format!("目标区域不存在: {:?}", close_area_key))?
-            .get_raw_geometry(&self.verts);
+            .geometry_rect(&self.verts);
 
-        println!(
+        log::debug!(
             "邻居区域坐标: ({}, {}) 到 ({}, {})",
-            neighbor_rect.xmin, neighbor_rect.ymin, neighbor_rect.xmax, neighbor_rect.ymax
+            neighbor_rect.xmin,
+            neighbor_rect.ymin,
+            neighbor_rect.xmax,
+            neighbor_rect.ymax
         );
-        println!(
+        log::debug!(
             "empty区域坐标: ({}, {}) 到 ({}, {})",
-            close_rect.xmin, close_rect.ymin, close_rect.xmax, close_rect.ymax
+            close_rect.xmin,
+            close_rect.ymin,
+            close_rect.xmax,
+            close_rect.ymax
         );
 
         // 检测相邻关系
@@ -1309,12 +1360,12 @@ impl ScrAreaMap {
                             next_close_areas.append(&mut new_closes);
                         }
                         Err(e) => {
-                            eprintln!("填充 close 区域 {:?} 失败: {}", close_area_key, e);
+                            log::warn!("填充 close 区域 {:?} 失败: {}", close_area_key, e);
                             // 继续处理其他区域，不中断整个流程
                         }
                     }
                 } else {
-                    eprintln!("Close 区域 {:?} 已不存在，跳过处理", close_area_key);
+                    log::warn!("Close 区域 {:?} 已不存在，跳过处理", close_area_key);
                 }
             }
 
@@ -1322,12 +1373,12 @@ impl ScrAreaMap {
         }
 
         if iteration >= MAX_ITERATIONS {
-            println!(
+            log::error!(
                 "警告: 达到最大迭代次数 {}，可能存在无限循环",
                 MAX_ITERATIONS
             );
             if !current_close_areas.is_empty() {
-                println!(
+                log::error!(
                     "仍有 {} 个 close 区域未处理: {:?}",
                     current_close_areas.len(),
                     current_close_areas
@@ -1362,8 +1413,8 @@ impl ScrAreaMap {
         source_area: &ScrArea,
         target_area: &ScrArea,
     ) -> Option<f64> {
-        let r_source = source_area.get_raw_geometry(&self.verts);
-        let r_target = target_area.get_raw_geometry(&self.verts);
+        let r_source = source_area.geometry_rect(&self.verts);
+        let r_target = target_area.geometry_rect(&self.verts);
 
         // 将坐标转换为 f64 以进行精确计算
         let (rs_xmin, rs_xmax) = (r_source.xmin as f64, r_source.xmax as f64);
@@ -1414,14 +1465,8 @@ impl ScrAreaMap {
         // 最小重叠要求 (与 apply_join_adjacent_areas 保持一致)
         let min_area_size = theme_settings.get_area_min_size();
 
-        let source_rect = self
-            .areas
-            .get(source_area_key)?
-            .get_raw_geometry(&self.verts);
-        let target_rect = self
-            .areas
-            .get(target_area_key)?
-            .get_raw_geometry(&self.verts);
+        let source_rect = self.areas.get(source_area_key)?.geometry_rect(&self.verts);
+        let target_rect = self.areas.get(target_area_key)?.geometry_rect(&self.verts);
 
         self.detect_adjacency(source_rect, target_rect, min_area_size)
     }
@@ -1492,8 +1537,8 @@ mod tests {
         let large_area = screen_map.areas.get(large_area_key).unwrap();
         let small_area = screen_map.areas.get(small_area_key).unwrap();
 
-        let large_rect = large_area.get_raw_geometry(&screen_map.verts);
-        let small_rect = small_area.get_raw_geometry(&screen_map.verts);
+        let large_rect = large_area.geometry_rect(&screen_map.verts);
+        let small_rect = small_area.geometry_rect(&screen_map.verts);
 
         assert_eq!(large_rect.xmin, 0);
         assert_eq!(large_rect.ymin, 0);
@@ -1527,7 +1572,7 @@ mod tests {
         let mut found_right_area = false;
 
         for (area_key, area) in &screen_map.areas {
-            let rect = area.get_raw_geometry(&screen_map.verts);
+            let rect = area.geometry_rect(&screen_map.verts);
             let width = rect.xmax - rect.xmin;
             let height = rect.ymax - rect.ymin;
 
@@ -1701,12 +1746,12 @@ mod tests {
             .areas
             .get(area1_key)
             .unwrap()
-            .get_raw_geometry(&screen_map.verts);
+            .geometry_rect(&screen_map.verts);
         let area2_rect = screen_map
             .areas
             .get(area2_key)
             .unwrap()
-            .get_raw_geometry(&screen_map.verts);
+            .geometry_rect(&screen_map.verts);
         let adjacency_result = screen_map.detect_adjacency(area1_rect, area2_rect, 1);
 
         // 检测相邻关系应该失败，因为区域不相邻
@@ -1729,5 +1774,83 @@ mod tests {
         println!("✓ 区域数量保持不变");
 
         println!("=== 不相邻区域合并测试完成 ===");
+    }
+
+    #[test]
+    fn test_join_with_margin_areas_does_not_panic() {
+        // 复现既有 bug：带边距（is_temp_window=false）的相邻 area join 时，
+        // trim 产生的窄条 ≤ 2*边距 → calculate_totrct_and_size 收缩后 ymax<ymin
+        // panic。修复后应返回 Err（split 被 min_area_size 拒绝），且 screen_map
+        // 原子回滚（区域数量与顶点数不变）。
+        let mut screen_map = ScrAreaMap::new();
+        let theme_settings = ThemeSettings::new(
+            1.0,  // scale_factor
+            1.0,  // base_border_width → margin = 1px
+            10.0, // base_actionzone_side_length
+            5.0,  // base_half_edge_width
+            3,    // area_min_size
+        );
+
+        // 左右相邻：左 (0,0)-(10,10)，右 (10,1)-(20,9)
+        // 右比左上下各凸出 1px → join 时 trim 出 1px 高的窄条（< 2*边距）
+        let v1 = screen_map.add_vertex_to_geometry(0, 0);
+        let v2 = screen_map.add_vertex_to_geometry(10, 0);
+        let v3 = screen_map.add_vertex_to_geometry(10, 10);
+        let v4 = screen_map.add_vertex_to_geometry(0, 10);
+        let v5 = screen_map.add_vertex_to_geometry(10, 1);
+        let v6 = screen_map.add_vertex_to_geometry(20, 1);
+        let v7 = screen_map.add_vertex_to_geometry(20, 9);
+        let v8 = screen_map.add_vertex_to_geometry(10, 9);
+
+        for (a, b) in [
+            (v1, v2),
+            (v2, v3),
+            (v3, v4),
+            (v4, v1),
+            (v5, v6),
+            (v6, v7),
+            (v7, v8),
+            (v8, v5),
+        ] {
+            screen_map.add_edge_to_geometry(a, b);
+        }
+
+        let mut left = ScrArea::new(v1, v2, v3, v4, AreaType::Empty, false, false, false);
+        left.calculate_totrct_and_size(&screen_map.verts, &theme_settings);
+        let left_key = screen_map.areas.insert(left);
+
+        let mut right = ScrArea::new(v5, v6, v7, v8, AreaType::Timeline, false, false, false);
+        right.calculate_totrct_and_size(&screen_map.verts, &theme_settings);
+        let right_key = screen_map.areas.insert(right);
+
+        let areas_before = screen_map.areas.len();
+        let verts_before = screen_map.verts.len();
+
+        let left_rect = screen_map
+            .areas
+            .get(left_key)
+            .unwrap()
+            .geometry_rect(&screen_map.verts);
+        let right_rect = screen_map
+            .areas
+            .get(right_key)
+            .unwrap()
+            .geometry_rect(&screen_map.verts);
+        let adjacency = screen_map
+            .detect_adjacency(left_rect, right_rect, 3)
+            .expect("应检测到相邻");
+
+        let result =
+            screen_map.apply_join_adjacent_areas(right_key, left_key, adjacency, &theme_settings);
+
+        // 不 panic，且 join 成功或原子回滚
+        if result.is_ok() {
+            // join 成功：区域数不应小于 2（至少左块保留）
+            assert!(screen_map.areas.len() >= 2);
+        } else {
+            // 失败：原子回滚，screen_map 无残留修改
+            assert_eq!(screen_map.areas.len(), areas_before, "失败应回滚 area");
+            assert_eq!(screen_map.verts.len(), verts_before, "失败应回滚 verts");
+        }
     }
 }
