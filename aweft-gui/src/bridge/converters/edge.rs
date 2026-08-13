@@ -1,14 +1,14 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use slint::{Model, ModelRc, VecModel};
 
 use crate::bridge::slint_area_key_to_key;
 use crate::bridge::types::{
-    ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData, SlintKey, key_to_slint_key,
+    key_to_slint_key, ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData, SlintKey,
 };
 use crate::screen::edge::ScrEdgeKey;
 use crate::screen::vertex::ScrVertKey;
-use crate::store::AppStore;
 use crate::store::state::AppState;
+use crate::store::AppStore;
 use std::collections::{HashMap, HashSet};
 
 /// 内部边数据结构，包含计算出的所有信息
@@ -113,9 +113,6 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
         }
     }
 
-    let half_edge_width = state.theme_settings.get_half_edge_width();
-    let scale_factor = state.theme_settings.get_scale_factor();
-
     let mut result: Vec<EdgeSegmentData> = Vec::new();
 
     for (edge_axis, mut spans) in grouped_segments {
@@ -127,45 +124,7 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
             other => other,
         });
 
-        let mut merged: Vec<SegmentRef> = Vec::new();
-        let mut preview: Option<SegmentRef> = None;
-
-        for span in spans {
-            // 与上一个
-            if let Some(mut preview_span) = preview {
-                use std::cmp::Ordering;
-                match span.start_pos.cmp(&preview_span.end_pos) {
-                    // 中间存在分段，非连续（preview_span 没有继续可合并的部分了）
-                    Ordering::Greater => {
-                        // 提交已合并完成的部分
-                        merged.push(preview_span);
-                        preview = Some(span);
-                    }
-                    // 片段有重合或相连接
-                    Ordering::Equal | Ordering::Less => {
-                        preview_span.vert_keys.extend(span.vert_keys);
-
-                        preview_span.edge_keys.extend(span.edge_keys);
-
-                        let new_merge_span = SegmentRef {
-                            start_pos: span.start_pos.min(preview_span.start_pos),
-                            end_pos: span.end_pos.max(preview_span.end_pos),
-                            vert_keys: preview_span.vert_keys,
-                            edge_keys: preview_span.edge_keys,
-                        };
-                        preview = Some(new_merge_span);
-                    }
-                }
-            }
-            // 第一个
-            else {
-                preview = Some(span);
-            }
-        }
-        // 补上最后一个
-        if let Some(seg) = preview {
-            merged.push(seg);
-        }
+        let merged = merge_segments(spans);
 
         // 生成此轴向 UI 矩形数据放入到 result
         for seg in merged {
@@ -180,8 +139,7 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
                 seg.start_pos,
                 seg.end_pos,
                 edge_axis.offset,
-                half_edge_width,
-                scale_factor,
+                &state.theme_settings,
             );
 
             result.push(EdgeSegmentData {
@@ -198,14 +156,58 @@ fn compute_edges_data(state: &AppState) -> Vec<EdgeSegmentData> {
     result
 }
 
+/// 合并同一轴向（EdgeAxis）的共线段。
+///
+/// 输入按 `start_pos` 升序。合并规则：
+/// - 当前段 `start <= prev.end`（重合或相接）：合并；
+/// - 当前段 `start == prev.end + 1`（相差 1px，顶点坐标经分割/舍入可能产生
+///   的相邻间隙）：**仍视为连续合并**——否则"几乎共线"的边会显示成两段；
+/// - 否则提交 prev，开始新段。
+fn merge_segments(spans: Vec<SegmentRef>) -> Vec<SegmentRef> {
+    // 相邻容差：两段共线段端点相差 ≤1px 仍视为连续。
+    const TOUCH_TOLERANCE: u32 = 1;
+
+    let mut merged: Vec<SegmentRef> = Vec::new();
+    let mut preview: Option<SegmentRef> = None;
+
+    for span in spans {
+        // 与上一个
+        if let Some(mut preview_span) = preview {
+            let gap = span.start_pos.saturating_sub(preview_span.end_pos);
+            if span.start_pos > preview_span.end_pos && gap > TOUCH_TOLERANCE {
+                // 中间存在分段且超出相邻容差（非连续，preview_span 没有
+                // 继续可合并的部分了）
+                merged.push(preview_span);
+                preview = Some(span);
+            } else {
+                // 片段重合、相接或相差 ≤ 容差：合并
+                preview_span.vert_keys.extend(span.vert_keys);
+                preview_span.edge_keys.extend(span.edge_keys);
+                preview = Some(SegmentRef {
+                    start_pos: span.start_pos.min(preview_span.start_pos),
+                    end_pos: span.end_pos.max(preview_span.end_pos),
+                    vert_keys: preview_span.vert_keys,
+                    edge_keys: preview_span.edge_keys,
+                });
+            }
+        }
+        // 第一个
+        else {
+            preview = Some(span);
+        }
+    }
+    // 补上最后一个
+    if let Some(seg) = preview {
+        merged.push(seg);
+    }
+    merged
+}
+
 // 将传入的 edge_keys 当作整体生成 UI 数据
 fn compute_segment_for_edges(
     state: &AppState,
     edge_keys: &[ScrEdgeKey],
 ) -> Result<(ScrEdgeTouchAreaDisplayData, ScrEdgeTouchAreaData)> {
-    let half_edge_width = state.theme_settings.get_half_edge_width();
-    let scale_factor = state.theme_settings.get_scale_factor();
-
     let mut start: u32;
     let mut end: u32;
     let mut vert_keys = HashSet::new();
@@ -285,8 +287,7 @@ fn compute_segment_for_edges(
         start,
         end,
         edge_axis.offset,
-        half_edge_width,
-        scale_factor,
+        &state.theme_settings,
     );
 
     let edge_keys_model = ModelRc::new(VecModel::from(edge_keys_slint));
@@ -311,61 +312,32 @@ fn compute_segment_for_edges(
     Ok((display, touch))
 }
 
-// 计算 Edge UI 矩形
+// 计算 Edge UI 矩形（物理像素 → 逻辑像素，走 ThemeSettings::to_logical_px）
 fn rect_for_edge(
     is_horizontal: bool,
     start: u32,
     end: u32,
     offset: u32,
-    half_edge_width: f64,
-    scale_factor: f64,
+    theme_settings: &crate::bridge::types::ThemeSettings,
 ) -> (f32, f32, f32, f32) {
+    let half_edge_width = theme_settings.get_half_edge_width();
+    // 边宽 = 2×半宽（物理→逻辑）+1 中心补偿。注意：这是唯一先加后转的
+    // 逻辑转换（其余都走 to_logical_px）——因为 +1 补偿必须在 ÷scale 后、
+    // 取整前加，保证边始终至少 1 逻辑像素可见。
+    let edge_thickness = (half_edge_width * 2.0 / theme_settings.get_scale_factor() + 1.0) as f32;
     if is_horizontal {
-        let width = ((end.saturating_sub(start)) as f64 / scale_factor) as f32;
-        // 因为是偶数，所以后面加一个 1 作为中心补充
-        let height = (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32;
-        let x = (start as f64 / scale_factor) as f32;
-        let y = ((offset as f64 - half_edge_width) / scale_factor) as f32;
+        let width = theme_settings.to_logical_px(end.saturating_sub(start) as f64);
+        let height = edge_thickness;
+        let x = theme_settings.to_logical_px(start as f64);
+        let y = theme_settings.to_logical_px(offset as f64 - half_edge_width);
         (x, y, width, height)
     } else {
-        let height = ((end.saturating_sub(start)) as f64 / scale_factor) as f32;
-        let width = (((half_edge_width * 2.0) / scale_factor) + 1.0) as f32;
-        let x = ((offset as f64 - half_edge_width) / scale_factor) as f32;
-        let y = (start as f64 / scale_factor) as f32;
+        let height = theme_settings.to_logical_px(end.saturating_sub(start) as f64);
+        let width = edge_thickness;
+        let x = theme_settings.to_logical_px(offset as f64 - half_edge_width);
+        let y = theme_settings.to_logical_px(start as f64);
         (x, y, width, height)
     }
-}
-
-/// 转换为显示数据
-/// 此函数会计算合并边（开销大）
-pub fn convert_all_edges_display(state: &AppState) -> Vec<ScrEdgeTouchAreaDisplayData> {
-    compute_edges_data(state)
-        .into_iter()
-        .map(|edge| ScrEdgeTouchAreaDisplayData {
-            x: edge.x,
-            y: edge.y,
-            width: edge.width,
-            height: edge.height,
-            active: false,
-            edge_keys: ModelRc::new(VecModel::from(edge.edge_keys)),
-        })
-        .collect()
-}
-
-/// 转换为触摸区域数据
-/// 此函数会计算合并边（开销大）
-pub fn convert_all_edges_touch(state: &AppState) -> Vec<ScrEdgeTouchAreaData> {
-    compute_edges_data(state)
-        .into_iter()
-        .map(|edge| ScrEdgeTouchAreaData {
-            x: edge.x,
-            y: edge.y,
-            width: edge.width,
-            height: edge.height,
-            vert_keys: ModelRc::new(VecModel::from(edge.vert_keys)),
-            edge_keys: ModelRc::new(VecModel::from(edge.edge_keys)),
-        })
-        .collect()
 }
 
 /// 同时转换显示和触摸数据
@@ -436,17 +408,50 @@ pub fn recompute_edges_by_indices(
     out
 }
 
-/// 批量计算 Edge 的 UI 图形信息（基于当前模型的合并行）
-pub fn convert_edges_raw(
-    store: &AppStore,
-    edge_keys: &[ScrEdgeKey],
-) -> (Vec<ScrEdgeTouchAreaDisplayData>, Vec<ScrEdgeTouchAreaData>) {
-    let recomputed = recompute_edges_by_indices(store, edge_keys);
-    let mut displays = Vec::new();
-    let mut touches = Vec::new();
-    for (_idx, d, t) in recomputed {
-        displays.push(d);
-        touches.push(t);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(start: u32, end: u32) -> SegmentRef {
+        SegmentRef {
+            start_pos: start,
+            end_pos: end,
+            vert_keys: HashSet::new(),
+            edge_keys: HashSet::new(),
+        }
     }
-    (displays, touches)
+
+    #[test]
+    fn contiguous_segments_merge() {
+        // 精确相接：0-10 + 10-20 → 0-20
+        let merged = merge_segments(vec![span(0, 10), span(10, 20)]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].start_pos, 0);
+        assert_eq!(merged[0].end_pos, 20);
+    }
+
+    #[test]
+    fn overlapping_segments_merge() {
+        // 重合：0-15 + 10-20 → 0-20
+        let merged = merge_segments(vec![span(0, 15), span(10, 20)]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].start_pos, 0);
+        assert_eq!(merged[0].end_pos, 20);
+    }
+
+    #[test]
+    fn near_contiguous_with_1px_gap_merges() {
+        // "几乎共线"：0-10 + 11-20（相差 1px）→ 合并为 0-20
+        let merged = merge_segments(vec![span(0, 10), span(11, 20)]);
+        assert_eq!(merged.len(), 1, "1px 间隙的共线段应合并");
+        assert_eq!(merged[0].start_pos, 0);
+        assert_eq!(merged[0].end_pos, 20);
+    }
+
+    #[test]
+    fn separated_segments_do_not_merge() {
+        // 明显分离：0-10 + 15-25（差 5px）→ 两段
+        let merged = merge_segments(vec![span(0, 10), span(15, 25)]);
+        assert_eq!(merged.len(), 2);
+    }
 }

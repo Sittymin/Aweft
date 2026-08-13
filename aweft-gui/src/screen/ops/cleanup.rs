@@ -76,7 +76,7 @@ impl ScrAreaMap {
         }
 
         if removed_count > 0 {
-            println!("清理了 {} 条未使用的边", removed_count);
+            log::debug!("清理了 {} 条未使用的边", removed_count);
         }
     }
 
@@ -101,7 +101,7 @@ impl ScrAreaMap {
                 vert_keys.sort();
                 let representative = vert_keys[0];
 
-                println!(
+                log::debug!(
                     "合并重叠顶点 {:?} 到代表顶点 {:?}",
                     &vert_keys[1..],
                     representative
@@ -122,16 +122,20 @@ impl ScrAreaMap {
         // 3. 更新所有边的顶点引用
         for (_edge_key, edge) in &mut self.edges {
             if let Some(&new_v1) = vertex_replacements.get(&edge.v1) {
-                println!(
+                log::debug!(
                     "边 {:?}: v1 从 {:?} 替换为 {:?}",
-                    _edge_key, edge.v1, new_v1
+                    _edge_key,
+                    edge.v1,
+                    new_v1
                 );
                 edge.v1 = new_v1;
             }
             if let Some(&new_v2) = vertex_replacements.get(&edge.v2) {
-                println!(
+                log::debug!(
                     "边 {:?}: v2 从 {:?} 替换为 {:?}",
-                    _edge_key, edge.v2, new_v2
+                    _edge_key,
+                    edge.v2,
+                    new_v2
                 );
                 edge.v2 = new_v2;
             }
@@ -146,7 +150,7 @@ impl ScrAreaMap {
                 let area = &self.areas[area_key];
 
                 if let Some(&new_tl) = vertex_replacements.get(&area.v_top_left()) {
-                    println!(
+                    log::debug!(
                         "区域 {:?}: v_top_left 从 {:?} 替换为 {:?}",
                         area_key,
                         area.v_top_left(),
@@ -155,7 +159,7 @@ impl ScrAreaMap {
                     updates.push(VertPosition::TopLeft(new_tl));
                 }
                 if let Some(&new_tr) = vertex_replacements.get(&area.v_top_right()) {
-                    println!(
+                    log::debug!(
                         "区域 {:?}: v_top_right 从 {:?} 替换为 {:?}",
                         area_key,
                         area.v_top_right(),
@@ -164,7 +168,7 @@ impl ScrAreaMap {
                     updates.push(VertPosition::TopRight(new_tr));
                 }
                 if let Some(&new_br) = vertex_replacements.get(&area.v_bottom_right()) {
-                    println!(
+                    log::debug!(
                         "区域 {:?}: v_bottom_right 从 {:?} 替换为 {:?}",
                         area_key,
                         area.v_bottom_right(),
@@ -173,7 +177,7 @@ impl ScrAreaMap {
                     updates.push(VertPosition::BottomRight(new_br));
                 }
                 if let Some(&new_bl) = vertex_replacements.get(&area.v_bottom_left()) {
-                    println!(
+                    log::debug!(
                         "区域 {:?}: v_bottom_left 从 {:?} 替换为 {:?}",
                         area_key,
                         area.v_bottom_left(),
@@ -192,14 +196,14 @@ impl ScrAreaMap {
         // 5. 删除被合并的顶点
         for vert_key in vertices_to_remove {
             self.verts.remove(vert_key);
-            println!("删除重叠顶点 {:?}", vert_key);
+            log::debug!("删除重叠顶点 {:?}", vert_key);
         }
 
         // 6. 清理可能产生的重复边和无效边
         self.remove_duplicate_edges();
         self.remove_unused_edges();
 
-        println!(
+        log::debug!(
             "重叠顶点清理完成，共合并了 {} 个顶点",
             vertex_replacements.len()
         );

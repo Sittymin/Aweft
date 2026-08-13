@@ -1,6 +1,6 @@
+use crate::depsgraph::Tag;
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::store::state::AppState;
-use crate::store::state_change::{AreasChange, StateChange};
 use anyhow::Result;
 
 /// 处理区域类型切换
@@ -8,22 +8,22 @@ pub fn handle_switch_type(
     state: &mut AppState,
     area_key: ScrAreaKey,
     area_type: AreaType,
-) -> Result<StateChange> {
+) -> Result<Vec<Tag>> {
     // 尝试获取并修改对应的 Area
     if let Some(area) = state.screen_map.areas.get_mut(area_key) {
         let old_type = area.area_type.clone();
         area.area_type = area_type.clone();
 
-        println!("成功切换 Area {:?} 的类型为 {:?}", area_key, area.area_type);
+        log::info!("成功切换 Area {:?} 的类型为 {:?}", area_key, area.area_type);
 
-        Ok(StateChange::Areas(AreasChange::TypeChanged {
-            area_key: area_key,
+        Ok(vec![Tag::AreaTypeChanged {
+            area_key,
             old_type,
             new_type: area_type,
-        }))
+        }])
     } else {
-        eprintln!("错误：找不到 Area {:?}", area_key);
-        Ok(StateChange::None)
+        log::error!("错误：找不到 Area {:?}", area_key);
+        Ok(vec![])
     }
 }
 
@@ -32,11 +32,11 @@ pub fn handle_split(
     state: &mut AppState,
     area_key: ScrAreaKey,
     preview_data: crate::bridge::types::SplitPreviewOverlayData,
-) -> Result<StateChange> {
+) -> Result<Vec<Tag>> {
     // 验证分割数据是否有效（避免0尺寸的区域）
     if preview_data.width2 <= 0.0 || preview_data.height2 <= 0.0 {
-        println!("分割数据无效（第二个区域尺寸为0），取消分割操作");
-        return Ok(StateChange::None);
+        log::warn!("分割数据无效（第二个区域尺寸为0），取消分割操作");
+        return Ok(vec![]);
     }
 
     let theme_settings = state.theme_settings;
@@ -51,12 +51,12 @@ pub fn handle_split(
         .screen_map
         .mark_window_border_edges(&current_rect, &theme_settings);
 
-    println!("成功分割区域 {:?}", area_key);
+    log::info!("成功分割区域 {:?}", area_key);
 
-    Ok(StateChange::Areas(AreasChange::Split {
+    Ok(vec![Tag::AreasSplit {
         parent_key: area_key,
         new_area_key,
-    }))
+    }])
 }
 
 /// 处理区域合并
@@ -65,13 +65,11 @@ pub fn handle_join(
     source_area_key: ScrAreaKey,
     target_area_key: ScrAreaKey,
     adjacency: crate::screen::primitives::Adjacency,
-) -> Result<StateChange> {
+) -> Result<Vec<Tag>> {
     let theme_settings = state.theme_settings;
 
-    // 记录将要被移除的区域
-    let removed_keys = vec![source_area_key];
-
-    state.screen_map.apply_join_adjacent_areas(
+    // join 返回实际受影响集合（主合并 + 递归空位填充的删除、对齐裁剪的新增）
+    let affected = state.screen_map.apply_join_adjacent_areas(
         source_area_key,
         target_area_key,
         adjacency,
@@ -87,23 +85,15 @@ pub fn handle_join(
         .screen_map
         .mark_window_border_edges(&current_rect, &theme_settings);
 
-    println!(
+    log::info!(
         "成功合并区域 {:?} -> {:?}",
-        source_area_key, target_area_key
+        source_area_key,
+        target_area_key
     );
 
-    // 输出调试信息
-    println!("合并后的所有区域信息:");
-    for (area_key, area) in &state.screen_map.areas {
-        let (rect, _, _) = area.geometry();
-        println!(
-            "  区域 {:?}: 位置=({}, {}, {}, {})",
-            area_key, rect.xmin, rect.ymin, rect.xmax, rect.ymax
-        );
-    }
-
-    Ok(StateChange::Areas(AreasChange::Joined {
-        removed_keys,
+    Ok(vec![Tag::AreasJoined {
+        removed_keys: affected.removed,
+        added_keys: affected.added,
         merged_into: target_area_key,
-    }))
+    }])
 }

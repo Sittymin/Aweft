@@ -1,8 +1,8 @@
-use crate::bridge::types::{SlintKey, slint_area_key_to_key};
+use crate::bridge::types::{slint_area_key_to_key, SlintKey};
+use crate::depsgraph::Tag;
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
 use crate::store::state::{AppState, DragOperation};
-use crate::store::state_change::{DragOperationChange, StateChange};
 use anyhow::Result;
 use slint::{Model, ModelRc};
 use std::rc::Rc;
@@ -14,19 +14,18 @@ pub fn handle_actionzone_update(
     corner: crate::bridge::types::ActionZoneCorner,
     offset_x: f32,
     offset_y: f32,
-) -> Result<StateChange> {
-    let scale_factor = state.theme_settings.get_scale_factor();
+) -> Result<Vec<Tag>> {
     let actionzone_side_length = state.theme_settings.get_actionzone_side_length();
 
-    let physical_offset_x = offset_x as f64 * scale_factor;
-    let physical_offset_y = offset_y as f64 * scale_factor;
+    let physical_offset_x = state.theme_settings.to_physical_px(offset_x as f64);
+    let physical_offset_y = state.theme_settings.to_physical_px(offset_y as f64);
 
     let source_area_key: ScrAreaKey = slint_area_key_to_key(&area_key);
 
     // 防护检查：确保源区域仍然存在
     if !state.screen_map.areas.contains_key(source_area_key) {
-        println!("警告：源区域 {:?} 已不存在，忽略拖拽事件", source_area_key);
-        return Ok(StateChange::None);
+        log::warn!("警告：源区域 {:?} 已不存在，忽略拖拽事件", source_area_key);
+        return Ok(vec![]);
     }
 
     if let Some(target_area_key) = state.screen_map.find_area_with_actionzone(
@@ -62,9 +61,7 @@ pub fn handle_actionzone_update(
                 preview_data: split_preview_overlay_data,
             };
 
-            Ok(StateChange::DragOperation(
-                DragOperationChange::SplitPreviewUpdated,
-            ))
+            Ok(vec![Tag::SplitPreviewUpdated])
         } else {
             // 移动到不同区域 - 合并操作
             if let Some(adjacency) = state.screen_map.detect_adjacency_by_keys(
@@ -77,23 +74,17 @@ pub fn handle_actionzone_update(
                     target_area_key,
                     adjacency,
                 };
-                Ok(StateChange::DragOperation(
-                    DragOperationChange::JoinPreviewUpdated,
-                ))
+                Ok(vec![Tag::JoinPreviewUpdated])
             } else {
                 // 非相邻：清除拖拽状态
                 state.current_drag_operation = DragOperation::None;
-                Ok(StateChange::DragOperation(
-                    DragOperationChange::PreviewCleared,
-                ))
+                Ok(vec![Tag::PreviewCleared])
             }
         }
     } else {
         // 离开任何区域
         state.current_drag_operation = DragOperation::None;
-        Ok(StateChange::DragOperation(
-            DragOperationChange::PreviewCleared,
-        ))
+        Ok(vec![Tag::PreviewCleared])
     }
 }
 
@@ -102,16 +93,18 @@ pub fn handle_actionzone_end(
     state: &mut AppState,
     _area_key: SlintKey,
     is_cancel: bool,
-) -> Result<StateChange> {
+) -> Result<Vec<Tag>> {
     if is_cancel {
         state.current_drag_operation = DragOperation::None;
-        return Ok(StateChange::DragOperation(DragOperationChange::Ended {
+        return Ok(vec![Tag::DragEnded {
             areas_changed: false,
-        }));
+        }]);
     }
 
     // 提取拖拽状态，避免借用冲突
     let drag_operation = state.current_drag_operation.clone();
+
+    let mut tags = Vec::new();
 
     let areas_changed = match drag_operation {
         DragOperation::Split {
@@ -120,7 +113,11 @@ pub fn handle_actionzone_end(
         } => {
             // 执行分割
             // HACK: 无视此函数的正常返回，!! 会导致未来撤销操作无法覆盖到分割
-            crate::store::reducers::area::handle_split(state, source_area, preview_data)?;
+            tags.extend(crate::store::reducers::area::handle_split(
+                state,
+                source_area,
+                preview_data,
+            )?);
             true
         }
         DragOperation::Join {
@@ -130,12 +127,12 @@ pub fn handle_actionzone_end(
         } => {
             // 执行合并
             // HACK: 无视此函数的正常返回，!! 会导致未来撤销操作无法覆盖到合并
-            crate::store::reducers::area::handle_join(
+            tags.extend(crate::store::reducers::area::handle_join(
                 state,
                 source_area_key,
                 target_area_key,
                 adjacency,
-            )?;
+            )?);
             true
         }
         _ => false,
@@ -144,9 +141,8 @@ pub fn handle_actionzone_end(
     // 清除拖拽状态 (避免后续数据错误)
     state.current_drag_operation = DragOperation::None;
 
-    Ok(StateChange::DragOperation(DragOperationChange::Ended {
-        areas_changed,
-    }))
+    tags.push(Tag::DragEnded { areas_changed });
+    Ok(tags)
 }
 
 /// 处理边缘拖拽更新
@@ -157,11 +153,10 @@ pub fn handle_edge_update(
     // 此坐标是相较于 UI Edge 矩形左上角的
     offset_x: f32,
     offset_y: f32,
-) -> Result<StateChange> {
+) -> Result<Vec<Tag>> {
     use crate::screen::vertex::ScrVertKey;
     use std::collections::HashSet;
 
-    let scale_factor = state.theme_settings.get_scale_factor();
     let min_area_size = state.theme_settings.get_area_min_size();
 
     // 如果当前已经在边移动状态，继续移动
@@ -185,7 +180,7 @@ pub fn handle_edge_update(
                     *dir_axis_horizontal,
                     moving_vert_keys,
                     *origval,
-                    (current_offset_y * scale_factor).round() as i32,
+                    theme_settings.to_physical_px(current_offset_y).round() as i32,
                     *bigger,
                     *smaller,
                 );
@@ -196,7 +191,7 @@ pub fn handle_edge_update(
                     *dir_axis_horizontal,
                     moving_vert_keys,
                     *origval,
-                    (current_offset_x * scale_factor).round() as i32,
+                    theme_settings.to_physical_px(current_offset_x).round() as i32,
                     *bigger,
                     *smaller,
                 );
@@ -206,12 +201,10 @@ pub fn handle_edge_update(
         // 更新区域几何数据
         state.screen_map.update_all_areas_rcti(&theme_settings);
 
-        return Ok(StateChange::DragOperation(
-            DragOperationChange::EdgeUpdated {
-                edge_keys_rc: edge_keys_rc.clone(),
-                area_keys_rc: area_keys_rc.clone(),
-            },
-        ));
+        return Ok(vec![Tag::EdgeUpdated {
+            edge_keys: edge_keys_rc.clone(),
+            area_keys: area_keys_rc.clone(),
+        }]);
     }
 
     // 开始新的边移动操作
@@ -266,7 +259,7 @@ pub fn handle_edge_update(
         area_keys_rc: area_keys_rc.clone(),
     };
 
-    println!(
+    log::info!(
         "开始边移动操作: 方向={}, 原始值={}, 限制=({}, {})",
         if dir_axis_horizontal {
             "水平"
@@ -278,16 +271,14 @@ pub fn handle_edge_update(
         smaller
     );
 
-    Ok(StateChange::DragOperation(
-        DragOperationChange::EdgeUpdated {
-            edge_keys_rc: edge_keys_rc,
-            area_keys_rc: area_keys_rc,
-        },
-    ))
+    Ok(vec![Tag::EdgeUpdated {
+        edge_keys: edge_keys_rc,
+        area_keys: area_keys_rc,
+    }])
 }
 
 /// 处理边缘拖拽结束
-pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateChange> {
+pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<Vec<Tag>> {
     let areas_changed = if let DragOperation::MoveEdge {
         dir_axis_horizontal,
         origval,
@@ -302,7 +293,7 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
 
         if is_cancel {
             // 取消：恢复到原始位置
-            println!("取消边移动，恢复到原始位置");
+            log::info!("取消边移动，恢复到原始位置");
             state.screen_map.apply_verts_move(
                 *dir_axis_horizontal,
                 moving_vert_keys,
@@ -315,7 +306,7 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
             false
         } else {
             // 确认：保持当前位置
-            println!("确认边移动");
+            log::info!("确认边移动");
             state.screen_map.remove_duplicate_vertices();
 
             // 标记窗口边框边缘
@@ -333,7 +324,5 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<StateCha
     // 清除拖拽状态
     state.current_drag_operation = DragOperation::None;
 
-    Ok(StateChange::DragOperation(DragOperationChange::Ended {
-        areas_changed,
-    }))
+    Ok(vec![Tag::DragEnded { areas_changed }])
 }

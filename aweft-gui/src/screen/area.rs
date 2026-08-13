@@ -344,8 +344,8 @@ impl ScrArea {
         let px = theme_settings.calculate_margin(false); // 区域间边距
 
         // 3. 应用边距调整
-        // 只有在非全屏、非临时窗口、且有多个区域的情况下才应用边距
-        if !self.is_fullscreen && !self.is_temp_window && !self.is_single_area {
+        // 只有非全屏、非临时窗口、且非单 area 时才应用边距
+        if self.has_margin() {
             // 左边距
             self.tot_rct.xmin += px;
 
@@ -364,14 +364,29 @@ impl ScrArea {
         self.winy = self.tot_rct.height();
     }
 
-    /// 只读访问几何属性
-    /// 不要使用这个属性来计算位置（它包含边距调整）
-    pub fn geometry(&self) -> (&Rcti, u32, u32) {
+    /// 该 area 是否应用区域间边距（margin）。
+    ///
+    /// margin 只在非全屏、非临时窗口、非单 area 时存在。单 area 时没有相邻
+    /// 区域，收缩边距会让内容偏离窗口边缘。
+    pub fn has_margin(&self) -> bool {
+        !self.is_fullscreen && !self.is_temp_window && !self.is_single_area
+    }
+
+    /// 布局矩形（**含 margin 收缩**）：UI 显示、命中检测、预览计算用。
+    ///
+    /// 与 `geometry_rect`（原始顶点坐标）差一个 margin。**几何运算**（创建/
+    /// 移动顶点、join/split 内部）必须用 `geometry_rect`；**UI 呈现**必须用
+    /// `layout_rect`。二者不要混用——坐标基准不一致是历史上 bug 的根源。
+    pub fn layout_rect(&self) -> (&Rcti, u32, u32) {
         (&self.tot_rct, self.winx, self.winy)
     }
 
-    /// 获取原始几何信息（边距调整之前的）
-    pub fn get_raw_geometry(&self, vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>) -> Rcti {
+    /// 几何矩形（**原始顶点坐标，不含 margin**）：几何运算用。
+    ///
+    /// 与 `layout_rect`（含 margin 收缩）差一个 margin。**几何运算**（创建/
+    /// 移动顶点、join/split 内部）必须用 `geometry_rect`；**UI 呈现**必须用
+    /// `layout_rect`。二者不要混用——坐标基准不一致是历史上 bug 的根源。
+    pub fn geometry_rect(&self, vertices: &slotmap::SlotMap<ScrVertKey, ScrVert>) -> Rcti {
         let tl = &vertices.get(self.v_top_left).unwrap().vec;
         let tr = &vertices.get(self.v_top_right).unwrap().vec;
         let bl = &vertices.get(self.v_bottom_left).unwrap().vec;

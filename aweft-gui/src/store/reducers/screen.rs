@@ -1,9 +1,9 @@
+use crate::depsgraph::Tag;
 use crate::store::state::AppState;
-use crate::store::state_change::{ScreenChange, StateChange};
 use anyhow::Result;
 
 /// 处理窗口大小改变
-pub fn handle_resize(state: &mut AppState, width: u32, height: u32) -> Result<StateChange> {
+pub fn handle_resize(state: &mut AppState, width: u32, height: u32) -> Result<Vec<Tag>> {
     use crate::screen::primitives::Rcti;
     use slint::PhysicalSize;
 
@@ -33,21 +33,14 @@ pub fn handle_resize(state: &mut AppState, width: u32, height: u32) -> Result<St
     // 更新状态中的窗口大小
     state.window_size = PhysicalSize { width, height };
 
-    // 处理边缘顶点，避免微小错位
-    state
-        .screen_map
-        .enforce_window_edge_snap(&new_window_rect, &state.theme_settings);
-
-    let new_size = (width, height);
-
-    Ok(StateChange::Screen(ScreenChange::Resized {
+    Ok(vec![Tag::ScreenResized {
         old_size,
-        new_size,
-    }))
+        new_size: (width, height),
+    }])
 }
 
 /// 处理缩放因子改变
-pub fn handle_scale_change(state: &mut AppState, scale_factor: f64) -> Result<StateChange> {
+pub fn handle_scale_change(state: &mut AppState, scale_factor: f64) -> Result<Vec<Tag>> {
     let old_scale = state.theme_settings.get_scale_factor();
 
     state.theme_settings.update_scale_factor(scale_factor);
@@ -57,17 +50,21 @@ pub fn handle_scale_change(state: &mut AppState, scale_factor: f64) -> Result<St
         .screen_map
         .update_all_areas_rcti(&state.theme_settings);
 
-    Ok(StateChange::Screen(ScreenChange::ScaleChanged {
+    Ok(vec![Tag::ScaleChanged {
         old_scale,
         new_scale: scale_factor,
-    }))
+    }])
 }
 
 /// 处理布局初始化
-pub fn handle_initialize(state: &mut AppState, width: u32, height: u32) -> Result<StateChange> {
+pub fn handle_initialize(state: &mut AppState, width: u32, height: u32) -> Result<Vec<Tag>> {
     if state.initialized {
-        return Ok(StateChange::None);
+        return Ok(vec![]);
     }
+
+    // 布局 size 即窗口实际尺寸：同步 window_size，供后续 resize 用正确的 old_rect
+    // （否则第一次 resize 会用过时的 AppState::new 窗口尺寸作缩放基准）。
+    state.window_size = slint::PhysicalSize { width, height };
 
     state
         .screen_map
@@ -81,5 +78,5 @@ pub fn handle_initialize(state: &mut AppState, width: u32, height: u32) -> Resul
 
     state.initialized = true;
 
-    Ok(StateChange::Screen(ScreenChange::Initialized))
+    Ok(vec![Tag::ScreenInitialized])
 }

@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::UnboundedSender;
+use gstreamer::{prelude::*, BusSyncReply};
 use gstreamer::{Buffer, Bus, Element, Fraction, Message, Pipeline};
-use gstreamer::{BusSyncReply, prelude::*};
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use gstreamer_video::{VideoCapsBuilder, VideoFormat, VideoInfo};
 use slint::wgpu_29::wgpu;
@@ -87,7 +87,7 @@ impl SlintWGPUSink {
                         .caps()
                         .and_then(|caps| VideoInfo::from_caps(caps).ok())
                     else {
-                        eprintln!("获取到无效的 caps");
+                        log::error!("获取到无效的 caps");
                         return Err(gstreamer::FlowError::NotNegotiated);
                     };
 
@@ -98,7 +98,7 @@ impl SlintWGPUSink {
                         next_frame_available_notifier();
                     } else {
                         // 如果无法获取锁，直接丢弃这一帧（优先性能）
-                        println!("丢弃一帧以保持性能");
+                        log::debug!("丢弃一帧以保持性能");
                     }
 
                     Ok(gstreamer::FlowSuccess::Ok)
@@ -132,17 +132,17 @@ impl SlintWGPUSink {
                             return Some(image);
                         }
                         Err(e) => {
-                            eprintln!("转换为 Slint Image 失败: {:?}", e);
+                            log::error!("转换为 Slint Image 失败: {:?}", e);
                             return None;
                         }
                     }
                 } else {
-                    eprintln!("创建 WGPU 纹理失败");
+                    log::error!("创建 WGPU 纹理失败");
                 }
             }
         } else {
             // 如果无法获取锁，跳过这一帧（优先性能）
-            println!("跳过一帧以保持渲染性能");
+            log::debug!("跳过一帧以保持渲染性能");
         }
 
         None
@@ -159,7 +159,7 @@ impl SlintWGPUSink {
             let data = buffer_map.as_slice();
 
             if data.is_empty() {
-                eprintln!("Buffer 数据为空");
+                log::error!("Buffer 数据为空");
                 return None;
             }
 
@@ -189,7 +189,7 @@ impl SlintWGPUSink {
 
             Some(texture)
         } else {
-            eprintln!("无法映射 GStreamer buffer");
+            log::error!("无法映射 GStreamer buffer");
             None
         }
     }
