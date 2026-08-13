@@ -2,48 +2,13 @@ pub mod actions;
 pub mod app;
 pub mod bridge;
 pub mod clipboard;
+pub mod depsgraph;
 pub mod screen;
 pub mod slint_video_sink;
 pub mod store;
-pub mod ui_update;
 mod wgpu_subtitle_renderer;
 
 use anyhow::{Context, Result};
-use bridge::types::*;
-use screen::area::ScrAreaKey;
-use screen::primitives::Adjacency;
-use screen::vertex::ScrVertKey;
-
-/// 拖拽操作的状态信息
-#[derive(Debug, Clone)]
-pub enum DragOperation {
-    /// 无拖拽操作
-    None,
-    /// 分割操作 - 存储分割的源区域和预览数据
-    Split {
-        source_area: ScrAreaKey,
-        preview_data: SplitPreviewOverlayData,
-    },
-    /// 合并操作 - 存储源区域、目标区域和邻接关系
-    Join {
-        source_area_key: ScrAreaKey,
-        target_area_key: ScrAreaKey,
-        adjacency: Adjacency,
-    },
-    /// 边移动操作 - 存储移动状态信息
-    MoveEdge {
-        /// 轴方向：true=水平轴(改变Y坐标)，false=垂直轴(改变X坐标)
-        dir_axis_horizontal: bool,
-        /// 原始轴坐标值
-        origval: u32,
-        /// 向正方向的最大位移距离
-        bigger: u32,
-        /// 向负方向的最大位移距离
-        smaller: u32,
-        /// 参与移动的顶点键集合
-        moving_vert_keys: Vec<ScrVertKey>,
-    },
-}
 
 //         // TODO: WARN: 修改为通用转换函数，或修改 WGPU 直接输出 Slint Image
 //         /// 渲染 "Hello World!" 字幕

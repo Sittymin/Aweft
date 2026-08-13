@@ -1,51 +1,82 @@
 use std::collections::HashSet;
 
-use crate::actions::Action;
 use crate::actions::area::AreaAction;
 use crate::actions::line_editor::LineEditorAction;
+use crate::actions::Action;
 use crate::clipboard::{Clipboard, ItemsClip};
+use crate::depsgraph::{Depsgraph, Tag};
 use crate::store::state::AppState;
-use crate::store::state_change::{LineEditorChange, StateChange};
 use crate::store::ui_models::UiModels;
 use anyhow::Result;
 use aweft_model::ids::ItemId;
-use aweft_model::structure::{ItemContent, ItemLocation};
+use aweft_model::structure::ItemContent;
 use chrono::TimeDelta;
 
 /// 应用状态存储 - 单一数据源
 pub struct AppStore {
-    state: AppState,
-    ui_models: UiModels,
+    pub(crate) state: AppState,
+    pub(crate) ui_models: UiModels,
+    pub(crate) depsgraph: Depsgraph,
+    /// OverlayState global 弱引用：overlay 投影经此写出拖拽预览。
+    /// 在 `AppStore::new` 中从 MainWindow 注入。
+    pub(crate) overlay_state: Option<slint::Weak<crate::bridge::types::OverlayState<'static>>>,
     clipboard: Clipboard,
 }
 
 impl AppStore {
     /// 创建新的 Store（从 MainWindow 以访问主题系统）
     pub fn new(main_window: &crate::bridge::types::MainWindow) -> Self {
-        use slint::ComponentHandle;
+        use slint::{ComponentHandle, Global};
 
         let theme_settings = crate::bridge::types::ThemeSettings::from_main_window(main_window);
+        let mut depsgraph = Depsgraph::new();
+        crate::store::projections::register_all(&mut depsgraph);
+        let overlay_state = main_window
+            .global::<crate::bridge::types::OverlayState>()
+            .as_weak();
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
             ui_models: UiModels::new(),
+            depsgraph,
+            overlay_state: Some(overlay_state),
             clipboard: Clipboard::new(),
         }
     }
 
-    /// 分发 Action，返回状态变更描述
-    pub fn dispatch(&mut self, action: Action) -> Result<StateChange> {
-        let change = match action {
-            Action::Screen(screen_action) => self.dispatch_screen(screen_action),
-            Action::Drag(drag_action) => self.dispatch_drag(drag_action),
-            Action::Area(area_action) => self.dispatch_area(area_action),
+    /// 分发 Action：修改数据并向依赖图打 tag。
+    pub fn dispatch(&mut self, action: Action) -> Result<()> {
+        let tags = match action {
+            Action::Screen(screen_action) => self.dispatch_screen(screen_action)?,
+            Action::Drag(drag_action) => self.dispatch_drag(drag_action)?,
+            Action::Area(area_action) => self.dispatch_area(area_action)?,
             Action::Media(_media_action) => {
                 // TODO: 实现媒体相关的 reducer
-                Ok(StateChange::None)
+                vec![]
             }
-            Action::LineEditor(act) => self.dispatch_line_editor(act),
+            Action::LineEditor(act) => self.dispatch_line_editor(act)?,
         };
+        for tag in tags {
+            self.depsgraph.tag(tag);
+        }
+        Ok(())
+    }
 
-        change
+    /// 把已挂起的依赖图标记应用到 UI 投影。
+    ///
+    /// 通过 `mem::take` 暂时取出 depsgraph，避免 `&mut self` 与 `&mut self.depsgraph`
+    /// 同时借用的冲突（投影重算需要访问 store 的其他部分）。
+    pub fn evaluate_depsgraph(&mut self) {
+        if !self.depsgraph.has_pending() {
+            return;
+        }
+        let mut depsgraph = std::mem::take(&mut self.depsgraph);
+        depsgraph.evaluate(self);
+        self.depsgraph = depsgraph;
+    }
+
+    /// 标记一个数据变更（reducer 内部使用）。
+    pub(crate) fn tag(&mut self, tag: Tag) {
+        self.depsgraph.tag(tag);
     }
 
     /// 获取当前状态（只读）
@@ -70,27 +101,121 @@ impl AppStore {
 
     /// 同时获取只读 `state` 与可变 `ui_models`。
     ///
-    /// 用于需要“读取 Domain、写入 UI Projection”的场景（典型是 `UIUpdater` 应用 LineEditor 投影更新）。
+    /// 用于需要“读取 Domain、写入 UI Projection”的场景（典型是投影重算应用 LineEditor 更新）。
     pub fn split_mut(&mut self) -> (&AppState, &mut UiModels) {
         (&self.state, &mut self.ui_models)
     }
 
-    /// 重建 LineEditor 的行数据与过滤模型，返回过滤后的 ModelRc。
+    /// 初始化 LineEditor 的行数据与过滤模型，返回过滤后的 ModelRc。
     pub fn rebuild_line_editor_models(
         &mut self,
     ) -> slint::ModelRc<crate::bridge::types::SlintSubtitleRow> {
         self.ui_models
             .line_editor_state
-            .rebuild_all_rows(&self.state.project);
+            .initialize_rows(&self.state.project);
         self.ui_models.line_editor_state.init_filter_model()
     }
 
     // ========== 内部 dispatch 方法 ==========
 
+    /// 可变访问字幕结构（`RefCell` 内部可变性，零拷贝）。
+    fn structure_mut(&mut self) -> std::cell::RefMut<'_, aweft_model::structure::ProjectStructure> {
+        self.state.project.structure_mut()
+    }
+
+    /// 计算某个 item 的祖先分组链（叶子到根）。用于聚合传播。
+    fn ancestor_chain(&self, item_id: ItemId) -> Vec<ItemId> {
+        let mut chain = Vec::new();
+        let mut cur = Some(item_id);
+        while let Some(id) = cur {
+            let structure = self.state.project.structure();
+            let Some(item) = structure.get(id) else {
+                break;
+            };
+            if item.parent.is_some() {
+                chain.push(id);
+            }
+            cur = item.parent;
+        }
+        chain
+    }
+
+    /// 构造单个时间码变化的 tag（带祖先链聚合传播）。
+    fn event_timecode_tag(&self, event_id: ItemId, is_start_time: bool, time: TimeDelta) -> Tag {
+        Tag::EventTimecodeChanged {
+            event_id,
+            is_start_time,
+            time,
+            ancestors: self.ancestor_chain(event_id),
+        }
+    }
+
+    /// 构造批量时间码变化的 tag（updates 与祖先链去重收集）。
+    fn events_timecode_tag(&self, ids: &[ItemId], is_start_time: bool, times: &[TimeDelta]) -> Tag {
+        Tag::EventsTimecodeChanged {
+            updates: ids
+                .iter()
+                .copied()
+                .zip(std::iter::repeat(is_start_time))
+                .zip(times.iter().copied())
+                .map(|((id, s), t)| (id, s, t))
+                .collect(),
+            ancestors: ids.iter().flat_map(|&id| self.ancestor_chain(id)).collect(),
+        }
+    }
+
+    /// 构造选中变化的 tag（affected = 祖先链 + 自身）。
+    fn selection_tag(&self, item_id: ItemId, kind: crate::depsgraph::SelectionKind) -> Tag {
+        let mut affected = self.ancestor_chain(item_id);
+        affected.push(item_id);
+        Tag::SelectionChanged {
+            item_id,
+            kind,
+            affected,
+        }
+    }
+
+    /// 批量时间码调整的公共逻辑：收集选中事件 + 当前项，逐个调整并打批量 tag。
+    ///
+    /// `adjust` 决定调整方式（增量、预览、提交等），返回该次调整后的新时间；
+    /// 失败的事件跳过。返回 `Some(tag)` 当有事件成功调整，否则 `None`。
+    fn batch_timecode_tag<F>(
+        &mut self,
+        event_id: ItemId,
+        is_start_time: bool,
+        mut adjust: F,
+    ) -> Option<Tag>
+    where
+        F: FnMut(&mut Self, ItemId) -> Option<TimeDelta>,
+    {
+        let mut event_ids: HashSet<ItemId> = self
+            .ui_models
+            .line_editor_state
+            .get_selected_events(&self.state.project)
+            .into_iter()
+            .collect();
+        // 确保当前 event_id 也在列表中（同时也避免重复）
+        event_ids.insert(event_id);
+
+        let mut updated_ids: Vec<ItemId> = Vec::new();
+        let mut updated_times: Vec<TimeDelta> = Vec::new();
+        for id in event_ids {
+            if let Some(time) = adjust(self, id) {
+                updated_ids.push(id);
+                updated_times.push(time);
+            }
+        }
+        if !updated_ids.is_empty() {
+            Some(self.events_timecode_tag(&updated_ids, is_start_time, &updated_times))
+        } else {
+            None
+        }
+    }
+
     fn dispatch_screen(
         &mut self,
         action: crate::actions::screen::ScreenAction,
-    ) -> Result<StateChange> {
+    ) -> Result<Vec<Tag>> {
         use crate::actions::screen::ScreenAction;
 
         match action {
@@ -106,7 +231,7 @@ impl AppStore {
         }
     }
 
-    fn dispatch_drag(&mut self, action: crate::actions::drag::DragAction) -> Result<StateChange> {
+    fn dispatch_drag(&mut self, action: crate::actions::drag::DragAction) -> Result<Vec<Tag>> {
         use crate::actions::drag::DragAction;
 
         match action {
@@ -118,7 +243,7 @@ impl AppStore {
     fn dispatch_actionzone_drag(
         &mut self,
         action: crate::actions::drag::ActionZoneDrag,
-    ) -> Result<StateChange> {
+    ) -> Result<Vec<Tag>> {
         use crate::actions::drag::ActionZoneDrag;
 
         match action {
@@ -145,10 +270,7 @@ impl AppStore {
         }
     }
 
-    fn dispatch_edge_drag(
-        &mut self,
-        action: crate::actions::drag::EdgeDrag,
-    ) -> Result<StateChange> {
+    fn dispatch_edge_drag(&mut self, action: crate::actions::drag::EdgeDrag) -> Result<Vec<Tag>> {
         use crate::actions::drag::EdgeDrag;
 
         match action {
@@ -168,7 +290,7 @@ impl AppStore {
         }
     }
 
-    fn dispatch_area(&mut self, action: AreaAction) -> Result<StateChange> {
+    fn dispatch_area(&mut self, action: AreaAction) -> Result<Vec<Tag>> {
         use crate::actions::area::AreaAction;
 
         match action {
@@ -200,186 +322,84 @@ impl AppStore {
     }
     // 处理 LineEditor 相关 Action。
     //
-    // 设计目标：本函数只做 Domain（`project.structure`）修改，UI 投影更新交给
-    // `UIUpdater`（通过返回的 `LineEditorChange`）。
-    //
-    // 当前已完成 Domain ↔ UI 拆分的分支：
-    // - `ToggleGroupCollapsed`
-    // - `InputTimecode`
-    // - `IncrementTimecode` / `DecrementTimecode`（仅单条）
-    // - `DragTimecodePreview` / `DragTimecodeCommit` / `DragTimecodeCancel`（仅单条）
-    // - `SelectSingle` / `SelectRange` / `SelectToggle`
-    // - `AddLine` / `DeleteItems`
-    //
-    // FIXME: 仍混合了 UI 投影更新（is_batch == true 的分支）：
-    // - `IncrementTimecode { is_batch: true }`
-    // - `DecrementTimecode { is_batch: true }`
-    // - `DragTimecodePreview { is_batch: true }`
-    // - `DragTimecodeCommit { is_batch: true }`
-    // - `DragTimecodeCancel { is_batch: true }`
-    //
-    // 这些批量分支需要新设计 payload（建议引入
-    // `LineEditorChange::TimecodesBatchUpdated { updates, with_ancestor_recalc }`），
-    // 当前先保留以维持行为不变。
-    fn dispatch_line_editor(&mut self, action: LineEditorAction) -> Result<StateChange> {
+    // 设计目标：本函数只做 Domain（`project.structure`）修改，并向依赖图打 tag；
+    // UI 投影更新交给 `Depsgraph` 的投影重算（LineEditor 投影依赖
+    // `ProjectStructure` / `Selection` 数据域）。
+    fn dispatch_line_editor(&mut self, action: LineEditorAction) -> Result<Vec<Tag>> {
         match action {
             LineEditorAction::ToggleGroupCollapsed { group_id } => {
                 // Rust 数据层修改 (持久化状态)
-                if let Some(item) = self.state.project.structure.get_mut(group_id) {
+                if let Some(item) = self.structure_mut().get_mut(group_id) {
                     if let ItemContent::Group(g) = &mut item.content {
                         g.collapsed = !g.collapsed;
                     }
                 }
 
-                Ok(StateChange::LineEditor(
-                    LineEditorChange::GroupCollapsedToggled {
-                        group_id: group_id.to_string(),
-                    },
-                ))
+                Ok(vec![Tag::GroupCollapsedToggled {
+                    group_id,
+                    ancestors: self.ancestor_chain(group_id),
+                }])
             }
             LineEditorAction::InputTimecode {
                 event_id,
                 text,
                 is_start_time,
             } => {
-                if let Ok(time) = self.state.project.structure.set_event_time_fuzzy(
-                    event_id,
-                    is_start_time,
-                    &text,
-                ) {
-                    return Ok(StateChange::LineEditor(LineEditorChange::TimecodeInputed {
-                        event_id,
-                        is_start_time,
-                        time,
-                    }));
+                let time_result =
+                    self.structure_mut()
+                        .set_event_time_fuzzy(event_id, is_start_time, &text);
+                if let Ok(time) = time_result {
+                    return Ok(vec![self.event_timecode_tag(event_id, is_start_time, time)]);
                 }
-                Ok(StateChange::None)
+                Ok(vec![])
             }
             LineEditorAction::IncrementTimecode {
                 event_id,
                 is_start_time,
                 is_batch,
             } => {
-                let delta = TimeDelta::seconds(1);
-
                 if is_batch {
-                    // 批量调整：获取所有选中的事件项
-                    let mut event_ids: Vec<ItemId> = self
-                        .ui_models
-                        .line_editor_state
-                        .get_selected_events(&self.state.project)
-                        .into_iter()
-                        .collect();
-
-                    // 确保当前 event_id 也在列表中（同时也避免重复）
-                    if !event_ids.contains(&event_id) {
-                        event_ids.push(event_id);
-                    }
-
-                    // 批量更新 Model，收集成功的 id+time
-                    let mut updated_ids: Vec<ItemId> = Vec::new();
-                    let mut updated_times: Vec<TimeDelta> = Vec::new();
-                    for &id in &event_ids {
-                        if let Ok(time) =
-                            self.state
-                                .project
-                                .structure
-                                .adjust_event_time(id, is_start_time, delta)
-                        {
-                            updated_ids.push(id);
-                            updated_times.push(time);
-                        }
-                    }
-
-                    if !updated_ids.is_empty() {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodesBatchCommitDraged {
-                                event_ids: updated_ids,
-                                is_start_time,
-                                times: updated_times,
-                            },
-                        ));
-                    }
+                    Ok(self
+                        .batch_timecode_tag(event_id, is_start_time, |s, id| {
+                            s.structure_mut()
+                                .adjust_event_time(id, is_start_time, TimeDelta::seconds(1))
+                                .ok()
+                        })
+                        .map(|t| vec![t])
+                        .unwrap_or_default())
                 } else {
-                    // 单个调整
-                    if let Ok(time) = self.state.project.structure.adjust_event_time(
-                        event_id,
-                        is_start_time,
-                        delta,
-                    ) {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeIncremented {
-                                event_id,
-                                is_start_time,
-                                time,
-                            },
-                        ));
-                    }
+                    let time = self
+                        .structure_mut()
+                        .adjust_event_time(event_id, is_start_time, TimeDelta::seconds(1))
+                        .ok();
+                    Ok(time
+                        .map(|t| vec![self.event_timecode_tag(event_id, is_start_time, t)])
+                        .unwrap_or_default())
                 }
-                Ok(StateChange::None)
             }
             LineEditorAction::DecrementTimecode {
                 event_id,
                 is_start_time,
                 is_batch,
             } => {
-                let delta = TimeDelta::seconds(-1);
-
                 if is_batch {
-                    // 批量调整：获取所有选中的事件项
-                    let mut event_ids: Vec<ItemId> = self
-                        .ui_models
-                        .line_editor_state
-                        .get_selected_events(&self.state.project)
-                        .into_iter()
-                        .collect();
-
-                    // 确保当前 event_id 也在列表中（同时也避免重复）
-                    if !event_ids.contains(&event_id) {
-                        event_ids.push(event_id);
-                    }
-
-                    // 批量更新 Model，收集成功的 id+time
-                    let mut updated_ids: Vec<ItemId> = Vec::new();
-                    let mut updated_times: Vec<TimeDelta> = Vec::new();
-                    for &id in &event_ids {
-                        if let Ok(time) =
-                            self.state
-                                .project
-                                .structure
-                                .adjust_event_time(id, is_start_time, delta)
-                        {
-                            updated_ids.push(id);
-                            updated_times.push(time);
-                        }
-                    }
-
-                    if !updated_ids.is_empty() {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodesBatchCommitDraged {
-                                event_ids: updated_ids,
-                                is_start_time,
-                                times: updated_times,
-                            },
-                        ));
-                    }
+                    Ok(self
+                        .batch_timecode_tag(event_id, is_start_time, |s, id| {
+                            s.structure_mut()
+                                .adjust_event_time(id, is_start_time, TimeDelta::seconds(-1))
+                                .ok()
+                        })
+                        .map(|t| vec![t])
+                        .unwrap_or_default())
                 } else {
-                    // 单个调整
-                    if let Ok(time) = self.state.project.structure.adjust_event_time(
-                        event_id,
-                        is_start_time,
-                        delta,
-                    ) {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeDecremented {
-                                event_id,
-                                is_start_time,
-                                time,
-                            },
-                        ));
-                    }
+                    let time = self
+                        .structure_mut()
+                        .adjust_event_time(event_id, is_start_time, TimeDelta::seconds(-1))
+                        .ok();
+                    Ok(time
+                        .map(|t| vec![self.event_timecode_tag(event_id, is_start_time, t)])
+                        .unwrap_or_default())
                 }
-                Ok(StateChange::None)
             }
             LineEditorAction::DragTimecodePreview {
                 event_id,
@@ -393,70 +413,58 @@ impl AppStore {
                     || delta_x >= (i64::MAX as f32)
                     || delta_x <= (i64::MIN as f32)
                 {
-                    return Ok(StateChange::None);
+                    return Ok(vec![]);
                 }
 
                 let delta = TimeDelta::milliseconds((delta_x.trunc() as i64) * 10);
 
                 if is_batch {
+                    // 批量预览：不写 structure，构造批量 preview tag
                     let mut event_ids: HashSet<ItemId> = self
                         .ui_models
                         .line_editor_state
-                        .get_selected_events(&self.state.project);
-
-                    // 确保当前 event_id 也在列表中（同时也避免重复）
+                        .get_selected_events(&self.state.project)
+                        .into_iter()
+                        .collect();
                     event_ids.insert(event_id);
 
-                    let mut batch_event_ids: Vec<ItemId> = Vec::new();
-                    let mut batch_times: Vec<TimeDelta> = Vec::new();
-
-                    // 批量预览调整
+                    let mut tags = Vec::new();
+                    let mut ancestors: Vec<ItemId> = Vec::new();
                     for id in event_ids {
-                        match self.state.project.structure.preview_adjust_event_time(
+                        if let Ok(time) = self.state.project.structure().preview_adjust_event_time(
                             id,
                             is_start_time,
                             delta,
                         ) {
-                            Ok(time) => {
-                                batch_event_ids.push(id);
-                                batch_times.push(time);
-                            }
-                            Err(err) => {
-                                log::error!(
-                                    "Failed to preview adjust event time for id {}: {:?}",
-                                    id,
-                                    err
-                                );
-                            }
-                        }
-                    }
-                    if !batch_event_ids.is_empty() && !batch_times.is_empty() {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodesBatchPreviewDraged {
-                                event_ids: batch_event_ids,
-                                is_start_time,
-                                times: batch_times,
-                            },
-                        ));
-                    }
-                } else {
-                    // 单个调整
-                    if let Ok(time) = self.state.project.structure.preview_adjust_event_time(
-                        event_id,
-                        is_start_time,
-                        delta,
-                    ) {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodePreviewDraged {
-                                event_id,
+                            tags.push(Tag::TimecodePreviewChanged {
+                                event_id: id,
                                 is_start_time,
                                 time,
-                            },
-                        ));
+                                ancestors: self.ancestor_chain(id),
+                            });
+                            ancestors.extend(self.ancestor_chain(id));
+                        }
                     }
+                    Ok(tags)
+                } else {
+                    // 单个预览：不写 structure，仅打 preview tag 供 UI 显示覆盖值
+                    let time = self
+                        .state
+                        .project
+                        .structure()
+                        .preview_adjust_event_time(event_id, is_start_time, delta)
+                        .ok();
+                    Ok(time
+                        .map(|t| {
+                            vec![Tag::TimecodePreviewChanged {
+                                event_id,
+                                is_start_time,
+                                time: t,
+                                ancestors: self.ancestor_chain(event_id),
+                            }]
+                        })
+                        .unwrap_or_default())
                 }
-
-                Ok(StateChange::None)
             }
             LineEditorAction::DragTimecodeCommit {
                 event_id,
@@ -470,69 +478,34 @@ impl AppStore {
                     || delta_x >= (i64::MAX as f32)
                     || delta_x <= (i64::MIN as f32)
                 {
-                    return Ok(StateChange::None);
+                    return Ok(vec![]);
                 }
 
                 let delta = TimeDelta::milliseconds((delta_x.trunc() as i64) * 10);
 
                 if is_batch {
-                    // 批量调整：获取所有选中的事件项
-                    let mut event_ids: HashSet<ItemId> = self
-                        .ui_models
-                        .line_editor_state
-                        .get_selected_events(&self.state.project)
-                        .into_iter()
-                        .collect();
-
-                    // 确保当前 event_id 也在列表中（同时也避免重复）
-                    event_ids.insert(event_id);
-
-                    // 批量更新 Model，收集成功的 id+time
-                    let mut updated_ids: Vec<ItemId> = Vec::new();
-                    let mut updated_times: Vec<TimeDelta> = Vec::new();
-                    for &id in &event_ids {
-                        if let Ok(time) =
-                            self.state
-                                .project
-                                .structure
+                    Ok(self
+                        .batch_timecode_tag(event_id, is_start_time, |s, id| {
+                            s.structure_mut()
                                 .adjust_event_time(id, is_start_time, delta)
-                        {
-                            updated_ids.push(id);
-                            updated_times.push(time);
-                        }
-                    }
-
-                    if !updated_ids.is_empty() {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodesBatchCommitDraged {
-                                event_ids: updated_ids,
-                                is_start_time,
-                                times: updated_times,
-                            },
-                        ));
-                    }
+                                .ok()
+                        })
+                        .map(|t| vec![t])
+                        .unwrap_or_default())
                 } else {
-                    match self.state.project.structure.adjust_event_time(
-                        event_id,
-                        is_start_time,
-                        delta,
-                    ) {
+                    let result =
+                        self.structure_mut()
+                            .adjust_event_time(event_id, is_start_time, delta);
+                    match result {
                         Ok(time) => {
-                            return Ok(StateChange::LineEditor(
-                                LineEditorChange::TimecodeCommitDraged {
-                                    event_id,
-                                    is_start_time,
-                                    time,
-                                },
-                            ));
+                            Ok(vec![self.event_timecode_tag(event_id, is_start_time, time)])
                         }
                         Err(e) => {
-                            log::warn!("{e}")
+                            log::warn!("{e}");
+                            Ok(vec![])
                         }
                     }
                 }
-
-                Ok(StateChange::None)
             }
             LineEditorAction::DragTimecodeCancel {
                 event_id,
@@ -540,69 +513,51 @@ impl AppStore {
                 is_batch,
             } => {
                 if is_batch {
-                    // 批量取消：获取所有选中的事件项
-                    let mut event_ids: HashSet<ItemId> = self
-                        .ui_models
-                        .line_editor_state
-                        .get_selected_events(&self.state.project);
-
-                    // 确保当前 event_id 也在列表中（同时也避免重复）
-                    event_ids.insert(event_id);
-
-                    // 批量恢复到原始时间
-                    let mut updated_count = 0;
-                    for &id in &event_ids {
-                        if let Ok(time) = self.state.project.structure.event_time(id, is_start_time)
-                        {
-                            self.ui_models
-                                .line_editor_state
-                                .update_row_time_without_ancestor_groups(id, is_start_time, time);
-                            updated_count += 1;
-                        }
-                    }
-
-                    // FIXME: 批量分支尚未走 StateChange/UIUpdater 管道，
-                    // 此处直接修改了 UI 投影；后续应引入 `TimecodesBatchUpdated` payload。
-                    if updated_count > 0 {
-                        return Ok(StateChange::None);
-                    }
+                    Ok(self
+                        .batch_timecode_tag(event_id, is_start_time, |s, id| {
+                            s.state
+                                .project
+                                .structure()
+                                .event_time(id, is_start_time)
+                                .ok()
+                        })
+                        .map(|t| vec![t])
+                        .unwrap_or_default())
                 } else {
                     // 单个取消（恢复到 Domain 当前值）
-                    if let Ok(time) = self
+                    match self
                         .state
                         .project
-                        .structure
+                        .structure()
                         .event_time(event_id, is_start_time)
                     {
-                        return Ok(StateChange::LineEditor(
-                            LineEditorChange::TimecodeCancelDraged {
-                                event_id,
-                                is_start_time,
-                                time,
-                            },
-                        ));
+                        Ok(time) => {
+                            Ok(vec![self.event_timecode_tag(event_id, is_start_time, time)])
+                        }
+                        Err(_) => Ok(vec![]),
                     }
                 }
-                Ok(StateChange::None)
             }
             LineEditorAction::SelectSingle { item_id } => {
-                Ok(StateChange::LineEditor(LineEditorChange::SelectSingle {
+                Ok(vec![self.selection_tag(
                     item_id,
-                }))
+                    crate::depsgraph::SelectionKind::Single,
+                )])
             }
             LineEditorAction::SelectRange { item_id } => {
-                Ok(StateChange::LineEditor(LineEditorChange::SelectRange {
+                Ok(vec![self.selection_tag(
                     item_id,
-                }))
+                    crate::depsgraph::SelectionKind::Range,
+                )])
             }
             LineEditorAction::SelectToggle { item_id } => {
-                Ok(StateChange::LineEditor(LineEditorChange::SelectToggle {
+                Ok(vec![self.selection_tag(
                     item_id,
-                }))
+                    crate::depsgraph::SelectionKind::Toggle,
+                )])
             }
             LineEditorAction::AddLine {
                 item_id,
-                start_time,
                 end_time,
                 actor,
                 text,
@@ -610,9 +565,8 @@ impl AppStore {
                 // FIXME: 之后需要更改为节点链
                 style,
             } => {
-                let new_item_id = self.state.project.structure.insert_event_after(
+                let new_item_id = self.structure_mut().insert_event_after(
                     item_id,
-                    start_time,
                     end_time,
                     actor,
                     text,
@@ -620,21 +574,19 @@ impl AppStore {
                     style,
                 )?;
 
-                Ok(StateChange::Multiple(vec![
-                    StateChange::LineEditor(LineEditorChange::ItemsInserted {
+                Ok(vec![
+                    Tag::ItemsInserted {
                         item_id,
                         new_item_id,
-                    }),
-                    StateChange::LineEditor(LineEditorChange::SelectSingle {
-                        item_id: new_item_id,
-                    }),
-                ]))
+                    },
+                    self.selection_tag(new_item_id, crate::depsgraph::SelectionKind::Single),
+                ])
             }
             LineEditorAction::AddGroup { item_id } => {
                 let group_count = self
                     .state
                     .project
-                    .structure
+                    .structure()
                     .items
                     .values()
                     .filter(|item| matches!(item.content, ItemContent::Group(_)))
@@ -642,68 +594,61 @@ impl AppStore {
 
                 let name = format!("新分组 {}", group_count + 1);
 
-                let new_group_item_id = self
-                    .state
-                    .project
-                    .structure
-                    .insert_group_after(item_id, name)?;
-                Ok(StateChange::Multiple(vec![
-                    StateChange::LineEditor(LineEditorChange::ItemsInserted {
+                let new_group_item_id = self.structure_mut().insert_group_after(item_id, name)?;
+                Ok(vec![
+                    Tag::ItemsInserted {
                         item_id,
                         new_item_id: new_group_item_id,
-                    }),
-                    StateChange::LineEditor(LineEditorChange::SelectSingle {
-                        item_id: new_group_item_id,
-                    }),
-                ]))
+                    },
+                    self.selection_tag(new_group_item_id, crate::depsgraph::SelectionKind::Single),
+                ])
             }
             LineEditorAction::DeleteItems {} => {
                 let removed = self.delete_currently_selected();
-                Ok(StateChange::LineEditor(LineEditorChange::ItemsRemoved {
-                    item_ids: removed,
-                }))
+                Ok(vec![Tag::ItemsRemoved { item_ids: removed }])
             }
             LineEditorAction::CopyItems => {
-                let count = self.copy_currently_selected()?;
-                Ok(StateChange::LineEditor(LineEditorChange::ItemsCopied {
-                    count,
-                }))
+                self.copy_currently_selected()?;
+                Ok(vec![])
             }
             LineEditorAction::CutItems => {
-                let count = self.copy_currently_selected()?;
+                self.copy_currently_selected()?;
                 let removed = self.delete_currently_selected();
-                Ok(StateChange::Multiple(vec![
-                    StateChange::LineEditor(LineEditorChange::ItemsCopied { count }),
-                    StateChange::LineEditor(LineEditorChange::ItemsRemoved { item_ids: removed }),
-                ]))
+                Ok(vec![Tag::ItemsRemoved { item_ids: removed }])
             }
             LineEditorAction::UnGroup { group_item_id } => {
-                let new_ids = self
-                    .state
-                    .project
-                    .structure
-                    .ungroup(group_item_id)
-                    .map_err(|e| {
-                        log::error!("解散分组失败 {:?}: {}", group_item_id, e);
-                        e
-                    })?;
-                // UI 更新：移除旧分组行 + 插入提升的子项行
-                Ok(StateChange::LineEditor(LineEditorChange::GroupsUngrouped {
+                let new_ids = self.structure_mut().ungroup(group_item_id).map_err(|e| {
+                    log::error!("解散分组失败 {:?}: {}", group_item_id, e);
+                    e
+                })?;
+                // UI 更新：移除旧分组行 + 插入提升的子项行（精确锚点）。
+                // 选中联动：子项提升后选中新根（reducer 声明数据变化，投影按 tag 原子执行）。
+                let mut tags = vec![Tag::GroupsUngrouped {
                     group_id: group_item_id,
-                    new_ids,
-                }))
+                    new_ids: new_ids.clone(),
+                }];
+                if let (Some(&first), Some(&last)) = (new_ids.first(), new_ids.last()) {
+                    tags.push(self.selection_tag(first, crate::depsgraph::SelectionKind::Single));
+                    tags.push(self.selection_tag(last, crate::depsgraph::SelectionKind::Range));
+                }
+                Ok(tags)
             }
             LineEditorAction::PasteItems { anchor } => {
                 let Some(clip) = self.clipboard.paste_items()? else {
                     log::info!("剪贴板没有可粘贴的内容");
-                    return Ok(StateChange::None);
+                    return Ok(vec![]);
                 };
                 let (new_root_ids, base_location) =
-                    clip.instantiate(&mut self.state.project.structure, anchor)?;
-                Ok(StateChange::LineEditor(LineEditorChange::ItemsPasted {
-                    new_root_ids,
+                    clip.instantiate(&mut self.structure_mut(), anchor)?;
+                // 结构变化 + 选中联动（粘贴后选中新内容首个根）。
+                let mut tags = vec![Tag::ItemsPasted {
+                    new_root_ids: new_root_ids.clone(),
                     base_location,
-                }))
+                }];
+                if let Some(&first) = new_root_ids.first() {
+                    tags.push(self.selection_tag(first, crate::depsgraph::SelectionKind::Single));
+                }
+                Ok(tags)
             }
         }
     }
@@ -716,7 +661,7 @@ impl AppStore {
         if selected.is_empty() {
             return Ok(0);
         }
-        let clip = ItemsClip::from_selection(&self.state.project.structure, selected);
+        let clip = ItemsClip::from_selection(&*self.state.project.structure(), &selected);
         let count = clip.root_count();
         self.clipboard.copy_items(&clip)?;
         Ok(count)
@@ -724,11 +669,7 @@ impl AppStore {
 
     /// 从 Domain 删除当前选中集合（过滤"祖先已选中"），返回实际被移除的 root id 列表。
     fn delete_currently_selected(&mut self) -> Vec<ItemId> {
-        let selected_set = self
-            .ui_models
-            .line_editor_state
-            .directly_selected_items()
-            .clone();
+        let selected_set = self.ui_models.line_editor_state.directly_selected_items();
         let to_delete: Vec<ItemId> = selected_set
             .iter()
             .copied()
@@ -736,14 +677,14 @@ impl AppStore {
                 !&self
                     .state
                     .project
-                    .structure
+                    .structure()
                     .has_ancestor_in_set(id, &selected_set)
             })
             .collect();
 
         let mut removed: Vec<ItemId> = Vec::with_capacity(to_delete.len());
         for id in to_delete {
-            match self.state.project.structure.remove_item(id) {
+            match self.structure_mut().remove_item(id) {
                 Ok(()) => removed.push(id),
                 Err(e) => log::warn!("删除 structure 项失败 id={:?}: {}", id, e),
             }

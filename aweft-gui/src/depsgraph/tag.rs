@@ -1,0 +1,277 @@
+use std::rc::Rc;
+
+use crate::screen::area::{AreaType, ScrAreaKey};
+use crate::screen::edge::ScrEdgeKey;
+use aweft_model::ids::ItemId;
+use aweft_model::structure::ItemLocation;
+use chrono::TimeDelta;
+
+/// 数据域：可被标记变更的权威数据。
+/// 值对应 AppState 直接持有的数据
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DataId {
+    /// 项目字幕结构（行/分组/时间码/文本/层级）。
+    ProjectStructure,
+    /// 选中状态（LineEditor 选中集等）。
+    Selection,
+    /// 屏幕布局（areas/edges/verts 几何与类型）。
+    ScreenLayout,
+    /// 拖拽状态（分割/合并/边移动预览）。
+    DragState,
+    /// 动画数据（AnimData/Action，供曲线/Dope/NLA 投影）。
+    Animation,
+}
+
+/// 选中操作类型：投影按此路由到对应的选择方法。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelectionKind {
+    /// 单选（清空其他选中）。
+    Single,
+    /// 范围选择（从上次锚点到该行）。
+    Range,
+    /// 切换（有则取消，无则选中）。
+    Toggle,
+}
+
+/// 一次数据变更的描述（带 payload，供投影做精准局部更新）。
+///
+/// 元素级：值变化 tag 携带 `item_id` + `element` 标识 + `ancestors`（祖先分组链），
+/// 依赖图据此精确路由到"更新该行"与"更新所有祖先分组聚合"。
+#[derive(Debug, Clone)]
+pub enum Tag {
+    // ── ProjectStructure ──────────────────────────────────────────────
+    /// 行/分组结构变化（增删、层级调整）——需要重建行列表索引。
+    StructureChanged,
+    /// 分组折叠状态切换（局部：只影响过滤结果）。
+    GroupCollapsedToggled {
+        group_id: ItemId,
+        /// 祖先分组链（自身不折叠影响，仅用于可能的聚合）。
+        ancestors: Vec<ItemId>,
+    },
+    /// 事件时间码元素变化（start/end）。`ancestors` 供聚合传播到分组头。
+    EventTimecodeChanged {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+        /// 祖先分组链（叶子到根）。
+        ancestors: Vec<ItemId>,
+    },
+    /// 事件时间码拖拽预览（不修改 structure，仅 UI 显示预览值）。
+    TimecodePreviewChanged {
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+        /// 祖先分组链（叶子到根）。
+        ancestors: Vec<ItemId>,
+    },
+    /// 批量事件时间码元素变化。
+    EventsTimecodeChanged {
+        updates: Vec<(ItemId, bool, TimeDelta)>,
+        /// 所有涉及行的祖先分组链（去重后）。
+        ancestors: Vec<ItemId>,
+    },
+    /// 事件文本元素变化。
+    EventTextChanged {
+        event_id: ItemId,
+        ancestors: Vec<ItemId>,
+    },
+    /// 插入一项。
+    ItemsInserted {
+        item_id: ItemId,
+        new_item_id: ItemId,
+    },
+    /// 移除多项（已从 project.structure 移除）。
+    ItemsRemoved {
+        item_ids: Vec<ItemId>,
+    },
+    /// 粘贴子树（已分配新 ItemId）。
+    ItemsPasted {
+        new_root_ids: Vec<ItemId>,
+        base_location: ItemLocation,
+    },
+    /// 解散分组。
+    GroupsUngrouped {
+        group_id: ItemId,
+        new_ids: Vec<ItemId>,
+    },
+
+    // ── Selection ─────────────────────────────────────────────────────
+    /// 选中状态元素变化。`affected` 含被选中的行 + 受影响的祖先分组头。
+    SelectionChanged {
+        item_id: ItemId,
+        /// 选择类型：单选 / 范围 / 切换——投影据此调用对应方法，
+        /// 否则无法区分（SelectToggle 会被误降级为 select_single）。
+        kind: SelectionKind,
+        /// 该行 + 所有祖先分组头（需要刷新 selected 状态的行）。
+        affected: Vec<ItemId>,
+    },
+
+    // ── ScreenLayout ──────────────────────────────────────────────────
+    ScreenInitialized,
+    ScreenResized {
+        old_size: (u32, u32),
+        new_size: (u32, u32),
+    },
+    ScaleChanged {
+        old_scale: f64,
+        new_scale: f64,
+    },
+    AreaTypeChanged {
+        area_key: ScrAreaKey,
+        old_type: AreaType,
+        new_type: AreaType,
+    },
+    AreasSplit {
+        parent_key: ScrAreaKey,
+        new_area_key: ScrAreaKey,
+    },
+    AreasJoined {
+        /// 被移除的 area（主合并 + 递归空位填充）。
+        removed_keys: Vec<ScrAreaKey>,
+        /// 新创建的 area（对齐裁剪 split 产生）。
+        added_keys: Vec<ScrAreaKey>,
+        merged_into: ScrAreaKey,
+    },
+
+    // ── DragState ─────────────────────────────────────────────────────
+    SplitPreviewUpdated,
+    JoinPreviewUpdated,
+    PreviewCleared,
+    EdgeUpdated {
+        edge_keys: Rc<Vec<ScrEdgeKey>>,
+        area_keys: Rc<Vec<ScrAreaKey>>,
+    },
+    DragEnded {
+        areas_changed: bool,
+    },
+
+    // ── Animation ─────────────────────────────────────────────────────
+    /// 当前 Action / 关键帧数据变化（曲线、Dope、NLA 相关投影依赖）。
+    AnimationChanged,
+}
+
+/// 操作语义分类：同一语义的 Tag 归为一类，供操作按 `handles` 精确路由。
+///
+/// 一个操作声明它处理哪些 kind（`Operation::handles`），只有 kind 命中的
+/// tag 才会被路由到该操作——避免把所有 tags 塞给所有操作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TagKind {
+    /// 行/分组结构增删、层级调整（需重建或精确 insert/remove）。
+    LineStructure,
+    /// 行时间码值变化（含批量/预览/取消）。
+    LineTimecode,
+    /// 行文本元素变化。
+    LineText,
+    /// 分组折叠切换。
+    GroupCollapse,
+    /// 选中状态变化。
+    Selection,
+    /// 屏幕布局结构变化（初始/缩放/分割/合并）。
+    ScreenStructure,
+    /// 区域类型切换。
+    AreaType,
+    /// 拖拽覆盖层（split/join 预览、清除）。
+    DragOverlay,
+    /// 拖拽边移动（局部几何更新）。
+    DragEdgeMove,
+    /// 拖拽结束（全量重建）。
+    DragEnded,
+    /// 动画数据变化。
+    Animation,
+}
+
+/// 操作唯一标识（编译期检查的枚举，可无限扩展加变体）。
+///
+/// 用于跨组件 `depends_on` 引用（Blender 的 OperationCode）。变体**全局唯一**，
+/// 前缀隐含组件维度（`Line*` 属 LineEditor，`Screen*` 属 Screen）——投影组件
+/// 是核心库随版本更新的内容，无运行时动态注册需求，故不需组件名字符串。
+/// 拼写错误在编译期暴露，而非运行时 panic。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OperationCode {
+    /// LineEditor 行结构操作。
+    LineStructure,
+    /// LineEditor 时间码操作。
+    LineTimecode,
+    /// LineEditor 折叠操作。
+    LineCollapse,
+    /// LineEditor 选中操作。
+    LineSelection,
+    /// Screen 覆盖层操作。
+    ScreenOverlays,
+    /// Screen 布局操作。
+    ScreenLayout,
+}
+
+impl Tag {
+    /// 该变更属于哪个数据域。
+    pub fn data_id(&self) -> DataId {
+        match self {
+            Tag::StructureChanged
+            | Tag::GroupCollapsedToggled { .. }
+            | Tag::EventTimecodeChanged { .. }
+            | Tag::TimecodePreviewChanged { .. }
+            | Tag::EventsTimecodeChanged { .. }
+            | Tag::EventTextChanged { .. }
+            | Tag::ItemsInserted { .. }
+            | Tag::ItemsRemoved { .. }
+            | Tag::ItemsPasted { .. }
+            | Tag::GroupsUngrouped { .. } => DataId::ProjectStructure,
+
+            Tag::SelectionChanged { .. } => DataId::Selection,
+
+            Tag::ScreenInitialized
+            | Tag::ScreenResized { .. }
+            | Tag::ScaleChanged { .. }
+            | Tag::AreaTypeChanged { .. }
+            | Tag::AreasSplit { .. }
+            | Tag::AreasJoined { .. } => DataId::ScreenLayout,
+
+            Tag::SplitPreviewUpdated
+            | Tag::JoinPreviewUpdated
+            | Tag::PreviewCleared
+            | Tag::EdgeUpdated { .. }
+            | Tag::DragEnded { .. } => DataId::DragState,
+
+            Tag::AnimationChanged => DataId::Animation,
+        }
+    }
+
+    /// 该变更的操作语义分类（操作路由键）。
+    pub fn kind(&self) -> TagKind {
+        match self {
+            Tag::StructureChanged
+            | Tag::ItemsInserted { .. }
+            | Tag::ItemsRemoved { .. }
+            | Tag::ItemsPasted { .. }
+            | Tag::GroupsUngrouped { .. } => TagKind::LineStructure,
+
+            Tag::EventTimecodeChanged { .. }
+            | Tag::TimecodePreviewChanged { .. }
+            | Tag::EventsTimecodeChanged { .. } => TagKind::LineTimecode,
+
+            Tag::EventTextChanged { .. } => TagKind::LineText,
+
+            Tag::GroupCollapsedToggled { .. } => TagKind::GroupCollapse,
+
+            Tag::SelectionChanged { .. } => TagKind::Selection,
+
+            Tag::ScreenInitialized
+            | Tag::ScreenResized { .. }
+            | Tag::ScaleChanged { .. }
+            | Tag::AreasSplit { .. }
+            | Tag::AreasJoined { .. } => TagKind::ScreenStructure,
+
+            Tag::AreaTypeChanged { .. } => TagKind::AreaType,
+
+            Tag::SplitPreviewUpdated | Tag::JoinPreviewUpdated | Tag::PreviewCleared => {
+                TagKind::DragOverlay
+            }
+
+            Tag::EdgeUpdated { .. } => TagKind::DragEdgeMove,
+
+            Tag::DragEnded { .. } => TagKind::DragEnded,
+
+            Tag::AnimationChanged => TagKind::Animation,
+        }
+    }
+}
