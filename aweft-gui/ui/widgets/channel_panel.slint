@@ -38,12 +38,8 @@ export component ChannelPanel inherits Rectangle {
 
     clip: true;
 
-    // 共用搜索栏（左上角，与标尺同层背景）。必须显式 x/y：
-    // Slint(1.17) 会把布局外无 x/y 的隐式尺寸元素居中到父内，否则搜索栏跑到面板中部
-    // （见 editor_search_bar.slint 头注释）。
+    // 共用搜索栏（左上角，与标尺同层背景）。
     search-bar := EditorSearchBar {
-        x: 0px;
-        y: 0px;
         width: 100%;
         search-height: root.search-height;
         search-active-mirror: root.search-active-mirror;

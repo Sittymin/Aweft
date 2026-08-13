@@ -157,11 +157,6 @@ export component NlaPanel inherits Rectangle {
     clip: true;
 
     search-bar := EditorSearchBar {
-        // 必须显式定位：无 x/y 时 Slint(1.17) 会把隐式尺寸元素居中到父内，
-        // 搜索栏会跑到 NLA 编辑器中部、顶部变成空白占位行（见 editor_search_bar.slint 头注释）。
-        // 显式放顶部，与画布时间标尺同层、列表第一行与画布第一泳道对齐。
-        x: 0px;
-        y: 0px;
         width: 100%;
         search-height: root.search-height;
         search-active-mirror: root.search-active-mirror;
