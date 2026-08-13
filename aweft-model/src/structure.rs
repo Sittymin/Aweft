@@ -1,13 +1,13 @@
 use crate::ids::{ActorId, ItemId};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use chrono::TimeDelta;
 use nom::{
-    Finish, IResult, Parser,
     branch::alt,
     character::complete::{alpha1, char, digit1, multispace0},
     combinator::{all_consuming, map_res, verify},
     number::complete::double,
     sequence::separated_pair,
+    Finish, IResult, Parser,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -229,15 +229,15 @@ impl ProjectStructure {
             Err(anyhow!("Item 没找到"))
         }
     }
-    // 不修改实际数据的版本
+    // 不修改实际数据的版本（纯只读预览计算）
     pub fn preview_adjust_event_time(
-        &mut self,
+        &self,
         id: ItemId,
         is_start_time: bool,
         delta: TimeDelta,
     ) -> Result<TimeDelta> {
-        if let Some(item) = self.items.get_mut(&id) {
-            if let ItemContent::Event(event_data) = &mut item.content {
+        if let Some(item) = self.items.get(&id) {
+            if let ItemContent::Event(event_data) = &item.content {
                 if is_start_time {
                     let new_start_time = event_data.start_time + delta;
                     // 避免越界
@@ -300,8 +300,6 @@ impl ProjectStructure {
     pub fn insert_event_after(
         &mut self,
         item_id: ItemId,
-        // 因为无法从分组获得时间等信息，所以需要从 UI 获得
-        _start_time: TimeDelta,
         end_time: TimeDelta,
         actor: Option<ActorId>,
         text: String,
@@ -310,10 +308,19 @@ impl ProjectStructure {
         style: Option<String>,
     ) -> Result<ItemId> {
         let location = self.find_insert_location(item_id)?;
+        // 延续参考行的时长：新行 start = 参考行 end，end = 参考行 end + 原时长。
+        // 这样新行保持与参考行相同的时长，向后平移（而非零长度起始）。
+        let duration = self
+            .items
+            .get(&item_id)
+            .and_then(|it| match &it.content {
+                ItemContent::Event(e) => Some(e.end_time - e.start_time),
+                ItemContent::Group(_) => None,
+            })
+            .unwrap_or_default();
         let new_item = EventData {
-            // 新建行沿用上一行的 end_time
             start_time: end_time,
-            end_time,
+            end_time: end_time + duration,
             actor,
             text,
             segment_timing,
@@ -433,35 +440,33 @@ impl ProjectStructure {
 
             let parent = group.parent;
 
-            // 获取当前在父级中的索引，以便把子项插到正确位置
+            // 获取当前在父级中的索引，以便把子项插到正确位置。
+            // 此处若 "找不到" / "类型不符" 说明 parent 指针与父级
+            // children/root_items 已不一致——数据结构不变量被破坏，属编程
+            // 错误，panic 暴露而非静默兜底。
             let idx = if let Some(pid) = parent {
-                let p_item = self
-                    .items
-                    .get(&pid)
-                    .ok_or_else(|| anyhow!("ungroup: parent {:?} not found", pid))?;
+                let p_item = self.items.get(&pid).unwrap_or_else(|| {
+                    unreachable!("ungroup: parent {:?} 不存在（数据不一致）", pid)
+                });
                 if let ItemContent::Group(pg) = &p_item.content {
                     pg.children
                         .iter()
                         .position(|&x| x == group_id)
                         .unwrap_or_else(|| {
-                            log::warn!(
-                                "ungroup: {} 不在父级 {} 的 children 中，使用索引 0",
-                                group_id,
-                                pid,
-                            );
-                            0
+                            unreachable!(
+                                "ungroup: {} 不在父级 {} 的 children 中（数据不一致）",
+                                group_id, pid
+                            )
                         })
                 } else {
-                    log::warn!("ungroup: 父级 {} 不是 Group，使用索引 0", pid,);
-                    0
+                    unreachable!("ungroup: 父级 {} 不是 Group（数据不一致）", pid);
                 }
             } else {
                 self.root_items
                     .iter()
                     .position(|&x| x == group_id)
                     .unwrap_or_else(|| {
-                        log::warn!("ungroup: {} 不在 root_items 中，使用索引 0", group_id,);
-                        0
+                        unreachable!("ungroup: {} 不在 root_items 中（数据不一致）", group_id)
                     })
             };
 
@@ -504,6 +509,9 @@ impl ProjectStructure {
     /// 将一个**已经存在于 `self.items`** 的项链接到指定位置（更新 parent
     /// 指针并写入父级 `children` 或 `root_items`）。
     ///
+    /// 幂等：内部先 `detach_item` 剥离旧位置，再挂新位置——重复调用或
+    /// 移动到已有位置不会产生重复引用（root_items / children 不会重复）。
+    ///
     /// 用于分组子树仅需要重新链接最高父级，剥离原始位置
     pub fn attach_item(&mut self, item_id: ItemId, location: ItemLocation) -> Result<()> {
         // 校验
@@ -531,7 +539,7 @@ impl ProjectStructure {
         let item = self
             .items
             .get_mut(&item_id)
-            .expect("[attach_item] 先前代码未检查 item_id 合法性");
+            .unwrap_or_else(|| unreachable!("[attach_item] item_id 已在上方校验存在"));
         item.parent = new_parent;
 
         match location {
@@ -543,14 +551,14 @@ impl ProjectStructure {
                 let group_item = self
                     .items
                     .get_mut(&group_id)
-                    .expect("[attach_item] 先前代码未检查 group_id 合法性");
+                    .unwrap_or_else(|| unreachable!("[attach_item] group_id 已在上方校验存在"));
 
                 match &mut group_item.content {
                     ItemContent::Group(g) => {
                         let pos = idx.min(g.children.len());
                         g.children.insert(pos, item_id);
                     }
-                    _ => panic!("[attach_item] 先前代码未检查 group_id 类型"),
+                    _ => unreachable!("[attach_item] group 类型已在上方校验"),
                 }
             }
         }
