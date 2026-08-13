@@ -684,6 +684,7 @@ dependencies = [
  "gstreamer-gl",
  "gstreamer-gl-egl",
  "gstreamer-video",
+ "i-slint-backend-testing",
  "log",
  "serde",
  "serde_json",
