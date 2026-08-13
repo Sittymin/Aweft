@@ -1,12 +1,8 @@
 // 将原来的 types.rs 内容移动到这里
 slint::include_modules!();
-use std::collections::{HashMap, HashSet};
 
-use anyhow::Result;
-use aweft_model::ids::ItemId;
 use chrono::TimeDelta;
-use log::warn;
-use slint::{Model, ModelRc, SharedString, ToSharedString, VecModel};
+use slint::SharedString;
 use slotmap::{Key, KeyData};
 
 /// 将 Rust 的 AreaType 转换为 Slint 的 AreaType
@@ -164,6 +160,20 @@ impl ThemeSettings {
 
     pub fn update_scale_factor(&mut self, scale_factor: f64) {
         self.scale_factor = scale_factor;
+    }
+
+    /// 物理像素 → 逻辑像素（UI 属性用）。Slint 的 `LogicalLength` 概念：
+    /// 内部几何/边距统一用物理像素计算，仅在输出到 Slint 属性时除以
+    /// scale_factor 转逻辑。所有 `as f64 / scale_factor` 都应走这里。
+    pub fn to_logical_px(&self, physical: f64) -> f32 {
+        (physical / self.scale_factor) as f32
+    }
+
+    /// 逻辑像素 → 物理像素（事件坐标换算用）。Slint 事件坐标是逻辑像素，
+    /// 内部几何需要物理像素，乘以 scale_factor。所有 `as f64 * scale_factor`
+    /// 都应走这里。
+    pub fn to_physical_px(&self, logical: f64) -> f64 {
+        logical * self.scale_factor
     }
 
     /// 创建测试用的 ThemeSettings

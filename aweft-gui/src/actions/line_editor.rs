@@ -52,7 +52,6 @@ pub enum LineEditorAction {
     },
     AddLine {
         item_id: ItemId,
-        start_time: TimeDelta,
         end_time: TimeDelta,
         actor: Option<ActorId>,
         text: String,

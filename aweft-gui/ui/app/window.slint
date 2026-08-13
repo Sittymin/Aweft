@@ -19,7 +19,7 @@ import {
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
-import { VideoState, SubtitleState } from "../bridge/state.slint";
+import { VideoState, SubtitleState, OverlayState } from "../bridge/state.slint";
 import {
     DragCallbacks,
     AreaCallbacks,
@@ -31,6 +31,7 @@ import { Theme } from "../theme/index.slint";
 export {
     VideoState,
     SubtitleState,
+    OverlayState,
     DragCallbacks,
     AreaCallbacks,
     LineEditorCallbacks,
@@ -42,12 +43,6 @@ export component MainWindow inherits Window {
     in property <[ScrAreaData]> scr-areas: [];
     in property <[ScrEdgeTouchAreaDisplayData]> scr-edge-touch-areas-displays: [];
     in property <[ScrEdgeTouchAreaData]> scr-edge-touch-areas: [];
-    in property <bool> show-split-preview-overlay: false;
-    in property <SplitPreviewOverlayData> split-preview-overlay-data;
-    in property <bool> show-join-highlight-overlay: false;
-    in property <JoinHighlightOverlayData> join-highlight-overlay-data;
-    in property <bool> show-close-area-overlays: false;
-    in property <[CloseAreaOverlayData]> close-area-overlay-datas;
 
     for scr-area[index] in scr-areas: SlintScrArea {
         area-key: scr-area.area_key;
@@ -65,15 +60,15 @@ export component MainWindow inherits Window {
         touch-area-data: scr-edge-touch-area;
     }
 
-    if show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {
-        data: split-preview-overlay-data;
+    if OverlayState.show-split-preview-overlay: split-preview-overlay := SplitPreviewOverlay {
+        data: OverlayState.split-preview-overlay-data;
         border-width: Theme.data.split-preview.border-width;
     }
-    if show-join-highlight-overlay: join-highlight-overlay := JoinHighlightOverlay {
-        data: join-highlight-overlay-data;
+    if OverlayState.show-join-highlight-overlay: join-highlight-overlay := JoinHighlightOverlay {
+        data: OverlayState.join-highlight-overlay-data;
     }
-    if show-close-area-overlays: close-area-overlays := CloseAreaOverlays {
-        datas: close-area-overlay-datas;
+    if OverlayState.show-close-area-overlays: close-area-overlays := CloseAreaOverlays {
+        datas: OverlayState.close-area-overlay-datas;
     }
 
     // 字幕覆盖层，显示在所有内容之上

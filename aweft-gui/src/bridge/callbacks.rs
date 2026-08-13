@@ -1,15 +1,14 @@
 use crate::actions::line_editor::LineEditorAction;
-use crate::actions::{Action, area::AreaAction};
+use crate::actions::{area::AreaAction, Action};
 use crate::bridge::types::{AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow};
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
-use crate::store::AppStore;
 use crate::store::reducers::media::connect_video_to_wgpu;
-use crate::ui_update::{UIUpdateCommand, UIUpdater};
+use crate::store::AppStore;
 use aweft_model::ids::ItemId;
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
-use slint::{ComponentHandle, RenderingState, SharedString};
+use slint::{ComponentHandle, RenderingState};
 use std::{cell::RefCell, rc::Rc};
 
 /// 设置所有回调
@@ -80,7 +79,7 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
             _ => (),
         }
     }) {
-        eprintln!("设置渲染通知器失败: {}", e);
+        log::error!("设置渲染通知器失败: {}", e);
     }
 }
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {
@@ -97,7 +96,7 @@ fn handle_before_rendering(instance: &MainWindow, store: &Rc<RefCell<AppStore>>)
         image_opt = wgpu_sink.fetch_next_frame();
     }
     if let Some(image) = image_opt {
-        println!("收到新视频帧，设置到 UI");
+        log::debug!("收到新视频帧，设置到 UI");
         instance
             .global::<crate::bridge::types::VideoState>()
             .set_current_video_frame(image);
@@ -109,7 +108,7 @@ fn handle_rendering_setup(
     store: &Rc<RefCell<AppStore>>,
     graphics_api: &slint::GraphicsAPI,
 ) {
-    println!("窗口初始化完成",);
+    log::info!("窗口初始化完成",);
     let windows_size = instance.window().size();
     let action = Action::Screen(crate::actions::screen::ScreenAction::InitializeLayout {
         width: windows_size.width,
@@ -119,7 +118,7 @@ fn handle_rendering_setup(
 
     // HACK: 后续需要修改为按需执行
     if let Err(e) = connect_video_to_wgpu(store, instance, graphics_api) {
-        eprintln!("❌ 视频系统连接失败: {}", e);
+        log::error!("❌ 视频系统连接失败: {}", e);
     }
 }
 
@@ -168,7 +167,7 @@ fn handle_resized(
     store: &Rc<RefCell<AppStore>>,
     new_size: &winit::dpi::PhysicalSize<u32>,
 ) {
-    println!("窗口大小发生改变: {}x{}", new_size.width, new_size.height);
+    log::debug!("窗口大小发生改变: {}x{}", new_size.width, new_size.height);
 
     let action = Action::Screen(crate::actions::screen::ScreenAction::WindowResized {
         width: new_size.width,
@@ -183,7 +182,7 @@ fn handle_scale_factor_changed(
     store: &Rc<RefCell<AppStore>>,
     scale_factor: f64,
 ) {
-    println!("检测到屏幕缩放因子变化: {:.2}", scale_factor);
+    log::info!("检测到屏幕缩放因子变化: {:.2}", scale_factor);
     let action =
         Action::Screen(crate::actions::screen::ScreenAction::ScaleFactorChanged { scale_factor });
 
@@ -286,15 +285,14 @@ fn setup_line_editor_timecode_editor_callback(instance: &MainWindow, store: Rc<R
                 warn!("无效的 event_id: {}", event_id_str);
                 return;
             };
-            println!("输入文本: {text}");
+            log::debug!("输入文本: {text}");
             if is_batch {
                 // 遍历所有选中的 event 项，应用时间修改
                 let selected_ids = store
                     .borrow()
                     .ui_models()
                     .line_editor_state
-                    .directly_selected_items()
-                    .clone();
+                    .directly_selected_items();
                 for &id in &selected_ids {
                     let action = Action::LineEditor(LineEditorAction::InputTimecode {
                         event_id: id,
@@ -492,31 +490,23 @@ fn setup_line_editor_selection_callbacks(instance: &MainWindow, store: Rc<RefCel
 fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
     instance.global::<LineEditorCallbacks>().on_add_line(
-        move |item_id_str, start_time_str, end_time_str, text| {
+        move |item_id_str, _start_time_str, end_time_str, _text| {
             use aweft_model::ids::ItemId;
             let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
-                println!("[callback] 无效的 item_id: {}", item_id_str);
-                return;
-            };
-
-            let start_time = if let Some(start_time) = parse_time(&start_time_str) {
-                start_time
-            } else {
-                println!("[callback] 无效的 : start_time_str {}", start_time_str);
+                log::warn!("[callback] 无效的 item_id: {}", item_id_str);
                 return;
             };
 
             let end_time = if let Some(end_time) = parse_time(&end_time_str) {
                 end_time
             } else {
-                println!("[callback] 无效的 : end_time_str {}", end_time_str);
+                log::warn!("[callback] 无效的 : end_time_str {}", end_time_str);
                 return;
             };
 
             let action =
                 Action::LineEditor(crate::actions::line_editor::LineEditorAction::AddLine {
                     item_id,
-                    start_time,
                     end_time,
                     actor: None,
                     // 新行不要延续参考行文本
@@ -539,7 +529,7 @@ fn setup_line_editor_add_group_callback(instance: &MainWindow, store: Rc<RefCell
         .on_add_group(move |item_id_str| {
             use aweft_model::ids::ItemId;
             let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
-                println!("[callback] 无效的 item_id: {}", item_id_str);
+                log::warn!("[callback] 无效的 item_id: {}", item_id_str);
                 return;
             };
 
@@ -617,7 +607,7 @@ fn setup_line_editor_ungroup_callbacks(instance: &MainWindow, store: Rc<RefCell<
         .on_ungroups(move |group_item_id_str| {
             let Ok(group_item_id) = uuid::Uuid::parse_str(group_item_id_str.as_str()).map(ItemId)
             else {
-                println!("[callback] ungroup 无效的 item_id: {}", group_item_id_str);
+                log::warn!("[callback] ungroup 无效的 item_id: {}", group_item_id_str);
                 return;
             };
 
@@ -630,33 +620,22 @@ fn setup_line_editor_ungroup_callbacks(instance: &MainWindow, store: Rc<RefCell<
         });
 }
 
-/// 统一的 dispatch 和渲染逻辑 - 使用新的 StateChange 机制
+/// 统一的 dispatch 和渲染逻辑。
+///
+/// reducer 修改数据并向依赖图打 tag；`evaluate_depsgraph` 只重算受影响的投影。
 fn dispatch_and_render(
     store: &Rc<RefCell<AppStore>>,
     action: Action,
-    weak_instance: &slint::Weak<MainWindow>,
+    _weak_instance: &slint::Weak<MainWindow>,
 ) {
     let mut store_mut = store.borrow_mut();
 
-    // 1. 分发 Action，获取状态变更
-    let state_change = match store_mut.dispatch(action) {
-        Ok(change) => change,
-        Err(e) => {
-            log::error!("❌ Action 处理失败: {}", e);
-            return;
-        }
-    };
-
-    // 2. 转换为 UI 更新指令
-    let ui_commands = UIUpdateCommand::from_state_change(state_change);
-
-    // 3. 合并优化指令
-    let optimized_commands = UIUpdateCommand::merge(ui_commands);
-
-    // 4. 如果有需要更新的内容，执行 UI 更新
-    if !optimized_commands.is_empty() {
-        if let Some(instance) = weak_instance.upgrade() {
-            UIUpdater::execute(&instance, &mut store_mut, optimized_commands);
-        }
+    // 1. 分发 Action：修改数据 + 打 tag
+    if let Err(e) = store_mut.dispatch(action) {
+        log::error!("❌ Action 处理失败: {}", e);
+        return;
     }
+
+    // 2. 依赖图求值：只重算受影响投影
+    store_mut.evaluate_depsgraph();
 }

@@ -1,10 +1,9 @@
 use log::warn;
-use slint::{Model, ModelRc, VecModel};
+use slint::{Model, VecModel};
 use std::{collections::HashMap, rc::Rc};
 
 use crate::bridge::types::{
-    ScrAreaData, ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData, SlintSubtitleRow,
-    slint_area_key_to_key,
+    slint_area_key_to_key, ScrAreaData, ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData,
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
@@ -36,11 +35,6 @@ impl UiModels {
         }
     }
 
-    /// 提供 Slint 端需要的行模型（便于初始化或重新绑定）。
-    pub fn line_editor_rows(&self) -> Rc<VecModel<SlintSubtitleRow>> {
-        self.line_editor_state.all_rows_model()
-    }
-
     /// 提供 ScreenArea 的模型。
     pub fn scrareas(&self) -> Rc<VecModel<ScrAreaData>> {
         self.scrarea_model.clone()
@@ -64,7 +58,6 @@ impl UiModels {
             self.scrarea_index_map.insert(key, idx);
         }
         self.scrarea_model.set_vec(areas);
-        println!("全量计算scrareas: {:#?}", self.scrarea_index_map);
     }
 
     /// 全量刷新 EdgeDisplay 模型。
@@ -85,7 +78,7 @@ impl UiModels {
         for (idx, edge) in edges.iter().enumerate() {
             for (_, edge_key) in edge.edge_keys.iter().enumerate() {
                 let key: ScrEdgeKey = slint_area_key_to_key(&edge_key);
-                self.scredge_touch_display_index_map.insert(key, idx);
+                self.scredge_touch_index_map.insert(key, idx);
             }
         }
         self.scredge_touch_model.set_vec(edges);
@@ -100,13 +93,12 @@ impl UiModels {
         if let Some(&index) = self.scrarea_index_map.get(key) {
             if let Some(mut data) = self.scrarea_model.row_data(index) {
                 data.area_type = new_area_type;
-                println!("已更新model");
+                log::debug!("已更新model");
                 self.scrarea_model.set_row_data(index, data);
                 return true;
             }
         }
-        println!("没更新model");
-        warn!("尝试更新不存在的 area key: {:?}", key);
+        log::warn!("尝试更新不存在的 area key: {:?}", key);
         false
     }
 
@@ -120,32 +112,140 @@ impl UiModels {
         false
     }
 
-    /// 局部更新单个 EdgeDisplay
-    pub fn update_scredge_display(
-        &mut self,
-        key: &ScrEdgeKey,
-        new_data: ScrEdgeTouchAreaDisplayData,
-    ) -> bool {
-        if let Some(&index) = self.scredge_touch_display_index_map.get(key) {
-            self.scredge_touch_display_model
-                .set_row_data(index, new_data);
-            return true;
-        }
-        warn!("尝试更新不存在的 edge key: {:?}", key);
-        false
+    /// 按已知索引更新 EdgeDisplay 行（resize/缩放局部几何更新）。
+    pub fn set_scredge_display_at(&mut self, index: usize, data: ScrEdgeTouchAreaDisplayData) {
+        self.scredge_touch_display_model.set_row_data(index, data);
     }
 
-    /// 局部更新单个 EdgeTouchArea
-    pub fn update_scredge_touch(
-        &mut self,
-        key: &ScrEdgeKey,
-        new_data: ScrEdgeTouchAreaData,
-    ) -> bool {
-        if let Some(&index) = self.scredge_touch_index_map.get(key) {
-            self.scredge_touch_model.set_row_data(index, new_data);
-            return true;
+    /// 按已知索引更新 EdgeTouchArea 行（resize/缩放局部几何更新）。
+    pub fn set_scredge_touch_at(&mut self, index: usize, data: ScrEdgeTouchAreaData) {
+        self.scredge_touch_model.set_row_data(index, data);
+    }
+
+    /// 按 key 更新 ScreenArea 行（返回该行索引，供 edges 同步更新）。
+    pub fn update_scrarea(&mut self, key: &ScrAreaKey, data: ScrAreaData) -> Option<usize> {
+        let index = *self.scrarea_index_map.get(key)?;
+        self.scrarea_model.set_row_data(index, data);
+        Some(index)
+    }
+
+    /// 在指定索引插入一个 ScreenArea 行（`row_added`，存量组件复用），
+    /// 并平移 index map 中 index 及其后的项。
+    pub fn insert_scrarea_at(&mut self, index: usize, data: ScrAreaData) {
+        self.scrarea_model.insert(index, data.clone());
+        let key: ScrAreaKey = slint_area_key_to_key(&data.area_key);
+        for (&k, &v) in self.scrarea_index_map.clone().iter() {
+            if v >= index {
+                self.scrarea_index_map.insert(k, v + 1);
+            }
         }
-        warn!("尝试更新不存在的 edge key: {:?}", key);
-        false
+        self.scrarea_index_map.insert(key, index);
+    }
+
+    /// 移除指定索引的 ScreenArea 行（`row_removed`，存量组件复用），
+    /// 并平移 index map 中 index 之后的项。
+    pub fn remove_scrarea_at(&mut self, index: usize) {
+        let removed_key: Option<ScrAreaKey> = self
+            .scrarea_model
+            .row_data(index)
+            .map(|d| slint_area_key_to_key(&d.area_key));
+        self.scrarea_model.remove(index);
+        if let Some(key) = removed_key {
+            self.scrarea_index_map.remove(&key);
+        }
+        for (&k, &v) in self.scrarea_index_map.clone().iter() {
+            if v > index {
+                self.scrarea_index_map.insert(k, v - 1);
+            }
+        }
+    }
+
+    /// 当前 ScreenArea 行数。
+    pub fn scrarea_count(&self) -> usize {
+        self.scrarea_model.row_count()
+    }
+
+    /// 按 key 查找 ScreenArea 行索引。
+    pub fn scrarea_index_of(&self, key: &ScrAreaKey) -> Option<usize> {
+        self.scrarea_index_map.get(key).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::types::{key_to_slint_key, SlintAreaType};
+
+    fn make_area(key: ScrAreaKey) -> ScrAreaData {
+        ScrAreaData {
+            area_key: key_to_slint_key(&key),
+            area_type: SlintAreaType::LineEditor,
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            actionzone_side_length: 10.0,
+        }
+    }
+
+    /// 构造唯一 ScrAreaKey（用 KeyData::from_ffi）。
+    fn unique_key(n: u64) -> ScrAreaKey {
+        slotmap::KeyData::from_ffi(n).into()
+    }
+
+    #[test]
+    fn insert_shift_index_map() {
+        let mut ui = UiModels::new();
+        let a: ScrAreaKey = unique_key(1);
+        let b: ScrAreaKey = unique_key(2);
+        let c: ScrAreaKey = unique_key(3);
+
+        ui.set_scrareas(vec![make_area(a), make_area(b)]);
+        assert_eq!(ui.scrarea_index_of(&a), Some(0));
+        assert_eq!(ui.scrarea_index_of(&b), Some(1));
+
+        // 在 index 1 插入 c → b 平移到 2
+        ui.insert_scrarea_at(1, make_area(c));
+        assert_eq!(ui.scrarea_count(), 3);
+        assert_eq!(ui.scrarea_index_of(&a), Some(0));
+        assert_eq!(ui.scrarea_index_of(&c), Some(1));
+        assert_eq!(ui.scrarea_index_of(&b), Some(2));
+        // 模型顺序一致
+        assert_eq!(
+            ui.scrarea_model
+                .row_data(0)
+                .map(|d| slint_area_key_to_key(&d.area_key)),
+            Some(a)
+        );
+        assert_eq!(
+            ui.scrarea_model
+                .row_data(2)
+                .map(|d| slint_area_key_to_key(&d.area_key)),
+            Some(b)
+        );
+    }
+
+    #[test]
+    fn remove_shift_index_map() {
+        let mut ui = UiModels::new();
+        let a: ScrAreaKey = unique_key(1);
+        let b: ScrAreaKey = unique_key(2);
+        let c: ScrAreaKey = unique_key(3);
+
+        ui.set_scrareas(vec![make_area(a), make_area(b), make_area(c)]);
+        assert_eq!(ui.scrarea_count(), 3);
+
+        // 移除 index 1 (b) → c 平移到 1
+        ui.remove_scrarea_at(1);
+        assert_eq!(ui.scrarea_count(), 2);
+        assert_eq!(ui.scrarea_index_of(&a), Some(0));
+        assert_eq!(ui.scrarea_index_of(&b), None, "被移除 key 应从 map 删除");
+        assert_eq!(ui.scrarea_index_of(&c), Some(1));
+        assert_eq!(
+            ui.scrarea_model
+                .row_data(1)
+                .map(|d| slint_area_key_to_key(&d.area_key)),
+            Some(c)
+        );
     }
 }

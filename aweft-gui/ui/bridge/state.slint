@@ -1,6 +1,15 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
 import { SlintSubtitleRow } from "../core/types.slint";
+import {
+    SplitPreviewOverlayData,
+} from "../screen/overlays/split_preview.slint";
+import {
+    JoinHighlightOverlayData,
+} from "../screen/overlays/join_highlight.slint";
+import {
+    CloseAreaOverlayData,
+} from "../screen/overlays/close_area.slint";
 
 export global VideoState {
     in property <image> current-video-frame;
@@ -9,4 +18,15 @@ export global VideoState {
 export global SubtitleState {
     in property <image> current-subtitle-frame;
     in property <[SlintSubtitleRow]> rows: [];
+}
+
+/// 拖拽预览覆盖层状态（UI 自持有的临时交互数据）。
+/// 由拖拽事件直接写入，不经 store/depsgraph。
+export global OverlayState {
+    in property <bool> show-split-preview-overlay: false;
+    in property <SplitPreviewOverlayData> split-preview-overlay-data;
+    in property <bool> show-join-highlight-overlay: false;
+    in property <JoinHighlightOverlayData> join-highlight-overlay-data;
+    in property <bool> show-close-area-overlays: false;
+    in property <[CloseAreaOverlayData]> close-area-overlay-datas;
 }

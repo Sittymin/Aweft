@@ -1,11 +1,10 @@
-use crate::bridge::SubtitleState;
 use crate::bridge::types::MainWindow;
+use crate::bridge::SubtitleState;
 use crate::store::AppStore;
-use crate::store::reducers::media::initialize_media;
 use anyhow::{Context, Result};
 use aweft_model::structure::GroupData;
-use slint::ComponentHandle;
 use slint::wgpu_29::{WGPUConfiguration, WGPUSettings};
+use slint::ComponentHandle;
 use std::{cell::RefCell, rc::Rc};
 
 /// 简化的应用窗口管理器
@@ -18,6 +17,16 @@ impl AppWindowManager {
     /// 创建新的应用窗口管理器
     pub fn new() -> Result<Self> {
         use slint::BackendSelector;
+        // 初始化日志（放最前，确保后续所有 log::* 都可用）。
+        // 默认只输出本 workspace（aweft*）的 debug+；第三方 crate（slint/
+        // gstreamer/winit 等）默认 warn+，避免刷屏。可通过 RUST_LOG 环境变量
+        // 覆盖（如 `RUST_LOG=debug` 或 `RUST_LOG=aweft_gui=trace`）。
+        env_logger::Builder::from_env(
+            env_logger::Env::default().default_filter_or(
+                "aweft=debug,aweft_gui=debug,aweft_model=debug,aweft_convert=debug,aweft_libass=debug,warn",
+            ),
+        )
+        .init();
         // 强制选择winit后端
         {
             let sel = BackendSelector::new();
@@ -27,8 +36,8 @@ impl AppWindowManager {
                 .require_wgpu_29(WGPUConfiguration::Automatic(WGPUSettings::default()))
                 .select();
             if let Err(e) = res {
-                eprintln!("Slint 后端选择失败: {:?}", e);
-                eprintln!("提示: 需要可用的 WGPU 环境与驱动，且请在 nix develop 中运行");
+                log::error!("Slint 后端选择失败: {:?}", e);
+                log::error!("提示: 需要可用的 WGPU 环境与驱动，且请在 nix develop 中运行");
                 return Err(e.into());
             }
         }
@@ -60,7 +69,7 @@ impl AppWindowManager {
         // 不应当再使用 set_rows 修改数据
         subtitle_state.set_rows(filter_model);
 
-        // 初始化模型并绑定给 Slint（占位空数组，后续通过 UIUpdater 刷新）
+        // 初始化模型并绑定给 Slint（占位空数组，后续通过依赖图投影刷新）
         {
             let areas_model = store.borrow().ui_models().scrareas();
             let scr_edge_displays_model = store.borrow().ui_models().scredge_displays();
@@ -71,10 +80,7 @@ impl AppWindowManager {
             instance.set_scr_edge_touch_areas(slint::ModelRc::from(scr_edge_touch_areas_model));
         }
 
-        println!("✅ 已初始化字幕过滤模型");
-        // ===================================
-        // 初始化日志
-        env_logger::init();
+        log::info!("✅ 已初始化字幕过滤模型");
 
         Ok(Self { instance, store })
     }
@@ -98,7 +104,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     use aweft_model::structure::{EventData, ItemLocation};
     use chrono::TimeDelta;
 
-    let structure = &mut project.structure;
+    let mut structure = project.structure_mut();
 
     // 创建根级别的事件
     let event1 = EventData {
