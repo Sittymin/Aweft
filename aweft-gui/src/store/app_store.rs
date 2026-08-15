@@ -118,8 +118,8 @@ impl AppStore {
 
     // ========== 内部 dispatch 方法 ==========
 
-    /// 可变访问字幕结构（`RefCell` 内部可变性，零拷贝）。
-    fn structure_mut(&mut self) -> std::cell::RefMut<'_, aweft_model::structure::ProjectStructure> {
+    /// 可变访问字幕结构（model 纯值语义，直接 &mut）。
+    fn structure_mut(&mut self) -> &mut aweft_model::structure::ProjectStructure {
         self.state.project.structure_mut()
     }
 
