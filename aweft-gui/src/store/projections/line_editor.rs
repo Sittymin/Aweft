@@ -77,25 +77,20 @@ pub fn op_line_timecode(store: &mut AppStore, tags: &[Tag]) {
                 event_id,
                 is_start_time,
                 time,
-                ancestors,
+                ancestors: _,
             } => {
                 let (state, ui) = store.split_mut();
                 // commit/cancel 后清除预览覆盖（提交已写 structure，cancel 恢复原值）
                 ui.line_editor_state
                     .rows_model()
                     .clear_preview_timecode(*event_id);
+                // update_row_time 内部重建该行 + 所有祖先分组头并通知（原子刷新）
                 ui.line_editor_state.update_row_time(
                     &state.project,
                     *event_id,
                     *is_start_time,
                     *time,
                 );
-                // 聚合传播：更新所有祖先分组头
-                for anc in ancestors {
-                    if let Some(idx) = ui.line_editor_state.rows_model().row_index_of(*anc) {
-                        ui.line_editor_state.rows_model().notify_row_changed(idx);
-                    }
-                }
             }
             Tag::TimecodePreviewChanged {
                 event_id,
@@ -117,7 +112,9 @@ pub fn op_line_timecode(store: &mut AppStore, tags: &[Tag]) {
                 }
             }
             Tag::EventsTimecodeChanged {
-                updates, ancestors, ..
+                updates,
+                ancestors: _,
+                ..
             } => {
                 let (state, ui) = store.split_mut();
                 let rows = ui.line_editor_state.rows_model();
@@ -128,17 +125,13 @@ pub fn op_line_timecode(store: &mut AppStore, tags: &[Tag]) {
                 let ids: Vec<ItemId> = updates.iter().map(|(id, _, _)| *id).collect();
                 let times: Vec<TimeDelta> = updates.iter().map(|(_, _, t)| *t).collect();
                 let is_start = updates.first().map(|(_, s, _)| *s).unwrap_or(false);
+                // 内部重建所有受影响行 + 祖先分组头并通知（原子刷新）
                 ui.line_editor_state.update_rows_batch_then_ancestors(
                     &state.project,
                     &ids,
                     is_start,
                     &times,
                 );
-                for anc in ancestors {
-                    if let Some(idx) = ui.line_editor_state.rows_model().row_index_of(*anc) {
-                        ui.line_editor_state.rows_model().notify_row_changed(idx);
-                    }
-                }
             }
             _ => {}
         }

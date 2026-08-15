@@ -7,7 +7,7 @@ use anyhow::Result;
 use aweft_model::{
     ids::ItemId,
     project::Project,
-    structure::{ItemContent, ItemLocation, ProjectStructure},
+    structure::{ItemContent, ItemLocation},
 };
 use chrono::TimeDelta;
 use slint::{Model, ModelRc};
@@ -122,77 +122,45 @@ impl LineEditorState {
     ///
     /// 仅在初始化时调用。结构变化用精确锚点操作，不得走全量重建。
     pub fn initialize_rows(&mut self, project: &Project) {
-        self.rows_model.set_structure(project.structure.clone());
+        self.rows_model.set_structure(&project.structure);
         self.invalidate_event_counts();
     }
 
     // === 时间码更新 ===
 
-    /// 更新事件行的时间码（数据源模型驱动）。
-    ///
-    /// 权威数据（project）已由 reducer 修改；这里仅通知 Slint 重算该行与祖先分组头。
-    /// `row_data` 从权威数据实时构造，因此无需手动改行副本。
-    pub fn update_row_time_without_ancestor_groups(
+    /// 更新单个事件行的时间码：重建该行 + 所有祖先分组头快照，并通知 Slint。
+    /// 权威数据（project）已由 reducer 修改；投影 op 调用此方法做 UI 刷新。
+    pub fn update_row_time(
         &mut self,
+        project: &Project,
         event_id: ItemId,
         _is_start_time: bool,
         _time: TimeDelta,
-    ) -> Vec<ItemId> {
-        let Some(idx) = self.rows_model.row_index_of(event_id) else {
-            return vec![];
-        };
-        self.rows_model.notify_row_changed(idx);
-        self.ancestors_of(event_id)
-    }
-
-    /// 更新单个事件行的时间码，并通知所有祖先分组头聚合更新。
-    pub fn update_row_time(
-        &mut self,
-        _project: &Project,
-        event_id: ItemId,
-        is_start_time: bool,
-        time: TimeDelta,
     ) {
-        let ancestors = self.update_row_time_without_ancestor_groups(event_id, is_start_time, time);
-        for ancestor in &ancestors {
-            if let Some(idx) = self.rows_model.row_index_of(*ancestor) {
-                self.rows_model.notify_row_changed(idx);
-            }
-        }
+        self.rows_model
+            .refresh_row_with_ancestors(&project.structure, event_id);
     }
 
-    /// 批量更新多个事件行的时间码，并统一通知所有受影响祖先分组头。
+    /// 批量更新多个事件行的时间码，并统一重建受影响行 + 所有祖先分组头。
     pub fn update_rows_batch_then_ancestors(
         &mut self,
-        _project: &Project,
+        project: &Project,
         event_ids: &[ItemId],
-        is_start_time: bool,
-        times: &[TimeDelta],
+        _is_start_time: bool,
+        _times: &[TimeDelta],
     ) {
-        let mut dirty_ancestors: HashSet<ItemId> = HashSet::new();
-        for (&id, &time) in event_ids.iter().zip(times.iter()) {
-            let ancestors = self.update_row_time_without_ancestor_groups(id, is_start_time, time);
-            dirty_ancestors.extend(ancestors);
+        let mut dirty: HashSet<ItemId> = HashSet::new();
+        for &id in event_ids {
+            dirty.insert(id);
+            dirty.extend(self.rows_model.ancestors_of(id));
         }
-        for ancestor in dirty_ancestors {
-            if let Some(idx) = self.rows_model.row_index_of(ancestor) {
-                self.rows_model.notify_row_changed(idx);
-            }
-        }
+        self.rows_model.refresh_ids(&project.structure, &dirty.iter().copied().collect::<Vec<_>>());
     }
 
-    /// 计算某个 item 的祖先分组链（叶子到根，不含自身）。从项目结构读取。
+    /// 计算某个 item 的祖先分组链（叶子到根，不含自身）。
+    /// 从行锚点的 `ancestor_ids` 读（投影时构建），无权威数据访问。
     fn ancestors_of(&self, item_id: ItemId) -> Vec<ItemId> {
-        let mut chain = Vec::new();
-        let mut cur = self.rows_model.item(item_id).and_then(|i| i.parent);
-        while let Some(id) = cur {
-            chain.push(id);
-            let Some(item) = self.rows_model.item(id) else {
-                break;
-            };
-            cur = item.parent;
-        }
-        chain
+        self.rows_model.ancestors_of(item_id)
     }
 
     pub fn toggle_group(&mut self, group_id: &str) {
@@ -228,7 +196,7 @@ impl LineEditorState {
         self.last_selection_anchor = Some(idx);
 
         let is_group = {
-            let Some(item) = self.rows_model.item(item_id) else {
+            let Some(item) = project.structure().get(item_id) else {
                 return;
             };
             matches!(item.content, ItemContent::Group(_))
@@ -332,11 +300,6 @@ impl LineEditorState {
         self.refresh_group_selected_by_counts(project);
     }
 
-    /// 同步数据源模型到当前权威结构（共享同一 Rc，零拷贝）。
-    pub fn sync_structure(&mut self, structure: Rc<std::cell::RefCell<ProjectStructure>>) {
-        self.rows_model.sync_structure(structure);
-    }
-
     /// 从 `selected`（三态单一来源）重建各分组"选中事件数"。
     ///
     /// 遍历直接选中（DirectlySelected）的事件，累加其祖先组的计数。
@@ -424,13 +387,13 @@ impl LineEditorState {
     /// 处理项插入后的 UI 更新（精确：插入锚点 + row_added）。
     pub fn handle_item_inserted(
         &mut self,
-        _project: &Project,
+        project: &Project,
         item_id: ItemId,
         new_item_id: ItemId,
     ) -> Result<()> {
-        // 精确插入锚点（structure 经共享 Rc 已是最新）。
-        // 事件数缓存失效由投影 op_line_structure 入口统一处理。
-        self.rows_model.insert_after(item_id, new_item_id);
+        // 精确插入锚点 + 构建新行内容快照（权威数据已由 reducer 更新）。
+        self.rows_model
+            .insert_after(&project.structure, item_id, new_item_id);
         Ok(())
     }
 
@@ -456,17 +419,18 @@ impl LineEditorState {
     /// 处理解散分组的 UI 投影更新（精确：删分组头 + 子项提升）。
     pub fn handle_group_ungrouped(
         &mut self,
-        _project: &Project,
+        project: &Project,
         group_id: ItemId,
         _new_ids: &[ItemId],
     ) -> Result<()> {
         // 解散不改事件归属（事件数不变），但父组头需 notify_row_changed
         // 强制重算 total_row_count（含组头行数，aggregate_group 实时递归）。
         // 事件数缓存失效由投影 op_line_structure 入口统一处理。
-        if let Some((idx, parent)) = self.rows_model.ungroup_anchor(group_id) {
+        if let Some((idx, parent)) = self.rows_model.ungroup_anchor(&project.structure, group_id) {
             // 更新父组头聚合（若有父组）。父组在 structure 中仍在，可查。
             if let Some(parent) = parent {
                 if let Some(pidx) = self.rows_model.row_index_of(parent) {
+                    self.rows_model.rebuild_row_content(pidx, &project.structure);
                     self.rows_model.notify_row_changed(pidx);
                 }
             }
@@ -484,7 +448,8 @@ impl LineEditorState {
         new_root_ids: &[ItemId],
     ) -> Result<()> {
         let at = self.compute_insert_at(project, &base_location)?;
-        self.rows_model.insert_subtrees(at, new_root_ids);
+        self.rows_model
+            .insert_subtrees(&project.structure, at, new_root_ids);
         // 事件数缓存失效由投影 op_line_structure 入口统一处理。
         if let Some(&first) = new_root_ids.first() {
             self.select_single(project, first);
