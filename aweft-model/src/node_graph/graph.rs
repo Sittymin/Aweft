@@ -6,37 +6,39 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{NodeGraphId, NodeId, SocketId};
 
 use super::error::EvalError;
+use super::kind::{EvalCache, EvalContext, NodeTreeType};
 use super::math::{Vec2, Vec3};
-use super::node::{ColorRole, FromNode, GraphNode, NodeKind, StyleOpKind, VecOpKind};
+use super::node::{
+    get_socket_decls, ColorRole, FromNode, Node, NodeKind, StyleOpKind, VecOpKind,
+};
 use super::socket::{InputSocket, Link, Socket, SocketDecl, SocketRef, SocketValue};
 use super::style::StyleResult;
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct EvaluationCache {
-    node_styles: HashMap<NodeId, StyleResult>,
-    socket_values: HashMap<SocketId, SocketValue>,
-}
-
+/// 通用节点图：拓扑结构对所有树类型统一（Blender `bNodeTree` 对应物）。
+/// 差异（节点目录/合法性/求值/UI）由 `K: NodeTreeType` 树类型承担。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeGraph {
+#[serde(bound(serialize = "K: Serialize", deserialize = "K: Deserialize<'de>"))]
+pub struct NodeGraph<K: NodeTreeType = NodeKind> {
     pub id: NodeGraphId,
     pub name: String,
-    pub nodes: HashMap<NodeId, GraphNode>,
+    pub enabled: bool,
+    pub nodes: HashMap<NodeId, Node<K>>,
     pub sockets: HashMap<SocketId, Socket>,
     pub links: Vec<Link>,
     input_link_map: HashMap<SocketId, SocketId>,
     output_link_map: HashMap<SocketId, Vec<SocketId>>,
     #[serde(skip, default)]
-    pub(crate) cache: Option<EvaluationCache>,
+    pub(crate) cache: Option<EvalCache>,
     #[serde(skip, default)]
     pub dirty: HashSet<NodeId>,
 }
 
-impl NodeGraph {
+impl<K: NodeTreeType> NodeGraph<K> {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             id: NodeGraphId::new(),
             name: name.into(),
+            enabled: true,
             nodes: HashMap::new(),
             sockets: HashMap::new(),
             links: Vec::new(),
@@ -47,20 +49,15 @@ impl NodeGraph {
         }
     }
 
-    pub fn add_node<T: FromNode>(
+    // ── 构建 ───────────────────────────────────────────────────────────────
+
+    pub fn add_node<T: FromNode<K>>(
         &mut self,
-        kind: NodeKind,
+        kind: K,
         extra_inputs: &[SocketDecl],
         extra_outputs: &[SocketDecl],
     ) -> Result<T, EvalError> {
-        if matches!(kind, NodeKind::Viewer)
-            && self
-                .nodes
-                .values()
-                .any(|n| matches!(n.kind, NodeKind::Viewer))
-        {
-            return Err(EvalError::DuplicateViewer);
-        }
+        kind.validate_add(self)?;
 
         if kind.is_static() && (!extra_inputs.is_empty() || !extra_outputs.is_empty()) {
             return Err(EvalError::StaticNodeExtras);
@@ -107,7 +104,7 @@ impl NodeGraph {
 
         self.nodes.insert(
             node_id,
-            GraphNode {
+            Node {
                 id: node_id,
                 kind,
                 inputs,
@@ -117,6 +114,8 @@ impl NodeGraph {
         self.dirty.insert(node_id);
         Ok(T::from_node(node_id, self))
     }
+
+    // ── 连线 ───────────────────────────────────────────────────────────────
 
     /// 运行时连线。适合动态场景，不需要提前知道 socket 类型。
     pub fn connect_raw(&mut self, from: SocketId, to: SocketId) -> Result<(), EvalError> {
@@ -149,6 +148,8 @@ impl NodeGraph {
     pub fn connect<T>(&mut self, from: SocketRef<T>, to: SocketRef<T>) -> Result<(), EvalError> {
         self.connect_raw(from.id, to.id)
     }
+
+    // ── 断线 ───────────────────────────────────────────────────────────────
 
     pub fn disconnect(&mut self, from: SocketId, to: SocketId) {
         if self.input_link_map.get(&to) != Some(&from) {
@@ -208,13 +209,13 @@ impl NodeGraph {
         self.disconnect_node_inputs(node_id);
     }
 
-    fn socket(&self, socket_id: SocketId) -> &Socket {
+    pub(crate) fn socket(&self, socket_id: SocketId) -> &Socket {
         self.sockets
             .get(&socket_id)
             .unwrap_or_else(|| panic!("socket {socket_id} not found in graph {}", self.id))
     }
 
-    pub fn input_source(&self, socket_id: SocketId) -> Option<SocketId> {
+    pub(crate) fn input_source(&self, socket_id: SocketId) -> Option<SocketId> {
         self.input_link_map.get(&socket_id).copied()
     }
 
@@ -222,14 +223,14 @@ impl NodeGraph {
         self.output_link_map.get(&socket_id).map(|v| v.as_slice())
     }
 
-    fn upstream_node_id(&self, socket_id: SocketId) -> Option<NodeId> {
+    pub(crate) fn upstream_node_id(&self, socket_id: SocketId) -> Option<NodeId> {
         self.input_source(socket_id)
             .map(|from| self.socket(from).node)
     }
 
-    fn read_input(
+    pub(crate) fn read_input(
         &self,
-        node: &GraphNode,
+        node: &Node<K>,
         idx: usize,
         socket_values: &HashMap<SocketId, SocketValue>,
     ) -> Option<SocketValue> {
@@ -242,6 +243,8 @@ impl NodeGraph {
         }
         self.socket(sid).default_value.clone()
     }
+
+    // ── Socket 设值 ────────────────────────────────────────────────────────
 
     pub fn set_socket_value(
         &mut self,
@@ -277,6 +280,8 @@ impl NodeGraph {
         self.set_socket_value(socket.id, None)
     }
 
+    // ── 删除节点 ───────────────────────────────────────────────────────────
+
     pub fn remove_node(&mut self, node_id: NodeId) {
         self.disconnect_node_all(node_id);
 
@@ -294,9 +299,12 @@ impl NodeGraph {
             cache
                 .socket_values
                 .retain(|sid, _| self.sockets.contains_key(sid));
+            cache.node_applications.remove(&node_id);
         }
         self.dirty.remove(&node_id);
     }
+
+    // ── 脏标记 ─────────────────────────────────────────────────────────────
 
     fn mark_dirty(&mut self, node_id: NodeId) {
         self.propagate_dirty(node_id);
@@ -327,9 +335,12 @@ impl NodeGraph {
         }
     }
 
-    pub fn evaluate(&mut self) -> Result<StyleResult, EvalError> {
+    // ── 求值 ───────────────────────────────────────────────────────────────
+
+    /// 求值：遍历脏节点（拓扑序），再按树类型收集图级结果。
+    pub fn evaluate(&mut self, ctx: &EvalContext) -> Result<K::Result, EvalError> {
         if self.cache.is_none() {
-            self.cache = Some(EvaluationCache::default());
+            self.cache = Some(EvalCache::default());
             if self.dirty.is_empty() {
                 self.dirty = self.nodes.keys().copied().collect();
             }
@@ -340,36 +351,20 @@ impl NodeGraph {
         let mut visiting = HashSet::new();
 
         for node_id in dirty_nodes {
-            self.ensure_node_evaluated(node_id, &mut cache, &mut visiting)?;
+            self.ensure_node_evaluated(node_id, &mut cache, &mut visiting, ctx)?;
         }
 
-        let result = if let Some(viewer_id) = self
-            .nodes
-            .iter()
-            .find(|(_, n)| matches!(n.kind, NodeKind::Viewer))
-            .map(|(&id, _)| id)
-        {
-            cache.node_styles.get(&viewer_id).cloned()
-        } else if let Some(output_id) = self
-            .nodes
-            .iter()
-            .find(|(_, n)| matches!(n.kind, NodeKind::GroupOutput))
-            .map(|(&id, _)| id)
-        {
-            cache.node_styles.get(&output_id).cloned()
-        } else {
-            Some(StyleResult::default())
-        };
-
+        let result = K::collect_result(self, &cache)?;
         self.cache = Some(cache);
-        Ok(result.unwrap_or_default())
+        Ok(result)
     }
 
     fn ensure_node_evaluated(
         &mut self,
         node_id: NodeId,
-        cache: &mut EvaluationCache,
+        cache: &mut EvalCache,
         visiting: &mut HashSet<NodeId>,
+        ctx: &EvalContext,
     ) -> Result<(), EvalError> {
         if !self.dirty.contains(&node_id) {
             return Ok(());
@@ -389,33 +384,76 @@ impl NodeGraph {
             .collect();
 
         for upstream_node in upstream_nodes {
-            self.ensure_node_evaluated(upstream_node, cache, visiting)?;
+            self.ensure_node_evaluated(upstream_node, cache, visiting, ctx)?;
         }
 
-        self.evaluate_node(node_id, cache)?;
+        self.evaluate_node(node_id, cache, ctx)?;
 
         visiting.remove(&node_id);
         self.dirty.remove(&node_id);
         Ok(())
     }
 
-    fn evaluate_node(&self, node_id: NodeId, cache: &mut EvaluationCache) -> Result<(), EvalError> {
+    fn evaluate_node(
+        &self,
+        node_id: NodeId,
+        cache: &mut EvalCache,
+        ctx: &EvalContext,
+    ) -> Result<(), EvalError> {
         let node = &self.nodes[&node_id];
+        node.kind.evaluate_node(self, node_id, cache, ctx)
+    }
+}
+
+// ── 样式图树类型注册（NodeKind） ───────────────────────────────────────────────
+
+impl NodeTreeType for NodeKind {
+    type Result = StyleResult;
+
+    fn validate_add(&self, graph: &NodeGraph<Self>) -> Result<(), EvalError> {
+        // 样式图只允许一个 Viewer。
+        if matches!(self, NodeKind::Viewer)
+            && graph
+                .nodes
+                .values()
+                .any(|n| matches!(n.kind, NodeKind::Viewer))
+        {
+            return Err(EvalError::DuplicateViewer);
+        }
+        Ok(())
+    }
+
+    fn is_static(&self) -> bool {
+        NodeKind::is_static(self)
+    }
+
+    fn socket_decls(&self) -> Option<(Vec<SocketDecl>, Vec<SocketDecl>)> {
+        get_socket_decls(self)
+    }
+
+    fn evaluate_node(
+        &self,
+        graph: &NodeGraph<Self>,
+        node_id: NodeId,
+        cache: &mut EvalCache,
+        _ctx: &EvalContext,
+    ) -> Result<(), EvalError> {
+        let node = &graph.nodes[&node_id];
         match &node.kind {
             NodeKind::StyleSource => {
                 cache.node_styles.insert(node_id, StyleResult::default());
             }
 
             kind @ NodeKind::VecOp(_) => {
-                eval_vec_op(self, node, kind, &mut cache.socket_values)?;
+                eval_vec_op(graph, node, kind, &mut cache.socket_values)?;
             }
 
             kind @ NodeKind::StyleOp(_) => {
-                let style = self
+                let style = graph
                     .upstream_node_id(node.inputs[0])
                     .and_then(|up| cache.node_styles.get(&up).cloned())
                     .unwrap_or_default();
-                let result = apply_style_op(self, node, kind, style, &cache.socket_values)?;
+                let result = apply_style_op(graph, node, kind, style, &cache.socket_values)?;
                 cache.node_styles.insert(node_id, result);
             }
 
@@ -423,7 +461,7 @@ impl NodeGraph {
                 let upstream_ids: Vec<NodeId> = node
                     .inputs
                     .iter()
-                    .filter_map(|&sid| self.upstream_node_id(sid))
+                    .filter_map(|&sid| graph.upstream_node_id(sid))
                     .collect();
                 let merged = upstream_ids
                     .iter()
@@ -436,7 +474,7 @@ impl NodeGraph {
                 let result = node
                     .inputs
                     .first()
-                    .and_then(|&sid| self.upstream_node_id(sid))
+                    .and_then(|&sid| graph.upstream_node_id(sid))
                     .and_then(|up| cache.node_styles.get(&up).cloned())
                     .unwrap_or_default();
                 cache.node_styles.insert(node_id, result);
@@ -446,11 +484,39 @@ impl NodeGraph {
         }
         Ok(())
     }
+
+    fn collect_result(graph: &NodeGraph<Self>, cache: &EvalCache) -> Result<Self::Result, EvalError> {
+        let result = if let Some(viewer_id) = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| matches!(n.kind, NodeKind::Viewer))
+            .map(|(&id, _)| id)
+        {
+            cache.node_styles.get(&viewer_id).cloned()
+        } else if let Some(output_id) = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| matches!(n.kind, NodeKind::GroupOutput))
+            .map(|(&id, _)| id)
+        {
+            cache.node_styles.get(&output_id).cloned()
+        } else {
+            Some(StyleResult::default())
+        };
+        Ok(result.unwrap_or_default())
+    }
+
+    fn reference_id(&self) -> Option<NodeGraphId> {
+        match self {
+            NodeKind::Reference(id) => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 fn eval_vec_op(
-    graph: &NodeGraph,
-    node: &GraphNode,
+    graph: &NodeGraph<NodeKind>,
+    node: &Node<NodeKind>,
     kind: &NodeKind,
     socket_values: &mut HashMap<SocketId, SocketValue>,
 ) -> Result<(), EvalError> {
@@ -529,8 +595,8 @@ fn eval_vec_op(
 }
 
 fn apply_style_op(
-    graph: &NodeGraph,
-    node: &GraphNode,
+    graph: &NodeGraph<NodeKind>,
+    node: &Node<NodeKind>,
     kind: &NodeKind,
     mut style: StyleResult,
     socket_values: &HashMap<SocketId, SocketValue>,

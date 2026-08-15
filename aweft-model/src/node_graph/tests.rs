@@ -90,7 +90,7 @@ proptest! {
         graph.connect_raw(*outputs.last().unwrap(), h.inputs.style.id).unwrap();
 
         let expected = expected.last().unwrap().clone();
-        prop_assert_eq!(graph.evaluate().unwrap(), expected);
+        prop_assert_eq!(graph.evaluate(&EvalContext::style()).unwrap(), expected);
     }
 }
 
@@ -114,7 +114,7 @@ fn typed_api_basic() {
         .unwrap();
     graph.set_value(size.inputs.size, 42.0).unwrap();
 
-    let result = graph.evaluate().unwrap();
+    let result = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result.font_size, Some(42.0));
 }
 
@@ -143,7 +143,7 @@ fn typed_api_vec2_chain() {
     graph.set_value(combine.inputs.x, 1.0).unwrap();
     graph.set_value(combine.inputs.y, 2.0).unwrap();
 
-    let result = graph.evaluate().unwrap();
+    let result = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result.position, Some(Vec2 { x: 1.0, y: 2.0 }));
 }
 
@@ -175,7 +175,7 @@ fn clip_rect_is_normalized() {
         )
         .unwrap();
 
-    let result = graph.evaluate().unwrap();
+    let result = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(
         result.clip_rect,
         Some(ClipRect {
@@ -215,7 +215,7 @@ proptest! {
         graph.connect(comb.outputs.vector, rot.inputs.rotation).unwrap();
         graph.connect(rot.outputs.style, output.inputs.style).unwrap();
 
-        let result = graph.evaluate().unwrap();
+        let result = graph.evaluate(&EvalContext::style()).unwrap();
         prop_assert_eq!(result.font_rotation, Some(Vec3 { x, y, z }));
     }
 }
@@ -247,7 +247,7 @@ fn incremental_evaluation_skips_clean_nodes() {
     graph.set_value(size.inputs.size, 10.0).unwrap();
     graph.set_value(bold.inputs.bold, true).unwrap();
 
-    let result1 = graph.evaluate().unwrap();
+    let result1 = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result1.font_size, Some(10.0));
     assert_eq!(result1.bold, Some(true));
     assert!(graph.dirty.is_empty());
@@ -259,7 +259,7 @@ fn incremental_evaluation_skips_clean_nodes() {
 
     assert!(graph.dirty.contains(&bold.id));
 
-    let result2 = graph.evaluate().unwrap();
+    let result2 = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result2.font_size, Some(10.0));
     assert_eq!(result2.bold, Some(false));
     assert!(graph.dirty.is_empty());
@@ -283,7 +283,7 @@ fn add_node_only_marks_new_node_dirty() {
         .unwrap();
     graph.set_value(size.inputs.size, 20.0).unwrap();
 
-    let _ = graph.evaluate().unwrap();
+    let _ = graph.evaluate(&EvalContext::style()).unwrap();
     assert!(graph.cache.is_some());
     assert!(graph.dirty.is_empty());
 
@@ -321,7 +321,7 @@ fn add_link_marks_destination_and_downstream_dirty() {
     graph.set_value(size.inputs.size, 20.0).unwrap();
     graph.set_value(bold.inputs.bold, true).unwrap();
 
-    let _ = graph.evaluate().unwrap();
+    let _ = graph.evaluate(&EvalContext::style()).unwrap();
     assert!(graph.dirty.is_empty());
 
     let bold_node = graph
@@ -363,7 +363,7 @@ fn disconnect_input_marks_destination_dirty() {
     graph.set_value(size.inputs.size, 20.0).unwrap();
     graph.set_value(bold.inputs.bold, true).unwrap();
 
-    let _ = graph.evaluate().unwrap();
+    let _ = graph.evaluate(&EvalContext::style()).unwrap();
     assert!(graph.dirty.is_empty());
 
     let bold_style_in = graph.nodes[&bold.id].inputs[0];
@@ -406,7 +406,7 @@ fn disconnect_output_marks_destinations_dirty() {
     graph.set_value(bold1.inputs.bold, true).unwrap();
     graph.set_value(bold2.inputs.bold, false).unwrap();
 
-    let _ = graph.evaluate().unwrap();
+    let _ = graph.evaluate(&EvalContext::style()).unwrap();
     assert!(graph.dirty.is_empty());
 
     graph.disconnect_output(size.outputs.style.id);
@@ -447,7 +447,7 @@ fn remove_node_removes_links_and_marks_downstream_dirty() {
     graph.set_value(size.inputs.size, 20.0).unwrap();
     graph.set_value(bold.inputs.bold, true).unwrap();
 
-    let result_before = graph.evaluate().unwrap();
+    let result_before = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result_before.font_size, Some(20.0));
     assert!(graph.dirty.is_empty());
 
@@ -465,7 +465,7 @@ fn remove_node_removes_links_and_marks_downstream_dirty() {
             .any(|l| l.from == size_out || l.to == size_out)
     );
 
-    let result_after = graph.evaluate().unwrap();
+    let result_after = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result_after.font_size, None);
 }
 
@@ -494,7 +494,7 @@ fn disconnect_removes_specific_link() {
     graph.set_value(size.inputs.size, 20.0).unwrap();
     graph.set_value(bold.inputs.bold, true).unwrap();
 
-    let _ = graph.evaluate().unwrap();
+    let _ = graph.evaluate(&EvalContext::style()).unwrap();
 
     let bold_style_in = graph.nodes[&bold.id].inputs[0];
     graph.disconnect(size.outputs.style.id, bold_style_in);
@@ -534,7 +534,7 @@ fn viewer_takes_priority_over_group_output() {
         .connect_raw(size.outputs.style.id, viewer.inputs.style.id)
         .unwrap();
 
-    let result = graph.evaluate().unwrap();
+    let result = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result.font_size, Some(20.0));
     assert_eq!(result.bold, None);
 }
@@ -553,7 +553,7 @@ fn evaluate_returns_default_when_no_output_or_viewer() {
         .unwrap();
     graph.set_value(size.inputs.size, 20.0).unwrap();
 
-    let result = graph.evaluate().unwrap();
+    let result = graph.evaluate(&EvalContext::style()).unwrap();
     assert_eq!(result, StyleResult::default());
 }
 

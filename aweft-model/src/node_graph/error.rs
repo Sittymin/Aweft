@@ -29,4 +29,7 @@ pub enum EvalError {
 
     #[error("完全静态节点不允许追加额外端口")]
     StaticNodeExtras,
+
+    #[error("节点（{0}）的样式输入未连接；请把样式来源连接到样式端口（默认样式可连接默认样式链）")]
+    StyleNotConnected(String),
 }
