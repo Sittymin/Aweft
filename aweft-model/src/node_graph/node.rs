@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{NodeGraphId, NodeId, SocketId};
 
+use super::graph::NodeGraph;
+use super::kind::NodeTreeType;
 use super::socket::{
     BoolSocket, ClipRectSocket, FloatSocket, Socket, SocketDecl, StyleSocket, Vec2Socket,
     Vec3Socket,
@@ -18,7 +22,7 @@ pub enum ColorRole {
     All,
 }
 
-// ── 节点类型 ──────────────────────────────────────────────────────────────────
+// ── 样式图节点类型 ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VecOpKind {
@@ -82,19 +86,21 @@ impl NodeKind {
 
 // ── 节点实例 ──────────────────────────────────────────────────────────────────
 
+/// 通用节点实例：`kind` 为树类型（样式 `NodeKind` / 应用 `ApplicationNodeKind`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphNode {
+#[serde(bound(serialize = "K: Serialize", deserialize = "K: Deserialize<'de>"))]
+pub struct Node<K: NodeTreeType> {
     pub id: NodeId,
-    pub kind: NodeKind,
+    pub kind: K,
     pub inputs: Vec<SocketId>,
     pub outputs: Vec<SocketId>,
 }
 
-impl GraphNode {
+impl<K: NodeTreeType> Node<K> {
     pub fn input<'a>(
         &self,
         idx: usize,
-        sockets: &'a std::collections::HashMap<SocketId, Socket>,
+        sockets: &'a HashMap<SocketId, Socket>,
     ) -> Option<&'a Socket> {
         self.inputs.get(idx).and_then(|id| sockets.get(id))
     }
@@ -102,7 +108,7 @@ impl GraphNode {
     pub fn output<'a>(
         &self,
         idx: usize,
-        sockets: &'a std::collections::HashMap<SocketId, Socket>,
+        sockets: &'a HashMap<SocketId, Socket>,
     ) -> Option<&'a Socket> {
         self.outputs.get(idx).and_then(|id| sockets.get(id))
     }
@@ -111,8 +117,9 @@ impl GraphNode {
 // ── 类型化 Node Handle ────────────────────────────────────────────────────────
 
 /// 节点的类型级规范。每种节点对应一个实现者，宏据此批量生成。
-pub trait NodeSpec {
-    const KIND: NodeKind;
+/// `K` 为树类型（默认样式 `NodeKind`；应用节点实现 `NodeSpec<ApplicationNodeKind>`）。
+pub trait NodeSpec<K: NodeTreeType = NodeKind> {
+    const KIND: K;
     type Inputs;
     type Outputs;
     fn build_inputs(node_id: NodeId, sockets: &[SocketId]) -> Self::Inputs;
@@ -121,39 +128,39 @@ pub trait NodeSpec {
     fn output_decls() -> Vec<SocketDecl>;
 }
 
-pub struct NodeHandle<T: NodeSpec> {
+pub struct NodeHandle<T: NodeSpec<K>, K: NodeTreeType = NodeKind> {
     pub id: NodeId,
     pub inputs: T::Inputs,
     pub outputs: T::Outputs,
 }
 
-impl<T: NodeSpec> NodeHandle<T> {
+impl<T: NodeSpec<K>, K: NodeTreeType> NodeHandle<T, K> {
     pub fn to_id(self) -> NodeId {
         self.id
     }
 }
 
-/// 决定 `add_node` 返回 `NodeId` 还是 `NodeHandle<T>`，
+/// 决定 `add_node` 返回 `NodeId` 还是 `NodeHandle<T, K>`，
 /// 同时提供 socket 声明解析路径。
-pub trait FromNode {
-    fn from_node(node_id: NodeId, graph: &super::graph::NodeGraph) -> Self;
+pub trait FromNode<K: NodeTreeType = NodeKind> {
+    fn from_node(node_id: NodeId, graph: &NodeGraph<K>) -> Self;
     fn resolve_decls(
-        kind: &NodeKind,
+        kind: &K,
         extra_inputs: &[SocketDecl],
         extra_outputs: &[SocketDecl],
     ) -> (Vec<SocketDecl>, Vec<SocketDecl>);
 }
 
-impl FromNode for NodeId {
-    fn from_node(node_id: NodeId, _graph: &super::graph::NodeGraph) -> Self {
+impl<K: NodeTreeType> FromNode<K> for NodeId {
+    fn from_node(node_id: NodeId, _graph: &NodeGraph<K>) -> Self {
         node_id
     }
     fn resolve_decls(
-        kind: &NodeKind,
+        kind: &K,
         extra_inputs: &[SocketDecl],
         extra_outputs: &[SocketDecl],
     ) -> (Vec<SocketDecl>, Vec<SocketDecl>) {
-        let (base_i, base_o) = get_socket_decls(kind).unwrap_or_default();
+        let (base_i, base_o) = kind.socket_decls().unwrap_or_default();
         let inputs: Vec<_> = base_i
             .into_iter()
             .chain(extra_inputs.iter().cloned())
@@ -166,8 +173,8 @@ impl FromNode for NodeId {
     }
 }
 
-impl<T: NodeSpec> FromNode for NodeHandle<T> {
-    fn from_node(node_id: NodeId, graph: &super::graph::NodeGraph) -> Self {
+impl<T: NodeSpec<K>, K: NodeTreeType> FromNode<K> for NodeHandle<T, K> {
+    fn from_node(node_id: NodeId, graph: &NodeGraph<K>) -> Self {
         let node = &graph.nodes[&node_id];
         NodeHandle {
             id: node_id,
@@ -176,7 +183,7 @@ impl<T: NodeSpec> FromNode for NodeHandle<T> {
         }
     }
     fn resolve_decls(
-        _kind: &NodeKind,
+        _kind: &K,
         extra_inputs: &[SocketDecl],
         extra_outputs: &[SocketDecl],
     ) -> (Vec<SocketDecl>, Vec<SocketDecl>) {
@@ -192,9 +199,9 @@ impl<T: NodeSpec> FromNode for NodeHandle<T> {
     }
 }
 
-// ── 节点定义宏 ────────────────────────────────────────────────────────────────
+// ── 样式节点定义宏 ────────────────────────────────────────────────────────────
 
-/// 顶层宏：一次性声明所有节点，统一生成类型级规范和运行时 socket 声明。
+/// 顶层宏：一次性声明所有样式节点，统一生成类型级规范和运行时 socket 声明。
 #[macro_export]
 macro_rules! define_nodes {
     (
@@ -218,7 +225,7 @@ macro_rules! define_nodes {
                 $(pub $out_name: $crate::node_graph::SocketRef<$out_ty>),*
             }
 
-            impl $crate::node_graph::NodeSpec for $name {
+            impl $crate::node_graph::NodeSpec<$crate::node_graph::NodeKind> for $name {
                 const KIND: $crate::node_graph::NodeKind = $kind;
                 type Inputs = $inputs;
                 type Outputs = $outputs;
@@ -296,7 +303,7 @@ macro_rules! define_nodes {
     };
 }
 
-// ── 通过宏定义所有具体节点 ────────────────────────────────────────────────────
+// ── 通过宏定义所有具体样式节点 ────────────────────────────────────────────────
 
 define_nodes! {
     StyleSource, StyleSourceInputs, StyleSourceOutputs {

@@ -1,20 +1,20 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::animation::{AnimationError, AnimationLibrary, apply_animation_to_style};
-use crate::ids::{AnimDataId, ApplicationGraphId, NodeGraphId, NodeId, SocketId};
-#[allow(unused_imports)]
-use crate::node_graph::socket::SocketType;
+use crate::ids::{AnimDataId, NodeGraphId, NodeId};
 use crate::node_graph::{
     error::EvalError,
+    kind::{EvalCache, EvalContext, NodeTreeType},
     socket::{
-        AnimationSocket, ApplicationSocket, ApplicationUnit, BoolSocket, InputSocket, IntSocket,
-        Link, Socket, SocketDecl, SocketRef, SocketValue, StyleSocket, TextSocket,
+        AnimationSocket, ApplicationSocket, ApplicationUnit, BoolSocket, IntSocket, SocketDecl,
+        SocketValue, StyleSocket, TextSocket,
     },
     style::StyleResult,
+    Node, NodeGraph, NodeHandle,
 };
 
 // ── LineContext ───────────────────────────────────────────────────────────────
@@ -38,20 +38,16 @@ pub struct ApplicationGraphMatch {
     pub animation: Option<AnimDataId>,
 }
 
-/// 应用图求值过程中可能产生的错误。
+/// 应用层求值过程中可能产生的错误。
 #[derive(Debug, Error)]
 pub enum ApplicationError {
     #[error(transparent)]
     Eval(#[from] EvalError),
     #[error(transparent)]
     Animation(#[from] AnimationError),
-    /// 静态样式必须明确连接（样式链引用；想要默认样式就连接默认样式链），
-    /// 不允许留空静默使用默认样式。
-    #[error("节点（{0}）的样式输入未连接；请把样式来源连接到样式端口（默认样式可连接默认样式链）")]
-    StyleNotConnected(String),
 }
 
-// ── ApplicationNodeKind ──────────────────────────────────────────────────────────────
+// ── ApplicationNodeKind ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApplicationNodeKind {
@@ -86,114 +82,290 @@ impl ApplicationNodeKind {
     }
 }
 
-// ── ApplicationGraphNode ─────────────────────────────────────────────────────────────
+// ── 应用图树类型注册（ApplicationNodeKind） ───────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplicationGraphNode {
-    pub id: NodeId,
-    pub kind: ApplicationNodeKind,
-    pub inputs: Vec<SocketId>,
-    pub outputs: Vec<SocketId>,
-}
+impl NodeTreeType for ApplicationNodeKind {
+    type Result = Option<ApplicationGraphMatch>;
 
-impl ApplicationGraphNode {
-    pub fn input<'a>(
-        &self,
-        idx: usize,
-        sockets: &'a HashMap<SocketId, Socket>,
-    ) -> Option<&'a Socket> {
-        self.inputs.get(idx).and_then(|id| sockets.get(id))
+    fn validate_add(&self, _graph: &NodeGraph<Self>) -> Result<(), EvalError> {
+        Ok(())
     }
 
-    pub fn output<'a>(
+    fn is_static(&self) -> bool {
+        ApplicationNodeKind::is_static(self)
+    }
+
+    fn socket_decls(&self) -> Option<(Vec<SocketDecl>, Vec<SocketDecl>)> {
+        get_application_socket_decls(self)
+    }
+
+    fn evaluate_node(
         &self,
-        idx: usize,
-        sockets: &'a HashMap<SocketId, Socket>,
-    ) -> Option<&'a Socket> {
-        self.outputs.get(idx).and_then(|id| sockets.get(id))
+        graph: &NodeGraph<Self>,
+        node_id: NodeId,
+        cache: &mut EvalCache,
+        ctx: &EvalContext,
+    ) -> Result<(), EvalError> {
+        let node = &graph.nodes[&node_id];
+        match &node.kind {
+            ApplicationNodeKind::ContextInput => {
+                let Some(line) = ctx.line else {
+                    return Ok(());
+                };
+                if let Some(&sid) = node.outputs.first() {
+                    cache
+                        .socket_values
+                        .insert(sid, SocketValue::Text(line.actor.clone()));
+                }
+                if let Some(&sid) = node.outputs.get(1) {
+                    cache
+                        .socket_values
+                        .insert(sid, SocketValue::Text(line.line_text.clone()));
+                }
+                if let Some(&sid) = node.outputs.get(2) {
+                    cache
+                        .socket_values
+                        .insert(sid, SocketValue::Int(line.line_index));
+                }
+            }
+
+            ApplicationNodeKind::MatchActor => {
+                let source = graph.read_input(node, 0, &cache.socket_values);
+                let pattern = graph.read_input(node, 1, &cache.socket_values);
+                let matched = match (source, pattern) {
+                    (Some(SocketValue::Text(s)), Some(SocketValue::Text(p))) => s.contains(&p),
+                    _ => false,
+                };
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(matched));
+                }
+            }
+
+            ApplicationNodeKind::MatchText => {
+                let source = graph.read_input(node, 0, &cache.socket_values);
+                let pattern = graph.read_input(node, 1, &cache.socket_values);
+                let matched = match (source, pattern) {
+                    (Some(SocketValue::Text(s)), Some(SocketValue::Text(re))) => {
+                        Regex::new(&re).map(|r| r.is_match(&s)).unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(matched));
+                }
+            }
+
+            ApplicationNodeKind::IntEq => {
+                let a = graph
+                    .read_input(node, 0, &cache.socket_values)
+                    .and_then(|v| match v {
+                        SocketValue::Int(i) => Some(i),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                let b = graph
+                    .read_input(node, 1, &cache.socket_values)
+                    .and_then(|v| match v {
+                        SocketValue::Int(i) => Some(i),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(a == b));
+                }
+            }
+
+            ApplicationNodeKind::And => {
+                let all_true = node.inputs.iter().all(|&sid| {
+                    graph
+                        .input_source(sid)
+                        .and_then(|from| cache.socket_values.get(&from))
+                        .map(|v| matches!(v, SocketValue::Bool(true)))
+                        .unwrap_or(false)
+                });
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(all_true));
+                }
+            }
+
+            ApplicationNodeKind::Or => {
+                let any_true = node.inputs.iter().any(|&sid| {
+                    graph
+                        .input_source(sid)
+                        .and_then(|from| cache.socket_values.get(&from))
+                        .map(|v| matches!(v, SocketValue::Bool(true)))
+                        .unwrap_or(false)
+                });
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(any_true));
+                }
+            }
+
+            ApplicationNodeKind::Not => {
+                let input = graph
+                    .read_input(node, 0, &cache.socket_values)
+                    .map(|v| match v {
+                        SocketValue::Bool(b) => !b,
+                        _ => false,
+                    })
+                    .unwrap_or(true);
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(input));
+                }
+            }
+
+            // 字符串常量：输出节点默认值里的文本（UI 节点内编辑，未设则空串）。
+            ApplicationNodeKind::TextConst => {
+                if let Some(&sid) = node.outputs.first() {
+                    let text = match graph.socket(sid).default_value.clone() {
+                        Some(SocketValue::Text(s)) => s,
+                        _ => String::new(),
+                    };
+                    cache.socket_values.insert(sid, SocketValue::Text(text));
+                }
+            }
+
+            ApplicationNodeKind::AppRef(graph_id) => {
+                let style = ctx
+                    .style_results
+                    .map(|m| m.get(graph_id).cloned().unwrap_or_default())
+                    .unwrap_or_default();
+                cache.node_styles.insert(node_id, style);
+            }
+
+            // 应用匹配：style（必须明确连接）+ condition → 应用单元，供组输出收集。
+            ApplicationNodeKind::ApplyMatch => {
+                let style = required_style(graph, node, cache)?;
+                let condition = node
+                    .inputs
+                    .get(1)
+                    .and_then(|&sid| graph.input_source(sid))
+                    .and_then(|from| cache.socket_values.get(&from))
+                    .and_then(|v| match v {
+                        SocketValue::Bool(b) => Some(*b),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                cache.node_applications.insert(
+                    node_id,
+                    ApplicationUnit {
+                        style,
+                        condition,
+                        animation: None,
+                    },
+                );
+            }
+
+            // 应用动画：style（必须明确连接）+ animation + condition → 应用单元。
+            // 动画的静态样式基础就是这里连接的样式（默认样式可连默认样式链）。
+            ApplicationNodeKind::ApplyAnimation => {
+                let style = required_style(graph, node, cache)?;
+                let animation = node
+                    .inputs
+                    .get(1)
+                    .and_then(|&sid| {
+                        graph
+                            .input_source(sid)
+                            .and_then(|from| cache.socket_values.get(&from).cloned())
+                            .or_else(|| graph.socket(sid).default_value.clone())
+                    })
+                    .and_then(|v| match v {
+                        SocketValue::Animation(id) => Some(id),
+                        _ => None,
+                    });
+                let condition = node
+                    .inputs
+                    .get(2)
+                    .and_then(|&sid| graph.input_source(sid))
+                    .and_then(|from| cache.socket_values.get(&from))
+                    .and_then(|v| match v {
+                        SocketValue::Bool(b) => Some(*b),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                cache.node_applications.insert(
+                    node_id,
+                    ApplicationUnit {
+                        style,
+                        condition,
+                        animation,
+                    },
+                );
+            }
+
+            // 组输出：出口节点，不计算任何值；收集与合并发生在 collect_result。
+            ApplicationNodeKind::GroupOutput => {}
+        }
+        Ok(())
+    }
+
+    fn collect_result(graph: &NodeGraph<Self>, cache: &EvalCache) -> Result<Self::Result, EvalError> {
+        // 组输出是唯一出口：按输入端口连接顺序（= 端口创建顺序）收集上游应用单元，
+        // 依次合并——后连接的端口优先级更高（覆盖前者），对应总应用图里
+        // ApplicationLayer 按 Vec 顺序"后面的图覆盖前面的图"。
+        let matched = graph
+            .nodes
+            .values()
+            .find(|n| matches!(n.kind, ApplicationNodeKind::GroupOutput))
+            .map(
+                |group_out| -> Result<Option<ApplicationGraphMatch>, EvalError> {
+                    let mut result = ApplicationGraphMatch::default();
+                    let mut any = false;
+                    for &input_id in &group_out.inputs {
+                        let Some(from) = graph.input_source(input_id) else {
+                            continue;
+                        };
+                        let Some(unit) = cache.node_applications.get(&graph.socket(from).node) else {
+                            continue;
+                        };
+                        if !unit.condition {
+                            continue;
+                        }
+                        any = true;
+                        result.style = result.style.merge_over(unit.style.clone());
+                        if unit.animation.is_some() {
+                            result.animation = unit.animation;
+                        }
+                    }
+                    Ok(any.then_some(result))
+                },
+            )
+            .transpose()?
+            .flatten();
+        Ok(matched)
+    }
+
+    fn reference_id(&self) -> Option<NodeGraphId> {
+        match self {
+            ApplicationNodeKind::AppRef(id) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
+/// 读取样式输入（第 0 号输入）：必须明确连接样式来源，未连接报错。
+fn required_style(
+    graph: &NodeGraph<ApplicationNodeKind>,
+    node: &Node<ApplicationNodeKind>,
+    cache: &EvalCache,
+) -> Result<StyleResult, EvalError> {
+    let style_sid = node
+        .inputs
+        .first()
+        .ok_or_else(|| EvalError::StyleNotConnected(graph.name.clone()))?;
+    match graph.upstream_node_id(*style_sid) {
+        Some(up) => Ok(cache.node_styles.get(&up).cloned().unwrap_or_default()),
+        None => Err(EvalError::StyleNotConnected(graph.name.clone())),
     }
 }
 
 // ── 类型化 Node Handle ───────────────────────────────────────────────────────
 
-pub trait ApplicationNodeSpec {
-    const KIND: ApplicationNodeKind;
-    type Inputs;
-    type Outputs;
-    fn build_inputs(node_id: NodeId, sockets: &[SocketId]) -> Self::Inputs;
-    fn build_outputs(node_id: NodeId, sockets: &[SocketId]) -> Self::Outputs;
-    fn input_decls() -> Vec<SocketDecl>;
-    fn output_decls() -> Vec<SocketDecl>;
-}
+/// 应用节点类型化 handle（`NodeHandle<_, ApplicationNodeKind>` 的别名）。
+pub type ApplicationNodeHandle<T> = NodeHandle<T, ApplicationNodeKind>;
 
-pub struct ApplicationNodeHandle<T: ApplicationNodeSpec> {
-    pub id: NodeId,
-    pub inputs: T::Inputs,
-    pub outputs: T::Outputs,
-}
-
-impl<T: ApplicationNodeSpec> ApplicationNodeHandle<T> {
-    pub fn to_id(self) -> NodeId {
-        self.id
-    }
-}
-
-pub trait ApplicationFromNode {
-    fn from_node(node_id: NodeId, graph: &ApplicationGraph) -> Self;
-    fn resolve_decls(
-        kind: &ApplicationNodeKind,
-        extra_inputs: &[SocketDecl],
-        extra_outputs: &[SocketDecl],
-    ) -> (Vec<SocketDecl>, Vec<SocketDecl>);
-}
-
-impl ApplicationFromNode for NodeId {
-    fn from_node(node_id: NodeId, _graph: &ApplicationGraph) -> Self {
-        node_id
-    }
-    fn resolve_decls(
-        kind: &ApplicationNodeKind,
-        extra_inputs: &[SocketDecl],
-        extra_outputs: &[SocketDecl],
-    ) -> (Vec<SocketDecl>, Vec<SocketDecl>) {
-        let (base_i, base_o) = get_application_socket_decls(kind).unwrap_or_default();
-        let inputs: Vec<_> = base_i
-            .into_iter()
-            .chain(extra_inputs.iter().cloned())
-            .collect();
-        let outputs: Vec<_> = base_o
-            .into_iter()
-            .chain(extra_outputs.iter().cloned())
-            .collect();
-        (inputs, outputs)
-    }
-}
-
-impl<T: ApplicationNodeSpec> ApplicationFromNode for ApplicationNodeHandle<T> {
-    fn from_node(node_id: NodeId, graph: &ApplicationGraph) -> Self {
-        let node = &graph.nodes[&node_id];
-        ApplicationNodeHandle {
-            id: node_id,
-            inputs: T::build_inputs(node_id, &node.inputs),
-            outputs: T::build_outputs(node_id, &node.outputs),
-        }
-    }
-    fn resolve_decls(
-        _kind: &ApplicationNodeKind,
-        extra_inputs: &[SocketDecl],
-        extra_outputs: &[SocketDecl],
-    ) -> (Vec<SocketDecl>, Vec<SocketDecl>) {
-        let inputs: Vec<_> = T::input_decls()
-            .into_iter()
-            .chain(extra_inputs.iter().cloned())
-            .collect();
-        let outputs: Vec<_> = T::output_decls()
-            .into_iter()
-            .chain(extra_outputs.iter().cloned())
-            .collect();
-        (inputs, outputs)
-    }
-}
+/// 应用图类型（`NodeGraph<ApplicationNodeKind>` 的别名）。
+pub type ApplicationGraph = NodeGraph<ApplicationNodeKind>;
 
 // ── 应用节点定义宏 ──────────────────────────────────────────────────────────
 
@@ -219,15 +391,15 @@ macro_rules! define_application_nodes {
                 $(pub $out_name: $crate::node_graph::SocketRef<$out_ty>),*
             }
 
-            impl $crate::application_graph::ApplicationNodeSpec for $name {
+            impl $crate::node_graph::NodeSpec<$crate::application_graph::ApplicationNodeKind> for $name {
                 const KIND: $crate::application_graph::ApplicationNodeKind = $kind;
                 type Inputs = $inputs;
                 type Outputs = $outputs;
 
                 #[allow(unused_variables, unused_mut, unused_assignments)]
                 fn build_inputs(
-                    _node_id: $crate::application_graph::NodeId,
-                    sockets: &[$crate::application_graph::SocketId],
+                    _node_id: $crate::node_graph::NodeId,
+                    sockets: &[$crate::node_graph::SocketId],
                 ) -> Self::Inputs {
                     let mut idx = 0usize;
                     $inputs {
@@ -241,8 +413,8 @@ macro_rules! define_application_nodes {
 
                 #[allow(unused_variables, unused_mut, unused_assignments)]
                 fn build_outputs(
-                    _node_id: $crate::application_graph::NodeId,
-                    sockets: &[$crate::application_graph::SocketId],
+                    _node_id: $crate::node_graph::NodeId,
+                    sockets: &[$crate::node_graph::SocketId],
                 ) -> Self::Outputs {
                     let mut idx = 0usize;
                     $outputs {
@@ -354,617 +526,7 @@ define_application_nodes! {
     }
 }
 
-// ── ApplicationGraph ─────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default)]
-struct ApplicationEvalCache {
-    socket_values: HashMap<SocketId, SocketValue>,
-    node_styles: HashMap<NodeId, StyleResult>,
-    /// 每个应用匹配 / 应用动画节点的产出单元（组输出按端口顺序收集）。
-    node_applications: HashMap<NodeId, ApplicationUnit>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplicationGraph {
-    pub id: ApplicationGraphId,
-    pub name: String,
-    pub enabled: bool,
-    pub nodes: HashMap<NodeId, ApplicationGraphNode>,
-    pub sockets: HashMap<SocketId, Socket>,
-    pub links: Vec<Link>,
-    input_link_map: HashMap<SocketId, SocketId>,
-    output_link_map: HashMap<SocketId, Vec<SocketId>>,
-    #[serde(skip, default)]
-    cache: Option<ApplicationEvalCache>,
-    #[serde(skip, default)]
-    pub dirty: HashSet<NodeId>,
-}
-
-impl ApplicationGraph {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            id: ApplicationGraphId::new(),
-            name: name.into(),
-            enabled: true,
-            nodes: HashMap::new(),
-            sockets: HashMap::new(),
-            links: Vec::new(),
-            input_link_map: HashMap::new(),
-            output_link_map: HashMap::new(),
-            cache: None,
-            dirty: HashSet::new(),
-        }
-    }
-
-    // ── 构建 ───────────────────────────────────────────────────────────────
-
-    pub fn add_node<T: ApplicationFromNode>(
-        &mut self,
-        kind: ApplicationNodeKind,
-        extra_inputs: &[SocketDecl],
-        extra_outputs: &[SocketDecl],
-    ) -> Result<T, EvalError> {
-        if kind.is_static() && (!extra_inputs.is_empty() || !extra_outputs.is_empty()) {
-            return Err(EvalError::StaticNodeExtras);
-        }
-
-        let node_id = NodeId::new();
-        let (input_decls, output_decls) = T::resolve_decls(&kind, extra_inputs, extra_outputs);
-
-        let inputs: Vec<SocketId> = input_decls
-            .iter()
-            .map(|decl| {
-                let sid = SocketId::new();
-                self.sockets.insert(
-                    sid,
-                    Socket {
-                        id: sid,
-                        node: node_id,
-                        data_type: decl.data_type,
-                        name: decl.name.clone(),
-                        default_value: decl.default_value.clone(),
-                    },
-                );
-                sid
-            })
-            .collect();
-
-        let outputs: Vec<SocketId> = output_decls
-            .iter()
-            .map(|decl| {
-                let sid = SocketId::new();
-                self.sockets.insert(
-                    sid,
-                    Socket {
-                        id: sid,
-                        node: node_id,
-                        data_type: decl.data_type,
-                        name: decl.name.clone(),
-                        default_value: None,
-                    },
-                );
-                sid
-            })
-            .collect();
-
-        self.nodes.insert(
-            node_id,
-            ApplicationGraphNode {
-                id: node_id,
-                kind,
-                inputs,
-                outputs,
-            },
-        );
-        self.dirty.insert(node_id);
-        Ok(T::from_node(node_id, self))
-    }
-
-    // ── 连线 ───────────────────────────────────────────────────────────────
-
-    pub fn connect_raw(&mut self, from: SocketId, to: SocketId) -> Result<(), EvalError> {
-        let from_type = self.socket(from).data_type;
-        let to_type = self.socket(to).data_type;
-        if from_type != to_type {
-            return Err(EvalError::TypeMismatch {
-                expected: from_type,
-                got: to_type,
-            });
-        }
-
-        if let Some(old_from) = self.input_link_map.remove(&to) {
-            if let Some(outputs) = self.output_link_map.get_mut(&old_from) {
-                outputs.retain(|&s| s != to);
-            }
-            self.links.retain(|l| l.to != to);
-        }
-
-        self.links.push(Link { from, to });
-        self.input_link_map.insert(to, from);
-        self.output_link_map.entry(from).or_default().push(to);
-
-        let dest_node = self.socket(to).node;
-        self.mark_dirty(dest_node);
-        Ok(())
-    }
-
-    pub fn connect<T>(&mut self, from: SocketRef<T>, to: SocketRef<T>) -> Result<(), EvalError> {
-        self.connect_raw(from.id, to.id)
-    }
-
-    // ── 断线 ───────────────────────────────────────────────────────────────
-
-    pub fn disconnect(&mut self, from: SocketId, to: SocketId) {
-        if self.input_link_map.get(&to) != Some(&from) {
-            return;
-        }
-        self.input_link_map.remove(&to);
-        self.links.retain(|l| l.from != from || l.to != to);
-        if let Some(outputs) = self.output_link_map.get_mut(&from) {
-            outputs.retain(|&s| s != to);
-        }
-        let dest_node = self.socket(to).node;
-        self.mark_dirty(dest_node);
-    }
-
-    pub fn disconnect_input(&mut self, input_socket_id: SocketId) {
-        if let Some(from) = self.input_link_map.remove(&input_socket_id) {
-            self.links.retain(|l| l.to != input_socket_id);
-            if let Some(outputs) = self.output_link_map.get_mut(&from) {
-                outputs.retain(|&s| s != input_socket_id);
-            }
-            let dest_node = self.socket(input_socket_id).node;
-            self.mark_dirty(dest_node);
-        }
-    }
-
-    /// 删除节点并断开其所有连线、移除其端口。
-    pub fn remove_node(&mut self, node_id: NodeId) {
-        if let Some(node) = self.nodes.get(&node_id) {
-            let inputs: Vec<SocketId> = node.inputs.clone();
-            let outputs: Vec<SocketId> = node.outputs.clone();
-            for sid in inputs {
-                self.disconnect_input(sid);
-            }
-            for sid in outputs {
-                self.disconnect_output(sid);
-            }
-        }
-
-        if let Some(node) = self.nodes.remove(&node_id) {
-            for input_id in &node.inputs {
-                self.sockets.remove(input_id);
-            }
-            for output_id in &node.outputs {
-                self.sockets.remove(output_id);
-            }
-        }
-
-        if let Some(cache) = &mut self.cache {
-            cache.node_styles.remove(&node_id);
-            cache
-                .socket_values
-                .retain(|sid, _| self.sockets.contains_key(sid));
-        }
-        self.dirty.remove(&node_id);
-    }
-
-    fn disconnect_output(&mut self, output_socket_id: SocketId) {
-        if let Some(tos) = self.output_link_map.remove(&output_socket_id) {
-            for &to in &tos {
-                self.input_link_map.remove(&to);
-                self.links.retain(|l| l.to != to);
-                let dest_node = self.socket(to).node;
-                self.mark_dirty(dest_node);
-            }
-        }
-    }
-
-    // ── 查询 ───────────────────────────────────────────────────────────────
-
-    fn socket(&self, socket_id: SocketId) -> &Socket {
-        self.sockets
-            .get(&socket_id)
-            .unwrap_or_else(|| panic!("socket {socket_id} not found in app graph {}", self.id))
-    }
-
-    fn input_source(&self, socket_id: SocketId) -> Option<SocketId> {
-        self.input_link_map.get(&socket_id).copied()
-    }
-
-    fn upstream_node_id(&self, socket_id: SocketId) -> Option<NodeId> {
-        self.input_source(socket_id)
-            .map(|from| self.socket(from).node)
-    }
-
-    fn read_input(
-        &self,
-        node: &ApplicationGraphNode,
-        idx: usize,
-        socket_values: &HashMap<SocketId, SocketValue>,
-    ) -> Option<SocketValue> {
-        let &sid = node.inputs.get(idx)?;
-        if let Some(from) = self.input_source(sid) {
-            if let Some(val) = socket_values.get(&from) {
-                return Some(val.clone());
-            }
-            return self.socket(from).default_value.clone();
-        }
-        self.socket(sid).default_value.clone()
-    }
-
-    // ── Socket 设值 ────────────────────────────────────────────────────────
-
-    pub fn set_socket_value(
-        &mut self,
-        socket_id: SocketId,
-        value: Option<SocketValue>,
-    ) -> Result<(), EvalError> {
-        let socket = self
-            .sockets
-            .get(&socket_id)
-            .ok_or(EvalError::MissingSocket(socket_id))?;
-        if let Some(ref v) = value {
-            let expected = socket.data_type;
-            let got = v.data_type();
-            if got != expected {
-                return Err(EvalError::TypeMismatch { expected, got });
-            }
-        }
-        let node_id = socket.node;
-        self.sockets.get_mut(&socket_id).unwrap().default_value = value;
-        self.mark_dirty(node_id);
-        Ok(())
-    }
-
-    pub fn set_value<T: InputSocket>(
-        &mut self,
-        socket: SocketRef<T>,
-        value: T::Value,
-    ) -> Result<(), EvalError> {
-        self.set_socket_value(socket.id, Some(T::to_socket_value(value)))
-    }
-
-    // ── 脏标记 ─────────────────────────────────────────────────────────────
-
-    fn mark_dirty(&mut self, node_id: NodeId) {
-        self.propagate_dirty(node_id);
-    }
-
-    fn propagate_dirty(&mut self, node_id: NodeId) {
-        if !self.dirty.insert(node_id) {
-            return;
-        }
-        let downstream: Vec<NodeId> = self
-            .nodes
-            .get(&node_id)
-            .map(|node| {
-                node.outputs
-                    .iter()
-                    .flat_map(|&sid| {
-                        self.output_link_map
-                            .get(&sid)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|&to_sid| self.sockets.get(&to_sid).map(|s| s.node))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        for down in downstream {
-            self.propagate_dirty(down);
-        }
-    }
-
-    // ── 求值 ───────────────────────────────────────────────────────────────
-
-    pub fn evaluate(
-        &mut self,
-        ctx: &LineContext,
-        style_results: &HashMap<NodeGraphId, StyleResult>,
-    ) -> Result<Option<ApplicationGraphMatch>, ApplicationError> {
-        if self.cache.is_none() {
-            self.cache = Some(ApplicationEvalCache::default());
-            if self.dirty.is_empty() {
-                self.dirty = self.nodes.keys().copied().collect();
-            }
-        }
-
-        let mut cache = self.cache.take().unwrap();
-        let dirty_nodes: Vec<NodeId> = self.dirty.iter().copied().collect();
-        let mut visiting = HashSet::new();
-
-        for node_id in dirty_nodes {
-            self.ensure_node_evaluated(node_id, &mut cache, &mut visiting, ctx, style_results)?;
-        }
-
-        // 组输出是唯一出口：按输入端口连接顺序（= 端口创建顺序）收集上游应用单元，
-        // 依次合并——后连接的端口优先级更高（覆盖前者），对应总应用图里
-        // ApplicationLayer 按 Vec 顺序"后面的图覆盖前面的图"。
-        let matched = self
-            .nodes
-            .values()
-            .find(|n| matches!(n.kind, ApplicationNodeKind::GroupOutput))
-            .map(
-                |group_out| -> Result<Option<ApplicationGraphMatch>, ApplicationError> {
-                    let mut result = ApplicationGraphMatch::default();
-                    let mut any = false;
-                    for &input_id in &group_out.inputs {
-                        let Some(from) = self.input_source(input_id) else {
-                            continue;
-                        };
-                        let Some(unit) = cache
-                            .node_applications
-                            .get(&self.socket(from).node)
-                        else {
-                            continue;
-                        };
-                        if !unit.condition {
-                            continue;
-                        }
-                        any = true;
-                        result.style = result.style.merge_over(unit.style.clone());
-                        if unit.animation.is_some() {
-                            result.animation = unit.animation;
-                        }
-                    }
-                    Ok(any.then_some(result))
-                },
-            )
-            .transpose()?
-            .flatten();
-
-        self.cache = Some(cache);
-        Ok(matched)
-    }
-
-    fn ensure_node_evaluated(
-        &mut self,
-        node_id: NodeId,
-        cache: &mut ApplicationEvalCache,
-        visiting: &mut HashSet<NodeId>,
-        ctx: &LineContext,
-        style_results: &HashMap<NodeGraphId, StyleResult>,
-    ) -> Result<(), ApplicationError> {
-        if !self.dirty.contains(&node_id) {
-            return Ok(());
-        }
-
-        if !visiting.insert(node_id) {
-            return Err(ApplicationError::Eval(EvalError::CyclicGraph(
-                NodeGraphId::new(),
-            )));
-        }
-
-        let upstream_nodes: Vec<NodeId> = self.nodes[&node_id]
-            .inputs
-            .iter()
-            .filter_map(|&input_id| {
-                self.input_source(input_id)
-                    .map(|from| self.socket(from).node)
-            })
-            .collect();
-
-        for upstream_node in upstream_nodes {
-            self.ensure_node_evaluated(upstream_node, cache, visiting, ctx, style_results)?;
-        }
-
-        self.evaluate_node(node_id, cache, ctx, style_results)?;
-
-        visiting.remove(&node_id);
-        self.dirty.remove(&node_id);
-        Ok(())
-    }
-
-    fn evaluate_node(
-        &self,
-        node_id: NodeId,
-        cache: &mut ApplicationEvalCache,
-        ctx: &LineContext,
-        style_results: &HashMap<NodeGraphId, StyleResult>,
-    ) -> Result<(), ApplicationError> {
-        let node = &self.nodes[&node_id];
-        match &node.kind {
-            ApplicationNodeKind::ContextInput => {
-                if let Some(&sid) = node.outputs.first() {
-                    cache
-                        .socket_values
-                        .insert(sid, SocketValue::Text(ctx.actor.clone()));
-                }
-                if let Some(&sid) = node.outputs.get(1) {
-                    cache
-                        .socket_values
-                        .insert(sid, SocketValue::Text(ctx.line_text.clone()));
-                }
-                if let Some(&sid) = node.outputs.get(2) {
-                    cache
-                        .socket_values
-                        .insert(sid, SocketValue::Int(ctx.line_index));
-                }
-            }
-
-            ApplicationNodeKind::MatchActor => {
-                let source = self.read_input(node, 0, &cache.socket_values);
-                let pattern = self.read_input(node, 1, &cache.socket_values);
-                let matched = match (source, pattern) {
-                    (Some(SocketValue::Text(s)), Some(SocketValue::Text(p))) => s.contains(&p),
-                    _ => false,
-                };
-                if let Some(&sid) = node.outputs.first() {
-                    cache.socket_values.insert(sid, SocketValue::Bool(matched));
-                }
-            }
-
-            ApplicationNodeKind::MatchText => {
-                let source = self.read_input(node, 0, &cache.socket_values);
-                let pattern = self.read_input(node, 1, &cache.socket_values);
-                let matched = match (source, pattern) {
-                    (Some(SocketValue::Text(s)), Some(SocketValue::Text(re))) => {
-                        Regex::new(&re).map(|r| r.is_match(&s)).unwrap_or(false)
-                    }
-                    _ => false,
-                };
-                if let Some(&sid) = node.outputs.first() {
-                    cache.socket_values.insert(sid, SocketValue::Bool(matched));
-                }
-            }
-
-            ApplicationNodeKind::IntEq => {
-                let a = self
-                    .read_input(node, 0, &cache.socket_values)
-                    .and_then(|v| match v {
-                        SocketValue::Int(i) => Some(i),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-                let b = self
-                    .read_input(node, 1, &cache.socket_values)
-                    .and_then(|v| match v {
-                        SocketValue::Int(i) => Some(i),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-                if let Some(&sid) = node.outputs.first() {
-                    cache.socket_values.insert(sid, SocketValue::Bool(a == b));
-                }
-            }
-
-            ApplicationNodeKind::And => {
-                let all_true = node.inputs.iter().all(|&sid| {
-                    self.input_source(sid)
-                        .and_then(|from| cache.socket_values.get(&from))
-                        .map(|v| matches!(v, SocketValue::Bool(true)))
-                        .unwrap_or(false)
-                });
-                if let Some(&sid) = node.outputs.first() {
-                    cache.socket_values.insert(sid, SocketValue::Bool(all_true));
-                }
-            }
-
-            ApplicationNodeKind::Or => {
-                let any_true = node.inputs.iter().any(|&sid| {
-                    self.input_source(sid)
-                        .and_then(|from| cache.socket_values.get(&from))
-                        .map(|v| matches!(v, SocketValue::Bool(true)))
-                        .unwrap_or(false)
-                });
-                if let Some(&sid) = node.outputs.first() {
-                    cache.socket_values.insert(sid, SocketValue::Bool(any_true));
-                }
-            }
-
-            ApplicationNodeKind::Not => {
-                let input = self
-                    .read_input(node, 0, &cache.socket_values)
-                    .map(|v| match v {
-                        SocketValue::Bool(b) => !b,
-                        _ => false,
-                    })
-                    .unwrap_or(true);
-                if let Some(&sid) = node.outputs.first() {
-                    cache.socket_values.insert(sid, SocketValue::Bool(input));
-                }
-            }
-
-            // 字符串常量：输出节点默认值里的文本（UI 节点内编辑，未设则空串）。
-            ApplicationNodeKind::TextConst => {
-                if let Some(&sid) = node.outputs.first() {
-                    let text = match self.socket(sid).default_value.clone() {
-                        Some(SocketValue::Text(s)) => s,
-                        _ => String::new(),
-                    };
-                    cache.socket_values.insert(sid, SocketValue::Text(text));
-                }
-            }
-
-            ApplicationNodeKind::AppRef(graph_id) => {
-                let style = style_results.get(graph_id).cloned().unwrap_or_default();
-                cache.node_styles.insert(node_id, style);
-            }
-
-            // 应用匹配：style（必须明确连接）+ condition → 应用单元，供组输出收集。
-            ApplicationNodeKind::ApplyMatch => {
-                let style = self.required_style(node, &cache)?;
-                let condition = node
-                    .inputs
-                    .get(1)
-                    .and_then(|&sid| self.input_source(sid))
-                    .and_then(|from| cache.socket_values.get(&from))
-                    .and_then(|v| match v {
-                        SocketValue::Bool(b) => Some(*b),
-                        _ => None,
-                    })
-                    .unwrap_or(false);
-                cache.node_applications.insert(
-                    node_id,
-                    ApplicationUnit {
-                        style,
-                        condition,
-                        animation: None,
-                    },
-                );
-            }
-
-            // 应用动画：style（必须明确连接）+ animation + condition → 应用单元。
-            // 动画的静态样式基础就是这里连接的样式（默认样式可连默认样式链）。
-            ApplicationNodeKind::ApplyAnimation => {
-                let style = self.required_style(node, &cache)?;
-                let animation = node
-                    .inputs
-                    .get(1)
-                    .and_then(|&sid| {
-                        self.input_source(sid)
-                            .and_then(|from| cache.socket_values.get(&from).cloned())
-                            .or_else(|| self.socket(sid).default_value.clone())
-                    })
-                    .and_then(|v| match v {
-                        SocketValue::Animation(id) => Some(id),
-                        _ => None,
-                    });
-                let condition = node
-                    .inputs
-                    .get(2)
-                    .and_then(|&sid| self.input_source(sid))
-                    .and_then(|from| cache.socket_values.get(&from))
-                    .and_then(|v| match v {
-                        SocketValue::Bool(b) => Some(*b),
-                        _ => None,
-                    })
-                    .unwrap_or(false);
-                cache.node_applications.insert(
-                    node_id,
-                    ApplicationUnit {
-                        style,
-                        condition,
-                        animation,
-                    },
-                );
-            }
-
-            // 组输出：出口节点，不计算任何值；收集与合并发生在 evaluate() 主流程。
-            ApplicationNodeKind::GroupOutput => {}
-        }
-        Ok(())
-    }
-
-    /// 读取样式输入（第 0 号输入）：必须明确连接样式来源，未连接报错。
-    fn required_style(
-        &self,
-        node: &ApplicationGraphNode,
-        cache: &ApplicationEvalCache,
-    ) -> Result<StyleResult, ApplicationError> {
-        let style_sid = node
-            .inputs
-            .first()
-            .ok_or_else(|| ApplicationError::StyleNotConnected(self.name.clone()))?;
-        match self.upstream_node_id(*style_sid) {
-            Some(up) => Ok(cache.node_styles.get(&up).cloned().unwrap_or_default()),
-            None => Err(ApplicationError::StyleNotConnected(self.name.clone())),
-        }
-    }
-}
-
-// ── ApplicationLayer ─────────────────────────────────────────────────────────────────
+// ── ApplicationLayer ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ApplicationLayer {
@@ -1006,7 +568,7 @@ impl ApplicationLayer {
             if !graph.enabled {
                 continue;
             }
-            if let Some(matched) = graph.evaluate(ctx, style_results)? {
+            if let Some(matched) = graph.evaluate(&EvalContext::app(ctx, style_results))? {
                 let mut graph_style = matched.style;
                 if let Some(clip_id) = matched.animation {
                     let tracks = animations.sample_tracks(clip_id, time, duration)?;
@@ -1033,7 +595,7 @@ impl ApplicationLayer {
             if !graph.enabled {
                 continue;
             }
-            if let Some(matched) = graph.evaluate(ctx, style_results)? {
+            if let Some(matched) = graph.evaluate(&EvalContext::app(ctx, style_results))? {
                 matches.push(matched);
             }
         }
@@ -1046,7 +608,9 @@ impl ApplicationLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::{NodeGraph, NodeHandle, NodeKind, StyleOpKind};
+    use crate::node_graph::{
+        NodeGraph, NodeHandle, NodeId, NodeKind, SocketDecl, SocketType, StyleOpKind,
+    };
 
     fn make_bold_chain(size: f64, bold: bool) -> NodeGraph {
         let mut g = NodeGraph::new("bold-chain");
@@ -1066,7 +630,7 @@ mod tests {
         g.connect(bd.outputs.style, out.inputs.style).unwrap();
         g.set_value(sz.inputs.size, size).unwrap();
         g.set_value(bd.inputs.bold, bold).unwrap();
-        g.evaluate().unwrap();
+        g.evaluate(&EvalContext::style()).unwrap();
         g
     }
 
@@ -1083,7 +647,7 @@ mod tests {
             line_index: 3,
         };
         let empty = HashMap::new();
-        let matched = g.evaluate(&ctx, &empty).unwrap();
+        let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
         assert!(matched.is_none());
         assert!(!g.dirty.contains(&g.nodes.values().next().unwrap().id));
     }
@@ -1110,7 +674,7 @@ mod tests {
             line_index: 0,
         };
         let empty = HashMap::new();
-        let matched = g.evaluate(&ctx, &empty).unwrap();
+        let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
         assert!(matched.is_none());
 
         let val = g.sockets.get(&matcher.outputs.matched.id).unwrap();
@@ -1139,7 +703,7 @@ mod tests {
             line_index: 0,
         };
         let empty = HashMap::new();
-        let matched = g.evaluate(&ctx, &empty).unwrap();
+        let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
         assert!(matched.is_none());
 
         // Verify the output socket exists and is Bool type
@@ -1177,7 +741,7 @@ mod tests {
             line_index: 0,
         };
         let empty = HashMap::new();
-        let matched = g.evaluate(&ctx, &empty).unwrap();
+        let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
         assert!(matched.is_none());
     }
 
@@ -1228,7 +792,7 @@ mod tests {
             line_index: 0,
         };
         let style_results = HashMap::new();
-        let matched = g.evaluate(&ctx, &style_results).unwrap();
+        let matched = g.evaluate(&EvalContext::app(&ctx, &style_results)).unwrap();
         assert!(matched.is_none());
     }
 
@@ -1279,17 +843,17 @@ mod tests {
             line_index: 0,
         };
         let style_results = HashMap::new();
-        let matched = g.evaluate(&ctx, &style_results).unwrap();
+        let matched = g.evaluate(&EvalContext::app(&ctx, &style_results)).unwrap();
         assert!(matched.is_some());
     }
 
     #[test]
     fn app_layer_composes_styles_by_priority() {
         let mut bold_chain = make_bold_chain(12.0, true);
-        let bold_result = bold_chain.evaluate().unwrap();
+        let bold_result = bold_chain.evaluate(&EvalContext::style()).unwrap();
 
         let mut size_chain = make_bold_chain(24.0, false);
-        let size_result = size_chain.evaluate().unwrap();
+        let size_result = size_chain.evaluate(&EvalContext::style()).unwrap();
 
         let style_results: HashMap<NodeGraphId, StyleResult> = vec![
             (bold_chain.id, bold_result.clone()),
@@ -1394,11 +958,6 @@ mod tests {
             .evaluate(&ctx, &style_results, &AnimationLibrary::default(), 0.0, 1.0)
             .unwrap();
         // g2's style (size=24, bold=false) should override g1's (size=12, bold=true)
-        // merge_over: later overrides earlier. g1 is first in layer, g2 is second.
-        // evaluate_layer does: result starts as default, then for each graph:
-        //   result = graph_style.merge_over(result);
-        // So for g1: result = g1_style.merge_over(default) = g1_style
-        // For g2: result = g2_style.merge_over(g1_style) = g2 overrides g1
         assert_eq!(result.font_size, Some(24.0));
         assert_eq!(result.bold, Some(false));
     }
@@ -1406,7 +965,7 @@ mod tests {
     #[test]
     fn app_layer_applies_animation_to_matched_style() {
         let mut style_chain = make_bold_chain(12.0, false);
-        let style_result = style_chain.evaluate().unwrap();
+        let style_result = style_chain.evaluate(&EvalContext::style()).unwrap();
 
         let style_results: HashMap<NodeGraphId, StyleResult> =
             vec![(style_chain.id, style_result.clone())]
@@ -1531,7 +1090,7 @@ mod tests {
             line_text: String::new(),
             line_index: 0,
         };
-        let err = g.evaluate(&ctx, &HashMap::new()).unwrap_err();
-        assert!(matches!(err, ApplicationError::StyleNotConnected(_)));
+        let err = g.evaluate(&EvalContext::app(&ctx, &HashMap::new())).unwrap_err();
+        assert!(matches!(err, EvalError::StyleNotConnected(_)));
     }
 }

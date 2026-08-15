@@ -37,6 +37,4 @@ define_id!(NodeGraphId); // 节点图模板资源 ID
 define_id!(MediaId); // 媒体文件引用 ID
 define_id!(NodeId); // 节点图内的节点
 define_id!(SocketId); // 节点图内的端口
-define_id!(StyleApplicationId); // 样式应用记录（旧，将被 ApplicationGraph 替代）
 define_id!(AnchorId); // 行内锚点
-define_id!(ApplicationGraphId); // 样式应用图
