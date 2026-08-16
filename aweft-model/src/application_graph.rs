@@ -341,6 +341,16 @@ impl NodeTreeType for ApplicationNodeKind {
             _ => None,
         }
     }
+
+    fn set_reference_id(&mut self, new_id: NodeGraphId) -> Result<(), EvalError> {
+        match self {
+            ApplicationNodeKind::AppRef(id) => {
+                *id = new_id;
+                Ok(())
+            }
+            _ => Err(EvalError::NotReferenceNode),
+        }
+    }
 }
 
 /// 读取样式输入（第 0 号输入）：必须明确连接样式来源，未连接报错。

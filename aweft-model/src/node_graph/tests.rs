@@ -644,3 +644,29 @@ fn group_output_has_default_input() {
     assert_eq!(node.outputs.len(), 0);
     assert_eq!(graph.sockets[&node.inputs[0]].data_type, SocketType::Style);
 }
+
+// ── reference 原位改值 tests ──────────────────────────────────────────────────
+
+#[test]
+fn set_node_reference_changes_kind_in_place() {
+    let mut g = NodeGraph::new("ref-test");
+    let nid = g
+        .add_node::<NodeId>(NodeKind::Reference(NodeGraphId::new()), &[], &[])
+        .unwrap();
+    let new_id = NodeGraphId::new();
+    g.set_node_reference(nid, new_id).unwrap();
+    // 节点原位保留，仅 kind 内嵌 id 变化 + 标脏
+    assert!(g.nodes.contains_key(&nid));
+    assert!(matches!(g.nodes[&nid].kind, NodeKind::Reference(id) if id == new_id));
+    assert!(g.dirty.contains(&nid));
+
+    // 非引用节点：报错且不改动
+    let src = g
+        .add_node::<NodeId>(NodeKind::StyleSource, &[], &[])
+        .unwrap();
+    assert!(matches!(
+        g.set_node_reference(src, new_id),
+        Err(EvalError::NotReferenceNode)
+    ));
+    assert!(matches!(g.nodes[&src].kind, NodeKind::StyleSource));
+}

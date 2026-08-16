@@ -280,6 +280,25 @@ impl<K: NodeTreeType> NodeGraph<K> {
         self.set_socket_value(socket.id, None)
     }
 
+    // ── 引用链设置 ─────────────────────────────────────────────────────────
+
+    /// 原位改引用节点的引用链（仅改 kind 内嵌 id + 标脏，不删节点）。
+    pub fn set_node_reference(
+        &mut self,
+        node_id: NodeId,
+        new_id: NodeGraphId,
+    ) -> Result<(), EvalError> {
+        {
+            let node = self
+                .nodes
+                .get_mut(&node_id)
+                .ok_or(EvalError::MissingNode(node_id))?;
+            node.kind.set_reference_id(new_id)?;
+        }
+        self.mark_dirty(node_id);
+        Ok(())
+    }
+
     // ── 删除节点 ───────────────────────────────────────────────────────────
 
     pub fn remove_node(&mut self, node_id: NodeId) {
@@ -510,6 +529,16 @@ impl NodeTreeType for NodeKind {
         match self {
             NodeKind::Reference(id) => Some(*id),
             _ => None,
+        }
+    }
+
+    fn set_reference_id(&mut self, new_id: NodeGraphId) -> Result<(), EvalError> {
+        match self {
+            NodeKind::Reference(id) => {
+                *id = new_id;
+                Ok(())
+            }
+            _ => Err(EvalError::NotReferenceNode),
         }
     }
 }

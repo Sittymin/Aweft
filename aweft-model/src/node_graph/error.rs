@@ -32,4 +32,7 @@ pub enum EvalError {
 
     #[error("节点（{0}）的样式输入未连接；请把样式来源连接到样式端口（默认样式可连接默认样式链）")]
     StyleNotConnected(String),
+
+    #[error("该节点不是样式引用节点，不能设置引用链")]
+    NotReferenceNode,
 }

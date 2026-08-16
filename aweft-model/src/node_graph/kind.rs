@@ -100,4 +100,10 @@ pub trait NodeTreeType: Clone + PartialEq + Eq + fmt::Debug + 'static {
 
     /// 样式引用节点（Reference / AppRef）引用的样式链 id；非引用节点返回 None。
     fn reference_id(&self) -> Option<NodeGraphId>;
+
+    /// 原位改引用链（仅改 kind 内嵌 id + 由调用方标脏，不删节点）。
+    /// 非引用节点返回 `EvalError::NotReferenceNode`。
+    fn set_reference_id(&mut self, _new_id: NodeGraphId) -> Result<(), EvalError> {
+        Err(EvalError::NotReferenceNode)
+    }
 }
