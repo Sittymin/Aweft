@@ -81,7 +81,8 @@ impl ScrAreaMap {
     }
 
     /// 清理完全重叠的顶点，将它们合并为同一个顶点
-    pub fn remove_duplicate_vertices(&mut self) {
+    /// 合并位置重叠的顶点。返回拓扑是否实际变化（合并了顶点 → true）。
+    pub fn remove_duplicate_vertices(&mut self) -> bool {
         use std::collections::HashMap;
 
         // 1. 按位置分组顶点
@@ -116,7 +117,7 @@ impl ScrAreaMap {
         }
 
         if vertex_replacements.is_empty() {
-            return; // 没有重叠顶点，直接返回
+            return false; // 没有重叠顶点，直接返回
         }
 
         // 3. 更新所有边的顶点引用
@@ -207,6 +208,7 @@ impl ScrAreaMap {
             "重叠顶点清理完成，共合并了 {} 个顶点",
             vertex_replacements.len()
         );
+        true
     }
 }
 

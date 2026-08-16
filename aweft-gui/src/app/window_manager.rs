@@ -44,6 +44,8 @@ impl AppWindowManager {
         let instance = MainWindow::new().context("创建 Slint 主窗口失败")?;
         // FIXME: 这里获得的是未初始化的数据
         let store = Rc::new(RefCell::new(AppStore::new(&instance)));
+        // 初始化节点图编辑器（建链/右键菜单、绑定全局、加载第 0 条链）
+        store.borrow_mut().initialize_graph_editors(&instance);
         // HACK: 临时直接加载一个视频，并且失败直接崩溃
         // initialize_media(
         //     &mut store.borrow_mut(),

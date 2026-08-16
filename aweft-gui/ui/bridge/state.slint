@@ -1,6 +1,8 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
 import { SlintSubtitleRow } from "../core/types.slint";
+import { GraphLink, GraphNode } from "../areas/node_graph/node_frame.slint";
+import { ContextMenuItem } from "../widgets/context_menu.slint";
 import {
     SplitPreviewOverlayData,
 } from "../screen/overlays/split_preview.slint";
@@ -15,9 +17,37 @@ export global VideoState {
     in property <image> current-video-frame;
 }
 
+// 通用"文本编辑遮罩"状态：内嵌输入框（字符串常量等）聚焦时，
+// MainWindow 顶层显示差集遮罩（挖去输入框窗口区域），点击输入框外任意处取消输入。
+// 坐标均为相对 MainWindow 的逻辑坐标。
+export global EditOverlayState {
+    in-out property <bool> active: false;
+    in-out property <length> hole-x: 0px;
+    in-out property <length> hole-y: 0px;
+    in-out property <length> hole-width: 0px;
+    in-out property <length> hole-height: 0px;
+}
+
 export global SubtitleState {
     in property <image> current-subtitle-frame;
     in property <[SlintSubtitleRow]> rows: [];
+}
+
+// 节点图编辑器状态：样式图/应用图各一组模型，由 Rust 侧驱动。
+// 节点/连线模型为 Rust 持有的 VecModel（增删节点重建、拖动节点局部更新）。
+export global NodeGraphState {
+    // 样式图：链列表 / 当前链索引 / 节点 / 连线 / 右键菜单项
+    in property <[ContextMenuItem]> style-chain-items: [];
+    in property <int> style-current-chain: 0;
+    in property <[GraphNode]> style-nodes: [];
+    in property <[GraphLink]> style-links: [];
+    in property <[ContextMenuItem]> style-menu-items: [];
+    // 应用图
+    in property <[ContextMenuItem]> app-chain-items: [];
+    in property <int> app-current-chain: 0;
+    in property <[GraphNode]> app-nodes: [];
+    in property <[GraphLink]> app-links: [];
+    in property <[ContextMenuItem]> app-menu-items: [];
 }
 
 /// 拖拽预览覆盖层状态（UI 自持有的临时交互数据）。

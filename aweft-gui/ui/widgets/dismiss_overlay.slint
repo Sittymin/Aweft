@@ -1,0 +1,74 @@
+// 通用"差集"遮罩：覆盖父区域内除输入框（hole 矩形）外的所有区域。
+// Slint 无原生图形差集，用环绕孔的 4 个矩形拼出（尺寸为 0 的矩形自然不拦事件）。
+// 挖出的输入框区域保持可点击（TextInput 自身光标/焦点行为），其余点击触发 dismissed。
+// MainWindow 顶层一处实例，挖孔由 EditOverlayState（窗口坐标）驱动。
+
+export component DismissOverlay inherits Rectangle {
+    // 输入框（孔）的位置与大小（本组件坐标系内）
+    in property <length> hole-x;
+    in property <length> hole-y;
+    in property <length> hole-width;
+    in property <length> hole-height;
+    callback dismissed();
+
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+
+    // 孔上方
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: root.hole-y;
+        background: transparent;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => { root.dismissed(); }
+        }
+    }
+
+    // 孔下方
+    Rectangle {
+        x: 0px;
+        y: root.hole-y + root.hole-height;
+        width: 100%;
+        height: parent.height - (root.hole-y + root.hole-height);
+        background: transparent;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => { root.dismissed(); }
+        }
+    }
+
+    // 孔左侧（孔上下高度之间）
+    Rectangle {
+        x: 0px;
+        y: root.hole-y;
+        width: root.hole-x;
+        height: root.hole-height;
+        background: transparent;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => { root.dismissed(); }
+        }
+    }
+
+    // 孔右侧（孔上下高度之间）
+    Rectangle {
+        x: root.hole-x + root.hole-width;
+        y: root.hole-y;
+        width: parent.width - (root.hole-x + root.hole-width);
+        height: root.hole-height;
+        background: transparent;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            clicked => { root.dismissed(); }
+        }
+    }
+}

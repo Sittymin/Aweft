@@ -2,6 +2,7 @@ pub mod area;
 pub mod drag;
 pub mod line_editor;
 pub mod media;
+pub mod node_graph;
 pub mod screen;
 
 /// 顶层 Action - 按功能域分类
@@ -16,4 +17,6 @@ pub enum Action {
     /// 媒体相关操作
     Media(media::MediaAction),
     LineEditor(line_editor::LineEditorAction),
+    /// 节点图（样式图/应用图）结构/值操作
+    NodeGraph(node_graph::NodeGraphAction),
 }

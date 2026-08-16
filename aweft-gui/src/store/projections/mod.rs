@@ -10,9 +10,13 @@ use crate::depsgraph::{
 };
 
 mod line_editor;
+mod node_graph;
 mod screen;
 
 pub use line_editor::{op_line_collapse, op_line_selection, op_line_structure, op_line_timecode};
+pub use node_graph::{
+    op_node_graph_chain, op_node_graph_links, op_node_graph_socket, op_node_graph_structure,
+};
 pub use screen::{op_screen_layout, op_screen_overlays};
 
 /// 注册所有投影组件到依赖图。在 `AppStore` 初始化时调用一次。
@@ -50,6 +54,43 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                 // （reducer 打双 tag 声明联动，依赖边保证执行顺序）。
                 depends_on: &[OperationCode::LineStructure],
                 exec: op_line_selection,
+            },
+        ],
+    });
+
+    depsgraph.register(Component {
+        id: ComponentId::new(),
+        depends_on: &[DataId::NodeGraph],
+        operations: vec![
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::NodeGraphStructure,
+                handles: &[TagKind::NodeGraphStructure],
+                depends_on: &[],
+                exec: op_node_graph_structure,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::NodeGraphLinks,
+                handles: &[TagKind::NodeGraphLinks],
+                // 连线按 order 映射下标，order 由结构操作维护 → 依赖结构先跑
+                depends_on: &[OperationCode::NodeGraphStructure],
+                exec: op_node_graph_links,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::NodeGraphSocket,
+                handles: &[TagKind::NodeGraphSocket],
+                // 单行定位依赖 order → 依赖结构先跑
+                depends_on: &[OperationCode::NodeGraphStructure],
+                exec: op_node_graph_socket,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::NodeGraphChain,
+                handles: &[TagKind::NodeGraphChain],
+                depends_on: &[],
+                exec: op_node_graph_chain,
             },
         ],
     });

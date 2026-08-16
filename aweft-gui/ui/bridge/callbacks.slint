@@ -3,7 +3,9 @@ import {
     ActionZoneCorner,
     SlintAreaType,
     SlintSubtitleRow,
+    GraphType,
 } from "../core/types.slint";
+import { NodeSocketType, SocketHit } from "../areas/node_graph/node_frame.slint";
 
 export global DragCallbacks {
     callback actionzone-drag(area-key: SlintKey, corner: ActionZoneCorner, offset-x: length, offset-y: length);
@@ -48,4 +50,35 @@ export global LineEditorCallbacks {
     callback delete-selected-items();
 
     callback ungroups(group-item-id: string);
+}
+
+// 节点图编辑回调：编辑器只做渲染与拖拽瞬态，全部图数据操作走 Rust。
+export global NodeGraphCallbacks {
+    // 端口命中（本地坐标，相对节点左上角，逻辑像素）：返回 sockets 组合数组下标，-1 无。
+    // 由 Rust 统一命中（与 find-drop-socket 同源），消除 Slint 硬编码端口数上限。
+    callback socket-at(graph-type: GraphType, node-index: int, x: length, y: length) -> int;
+    // 拖动节点：上报新的世界坐标（UI 位置数据，不改图结构）
+    callback node-dragged(graph-type: GraphType, node-index: int, x: length, y: length);
+    // 在右键位置添加节点，返回新节点在 nodes 模型中的下标
+    callback add-node(graph-type: GraphType, template-index: int, x: length, y: length) -> int;
+    // 删除节点（Rust 一并断开相关连线并重建模型）
+    callback delete-node(graph-type: GraphType, node-index: int);
+    // 拖输入端时，找喂给该输入端的那条连线（模型下标，-1 无）；用于拖拽时隐藏它
+    callback find-link-for-input(graph-type: GraphType, node-index: int, socket-index: int) -> int;
+    // 找拖拽释放位置命中的、类型匹配的输入端口（世界坐标）
+    callback find-drop-socket(graph-type: GraphType, x: length, y: length, data-type: NodeSocketType) -> SocketHit;
+    // 端口拖拽松开：由 Rust 按拖拽语义完成断开/重连（node/socket 为被拖的端口）
+    callback socket-drag-ended(graph-type: GraphType, node-index: int, socket-index: int, is-input: bool, x: length, y: length);
+    // 切换/新建链：加载第 index 条链到编辑器模型
+    callback load-chain(graph-type: GraphType, index: int);
+    // 新建一条默认链并切换到它，返回新链在切换菜单中的下标
+    callback new-chain(graph-type: GraphType) -> int;
+    // 样式引用节点下拉菜单选择样式链（node-index 为节点下标，menu-index 为样式链菜单下标）
+    callback menu-selected(graph-type: GraphType, node-index: int, menu-index: int);
+    // 端口预设下拉选择（socket-row 为端口全局行号，option-index 为预设下标）
+    callback socket-option-selected(graph-type: GraphType, node-index: int, socket-row: int, option-index: int);
+    // 角色下拉"新建角色"：创建新角色并设端口默认值
+    callback create-actor(graph-type: GraphType, node-index: int, socket-row: int, name: string);
+    // 内嵌文本输入框提交（字符串常量）：设端口默认值
+    callback socket-input-changed(graph-type: GraphType, node-index: int, socket-row: int, text: string);
 }

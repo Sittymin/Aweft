@@ -1,9 +1,18 @@
-// 自定义右键菜单：不依赖 Slint 原生 Menu，完全按本项目设计体系（popup 混入）渲染。
-// 以组件根定位在容器坐标系内，内部含悬停高亮、禁用项、色点与分隔线；
-// 由编辑器提供"菜单外点击关闭"的背景层。位置会夹在容器内，避免出界。
+// 自定义菜单：不依赖 Slint 原生 Menu，完全按本项目设计体系（popup 混入）渲染。
+// 声明式 API（对齐 Slint 原生 Menu/MenuItem 的体验）：
+//   ContextMenu {
+//       open <=> root.menu-open;
+//       MenuItem { text: "删除"; activated => { ... } }        // 每项自带回调，无 index 分发
+//       for item[i] in 数据列表: MenuItem {                     // 数据列表同样声明式
+//           selected: i == 当前选中;
+//           activated => { ...具体动作(i) }
+//       }
+//   }
+// ContextMenu 只负责容器（定位/夹取/边框/背景点击层）；菜单项由调用方通过 @children
+// 注入 MenuItem。点击关闭由 MenuItem 内部的 menu-open 两向绑定驱动（keep-open 除外）。
 import { Mixins } from "../theme/mixins.slint";
 
-// 菜单中的一项。
+// 数据驱动的菜单项（用于下拉/链切换等按数据列表渲染的场景，如 Dropdown/ChainSwitcher）。
 export struct ContextMenuItem {
     text: string,
     // false 时灰显且不可点击
@@ -14,8 +23,89 @@ export struct ContextMenuItem {
     separator-before: bool,
 }
 
+// 菜单中的一项（声明式组件）。
+export component MenuItem inherits Rectangle {
+    in property <string> text;
+    // false 时灰显且不可点击
+    in property <bool> enabled: true;
+    // 前导色点（transparent 则不显示），可用于标识数据类型/图标颜色
+    in property <color> dot-color: Colors.transparent;
+    // true 时在该项上方画一条分隔线
+    in property <bool> separator-before: false;
+    // 当前选中项（下拉选择类菜单用；半激活背景高亮）
+    in property <bool> selected: false;
+    // 点击后保持菜单打开（如"新建角色"原位替换输入框）；false=点击即关闭
+    in property <bool> keep-open: false;
+    // 该项内容消失但保留占位、不可点击（如"新建角色"输入模式时原位隐藏）
+    in property <bool> hidden: false;
+    // 菜单打开状态（由调用方两向绑定到 ContextMenu.open）：点击后关闭菜单
+    in-out property <bool> menu-open: false;
+    // 菜单项被激活（具体动作由调用方在声明处绑定）
+    callback activated();
+
+    // 样式可自定义（默认用 popup 混入主题）：外部可按需覆盖
+    in property <color> text-color: Mixins.popup-item.text-color;
+    in property <color> highlight-color: Mixins.popup-item.highlight-color;
+    in property <color> selected-background: Mixins.popup-item.selected-background;
+    in property <color> surface-background: Mixins.popup-surface.background;
+    in property <color> separator-color: Mixins.popup-surface.border-color;
+    in property <length> min-item-height: Mixins.popup-item.min-height;
+
+    // 分隔线
+    if root.separator-before: Rectangle {
+        height: 1px;
+        background: root.separator-color;
+    }
+
+    item-area := TouchArea {
+        // 禁用项/隐藏项不响应点击
+        enabled: root.enabled && !root.hidden;
+        clicked => {
+            // 触发调用方绑定的具体动作（若同时关闭则随后 menu-open 置 false）
+            root.activated();
+            // 除 keep-open 外点击即关闭菜单（两向绑定到 ContextMenu.open）
+            if !root.keep-open && !root.hidden {
+                root.menu-open = false;
+            }
+        }
+
+        item-box := Rectangle {
+            min-height: root.min-item-height;
+            border-radius: Mixins.popup-item.border-radius;
+            // 当前选中项：半激活背景；其余项悬停高亮
+            background: root.selected
+                ? root.selected-background.mix(root.surface-background, 0.5)
+                : (item-area.has-hover && root.enabled ? root.highlight-color : transparent);
+
+            HorizontalLayout {
+                padding-left: Mixins.popup-item.padding-horizontal;
+                padding-right: Mixins.popup-item.padding-horizontal;
+                spacing: Mixins.popup-item.spacing;
+                alignment: start;
+
+                // 前导色点（Colors.transparent 表示不显示）
+                if root.dot-color != Colors.transparent: Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: self.width / 2;
+                    background: root.dot-color;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: root.text;
+                    // 禁用项向表面背景色混合，呈现灰显
+                    color: root.enabled ? root.text-color : root.text-color.mix(root.surface-background, 0.6);
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// 菜单容器：以组件根定位在容器坐标系内，内部含菜单项（@children）、边框与阴影；
+// 位置会夹在容器内，避免出界。背景点击层由调用方在编辑器里提供（与菜单同级）。
 export component ContextMenu inherits Rectangle {
-    in property <[ContextMenuItem]> items;
     // 菜单左上角位置（容器本地屏幕坐标）
     in property <length> menu-x: 0px;
     in property <length> menu-y: 0px;
@@ -25,7 +115,12 @@ export component ContextMenu inherits Rectangle {
     in property <length> container-height: 0px;
     // false 时不夹取位置（用于要落在容器外的下拉菜单）
     in property <bool> clamp-position: true;
-    callback item-selected(index: int);
+
+    // 样式可自定义（默认用 popup 混入主题）：外部可按需覆盖
+    in property <color> surface-background: Mixins.popup-surface.background;
+    in property <color> surface-border-color: Mixins.popup-surface.border-color;
+    in property <length> surface-radius: Mixins.popup-surface.border-radius;
+    in property <length> surface-border-width: Mixins.popup-surface.border-width;
 
     // 固定菜单宽度（配合容器夹取时稳定）
     private property <length> menu-width: 180px;
@@ -35,10 +130,10 @@ export component ContextMenu inherits Rectangle {
     y: clamp-position ? min(menu-y, max(0px, container-height - self.height)) : menu-y;
     width: menu-width;
     height: content.preferred-height;
-    background: Mixins.popup-surface.background;
-    border-radius: Mixins.popup-surface.border-radius;
-    border-width: Mixins.popup-surface.border-width;
-    border-color: Mixins.popup-surface.border-color;
+    background: root.surface-background;
+    border-radius: root.surface-radius;
+    border-width: root.surface-border-width;
+    border-color: root.surface-border-color;
     drop-shadow-blur: 6px;
     drop-shadow-color: rgba(0, 0, 0, 0.45);
 
@@ -46,50 +141,6 @@ export component ContextMenu inherits Rectangle {
         padding: Mixins.popup-surface.padding;
         spacing: Mixins.popup-surface.spacing;
 
-        for item[i] in root.items: VerticalLayout {
-            // 分隔线
-            if item.separator-before: Rectangle {
-                height: 1px;
-                background: Mixins.popup-surface.border-color;
-            }
-
-            item-area := TouchArea {
-                // 禁用项不响应点击
-                enabled: item.enabled;
-                clicked => {
-                    root.item-selected(i);
-                    root.open = false;
-                }
-
-                item-box := Rectangle {
-                    min-height: Mixins.popup-item.min-height;
-                    border-radius: Mixins.popup-item.border-radius;
-                    background: item-area.has-hover && item.enabled ? Mixins.popup-item.highlight-color : transparent;
-
-                    HorizontalLayout {
-                        padding-left: Mixins.popup-item.padding-horizontal;
-                        padding-right: Mixins.popup-item.padding-horizontal;
-                        spacing: Mixins.popup-item.spacing;
-                        alignment: start;
-
-                        // 前导色点（Colors.transparent 表示不显示）
-                        if item.dot-color != Colors.transparent: Rectangle {
-                            width: 10px;
-                            height: 10px;
-                            border-radius: self.width / 2;
-                            background: item.dot-color;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        Text {
-                            text: item.text;
-                            // 禁用项向表面背景色混合，呈现灰显
-                            color: item.enabled ? Mixins.popup-item.text-color : Mixins.popup-item.text-color.mix(Mixins.popup-surface.background, 0.6);
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
+        @children
     }
 }

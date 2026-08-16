@@ -35,8 +35,12 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
         crate::screen::area::ScrAreaKey,
         crate::bridge::types::SlintAreaType,
     )> = None;
-    let mut full_rebuild = false;
     let mut geometry_update = false;
+    // 边移动结束：area 数量不变（仅几何变），row_changed 局部更新；
+    // 边拓扑可能因 remove_duplicate_vertices 变化，需全量重建 edges。
+    let mut edges_rebuild = false;
+    // 边移动结束时是否发生了顶点合并（拓扑变化）。
+    let mut edges_topology_changed = false;
     let mut split: Option<(
         crate::screen::area::ScrAreaKey,
         crate::screen::area::ScrAreaKey,
@@ -49,7 +53,13 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
 
     for tag in tags {
         match tag {
-            Tag::ScreenInitialized => full_rebuild = true,
+            // 全量重建 areas/edges 只发生在初始化（其余路径均为精确增量，见函数头注释）。
+            // 短路直接执行并返回——reducer 已改好 state，rebuild_all 读到最新数据，
+            // 且初始化只产生这一个 tag，不存在同轮其它 tag 被丢弃。
+            Tag::ScreenInitialized => {
+                rebuild_all(store);
+                return;
+            }
 
             // 仅几何坐标变化（resize/scale），area/edge 数量不变 → 局部更新
             Tag::ScreenResized { .. } | Tag::ScaleChanged { .. } => geometry_update = true,
@@ -83,15 +93,16 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
                 area_keys.extend(ak.iter().copied());
             }
 
-            Tag::DragEnded { areas_changed } => {
-                // split/join 的 handle_actionzone_end 同轮产生
-                // [AreasSplit/AreasJoined, DragEnded]，前者已精确处理
-                // （apply_split/apply_join），DragEnded 不应再全量覆盖。
-                // 仅当本轮没有精确 split/join（纯边移动结束）且
-                // areas_changed 时才全量（边结构可能因 remove_duplicate_vertices 变化）。
-                if *areas_changed && split.is_none() && joined.is_none() {
-                    full_rebuild = true;
-                }
+            // 纯边移动结束（无同轮 split/join）：area 数量不变（仅几何变），
+            // row_changed 局部更新即可，避免全量 set_scrareas 重实例化 AreaContainer
+            // （丢失编辑器 pan/zoom 等每 area 的 UI 状态）。仅当 remove_duplicate_vertices
+            // 实际合并了顶点（拓扑变化）时才全量重建 edges。
+            Tag::DragEnded {
+                areas_changed,
+                topology_changed,
+            } if *areas_changed && split.is_none() && joined.is_none() => {
+                edges_rebuild = true;
+                edges_topology_changed = *topology_changed;
             }
 
             _ => {}
@@ -104,8 +115,20 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
         store.ui_models_mut().update_area_type(&key, slint_type);
     }
 
-    if full_rebuild {
-        rebuild_all(store);
+    if edges_rebuild {
+        if edges_topology_changed {
+            // 顶点合并 → 边结构变化 → 全量重建 edges（areas 数量不变，row_changed）
+            let area_keys: Vec<_> = store.state().screen_map.areas.keys().collect();
+            for key in area_keys {
+                if let Some(data) = crate::bridge::converters::convert_area(store.state(), key) {
+                    store.ui_models_mut().update_scrarea(&key, data);
+                }
+            }
+            rebuild_edges(store);
+        } else {
+            // 仅几何变化 → areas + edges 全部 row_changed（无 set_vec，组件复用）
+            update_geometry_locally(store);
+        }
     } else if let Some((parent_key, new_area_key)) = split {
         apply_split(store, parent_key, new_area_key);
     } else if let Some((removed_keys, added_keys, merged_into)) = joined {
