@@ -1,41 +1,96 @@
-// 应用图标题栏：向通用 AreaHeader 传入应用链数据（占位）与右侧操作按钮。
-import { SlintKey, SlintAreaType } from "../../core/types.slint";
-import { AreaHeader, AreaHeaderCenterMode } from "../area_header.slint";
-import { ContextMenuItem } from "../../widgets/context_menu.slint";
+// 应用图标题栏：链列表/当前链索引来自 Rust 全局，向通用 AreaHeader 传入，并接入加载回调。
+// 中区内容（新建按钮/链选择器/+按钮）通过 AreaHeader 的 @children 插槽注入。
+import { SlintKey, SlintAreaType, GraphType } from "../../core/types.slint";
+import { AreaHeader } from "../area_header.slint";
+import { ChainSwitcher } from "../../widgets/chain_switcher.slint";
+import { NodeGraphCallbacks } from "../../bridge/callbacks.slint";
+import { NodeGraphState } from "../../bridge/state.slint";
 import { Mixins } from "../../theme/mixins.slint";
+import { Theme } from "../../theme/index.slint";
 
 export component AppGraphToolbar inherits Rectangle {
     in property <SlintKey> area-key;
     in property <SlintAreaType> area-type;
     in-out property <bool> chain-editing: false;
 
-    // 当前应用链索引（占位，真实数据来自 Rust 侧）
-    private property <int> current-chain-index: 0;
-    // 应用链候选（占位）
-    private property <[ContextMenuItem]> app-chain-items: [
-        { text: "应用链 1", enabled: true, dot-color: root.current-chain-index == 0 ? Mixins.popup-item.selected-background : Colors.transparent, separator-before: false },
-        { text: "应用链 2", enabled: true, dot-color: root.current-chain-index == 1 ? Mixins.popup-item.selected-background : Colors.transparent, separator-before: false },
-    ];
-
-    // 占位：新建时选中第一条链
+    // 进入编辑：加载当前选中的链（切 Area 回来自动恢复，无需重新点"新建"）
     changed chain-editing => {
         if root.chain-editing {
-            root.current-chain-index = 0;
+            NodeGraphCallbacks.load-chain(GraphType.app-graph, NodeGraphState.app-current-chain);
         }
     }
+
+    private property <string> current-chain-name: NodeGraphState.app-current-chain >= 0 && NodeGraphState.app-current-chain < NodeGraphState.app-chain-items.length ? NodeGraphState.app-chain-items[NodeGraphState.app-current-chain].text : "";
 
     AreaHeader {
         width: 100%;
         height: 100%;
         area-key: root.area-key;
         area-type: root.area-type;
-        center-mode: AreaHeaderCenterMode.chain;
-        chain-items: root.app-chain-items;
-        current-chain-index: root.current-chain-index;
-        chain-editing <=> root.chain-editing;
-        chain-selected(index) => {
-            root.current-chain-index = index;
+
+        // 中区内容（@children）：未编辑链=新建按钮；编辑链=链选择器 + 新增按钮
+        if !root.chain-editing: Rectangle {
+            height: Theme.data.area-type-switcher.height + 4px;
+            background: Mixins.popup-item.selected-background;
+            border-radius: Theme.data.area-type-switcher.border-radius;
+            TouchArea {
+                clicked => {
+                    // 尚无任何链：点"新建"直接建第一条链并进入编辑；
+                    // 已有链则只进入编辑（从下拉选择）
+                    if NodeGraphState.app-chain-items.length == 0 {
+                        NodeGraphState.app-current-chain = NodeGraphCallbacks.new-chain(GraphType.app-graph);
+                    }
+                    root.chain-editing = true;
+                }
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    height: 100%;
+                    alignment: center;
+                    Text {
+                        text: "新建";
+                        color: #ffffff;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+            }
         }
+
+        if root.chain-editing: ChainSwitcher {
+            current-name: root.current-chain-name;
+            current-index: NodeGraphState.app-current-chain;
+            items: NodeGraphState.app-chain-items;
+            chain-selected(index) => {
+                NodeGraphState.app-current-chain = index;
+                NodeGraphCallbacks.load-chain(GraphType.app-graph, index);
+            }
+        }
+
+        // 编辑链：新增链按钮（Blender 式"+"）
+        if root.chain-editing: Rectangle {
+            width: Theme.data.area-type-switcher.height;
+            height: Theme.data.area-type-switcher.height;
+            background: Theme.data.area-type-switcher.background;
+            border-radius: Theme.data.area-type-switcher.border-radius;
+            border-width: Theme.data.area-type-switcher.border-width;
+            border-color: Theme.data.area-type-switcher.border-color;
+            TouchArea {
+                clicked => {
+                    NodeGraphState.app-current-chain = NodeGraphCallbacks.new-chain(GraphType.app-graph);
+                }
+                Text {
+                    text: "+";
+                    width: 100%;
+                    height: 100%;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: Theme.data.area-type-switcher.popup.item-text-color;
+                    font-size: 16px;
+                }
+            }
+        }
+
         // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
         right-actions: [
             { icon: @image-url("../../assets/icons/keep.svg") },

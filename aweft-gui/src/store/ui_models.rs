@@ -7,12 +7,16 @@ use crate::bridge::types::{
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
+use crate::store::graph_editor::GraphEditorState;
 use crate::store::line_editor::LineEditorState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
-/// 目前只包含字幕编辑器的行模型，后续可以加入 screen/edge 等模型。
 pub struct UiModels {
     pub line_editor_state: LineEditorState,
+    /// 样式图编辑器状态（节点/连线/链/角色）
+    pub style_graph: GraphEditorState,
+    /// 应用图编辑器状态
+    pub app_graph: GraphEditorState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -26,6 +30,8 @@ impl UiModels {
     pub fn new() -> Self {
         Self {
             line_editor_state: LineEditorState::new(),
+            style_graph: GraphEditorState::default(),
+            app_graph: GraphEditorState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),

@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::edge::ScrEdgeKey;
-use aweft_model::ids::ItemId;
+use aweft_model::ids::{ItemId, NodeId, SocketId};
 use aweft_model::structure::ItemLocation;
 use chrono::TimeDelta;
 
@@ -20,6 +20,50 @@ pub enum DataId {
     DragState,
     /// 动画数据（AnimData/Action，供曲线/Dope/NLA 投影）。
     Animation,
+    /// 节点图数据（NodeGraph/ApplicationGraph 的节点/连线/端口值）。
+    NodeGraph,
+}
+
+/// 节点图类型（tag 内区分样式图/应用图，定义在 model 侧）。
+pub use aweft_model::node_graph::NodeGraphKind;
+
+/// 节点图一次变更的精确描述（投影据此精确定位局部更新）。
+#[derive(Debug, Clone)]
+pub enum NodeGraphChange {
+    /// 新增节点（含请求位置，供投影构建快照 + row_added）。
+    NodesInserted {
+        node_ids: Vec<NodeId>,
+        positions: std::collections::HashMap<NodeId, (f32, f32)>,
+    },
+    /// 删除节点（投影移除行 + row_removed + 连线重映射）。
+    NodesRemoved {
+        node_ids: Vec<NodeId>,
+    },
+    /// 连线增删/重连（投影更新受影响节点的 connected 标记 + 连线模型）。
+    LinksChanged {
+        /// connected 标记发生变化的节点（连线的两端点），投影只 row_changed 这些行。
+        affected_nodes: Vec<NodeId>,
+    },
+    /// 端口值变化（投影更新该节点行：输入文本/角色选中）。
+    SocketValueChanged {
+        node_id: NodeId,
+        socket_id: SocketId,
+    },
+    /// 引用节点换引用链（原位改值，投影重建该节点一行：menu_selected/端口）。
+    ReferenceChanged {
+        node_id: NodeId,
+    },
+    /// 新建链后切到它（投影：派生链菜单 + 设当前链 + 全量重建快照）。`target` 为目标链下标。
+    ChainSwitched {
+        target: usize,
+    },
+}
+
+impl NodeGraphChange {
+    /// 包装为 `Tag::NodeGraph`（带图类型）。
+    pub fn into_tag(self, kind: NodeGraphKind) -> Tag {
+        Tag::NodeGraph { kind, change: self }
+    }
 }
 
 /// 选中操作类型：投影按此路由到对应的选择方法。
@@ -143,11 +187,20 @@ pub enum Tag {
     },
     DragEnded {
         areas_changed: bool,
+        /// 边移动结束是否发生了顶点合并（拓扑变化）——拓扑变了才需全量重建 edges。
+        topology_changed: bool,
     },
 
     // ── Animation ─────────────────────────────────────────────────────
     /// 当前 Action / 关键帧数据变化（曲线、Dope、NLA 相关投影依赖）。
     AnimationChanged,
+
+    // ── NodeGraph ─────────────────────────────────────────────────────
+    /// 节点图结构/值变化（携带精确操作信息，投影据此局部更新）。
+    NodeGraph {
+        kind: NodeGraphKind,
+        change: NodeGraphChange,
+    },
 }
 
 /// 操作语义分类：同一语义的 Tag 归为一类，供操作按 `handles` 精确路由。
@@ -178,6 +231,14 @@ pub enum TagKind {
     DragEnded,
     /// 动画数据变化。
     Animation,
+    /// 节点图：结构（节点增删）。
+    NodeGraphStructure,
+    /// 节点图：连线（增删/重连）。
+    NodeGraphLinks,
+    /// 节点图：端口值/引用（单行更新）。
+    NodeGraphSocket,
+    /// 节点图：新建链（全量重建）。
+    NodeGraphChain,
 }
 
 /// 操作唯一标识（编译期检查的枚举，可无限扩展加变体）。
@@ -200,6 +261,14 @@ pub enum OperationCode {
     ScreenOverlays,
     /// Screen 布局操作。
     ScreenLayout,
+    /// 节点图：结构操作（节点增删）。
+    NodeGraphStructure,
+    /// 节点图：连线操作（增删/重连）。
+    NodeGraphLinks,
+    /// 节点图：端口值/引用操作（单行更新）。
+    NodeGraphSocket,
+    /// 节点图：新建链操作（全量重建）。
+    NodeGraphChain,
 }
 
 impl Tag {
@@ -233,6 +302,8 @@ impl Tag {
             | Tag::DragEnded { .. } => DataId::DragState,
 
             Tag::AnimationChanged => DataId::Animation,
+
+            Tag::NodeGraph { .. } => DataId::NodeGraph,
         }
     }
 
@@ -272,6 +343,17 @@ impl Tag {
             Tag::DragEnded { .. } => TagKind::DragEnded,
 
             Tag::AnimationChanged => TagKind::Animation,
+
+            Tag::NodeGraph { change, .. } => match change {
+                NodeGraphChange::NodesInserted { .. } | NodeGraphChange::NodesRemoved { .. } => {
+                    TagKind::NodeGraphStructure
+                }
+                NodeGraphChange::LinksChanged { .. } => TagKind::NodeGraphLinks,
+                NodeGraphChange::SocketValueChanged { .. } | NodeGraphChange::ReferenceChanged { .. } => {
+                    TagKind::NodeGraphSocket
+                }
+                NodeGraphChange::ChainSwitched { .. } => TagKind::NodeGraphChain,
+            },
         }
     }
 }

@@ -6,6 +6,7 @@ import { ListView, VerticalBox } from "std-widgets.slint";
 import { TableHeader, TableColumn } from "../../widgets/table_header.slint";
 import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
+import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { SlintKey } from "../../core/types.slint";
 import { LineEditorCallbacks } from "../../bridge/callbacks.slint";
 import {
@@ -46,6 +47,14 @@ export component LineEditor inherits Rectangle {
     ];
 
     forward-focus: main-focus;
+
+    // 右键菜单状态（根层统一 ContextMenu）
+    private property <bool> context-menu-open: false;
+    private property <length> context-menu-x: 0px;
+    private property <length> context-menu-y: 0px;
+    // 被右键的行：回调定位用
+    private property <int> context-menu-row: -1;
+    private property <bool> context-menu-is-group: false;
 
     private property <int> focused-index: 0;
     private property <length> row-height: Theme.data.line-editor.row-height;
@@ -171,84 +180,14 @@ export component LineEditor inherits Rectangle {
                                 LineEditorCallbacks.select-single(row.item-id);
                             }
 
-                            // 手动显示菜单
-                            list-view-menu-area.show({ x: self.mouse-x, y: self.mouse-y });
-                        }
-                    }
-                }
-
-                // NOTE: 后声明的组件会先接收到事件（所以需要放在 “TouchArea 处理左键” 的后面）
-                // 右键菜单
-                list-view-menu-area := ContextMenuArea {
-                    // 由 TouchArea 捕获控制
-                    enabled: false;
-                    Menu {
-                        MenuItem {
-                            title: "增加行";
-                            activated => {
-                                LineEditorCallbacks.add-line(row.item-id, row.start-time, row.end-time, row.text);
-                            }
-                        }
-
-                        MenuItem {
-                            title: "增加分组";
-                            activated => {
-                                LineEditorCallbacks.add-group(row.item-id);
-                            }
-                        }
-
-                        MenuItem {
-                            title: "剪切";
-                            activated => {
-                                LineEditorCallbacks.cut-items();
-                            }
-                        }
-
-                        MenuItem {
-                            title: "复制";
-                            activated => {
-                                LineEditorCallbacks.copy-items();
-                            }
-                        }
-
-                        MenuItem {
-                            title: "粘贴";
-                            activated => {
-                                LineEditorCallbacks.paste-items(row.item-id);
-                            }
-                        }
-
-                        MenuItem {
-                            title: "删除";
-                            activated => {
-                                LineEditorCallbacks.delete-selected-items();
-                            }
-                        }
-
-                        // TODO: 实现 Action 节点链化编辑与快捷键触发。
-                        // 预留右键菜单入口，当前不执行任何操作。
-                        MenuItem {
-                            title: "上移（TODO）";
-                            activated => {
-                                debug("TODO: 实现 Action 节点链化编辑与快捷键触发（上移）（应当作为用户自定义的示例）", idx);
-                            }
-                        }
-
-                        MenuItem {
-                            title: "下移（TODO）";
-                            activated => {
-                                debug("TODO: 实现 Action 节点链化编辑与快捷键触发（下移）", idx);
-                            }
-                        }
-
-                        // 分隔符
-                        MenuSeparator { }
-
-                        if row.row-type == SlintSubtitleRowType.GroupHeader: MenuItem {
-                            title: "解散分组（未完成）";
-                            activated => {
-                                LineEditorCallbacks.ungroups(row.item-id)
-                            }
+                            // 记录被右键的行并换算菜单坐标（行内坐标 → LineEditor 根坐标）
+                            root.context-menu-row = idx;
+                            root.context-menu-is-group = row.row-type == SlintSubtitleRowType.GroupHeader;
+                            // ListView 在 TableHeader 之下；行在视口内纵坐标 = idx*行高 - viewport-y
+                            root.context-menu-x = self.mouse-x;
+                            root.context-menu-y = Theme.data.line-editor.header-height
+                                + (idx * root.row-height - list-view.viewport-y) + self.mouse-y;
+                            root.context-menu-open = true;
                         }
                     }
                 }
@@ -563,6 +502,96 @@ export component LineEditor inherits Rectangle {
                     y: parent.height - 1px;
                     height: 1px;
                     background: #333;
+                }
+            }
+        }
+    }
+
+    // 右键菜单（根层统一 ContextMenu）：菜单外点击层关闭
+    if root.context-menu-open: TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.context-menu-open = false;
+            }
+        }
+    }
+    ContextMenu {
+        open <=> root.context-menu-open;
+        menu-x: root.context-menu-x;
+        menu-y: root.context-menu-y;
+        container-width: root.width;
+        container-height: root.height;
+        clamp-position: true;
+
+        // 声明式菜单项：每个动作绑定到具体 MenuItem，无 index 分发
+        MenuItem {
+            text: "增加行";
+            menu-open <=> root.context-menu-open;
+            activated => {
+                let row = root.context-menu-row;
+                if row >= 0 && row < SubtitleState.rows.length {
+                    LineEditorCallbacks.add-line(SubtitleState.rows[row].item-id, SubtitleState.rows[row].start-time, SubtitleState.rows[row].end-time, SubtitleState.rows[row].text);
+                }
+            }
+        }
+        MenuItem {
+            text: "增加分组";
+            menu-open <=> root.context-menu-open;
+            activated => {
+                let row = root.context-menu-row;
+                if row >= 0 && row < SubtitleState.rows.length {
+                    LineEditorCallbacks.add-group(SubtitleState.rows[row].item-id);
+                }
+            }
+        }
+        MenuItem {
+            text: "剪切";
+            menu-open <=> root.context-menu-open;
+            activated => { LineEditorCallbacks.cut-items(); }
+        }
+        MenuItem {
+            text: "复制";
+            menu-open <=> root.context-menu-open;
+            activated => { LineEditorCallbacks.copy-items(); }
+        }
+        MenuItem {
+            text: "粘贴";
+            menu-open <=> root.context-menu-open;
+            activated => {
+                let row = root.context-menu-row;
+                if row >= 0 && row < SubtitleState.rows.length {
+                    LineEditorCallbacks.paste-items(SubtitleState.rows[row].item-id);
+                }
+            }
+        }
+        MenuItem {
+            text: "删除";
+            menu-open <=> root.context-menu-open;
+            activated => { LineEditorCallbacks.delete-selected-items(); }
+        }
+        MenuItem {
+            text: "上移（TODO）";
+            menu-open <=> root.context-menu-open;
+            activated => {
+                debug("TODO: 实现 Action 节点链化编辑与快捷键触发（上移）", root.context-menu-row);
+            }
+        }
+        MenuItem {
+            text: "下移（TODO）";
+            menu-open <=> root.context-menu-open;
+            activated => {
+                debug("TODO: 实现 Action 节点链化编辑与快捷键触发（下移）", root.context-menu-row);
+            }
+        }
+        // 分组头专属：解散分组
+        if root.context-menu-is-group: MenuItem {
+            text: "解散分组（未完成）";
+            separator-before: true;
+            menu-open <=> root.context-menu-open;
+            activated => {
+                let row = root.context-menu-row;
+                if row >= 0 && row < SubtitleState.rows.length {
+                    LineEditorCallbacks.ungroups(SubtitleState.rows[row].item-id);
                 }
             }
         }

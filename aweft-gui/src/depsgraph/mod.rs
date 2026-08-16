@@ -23,4 +23,4 @@ mod graph;
 mod tag;
 
 pub use graph::{Component, ComponentId, Depsgraph, Operation, OperationId};
-pub use tag::{DataId, OperationCode, SelectionKind, Tag, TagKind};
+pub use tag::{DataId, NodeGraphChange, NodeGraphKind, OperationCode, SelectionKind, Tag, TagKind};

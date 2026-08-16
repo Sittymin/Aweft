@@ -73,9 +73,14 @@ export struct NodeEditorPalette {
     node-muted-text: color,
     socket-outline: color,
     socket-style: color,
+    socket-float: color,
     socket-text: color,
     socket-int: color,
     socket-bool: color,
+    socket-color: color,
+    socket-vec2: color,
+    socket-vec3: color,
+    socket-clip-rect: color,
     socket-animation: color,
     link: color,
     lattice: color,
@@ -220,6 +225,8 @@ export global Tokens {
             socket-outline: #0e0e11,
             // style(样式链)
             socket-style: #63c763,
+            // float(浮点)
+            socket-float: #ffd166,
             // animation(动画)
             socket-animation: #ed9e5c,
             // text(文本)
@@ -228,6 +235,14 @@ export global Tokens {
             socket-int: #598c5c,
             // bool(布尔)
             socket-bool: #cca6d6,
+            // color(颜色)
+            socket-color: #e8806b,
+            // vec2(二维向量)
+            socket-vec2: #9dd5b2,
+            // vec3(三维向量)
+            socket-vec3: #8fa6d9,
+            // clip-rect(裁剪区域)
+            socket-clip-rect: #c9b46e,
             link: #63c763,
             lattice: #3a3a40,
         },
