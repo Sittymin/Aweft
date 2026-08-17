@@ -7,7 +7,7 @@ import { TableHeader, TableColumn } from "../../widgets/table_header.slint";
 import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
-import { SlintKey } from "../../core/types.slint";
+import { SlintKey, SlintSelectionModifier } from "../../core/types.slint";
 import { LineEditorCallbacks } from "../../bridge/callbacks.slint";
 import {
     SlintSubtitleRow,
@@ -116,8 +116,8 @@ export component LineEditor inherits Rectangle {
                 if focused-index + 1 < SubtitleState.rows.length {
                     focused-index += 1;
                     bring-into-view(focused-index);
-                    LineEditorCallbacks.select-single(
-                        SubtitleState.rows[focused-index].item-id);
+                    LineEditorCallbacks.select-row(
+                        SubtitleState.rows[focused-index].item-id, SlintSelectionModifier.none);
                 }
                 return accept;
             }
@@ -125,8 +125,8 @@ export component LineEditor inherits Rectangle {
                 if focused-index > 0 {
                     focused-index -= 1;
                     bring-into-view(focused-index);
-                    LineEditorCallbacks.select-single(
-                        SubtitleState.rows[focused-index].item-id);
+                    LineEditorCallbacks.select-row(
+                        SubtitleState.rows[focused-index].item-id, SlintSelectionModifier.none);
                 }
                 return accept;
             }
@@ -159,16 +159,9 @@ export component LineEditor inherits Rectangle {
                             focused-index = idx;
                             bring-into-view(idx);
 
-                            if event.modifiers.shift {
-                                debug("Shift + 左键点击", idx, "行");
-                                LineEditorCallbacks.select-range(row.item-id)
-                            } else if event.modifiers.control {
-                                debug("Ctrl + 左键点击", idx, "行");
-                                LineEditorCallbacks.select-toggle(row.item-id)
-                            } else {
-                                debug("普通左键点击", idx, "行");
-                                LineEditorCallbacks.select-single(row.item-id)
-                            }
+                            LineEditorCallbacks.select-row(row.item-id, event.modifiers.control
+                                ? SlintSelectionModifier.ctrl
+                                : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none))
                         }
                         // 右键
                         else if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
@@ -177,7 +170,7 @@ export component LineEditor inherits Rectangle {
 
                             // 如果右键的不是已选择的项目，那么就单选右键的行
                             if row.selected != SlintSelectionState.DirectlySelected {
-                                LineEditorCallbacks.select-single(row.item-id);
+                                LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                             }
 
                             // 记录被右键的行并换算菜单坐标（行内坐标 → LineEditor 根坐标）
@@ -287,10 +280,10 @@ export component LineEditor inherits Rectangle {
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-single(row.item-id);
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     } else {
                                         if row.selected != SlintSelectionState.DirectlySelected {
-                                            LineEditorCallbacks.select-toggle(row.item-id);
+                                            LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.ctrl);
                                         }
                                     }
                                 }
@@ -299,16 +292,16 @@ export component LineEditor inherits Rectangle {
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-single(row.item-id);
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     } else {
                                         if row.selected != SlintSelectionState.DirectlySelected {
-                                            LineEditorCallbacks.select-toggle(row.item-id);
+                                            LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.ctrl);
                                         }
                                     }
                                 }
                                 drag-timecode-start => {
                                     if row.selected != SlintSelectionState.DirectlySelected {
-                                        LineEditorCallbacks.select-single(row.item-id);
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
@@ -336,7 +329,7 @@ export component LineEditor inherits Rectangle {
                                     } else if row.selected != SlintSelectionState.DirectlySelected {
                                         focused-index = idx;
                                         bring-into-view(idx);
-                                        LineEditorCallbacks.select-single(row.item-id)
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none)
                                     }
                                 }
                                 editing-text-changed(text) => {
@@ -365,7 +358,7 @@ export component LineEditor inherits Rectangle {
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-single(row.item-id);
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 decrement-timecode(is_batch) => {
@@ -373,12 +366,12 @@ export component LineEditor inherits Rectangle {
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-single(row.item-id);
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 drag-timecode-start => {
                                     if row.selected != SlintSelectionState.DirectlySelected {
-                                        LineEditorCallbacks.select-single(row.item-id);
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
@@ -407,7 +400,7 @@ export component LineEditor inherits Rectangle {
                                     } else if row.selected != SlintSelectionState.DirectlySelected {
                                         focused-index = idx;
                                         bring-into-view(idx);
-                                        LineEditorCallbacks.select-single(row.item-id)
+                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none)
                                     }
                                 }
                                 editing-text-changed(text) => {

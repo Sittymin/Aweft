@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use crate::actions::area::AreaAction;
+use crate::actions::animation::AnimationAction;
 use crate::actions::line_editor::LineEditorAction;
 use crate::actions::Action;
 use crate::clipboard::{Clipboard, ItemsClip};
@@ -20,6 +21,8 @@ pub struct AppStore {
     /// OverlayState global 弱引用：overlay 投影经此写出拖拽预览。
     /// 在 `AppStore::new` 中从 MainWindow 注入。
     pub(crate) overlay_state: Option<slint::Weak<crate::bridge::types::OverlayState<'static>>>,
+    /// AnimationState global 弱引用：动画投影（op_animation_curve）经此同步标量到 Slint。
+    pub(crate) animation_state: Option<slint::Weak<crate::bridge::types::AnimationState<'static>>>,
     clipboard: Clipboard,
 }
 
@@ -34,11 +37,15 @@ impl AppStore {
         let overlay_state = main_window
             .global::<crate::bridge::types::OverlayState>()
             .as_weak();
+        let animation_state = main_window
+            .global::<crate::bridge::types::AnimationState>()
+            .as_weak();
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
             ui_models: UiModels::new(),
             depsgraph,
             overlay_state: Some(overlay_state),
+            animation_state: Some(animation_state),
             clipboard: Clipboard::new(),
         }
     }
@@ -55,6 +62,7 @@ impl AppStore {
             }
             Action::LineEditor(act) => self.dispatch_line_editor(act)?,
             Action::NodeGraph(act) => self.dispatch_node_graph(act)?,
+            Action::Animation(act) => self.dispatch_animation(act)?,
         };
         for tag in tags {
             self.depsgraph.tag(tag);
@@ -487,6 +495,159 @@ impl AppStore {
         .flatten()
     }
 
+    /// 分发动画编辑器（曲线编辑器）交互操作：修改权威数据（model）+ 更新视图 + 打 `Tag::AnimationChanged`。
+    ///
+    /// 权威数据在 model（`Project.library.animation_library.actions`）：
+    ///  - **拖拽（高频）**：`KeyframeDragged`/`HandleDragged` 只改视图（preview，对齐
+    ///    LineEditor 的 preview 语义），保住 Slint 拖拽抓取；
+    ///  - **提交**：松开/插值变更后 `commit_current_action` 把视图关键帧写回 model Action；
+    ///  - **装载**：`ActionSelected` 读 model Action 重建视图。
+    ///
+    /// UI 态（选中/搜索/视图缩放/通道可见性/颜色）留在 store，不入 model。
+    fn dispatch_animation(&mut self, action: AnimationAction) -> Result<Vec<Tag>> {
+        use AnimationAction::*;
+
+        let ce = &mut self.ui_models.curve_editor;
+        match action {
+            KeyframePressed { curve, key, modifier } => ce.keyframe_pressed(curve, key, modifier),
+            KeyframeDragged {
+                curve,
+                key,
+                delta_time,
+                delta_value,
+                mode,
+            } => ce.keyframe_dragged(curve, key, delta_time, delta_value, mode),
+            KeyframeReleased { curve, key, moved } => {
+                ce.keyframe_released(curve, key, moved);
+                self.commit_current_action();
+            }
+            DeselectKeyframes => ce.deselect_all(),
+            HandlePressed {
+                curve,
+                key,
+                is_in,
+                modifier,
+            } => ce.handle_pressed(curve, key, is_in, modifier),
+            HandleDragged {
+                curve,
+                key,
+                is_in,
+                delta_time,
+                delta_value,
+                mode,
+            } => ce.handle_dragged(curve, key, is_in, delta_time, delta_value, mode),
+            HandleReleased {
+                curve,
+                key,
+                is_in,
+                moved,
+            } => {
+                ce.handle_released(curve, key, is_in, moved);
+                self.commit_current_action();
+            }
+            GraphMarqueeSelect {
+                x_lo,
+                x_hi,
+                y_lo,
+                y_hi,
+                modifier,
+            } => ce.graph_marquee_select(x_lo, x_hi, y_lo, y_hi, modifier),
+            ChannelPressed { curve, modifier } => ce.channel_pressed(curve, modifier),
+            ChannelDeselectAll => ce.deselect_channel(),
+            GraphSearchChanged { text } => ce.set_graph_search(&text),
+            DopeSearchChanged { text } => ce.set_dope_search(&text),
+            DopeChannelPressed { view_row, modifier } => ce.dope_channel_pressed(view_row, modifier),
+            CurveColorModeChanged { curve, mode } => ce.set_curve_color_mode(curve, mode),
+            KeyframeInterpolationChanged { interpolation } => {
+                ce.set_selected_keyframes_interpolation(interpolation);
+                self.commit_current_action();
+            }
+            ChannelToggleVisible { curve } => ce.toggle_channel_visible(curve),
+            ChannelToggleModifier { curve } => ce.toggle_channel_modifier(curve),
+            ChannelToggleActive { curve } => ce.toggle_channel_active(curve),
+            ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
+            SetCurrentTime { time } => ce.current_time = time as f64,
+            ViewChanged {
+                zoom_x,
+                zoom_y,
+                pan_x,
+                pan_y,
+                width,
+                height,
+            } => ce.set_view(zoom_x, zoom_y, pan_x, pan_y, width, height),
+            ActionSelected { index } => self.load_animation_action(index),
+        }
+        Ok(vec![Tag::AnimationChanged])
+    }
+
+    /// 提交当前 Action 的视图改动到 model（`dispatch_animation` 的 commit 步骤）。
+    fn commit_current_action(&mut self) {
+        let Some(id) = self.ui_models.curve_editor.current_action_id() else {
+            return;
+        };
+        let Some(action) = self
+            .state
+            .project
+            .library
+            .animation_library
+            .actions
+            .get_mut(&id)
+        else {
+            return;
+        };
+        self.ui_models.curve_editor.commit_to_model(action);
+    }
+
+    /// 装载 model 的第 `index` 个 Action 到编辑器（`ActionSelected` 的 reducer 步骤）。
+    fn load_animation_action(&mut self, index: i32) {
+        if index < 0 {
+            self.ui_models.curve_editor.reset_action();
+            return;
+        }
+        let Some(id) = self
+            .ui_models
+            .curve_editor
+            .actions
+            .get(index as usize)
+            .map(|a| a.id)
+        else {
+            return;
+        };
+        let Some(action) = self
+            .state
+            .project
+            .library
+            .animation_library
+            .actions
+            .get(&id)
+        else {
+            return;
+        };
+        self.ui_models.curve_editor.load_action(index as usize, action);
+    }
+
+    /// 同步动画编辑器标量到 Slint 全局（`op_animation_curve` 调用）。
+    /// 通道/关键帧等 VecModel 一次性绑定（共享 inner 模型，变更自动通知），
+    /// 只有 current-time/action-name/current-action/action-range/current-channel/
+    /// 选中数/插值等标量需要在此推送。
+    pub(crate) fn sync_animation_scalars(&mut self) {
+        let Some(weak) = &self.animation_state else {
+            return;
+        };
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        let ce = &self.ui_models.curve_editor;
+        state.set_current_time(ce.current_time as f32);
+        state.set_action_name(ce.action_name.clone());
+        state.set_current_action(ce.current_action);
+        state.set_action_start(ce.action_start);
+        state.set_action_end(ce.action_end);
+        state.set_current_channel(ce.current_channel as i32);
+        state.set_selected_keyframes(ce.selected_keyframe_count() as i32);
+        state.set_selected_interpolation(ce.selected_interpolation_index());
+    }
+
     // 处理 LineEditor 相关 Action。
     //
     // 设计目标：本函数只做 Domain（`project.structure`）修改，并向依赖图打 tag；
@@ -705,23 +866,19 @@ impl AppStore {
                     }
                 }
             }
-            LineEditorAction::SelectSingle { item_id } => {
-                Ok(vec![self.selection_tag(
-                    item_id,
-                    crate::depsgraph::SelectionKind::Single,
-                )])
-            }
-            LineEditorAction::SelectRange { item_id } => {
-                Ok(vec![self.selection_tag(
-                    item_id,
-                    crate::depsgraph::SelectionKind::Range,
-                )])
-            }
-            LineEditorAction::SelectToggle { item_id } => {
-                Ok(vec![self.selection_tag(
-                    item_id,
-                    crate::depsgraph::SelectionKind::Toggle,
-                )])
+            LineEditorAction::SelectRow { item_id, modifier } => {
+                let kind = match modifier {
+                    crate::bridge::types::SlintSelectionModifier::Shift => {
+                        crate::depsgraph::SelectionKind::Range
+                    }
+                    crate::bridge::types::SlintSelectionModifier::Ctrl => {
+                        crate::depsgraph::SelectionKind::Toggle
+                    }
+                    crate::bridge::types::SlintSelectionModifier::None => {
+                        crate::depsgraph::SelectionKind::Single
+                    }
+                };
+                Ok(vec![self.selection_tag(item_id, kind)])
             }
             LineEditorAction::AddLine {
                 item_id,

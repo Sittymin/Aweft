@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use aweft_gui::bridge::callbacks::setup_callbacks;
-use aweft_gui::bridge::types::{LineEditorCallbacks, MainWindow};
+use aweft_gui::bridge::types::{LineEditorCallbacks, MainWindow, SlintSelectionModifier};
 use aweft_gui::store::AppStore;
 use aweft_model::structure::{EventData, ItemContent, ItemLocation};
 use slint::{ComponentHandle, Model, ModelRc};
@@ -191,7 +191,7 @@ fn ui_toggle_group_collapsed_via_callback() {
 #[test]
 fn ui_select_toggle_keeps_multi_selection() {
     // 验证 toggle 语义：先单选 e1，再 toggle e2，两行都应被选中。
-    // 若投影把 SelectToggle 误降级为 select_single，则 e1 会被取消选中。
+    // 若投影把 SelectRow(ctrl) 误降级为 select_single，则 e1 会被取消选中。
     i_slint_backend_testing::init_no_event_loop();
     let (store, instance) = setup();
 
@@ -229,7 +229,7 @@ fn ui_select_toggle_keeps_multi_selection() {
     // 先单选 e1
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
 
     // 验证单选后 e1 已选中
     {
@@ -248,7 +248,7 @@ fn ui_select_toggle_keeps_multi_selection() {
     // 再 toggle e2（不取消 e1）
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_toggle(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Ctrl);
 
     let s = store.borrow();
     let rows = all_rows(&s);
@@ -537,7 +537,7 @@ fn ui_select_events_updates_group_header_selected_state() {
     // 单选 e1：组头未全选 → Unselected
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -556,7 +556,7 @@ fn ui_select_events_updates_group_header_selected_state() {
     // 组头未被直接点选（子项全选）→ 应 IndirectlySelected（恢复的三态）
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_toggle(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Ctrl);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -574,7 +574,7 @@ fn ui_select_events_updates_group_header_selected_state() {
     // 再直接点选组头 → 组头应变为 DirectlySelected
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(group_id.to_string().into());
+        .invoke_select_row(group_id.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -645,7 +645,7 @@ fn ui_copy_cut_paste_delete_chain() {
     // 1. 选中 e1 → CopyItems（剪贴板应写入）
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance.global::<LineEditorCallbacks>().invoke_copy_items();
 
     // 2. 粘贴到 e1 后 → PasteItems（行数增加，handle_subtrees_pasted 精确插入）
@@ -672,7 +672,7 @@ fn ui_copy_cut_paste_delete_chain() {
     };
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance.global::<LineEditorCallbacks>().invoke_cut_items();
     {
         let s = store.borrow();
@@ -694,7 +694,7 @@ fn ui_copy_cut_paste_delete_chain() {
     };
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::None);
     instance
         .global::<LineEditorCallbacks>()
         .invoke_delete_selected_items();
@@ -792,10 +792,10 @@ fn ui_add_group_and_batch_timecode() {
     // 选中 e1 和 e2（toggle 多选），批量改 start_time（is_batch=true）
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_toggle(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Ctrl);
     // 批量输入时间码：回调的 is_batch 参数 = true
     // 验证：两个事件 start_time 都变为 0:00:05.00
     instance
@@ -945,10 +945,10 @@ fn ui_select_range_marks_group_header_indirectly_selected() {
     // 先单选 e1（设 anchor），再 range 到 e2 → 范围覆盖两个子项，组头未直接点选
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_range(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Shift);
 
     let s = store.borrow();
     let rows = all_rows(&s);
@@ -1024,10 +1024,10 @@ fn ui_reselect_single_refreshes_group_header_state() {
     // 范围选中整组 → 组头 Indirectly
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_range(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Shift);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -1045,7 +1045,7 @@ fn ui_reselect_single_refreshes_group_header_state() {
     // 重新单选 e1（只选一个子项）→ 组头应刷新为 Unselected
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -1119,10 +1119,10 @@ fn ui_select_outside_group_refreshes_group_header() {
     // 范围选中整组（组内全选）→ 组头 Indirectly
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(e1.to_string().into());
+        .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_range(e2.to_string().into());
+        .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Shift);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -1140,7 +1140,7 @@ fn ui_select_outside_group_refreshes_group_header() {
     // 选组外事件 → 组头应刷新为 Unselected
     instance
         .global::<LineEditorCallbacks>()
-        .invoke_select_single(outside.to_string().into());
+        .invoke_select_row(outside.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
