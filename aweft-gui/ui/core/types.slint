@@ -12,12 +12,21 @@ export enum SlintAreaType {
     style-graph-editor,
     // 应用图（application_graph）
     app-graph-editor,
+    // 曲线编辑器（animation::Action/FCurve）
+    graph-editor,
 }
 
 // 节点图类型：样式图（node_graph）与应用图（application_graph）
 export enum GraphType {
     style-graph,
     app-graph,
+}
+
+// 鼠标选择修饰键：无修饰、Shift 区间扩展、Ctrl 切换。
+export enum SlintSelectionModifier {
+    none,
+    shift,
+    ctrl,
 }
 
 export struct IconAndText {

@@ -1,7 +1,8 @@
 use crate::actions::line_editor::LineEditorAction;
 use crate::actions::{area::AreaAction, Action};
 use crate::bridge::types::{
-    AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow, NodeGraphCallbacks,
+    AnimationCallbacks, AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow,
+    NodeGraphCallbacks,
 };
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::reducers::media::connect_video_to_wgpu;
@@ -34,6 +35,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_clipboard_callbacks(instance, Rc::clone(&store));
     setup_line_editor_ungroup_callbacks(instance, Rc::clone(&store));
     setup_node_graph_callbacks(instance, Rc::clone(&store));
+    setup_animation_callbacks(instance, Rc::clone(&store));
 }
 
 /// 设置节点图编辑器回调：图操作走 `Action::NodeGraph` → dispatch → tag → 投影。
@@ -636,38 +638,19 @@ fn setup_line_editor_drag_timecode_cancel_callback(
 fn setup_line_editor_selection_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     use aweft_model::ids::ItemId;
     let weak_instance = instance.as_weak();
-
-    let register =
-        |f: fn(ItemId) -> LineEditorAction,
-         setter: fn(&MainWindow, Box<dyn FnMut(slint::SharedString)>)| {
-            let s = Rc::clone(&store);
-            let w = weak_instance.clone();
-            setter(
-                instance,
-                Box::new(move |item_id_str| {
-                    use aweft_model::ids::ItemId;
-                    let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId)
-                    else {
-                        warn!("无效的 item_id: {}", item_id_str);
-                        return;
-                    };
-                    let action = Action::LineEditor(f(item_id));
-                    dispatch_and_render(&s, action, &w);
-                }),
-            );
-        };
-
-    register(
-        |item_id| LineEditorAction::SelectSingle { item_id },
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_select_single(cb),
-    );
-    register(
-        |item_id| LineEditorAction::SelectRange { item_id },
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_select_range(cb),
-    );
-    register(
-        |item_id| LineEditorAction::SelectToggle { item_id },
-        |inst, cb| inst.global::<LineEditorCallbacks>().on_select_toggle(cb),
+    let s = Rc::clone(&store);
+    instance.global::<LineEditorCallbacks>().on_select_row(
+        move |item_id_str, modifier| {
+            let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 item_id: {}", item_id_str);
+                return;
+            };
+            let action = Action::LineEditor(LineEditorAction::SelectRow {
+                item_id,
+                modifier,
+            });
+            dispatch_and_render(&s, action, &weak_instance);
+        },
     );
 }
 
@@ -822,4 +805,312 @@ fn dispatch_and_render(
 
     // 2. 依赖图求值：只重算受影响投影
     store_mut.evaluate_depsgraph();
+}
+
+/// 设置动画编辑器（曲线编辑器）回调：全部交互走 `Action::Animation` → dispatch → tag → 投影。
+fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    use crate::actions::animation::AnimationAction;
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_keyframe_pressed(
+        move |curve, key, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::KeyframePressed {
+                    curve: curve as usize,
+                    key: key as usize,
+                    modifier,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_keyframe_dragged(
+        move |curve, key, delta_time, delta_value, mode| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::KeyframeDragged {
+                    curve: curve as usize,
+                    key: key as usize,
+                    delta_time,
+                    delta_value,
+                    mode,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_keyframe_released(
+        move |curve, key, moved| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::KeyframeReleased {
+                    curve: curve as usize,
+                    key: key as usize,
+                    moved,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_keyframe_deselect_all(move || {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::DeselectKeyframes),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_handle_pressed(
+        move |curve, key, is_in, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::HandlePressed {
+                    curve: curve as usize,
+                    key: key as usize,
+                    is_in,
+                    modifier,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_handle_dragged(
+        move |curve, key, is_in, delta_time, delta_value, mode| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::HandleDragged {
+                    curve: curve as usize,
+                    key: key as usize,
+                    is_in,
+                    delta_time,
+                    delta_value,
+                    mode,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_handle_released(
+        move |curve, key, is_in, moved| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::HandleReleased {
+                    curve: curve as usize,
+                    key: key as usize,
+                    is_in,
+                    moved,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_graph_marquee_select(
+        move |x_lo, x_hi, y_lo, y_hi, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::GraphMarqueeSelect {
+                    x_lo,
+                    x_hi,
+                    y_lo,
+                    y_hi,
+                    modifier,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_channel_pressed(move |curve, modifier| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ChannelPressed {
+                curve: curve as usize,
+                modifier,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_channel_deselect_all(move || {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ChannelDeselectAll),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_graph_search_changed(move |text| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::GraphSearchChanged {
+                text: text.to_string(),
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_search_changed(move |text| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::DopeSearchChanged {
+                text: text.to_string(),
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_channel_pressed(move |view_row, modifier| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::DopeChannelPressed {
+                view_row: view_row as usize,
+                modifier,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_curve_color_mode_changed(move |curve, mode| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::CurveColorModeChanged {
+                curve: curve as usize,
+                mode,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_keyframe_interpolation_changed(move |interp| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::KeyframeInterpolationChanged {
+                interpolation: interp,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_channel_toggle_visible(move |curve| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ChannelToggleVisible {
+                curve: curve as usize,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_channel_toggle_modifier(move |curve| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ChannelToggleModifier {
+                curve: curve as usize,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_channel_toggle_active(move |curve| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ChannelToggleActive {
+                curve: curve as usize,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_channel_toggle_editable(move |curve| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ChannelToggleEditable {
+                curve: curve as usize,
+            }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_set_current_time(move |time| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::SetCurrentTime { time }),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_view_changed(
+        move |zoom_x, zoom_y, pan_x, pan_y, width, height| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ViewChanged {
+                    zoom_x,
+                    zoom_y,
+                    pan_x,
+                    pan_y,
+                    width,
+                    height,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_action_selected(move |index| {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::ActionSelected { index }),
+            &weak,
+        );
+    });
 }

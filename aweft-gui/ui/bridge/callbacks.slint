@@ -4,7 +4,14 @@ import {
     SlintAreaType,
     SlintSubtitleRow,
     GraphType,
+    SlintSelectionModifier,
 } from "../core/types.slint";
+import {
+    SlintKeyframeDragMode,
+    SlintHandleDragMode,
+    SlintColorMode,
+    SlintInterpolation,
+} from "../core/animation_types.slint";
 import { NodeSocketType, SocketHit } from "../areas/node_graph/node_frame.slint";
 
 export global DragCallbacks {
@@ -26,10 +33,8 @@ export global LineEditorCallbacks {
     callback drag-timecode-commit(item-id: string, is-start-time: bool, delta-x: length, is_batch: bool);
     callback drag-timecode-cancel(item-id: string, is-start-time: bool, is_batch: bool);
     callback timecode-input(item-id: string, is-start-time: bool, text: string, is_batch: bool);
-    // 行选择
-    callback select-single(item-id: string);
-    callback select-range(item-id: string);
-    callback select-toggle(item-id: string);
+    // 行选择（none=普通单选，shift=区间扩展，ctrl=切换）
+    callback select-row(item-id: string, modifier: SlintSelectionModifier);
     // 右键菜单
     // NOTE: 后续在空列表当中的也需要实现（即无法获得开始与结束时间）
     // 参数用于定位新增的行位置
@@ -81,4 +86,62 @@ export global NodeGraphCallbacks {
     callback create-actor(graph-type: GraphType, node-index: int, socket-row: int, name: string);
     // 内嵌文本输入框提交（字符串常量）：设端口默认值
     callback socket-input-changed(graph-type: GraphType, node-index: int, socket-row: int, text: string);
+}
+
+// 动画编辑器（曲线编辑器 + 摄影表 + NLA）回调：编辑器只做渲染与拖拽瞬态，
+// 全部数据操作走 Rust（dispatch → depsgraph 投影）。
+export global AnimationCallbacks {
+    // —— 曲线编辑器：关键帧 ——
+    // 按下：none=单选，shift=区间扩展，ctrl=切换
+    callback keyframe-pressed(curve-index: int, key-index: int, modifier: SlintSelectionModifier);
+    // 拖拽移动（delta 相对按下起点，世界坐标）
+    callback keyframe-dragged(curve-index: int, key-index: int, delta-time: float, delta-value: float, mode: SlintKeyframeDragMode);
+    // 松开：moved=false（单击）时折叠为单选
+    callback keyframe-released(curve-index: int, key-index: int, moved: bool);
+    // 画布空白点击：清除关键帧选中
+    callback keyframe-deselect-all();
+    // —— 曲线编辑器：贝塞尔控制柄 ——
+    // 按下：none=单选，shift=区间扩展，ctrl=切换
+    callback handle-pressed(curve-index: int, key-index: int, is-in: bool, modifier: SlintSelectionModifier);
+    // 手柄拖拽约束模式：free=Ctrl，aligned=默认，symmetric=Shift
+    callback handle-dragged(curve-index: int, key-index: int, is-in: bool, delta-time: float, delta-value: float, mode: SlintHandleDragMode);
+    // 松开：moved=false（单击）时折叠为单选该手柄
+    callback handle-released(curve-index: int, key-index: int, is-in: bool, moved: bool);
+    // 画布空白框选（none=替换，shift=区间扩展，ctrl=切换）
+    callback graph-marquee-select(x-lo: float, x-hi: float, y-lo: float, y-hi: float, modifier: SlintSelectionModifier);
+    // —— 曲线编辑器：通道 ——
+    // 通道/曲线按下：none=普通，shift=区间，ctrl=切换
+    callback channel-pressed(curve-index: int, modifier: SlintSelectionModifier);
+    // 画布空白点击：清除激活通道与选中
+    callback channel-deselect-all();
+    // 左侧搜索框：曲线编辑器 / 摄影表各自独立过滤（空串恢复全部）
+    callback graph-search-changed(text: string);
+    callback dope-search-changed(text: string);
+    // 摄影表压缩视图中的一行被点击（显示行 → Rust 映射回真实通道）
+    callback dope-channel-pressed(view-row: int, modifier: SlintSelectionModifier);
+    // 侧边栏：设置曲线颜色来源（0=自动彩虹，1=用户设置）
+    callback curve-color-mode-changed(curve-index: int, mode: SlintColorMode);
+    // 侧边栏：设置选中关键帧的插值类型（0=贝塞尔，1=线性，2=常量）
+    callback keyframe-interpolation-changed(interp: SlintInterpolation);
+    callback channel-toggle-visible(curve-index: int);
+    callback channel-toggle-modifier(curve-index: int);
+    callback channel-toggle-active(curve-index: int);
+    callback channel-toggle-editable(curve-index: int);
+    // —— 摄影表（Dope Sheet）：关键帧（共用曲线编辑器的选中/数据，拖拽只调时间） ——
+    callback dope-keyframe-pressed(curve-index: int, key-index: int, modifier: SlintSelectionModifier);
+    callback dope-keyframe-dragged(curve-index: int, key-index: int, delta-time: float);
+    callback dope-keyframe-released(curve-index: int, key-index: int, moved: bool);
+    callback dope-keyframe-deselect-all();
+    // 空白处框选（世界时间范围 + 行区间；mode 0=替换 1/2=追加）
+    callback dope-marquee-select(x-lo: float, x-hi: float, row-lo: int, row-hi: int, modifier: SlintSelectionModifier);
+    // —— 摄影表：汇总条带（聚合所有通道同一时刻的关键帧；拖拽跨通道同步移动） ——
+    callback dope-summary-pressed(index: int, modifier: SlintSelectionModifier);
+    callback dope-summary-dragged(index: int, delta-time: float);
+    callback dope-summary-released(index: int, moved: bool);
+    // —— 共享：当前时间（播放头） ——
+    callback set-current-time(time: float);
+    // —— 摄影表 Header：Action 选择下拉菜单 ——
+    callback action-selected(index: int);
+    // —— 共享：视图缩放变化 —— 更新命中检测容差依据（刻度已 Slint 侧即时计算）
+    callback view-changed(zoom-x: float, zoom-y: float, pan-x: float, pan-y: float, width: float, height: float);
 }

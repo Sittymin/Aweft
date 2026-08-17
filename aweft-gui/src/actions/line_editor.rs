@@ -4,6 +4,8 @@ use aweft_model::{
 };
 use chrono::TimeDelta;
 
+use crate::bridge::types::SlintSelectionModifier;
+
 #[derive(Debug, Clone)]
 pub enum LineEditorAction {
     ToggleGroupCollapsed {
@@ -41,14 +43,10 @@ pub enum LineEditorAction {
         is_start_time: bool,
         is_batch: bool,
     },
-    SelectSingle {
+    /// 行选择：none=普通单选，shift=区间扩展，ctrl=切换。
+    SelectRow {
         item_id: ItemId,
-    },
-    SelectRange {
-        item_id: ItemId,
-    },
-    SelectToggle {
-        item_id: ItemId,
+        modifier: SlintSelectionModifier,
     },
     AddLine {
         item_id: ItemId,
