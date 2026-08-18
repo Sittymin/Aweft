@@ -9,6 +9,7 @@ import {
     SlintHandleMarker,
     SlintDopeConnection,
     SlintSummaryKeyframe,
+    SlintExtrapolation,
     SlintNlaTrack,
     SlintInterpolationState,
 } from "../core/animation_types.slint";
@@ -76,6 +77,8 @@ export global AnimationState {
     in property <[SlintDopeConnection]> dope-connections: [];
     // 摄影表：汇总条带关键帧（按整数毫秒时间聚合所有通道，Rust 派生）
     in property <[SlintSummaryKeyframe]> dope-summary-keyframes: [];
+    // 每通道排序后首/末关键帧（外推线数据源，Rust 投影派生）
+    in property <[SlintExtrapolation]> extrapolations: [];
     // NLA 编辑器
     in property <[SlintNlaTrack]> nla-tracks: [];
     // 共享：当前时间（播放头）

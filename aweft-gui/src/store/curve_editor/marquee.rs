@@ -4,7 +4,7 @@ use slint::Model;
 
 use super::CurveEditorState;
 use super::curve_math::segment_intersects_rect;
-use crate::depsgraph::Tag;
+use crate::depsgraph::{HandleLoc, Tag};
 use super::ms_of;
 use crate::bridge::types::SlintSelectionModifier;
 
@@ -189,15 +189,15 @@ impl CurveEditorState {
                     let hx = kf.time + ho_t;
                     let hy = kf.value + ho_v;
                     if hx >= t_lo && hx <= t_hi && hy >= v_lo && hy <= v_hi {
-                        let key = (curve, j, si);
+                        let loc = HandleLoc { curve, key: j, is_in: si };
                         if toggling {
-                            if self.selected_handles.contains(&key) {
-                                self.selected_handles.remove(&key);
+                            if self.selected_handles.contains(&loc) {
+                                self.selected_handles.remove(&loc);
                             } else {
-                                self.selected_handles.insert(key);
+                                self.selected_handles.insert(loc);
                             }
                         } else {
-                            self.selected_handles.insert(key);
+                            self.selected_handles.insert(loc);
                         }
                     }
                 }

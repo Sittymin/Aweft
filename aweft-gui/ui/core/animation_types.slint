@@ -204,3 +204,13 @@ export struct SlintSummaryKeyframe {
     // count>5 时大关键帧是否全部选中（Rust 端随掩码同步维护）
     all-selected: bool,
 }
+
+// 每通道一条：按时间排序后的首/末关键帧（外推线数据源）。
+// 关键帧模型拖拽期间保序（保住 Slint grab），下标 0/len-1 不一定是时间首末，
+// 因此由投影每帧按排序结果填充，外推线读这里而非 keyframes[0]/[len-1]。
+export struct SlintExtrapolation {
+    first-time: float,
+    first-value: float,
+    last-time: float,
+    last-value: float,
+}

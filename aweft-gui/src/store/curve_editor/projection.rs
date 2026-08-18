@@ -3,6 +3,8 @@
 //!
 //! 投影不修改数据层，只读数据算派生状态，并与当前 UI 模型 diff 后增量更新
 //! （`set_row_data` / `insert` / `remove`），对齐 LineEditor 投影规范。
+//!
+//! 每个 apply_* 只做"对应 tag 语义"的更新，内部按职责拆成单一目的的私有方法。
 
 use std::collections::HashSet;
 
@@ -10,8 +12,8 @@ use slint::Model;
 
 use super::CurveEditorState;
 use crate::bridge::converters::build_action_menu_items;
-use crate::bridge::types::{SlintBezierHandle, SlintKeyframe};
-use crate::depsgraph::Tag;
+use crate::bridge::types::{SlintBezierHandle, SlintExtrapolation, SlintHandleMarker, SlintKeyframe};
+use crate::depsgraph::{HandleLoc, Tag};
 use slint::SharedString;
 
 impl CurveEditorState {
@@ -59,6 +61,7 @@ impl CurveEditorState {
         self.rebuild_filters();
         // 3. 派生模型全量重建
         self.rebuild_all();
+        self.rebuild_extrapolations();
         // 4. Action 下拉菜单（由 actions 清单派生）
         self.rebuild_action_menu();
     }
@@ -72,40 +75,29 @@ impl CurveEditorState {
         curves: &[usize],
         summary_ms: &[i64],
         dragged_curve: Option<usize>,
-        dragged_summary: Option<(usize, f32)>,
-        handle_preview: &Option<Vec<(usize, usize, bool)>>,
+        dragged_summary: Option<crate::depsgraph::SummaryDrag>,
+        handle_preview: &Option<Vec<HandleLoc>>,
     ) {
         for &curve in curves {
             // 嵌套模型同步（拖拽期间数量不变，set_row_data 保住 grab）
             self.sync_keyframe_model(curve);
             // 段/手柄/连接线：数量不变原地更新，数量变化 splice
             self.rebuild_curve(curve);
+            // 外推线数据（排序后首末）——拖拽期间实时跟随
+            self.update_extrapolation(curve);
         }
         // 关键帧拖拽的手柄软钳制预览：只对被拖通道替换 handles 区间
         if let Some(curve) = dragged_curve {
             self.rebuild_handles_with_preview(curve);
         }
-        // 汇总条带：重算受影响 ms（拖拽含旧 + 新位置）
-        for &ms in summary_ms {
-            self.summary_update_or_insert(ms);
-            self.summary_remove_if_empty(ms);
-        }
+        self.update_summary_entries(summary_ms);
         // 汇总条带拖拽：被拖标记就地更新时间（不 insert/remove，保住 grab）
-        if let Some((index, delta_time)) = dragged_summary
-            && let Some(mut sk) = self.summary_keyframes.row_data(index)
-        {
-            sk.time = super::snap_ms(sk.time + delta_time);
-            self.summary_keyframes.set_row_data(index, sk);
+        if let Some(drag) = dragged_summary {
+            self.update_summary_drag_time(drag.index, drag.delta_time);
         }
-        // 手柄拖拽的软钳制预览：重建 preview_handles（只含有效控制点与原始不同的手柄）
+        // 手柄拖拽的软钳制预览：重建 preview_handles
         if let Some(handles) = handle_preview {
-            let mut preview: Vec<crate::bridge::types::SlintHandleMarker> = Vec::new();
-            for &(c, k, is_in) in handles {
-                if let Some(marker) = self.dragged_handle_preview(c, k, is_in) {
-                    preview.push(marker);
-                }
-            }
-            self.preview_handles.set_vec(preview);
+            self.rebuild_preview_handles(handles);
         }
     }
 
@@ -136,15 +128,86 @@ impl CurveEditorState {
         }
     }
 
+    /// 重建单通道的外推线数据：按时间排序取首/末关键帧。
+    /// 拖拽期间关键帧模型保序（下标 0 不一定是时间最小），外推线必须读排序结果。
+    fn update_extrapolation(&mut self, curve: usize) {
+        let Some(kfs) = self.editing_keyframes.get(&curve) else {
+            return;
+        };
+        if kfs.is_empty() {
+            return;
+        }
+        let mut sorted: Vec<&SlintKeyframe> = kfs.iter().collect();
+        sorted.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let entry = SlintExtrapolation {
+            first_time: sorted[0].time,
+            first_value: sorted[0].value,
+            last_time: sorted[sorted.len() - 1].time,
+            last_value: sorted[sorted.len() - 1].value,
+        };
+        self.extrapolations.set_row_data(curve, entry);
+    }
+
+    /// 全量重建外推线数据（结构变化时调用；行数 = 通道数）。
+    fn rebuild_extrapolations(&mut self) {
+        let n = self.channels_data.len();
+        let mut items: Vec<SlintExtrapolation> = Vec::with_capacity(n);
+        for curve in 0..n {
+            let Some(kfs) = self.editing_keyframes.get(&curve) else {
+                items.push(SlintExtrapolation {
+                    first_time: 0.0,
+                    first_value: 0.0,
+                    last_time: 0.0,
+                    last_value: 0.0,
+                });
+                continue;
+            };
+            if kfs.is_empty() {
+                items.push(SlintExtrapolation {
+                    first_time: 0.0,
+                    first_value: 0.0,
+                    last_time: 0.0,
+                    last_value: 0.0,
+                });
+                continue;
+            }
+            let mut sorted: Vec<&SlintKeyframe> = kfs.iter().collect();
+            sorted.sort_by(|a, b| {
+                a.time
+                    .partial_cmp(&b.time)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            items.push(SlintExtrapolation {
+                first_time: sorted[0].time,
+                first_value: sorted[0].value,
+                last_time: sorted[sorted.len() - 1].time,
+                last_value: sorted[sorted.len() - 1].value,
+            });
+        }
+        self.extrapolations.set_vec(items);
+    }
+
     // ── 选中变化 ────────────────────────────────────────────────────────
 
-    /// 选中变化：同步 channels 行 selected、selected_display 掩码、嵌套关键帧模型
-    /// selected、手柄 selected 视觉，并重算汇总条带受影响 ms 的选中掩码。
+    /// 选中变化：交互终止点清理（拖拽预览/重排）+ 选中视觉同步 + 汇总掩码重算。
     fn apply_selection(&mut self, summary_ms: &[i64]) {
-        // 任何选中交互（按下/松开/框选）都是手柄拖拽的终止点：清空拖拽预览
+        self.clear_drag_preview();
+        self.resort_keyframes();
+        self.sync_channel_rows();
+        self.sync_selected_display();
+        self.sync_keyframe_selection();
+        self.update_handle_selection_visual();
+        self.update_summary_entries(summary_ms);
+    }
+
+    /// 交互终止点清理：清空手柄拖拽预览（preview_handles），并把关键帧拖拽期间
+    /// preview 替换过的 handles 区间恢复为普通手柄（拖拽残留换回）。
+    fn clear_drag_preview(&mut self) {
         self.preview_handles.clear();
-        // 恢复被拖通道的普通手柄：拖拽期间 preview 替换（handles 区间带 preview 标记）
-        // 在交互终止时换回普通几何
         let mut previewed: Vec<usize> = Vec::new();
         for i in 0..self.handles.row_count() {
             if let Some(h) = self.handles.row_data(i)
@@ -159,9 +222,12 @@ impl CurveEditorState {
         for curve in previewed {
             self.rebuild_curve(curve);
         }
-        // 拖拽可能破坏关键帧时间序（模型保序）：松开后重排受影响通道，
-        // 恢复"下标 0 = 时间最小"（Slint 外推线读 keyframes[0]/[len-1]）。
-        // 拖拽期间（Keyframes tag）不重排——保住 grab 与拖拽抓手下标映射。
+    }
+
+    /// 拖拽可能破坏关键帧时间序（模型保序）：松开后重排受影响通道，
+    /// 恢复"下标 0 = 时间最小"（嵌套模型与数据同序）。
+    /// 拖拽期间（Keyframes tag）不重排——保住 grab 与拖拽抓手下标映射。
+    fn resort_keyframes(&mut self) {
         let mut to_resort: Vec<usize> = Vec::new();
         for curve in 0..self.channels_data.len() {
             if let Some(kfs) = self.editing_keyframes.get(&curve)
@@ -173,7 +239,9 @@ impl CurveEditorState {
         for curve in to_resort {
             if let Some(kfs) = self.editing_keyframes.get_mut(&curve) {
                 kfs.sort_by(|a, b| {
-                    a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal)
+                    a.time
+                        .partial_cmp(&b.time)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
             if let Some(model) = self.keyframe_models.get(&curve) {
@@ -183,9 +251,10 @@ impl CurveEditorState {
             // 关键帧下标变化 → 段/手柄/连接线重建（keyframe_index 字段跟随）
             self.rebuild_curve(curve);
         }
-        self.sync_channel_rows();
-        self.sync_selected_display();
-        // 嵌套关键帧模型 selected 同步（只写变化的行）
+    }
+
+    /// 同步嵌套关键帧模型的 selected 字段（diff 只写变化的行）。
+    fn sync_keyframe_selection(&mut self) {
         for (&curve, data) in &self.editing_keyframes {
             if let Some(model) = self.keyframe_models.get(&curve) {
                 for (i, kf) in data.iter().enumerate() {
@@ -199,13 +268,33 @@ impl CurveEditorState {
                 }
             }
         }
-        // 手柄 selected 视觉（扁平模型，逐行更新 selected 字段）
-        self.update_handle_selection_visual();
-        // 汇总条带：重算受影响 ms 的条目（count/掩码随选中变化）
+    }
+
+    /// 重算汇总条带中受影响 ms 的条目（count/掩码随数据与选中变化）。
+    fn update_summary_entries(&mut self, summary_ms: &[i64]) {
         for &ms in summary_ms {
             self.summary_update_or_insert(ms);
             self.summary_remove_if_empty(ms);
         }
+    }
+
+    /// 汇总条带拖拽：被拖标记就地更新时间（不 insert/remove，保住 grab）。
+    fn update_summary_drag_time(&mut self, index: usize, delta_time: f32) {
+        if let Some(mut sk) = self.summary_keyframes.row_data(index) {
+            sk.time = super::snap_ms(sk.time + delta_time);
+            self.summary_keyframes.set_row_data(index, sk);
+        }
+    }
+
+    /// 手柄拖拽的软钳制预览：重建 preview_handles（只含有效控制点与原始不同的手柄）。
+    fn rebuild_preview_handles(&mut self, handles: &[HandleLoc]) {
+        let mut preview: Vec<SlintHandleMarker> = Vec::new();
+        for &loc in handles {
+            if let Some(marker) = self.dragged_handle_preview(loc.curve, loc.key, loc.is_in) {
+                preview.push(marker);
+            }
+        }
+        self.preview_handles.set_vec(preview);
     }
 
     // ── 通道属性变化 ────────────────────────────────────────────────────
@@ -219,10 +308,7 @@ impl CurveEditorState {
             let affected: HashSet<i64> = (0..model.row_count())
                 .filter_map(|i| model.row_data(i).map(|kf| super::ms_of(kf.time)))
                 .collect();
-            for ms in affected {
-                self.summary_update_or_insert(ms);
-                self.summary_remove_if_empty(ms);
-            }
+            self.update_summary_entries(&affected.into_iter().collect::<Vec<i64>>());
         }
     }
 
@@ -230,8 +316,12 @@ impl CurveEditorState {
     fn update_handle_selection_visual(&mut self) {
         for i in 0..self.handles.row_count() {
             if let Some(mut h) = self.handles.row_data(i) {
-                let key = (h.curve_index as usize, h.keyframe_index as usize, h.is_in);
-                let new_sel = self.selected_handles.contains(&key);
+                let loc = HandleLoc {
+                    curve: h.curve_index as usize,
+                    key: h.keyframe_index as usize,
+                    is_in: h.is_in,
+                };
+                let new_sel = self.selected_handles.contains(&loc);
                 if h.selected != new_sel {
                     h.selected = new_sel;
                     self.handles.set_row_data(i, h);

@@ -11,6 +11,7 @@ import {
     SlintHandleMarker,
     SlintSegmentKind,
     SlintInterpolationState,
+    SlintExtrapolation,
 } from "../../core/animation_types.slint";
 import { SlintSelectionModifier } from "../../core/types.slint";
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
@@ -39,6 +40,8 @@ export component GraphEditor inherits Rectangle {
     in property <[bool]> selected-channels: [];
     // 手柄拖拽时相邻软钳制的有效控制点预览
     in property <[SlintHandleMarker]> preview-handles;
+    // 每通道排序后首/末关键帧（外推线数据源）
+    in property <[SlintExtrapolation]> extrapolations;
     // 侧边栏：选中关键帧数量 / 选中关键帧插值聚合状态
     in property <int> selected-keyframes: 0;
     in property <SlintInterpolationState> selected-interpolation: SlintInterpolationState.none;
@@ -295,16 +298,18 @@ export component GraphEditor inherits Rectangle {
         }
 
         // 外推线：首/末关键帧水平延伸到视口边缘（比主曲线暗，非当前通道更暗）。
+        // 数据源是 extrapolations（投影按排序后首末填充）——关键帧模型拖拽期间保序，
+        // 直接读 keyframes[0]/[len-1] 会画错（被拖关键帧仍是下标 0 但时间已不是最小）。
         // 用颜色 alpha 代替 opacity，避免任何离屏 layer。
         for curve in root.graph-channels: Rectangle {
             width: 100%;
             height: 100%;
 
-            if curve.visible && curve.keyframes.length > 0: ExtrapolationLine {
+            if curve.visible && curve.keyframes.length > 0 && root.extrapolations.length > curve.curve-index: ExtrapolationLine {
                 left-side: true;
                 area-width: parent.width;
-                key-time: curve.keyframes[0].time;
-                key-value: curve.keyframes[0].value;
+                key-time: root.extrapolations[curve.curve-index].first-time;
+                key-value: root.extrapolations[curve.curve-index].first-value;
                 view-zoom-x: root.nav-zoom-x;
                 view-zoom-y: root.nav-zoom-y;
                 pan-x: root.nav-pan-x;
@@ -313,11 +318,11 @@ export component GraphEditor inherits Rectangle {
                     ? curve.color
                     : curve.color.with-alpha(0.18);
             }
-            if curve.visible && curve.keyframes.length > 0: ExtrapolationLine {
+            if curve.visible && curve.keyframes.length > 0 && root.extrapolations.length > curve.curve-index: ExtrapolationLine {
                 left-side: false;
                 area-width: parent.width;
-                key-time: curve.keyframes[curve.keyframes.length - 1].time;
-                key-value: curve.keyframes[curve.keyframes.length - 1].value;
+                key-time: root.extrapolations[curve.curve-index].last-time;
+                key-value: root.extrapolations[curve.curve-index].last-value;
                 view-zoom-x: root.nav-zoom-x;
                 view-zoom-y: root.nav-zoom-y;
                 pan-x: root.nav-pan-x;

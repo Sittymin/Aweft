@@ -4,7 +4,7 @@
 use super::CurveEditorState;
 use super::curve_math::{clamp_handle_own_side, apply_handle_mode};
 use crate::bridge::types::{SlintHandleDragMode, SlintSelectionModifier};
-use crate::depsgraph::Tag;
+use crate::depsgraph::{HandleLoc, Tag};
 
 impl CurveEditorState {
     /// 控制柄按下：none=单选，shift=同通道同侧区间扩展，ctrl=切换。
@@ -13,32 +13,34 @@ impl CurveEditorState {
         if !self.channel_editable(curve) {
             return Vec::new();
         }
-        let key_in_sel = self.selected_handles.contains(&(curve, key, is_in));
+        let key_in_sel = self.selected_handles.contains(&HandleLoc { curve, key, is_in });
         match modifier {
             SlintSelectionModifier::Shift => {
-                let anchor = self.handle_selection_anchor.unwrap_or((curve, key, is_in));
-                let (lo, hi) = if anchor.0 == curve && anchor.2 == is_in {
-                    (anchor.1.min(key), anchor.1.max(key))
+                let anchor = self
+                    .handle_selection_anchor
+                    .unwrap_or(HandleLoc { curve, key, is_in });
+                let (lo, hi) = if anchor.curve == curve && anchor.is_in == is_in {
+                    (anchor.key.min(key), anchor.key.max(key))
                 } else {
                     (key, key)
                 };
                 for index in lo..=hi {
-                    self.selected_handles.insert((curve, index, is_in));
+                    self.selected_handles.insert(HandleLoc { curve, key: index, is_in });
                 }
-                self.handle_selection_anchor = Some((curve, key, is_in));
+                self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
             }
             SlintSelectionModifier::Ctrl => {
                 if key_in_sel {
-                    self.selected_handles.remove(&(curve, key, is_in));
+                    self.selected_handles.remove(&HandleLoc { curve, key, is_in });
                 } else {
-                    self.selected_handles.insert((curve, key, is_in));
+                    self.selected_handles.insert(HandleLoc { curve, key, is_in });
                 }
             }
             SlintSelectionModifier::None => {
-                self.handle_selection_anchor = Some((curve, key, is_in));
+                self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
                 if !key_in_sel {
                     self.deselect_all();
-                    self.selected_handles.insert((curve, key, is_in));
+                    self.selected_handles.insert(HandleLoc { curve, key, is_in });
                 }
             }
         }
@@ -85,26 +87,26 @@ impl CurveEditorState {
 
         // 多选同侧手柄：各自按相同屏幕偏移移动（世界增量一致 → 屏幕位移一致，更符合预期）。
         // 非主手柄同样做"自己关键帧一侧"的硬钳制；软钳制预览对所有被移动的手柄都做。
-        let mut synchronized_handles: Vec<(usize, usize, bool)> = Vec::new();
+        let mut synchronized_handles: Vec<HandleLoc> = Vec::new();
         if (delta_time != 0.0 || delta_value != 0.0) && !self.selected_handles.is_empty() {
-            for &(curve_index, keyframe_index, is_incoming) in &self.selected_handles {
-                if curve_index == curve && keyframe_index == key && is_incoming == is_in {
+            for &loc in &self.selected_handles {
+                if loc.curve == curve && loc.key == key && loc.is_in == is_in {
                     continue; // 被拖手柄已更新
                 }
-                if is_incoming != is_in {
+                if loc.is_in != is_in {
                     continue; // 只同步同一侧
                 }
-                if !self.channel_editable(curve_index) {
+                if !self.channel_editable(loc.curve) {
                     continue;
                 }
                 let Some(kf) = self
                     .editing_keyframes
-                    .get_mut(&curve_index)
-                    .and_then(|kfs| kfs.get_mut(keyframe_index))
+                    .get_mut(&loc.curve)
+                    .and_then(|kfs| kfs.get_mut(loc.key))
                 else {
                     continue;
                 };
-                if is_incoming {
+                if loc.is_in {
                     kf.handle_in.time_offset += delta_time;
                     kf.handle_in.value_offset += delta_value;
                     clamp_handle_own_side(kf, true);
@@ -114,10 +116,10 @@ impl CurveEditorState {
                     clamp_handle_own_side(kf, false);
                 }
                 // 与主手柄一致的模式：对每个被同步手柄的对手柄同样应用（对齐/原点对称/自由）
-                apply_handle_mode(kf, is_incoming, mode);
+                apply_handle_mode(kf, loc.is_in, mode);
                 clamp_handle_own_side(kf, true);
                 clamp_handle_own_side(kf, false);
-                synchronized_handles.push((curve_index, keyframe_index, is_incoming));
+                synchronized_handles.push(loc);
             }
         }
 
@@ -140,14 +142,20 @@ impl CurveEditorState {
         // 对向柄在 Aligned（共线）/Symmetric（原点对称）模式下被 apply_handle_mode 约束，
         // 可能越过相邻关键帧边界被软钳制——同样需要预览。
         let mut curves: Vec<usize> = vec![curve];
-        let mut handle_preview: Vec<(usize, usize, bool)> =
-            vec![(curve, key, is_in), (curve, key, !is_in)];
-        for &(curve_index, keyframe_index, is_incoming) in &synchronized_handles {
-            if !curves.contains(&curve_index) {
-                curves.push(curve_index);
+        let mut handle_preview: Vec<HandleLoc> = vec![
+            HandleLoc { curve, key, is_in },
+            HandleLoc { curve, key, is_in: !is_in },
+        ];
+        for &loc in &synchronized_handles {
+            if !curves.contains(&loc.curve) {
+                curves.push(loc.curve);
             }
-            handle_preview.push((curve_index, keyframe_index, is_incoming));
-            handle_preview.push((curve_index, keyframe_index, !is_incoming));
+            handle_preview.push(loc);
+            handle_preview.push(HandleLoc {
+                curve: loc.curve,
+                key: loc.key,
+                is_in: !loc.is_in,
+            });
         }
         vec![Tag::AnimationKeyframesChanged {
             curves,
@@ -166,7 +174,7 @@ impl CurveEditorState {
             for ms in self.deselect_all() {
                 summary_ms.push(ms);
             }
-            self.selected_handles.insert((curve, key, is_in));
+            self.selected_handles.insert(HandleLoc { curve, key, is_in });
         }
         vec![Tag::AnimationSelectionChanged { summary_ms }]
     }

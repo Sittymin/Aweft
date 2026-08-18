@@ -10,6 +10,7 @@ use super::curve_math::make_segment;
 use crate::bridge::types::{
     SlintHandleMarker, SlintInterpolation, SlintKeyframe, SlintCurveSegment,
 };
+use crate::depsgraph::HandleLoc;
 
 impl CurveEditorState {
     /// 全量重算派生数据。**仅用于初始化/重置**（load_action / reset_action）；
@@ -129,7 +130,7 @@ impl CurveEditorState {
                     handle_time: kf.time + kf.handle_in.time_offset,
                     handle_value: kf.value + kf.handle_in.value_offset,
                     preview: false,
-                    selected: self.selected_handles.contains(&(curve, *model_idx, true)),
+                    selected: self.selected_handles.contains(&HandleLoc { curve, key: *model_idx, is_in: true }),
                 });
             }
             // 出柄：本关键帧是贝塞尔 → 右侧段为贝塞尔
@@ -144,7 +145,7 @@ impl CurveEditorState {
                     handle_time: kf.time + kf.handle_out.time_offset,
                     handle_value: kf.value + kf.handle_out.value_offset,
                     preview: false,
-                    selected: self.selected_handles.contains(&(curve, *model_idx, false)),
+                    selected: self.selected_handles.contains(&HandleLoc { curve, key: *model_idx, is_in: false }),
                 });
             }
         }

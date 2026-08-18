@@ -1,5 +1,5 @@
 use super::*;
-use crate::depsgraph::Tag;
+use crate::depsgraph::{HandleLoc, Tag};
 use aweft_model::animation::{
     action::ActionCurve, fcurve::FCurve, Action as ModelAction, Keyframe as Mk,
     PropertyPath,
@@ -1216,8 +1216,8 @@ fn graph_marquee_select_picks_keyframes_and_handles() {
     assert!(st.keyframe_models[&0].row_data(0).unwrap().selected);
     assert!(!st.keyframe_models[&0].row_data(1).unwrap().selected);
     assert!(!st.keyframe_models[&0].row_data(2).unwrap().selected);
-    assert!(st.selected_handles.contains(&(0, 0, false)), "A 的出柄应被选中");
-    assert!(!st.selected_handles.contains(&(0, 2, false)), "C 的出柄不应被选中");
+    assert!(st.selected_handles.contains(&HandleLoc { curve: 0, key: 0, is_in: false }), "A 的出柄应被选中");
+    assert!(!st.selected_handles.contains(&HandleLoc { curve: 0, key: 2, is_in: false }), "C 的出柄不应被选中");
 
     // selected 反映到 Slint 手柄模型
     let h = (0..st.handles.row_count())
@@ -1266,7 +1266,7 @@ fn multi_handle_drag_same_screen_offset() {
     project(&mut st, tags);
     let tags = st.handle_pressed(0, 1, false, SlintSelectionModifier::Shift);
     project(&mut st, tags);
-    assert!(st.selected_handles.contains(&(0, 0, false)) && st.selected_handles.contains(&(0, 1, false)));
+    assert!(st.selected_handles.contains(&HandleLoc { curve: 0, key: 0, is_in: false }) && st.selected_handles.contains(&HandleLoc { curve: 0, key: 1, is_in: false }));
 
     // 拖 A 出柄 +1s,+1 值：A (1,0)→(2,1)，B 相同屏幕偏移 (1,1)→(2,2)
     let tags = st.handle_dragged(0, 0, false, 1.0, 1.0, SlintHandleDragMode::Free);
@@ -1372,8 +1372,8 @@ fn click_on_selected_handle_collapses_to_single() {
     let tags = st.handle_released(0, 0, false, false);
     project(&mut st, tags);
     assert_eq!(st.selected_handles.len(), 1);
-    assert!(st.selected_handles.contains(&(0, 0, false)));
-    assert!(!st.selected_handles.contains(&(0, 1, false)));
+    assert!(st.selected_handles.contains(&HandleLoc { curve: 0, key: 0, is_in: false }));
+    assert!(!st.selected_handles.contains(&HandleLoc { curve: 0, key: 1, is_in: false }));
 }
 
 #[test]
@@ -2025,4 +2025,41 @@ fn drag_first_keyframe_past_neighbor_resorts_on_release() {
     // 段模型同步重建（首段从 2.0 开始）
     let seg0 = st.segments.row_data(0).unwrap();
     assert_eq!(seg0.x0, 2.0);
+}
+
+/// 回归：拖拽改变首/末关键帧时，外推线数据（extrapolations，排序后首末）
+/// 在拖拽期间实时更新——不依赖松开后的重排。
+#[test]
+fn extrapolation_follows_first_last_during_drag() {
+    let mut st = CurveEditorState::default();
+    let tags = st.push_channel(
+        "t",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![
+            key(0.0, 0.0, SlintInterpolation::Linear),
+            key(2.0, 10.0, SlintInterpolation::Linear),
+            key(4.0, 20.0, SlintInterpolation::Linear),
+        ],
+    );
+    project(&mut st, tags);
+    let ex = st.extrapolations.row_data(0).unwrap();
+    assert_eq!(ex.first_time, 0.0);
+    assert_eq!(ex.last_time, 4.0);
+
+    // 拖第一个关键帧到 3.0（越过第二个 2.0）：拖拽中（未松开）外推已切换
+    let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.keyframe_dragged(0, 0, 3.0, 0.0, SlintKeyframeDragMode::Move);
+    project(&mut st, tags);
+    let ex = st.extrapolations.row_data(0).unwrap();
+    assert_eq!(ex.first_time, 2.0, "拖拽中左外推应切到新的时间最小关键帧");
+    assert_eq!(ex.first_value, 10.0);
+    assert_eq!(ex.last_time, 4.0);
+
+    // 松开（重排）后外推保持一致
+    let tags = st.keyframe_released(0, 0, true);
+    project(&mut st, tags);
+    let ex = st.extrapolations.row_data(0).unwrap();
+    assert_eq!(ex.first_time, 2.0);
+    assert_eq!(ex.last_time, 4.0);
 }

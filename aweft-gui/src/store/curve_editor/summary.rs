@@ -9,11 +9,11 @@ use std::rc::Rc;
 
 use slint::{Model, ModelRc};
 
-use super::{ms_of, CurveEditorState};
+use super::{ms_of, CurveEditorState, KeyframeLoc};
 use crate::bridge::types::{
     SlintSelectionModifier, SlintSummaryKeyframe,
 };
-use crate::depsgraph::Tag;
+use crate::depsgraph::{SummaryDrag, Tag};
 
 impl CurveEditorState {
     /// 重建摄影表汇总条带：把全部通道的关键帧按整数毫秒时间聚合，
@@ -125,7 +125,7 @@ impl CurveEditorState {
         let Some(sk) = self.summary_keyframes.row_data(index) else { return Vec::new() };
         let target_ms = ms_of(sk.time);
         // 收集该时刻跨通道的全部关键帧（可见且可编辑的通道；与拖拽一致）
-        let mut group: Vec<(usize, usize)> = Vec::new();
+        let mut group: Vec<KeyframeLoc> = Vec::new();
         for (&c, kfs) in self.editing_keyframes.iter() {
             if !self.channel_editable(c) {
                 continue;
@@ -136,37 +136,35 @@ impl CurveEditorState {
             }
             for (j, kf) in kfs.iter().enumerate() {
                 if ms_of(kf.time) == target_ms {
-                    group.push((c, j));
+                    group.push(KeyframeLoc { curve: c, key: j });
                 }
             }
         }
         if group.is_empty() {
             return Vec::new();
         }
-        let already_selected = group
-            .iter()
-            .any(|&(c, j)| {
-                self.editing_keyframes
-                    .get(&c)
-                    .and_then(|kfs| kfs.get(j))
-                    .map(|k| k.selected)
-                    .unwrap_or(false)
-            });
+        let already_selected = group.iter().any(|loc| {
+            self.editing_keyframes
+                .get(&loc.curve)
+                .and_then(|kfs| kfs.get(loc.key))
+                .map(|k| k.selected)
+                .unwrap_or(false)
+        });
         self.pressed_was_selected = already_selected;
         let mut summary_ms: std::collections::HashSet<i64> = std::collections::HashSet::new();
         if modifier != SlintSelectionModifier::None {
             // 加入：全部选上（不取消），并确保其通道在期望选中集合里
-            for &(c, j) in &group {
+            for &loc in &group {
                 let should_toggle_off = modifier == SlintSelectionModifier::Ctrl
-                    && self.editing_keyframes.get(&c).and_then(|kfs| kfs.get(j)).map(|keyframe| keyframe.selected).unwrap_or(false);
-                if let Some(ms) = self.set_keyframe_selected(c, j, should_toggle_off) {
+                    && self.editing_keyframes.get(&loc.curve).and_then(|kfs| kfs.get(loc.key)).map(|keyframe| keyframe.selected).unwrap_or(false);
+                if let Some(ms) = self.set_keyframe_selected(loc.curve, loc.key, should_toggle_off) {
                     summary_ms.insert(ms);
                 }
             }
             let mut sel = self.effective_selected_channels();
-            for &(c, _) in &group {
-                if !sel.contains(&c) {
-                    sel.push(c);
+            for &loc in &group {
+                if !sel.contains(&loc.curve) {
+                    sel.push(loc.curve);
                 }
             }
             // 立即写回通道选中（追加，不清空其它）；汇总标记独立于 channels 嵌套循环，
@@ -177,15 +175,15 @@ impl CurveEditorState {
             self.pending_channel_selection.clear();
         } else {
             // 普通点击：无论该时刻是否已有选中，都清空并单选该时刻全部
-            let mut chans: Vec<usize> = group.iter().map(|&(c, _)| c).collect();
+            let mut chans: Vec<usize> = group.iter().map(|loc| loc.curve).collect();
             chans.sort_unstable();
             chans.dedup();
             self.selection_anchor = chans[0] as isize;
             for ms in self.deselect_all() {
                 summary_ms.insert(ms);
             }
-            for &(c, j) in &group {
-                if let Some(ms) = self.set_keyframe_selected(c, j, false) {
+            for &loc in &group {
+                if let Some(ms) = self.set_keyframe_selected(loc.curve, loc.key, false) {
                     summary_ms.insert(ms);
                 }
             }
@@ -196,7 +194,7 @@ impl CurveEditorState {
             }
             self.pending_channel_selection.clear();
         }
-        self.current_channel = group[0].0 as isize;
+        self.current_channel = group[0].curve as isize;
         // 按下立即高亮（视觉反馈，不用等松开重建）：汇总标记独立于 channels 嵌套循环，
         // 按下期间更新本行模型安全（不会破坏 Slint 拖拽抓取）。这是拖拽上下文预览
         // （红框语义），保持 reducer 直写；条带其余更新走投影。
@@ -220,24 +218,28 @@ impl CurveEditorState {
             return Vec::new();
         }
         let mut moved: Vec<usize> = Vec::new();
-        let mut updates: Vec<(usize, usize, f32)> = Vec::new(); // (通道, 下标, 新时间)
+        let mut updates: Vec<super::KeyframeTimeUpdate> = Vec::new();
         for (&c, kfs) in self.editing_keyframes.iter() {
             if !self.channel_editable(c) {
                 continue;
             }
             for (j, kf) in kfs.iter().enumerate() {
                 if kf.selected {
-                    updates.push((c, j, super::snap_ms(kf.time + delta_time)));
+                    updates.push(super::KeyframeTimeUpdate {
+                        curve: c,
+                        key: j,
+                        time: super::snap_ms(kf.time + delta_time),
+                    });
                 }
             }
         }
-        for (c, j, time) in updates {
-            if let Some(kfs) = self.editing_keyframes.get_mut(&c)
-                && let Some(kf) = kfs.get_mut(j)
+        for update in updates {
+            if let Some(kfs) = self.editing_keyframes.get_mut(&update.curve)
+                && let Some(kf) = kfs.get_mut(update.key)
             {
-                kf.time = time;
-                if !moved.contains(&c) {
-                    moved.push(c);
+                kf.time = update.time;
+                if !moved.contains(&update.curve) {
+                    moved.push(update.curve);
                 }
             }
         }
@@ -249,7 +251,7 @@ impl CurveEditorState {
             curves: moved,
             summary_ms: vec![],
             dragged_curve: None,
-            dragged_summary: Some((index, delta_time)),
+            dragged_summary: Some(SummaryDrag { index, delta_time }),
             handle_preview: None,
         }]
     }

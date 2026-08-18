@@ -27,6 +27,21 @@ pub enum DataId {
 /// 节点图类型（tag 内区分样式图/应用图，定义在 model 侧）。
 pub use aweft_model::node_graph::NodeGraphKind;
 
+/// 手柄位置标识：(通道, 关键帧下标, 入/出柄)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HandleLoc {
+    pub curve: usize,
+    pub key: usize,
+    pub is_in: bool,
+}
+
+/// 汇总条带拖拽上下文：被拖标记下标 + 累计时间增量（投影就地更新其 time）。
+#[derive(Debug, Clone, Copy)]
+pub struct SummaryDrag {
+    pub index: usize,
+    pub delta_time: f32,
+}
+
 /// 节点图一次变更的精确描述（投影据此精确定位局部更新）。
 #[derive(Debug, Clone)]
 pub enum NodeGraphChange {
@@ -203,12 +218,12 @@ pub enum Tag {
         summary_ms: Vec<i64>,
         /// 关键帧拖拽的被拖通道（投影对其做相邻手柄软钳制预览替换）。
         dragged_curve: Option<usize>,
-        /// 从汇总条带拖拽时：被拖标记下标 + 累计时间增量（投影就地更新其 time，
+        /// 从汇总条带拖拽时：被拖标记 + 累计时间增量（投影就地更新其 time，
         /// 不 insert/remove——拖拽期间重建汇总模型会破坏 Slint grab）。
-        dragged_summary: Option<(usize, f32)>,
-        /// 手柄拖拽时被移动的手柄（被拖 + 同步）：投影据此重建 preview_handles
-        /// （软钳制有效控制点预览，拖拽上下文依赖）。
-        handle_preview: Option<Vec<(usize, usize, bool)>>,
+        dragged_summary: Option<SummaryDrag>,
+        /// 手柄拖拽时被移动的手柄（被拖 + 同步 + 对向柄）：投影据此重建
+        /// preview_handles（软钳制有效控制点预览，拖拽上下文依赖）。
+        handle_preview: Option<Vec<HandleLoc>>,
     },
     /// 动画编辑器：关键帧/通道选中变化。
     /// 投影同步 selected_display、汇总条目选中掩码、手柄 selected 视觉。

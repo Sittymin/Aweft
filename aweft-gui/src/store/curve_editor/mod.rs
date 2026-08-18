@@ -30,7 +30,7 @@
 //! 本模块的状态分两层：
 //!  - **数据层**（reducer 可写）：`channels_data`（通道属性）、`editing_keyframes`
 //!    （关键帧数据）、选中集与 UI 态（selected_handles/搜索/缩放/锚点/pending 选择……）
-//!  - **派生层**（只由投影写）：`channels`/`keyframe_models`（Slint 绑定模型）、
+//!  - **派生层**（只由投影写）：`channels`/`keyframe_models`/`extrapolations`（Slint 绑定模型）、
 //!    `segments`/`handles`/`dope_connections`/`summary_keyframes`/
 //!    `selected_display`/`preview_handles`/`action_start`/`action_end` 与 Slint 标量
 //!
@@ -48,9 +48,10 @@ use aweft_model::{
 use slint::{ModelRc, SharedString, VecModel};
 
 use crate::bridge::types::{
-    ContextMenuItem, SlintCurveSegment, SlintDopeConnection, SlintFCurveChannel,
-    SlintHandleMarker, SlintKeyframe, SlintSummaryKeyframe,
+    ContextMenuItem, SlintCurveSegment, SlintDopeConnection, SlintExtrapolation,
+    SlintFCurveChannel, SlintHandleMarker, SlintKeyframe, SlintSummaryKeyframe,
 };
+use crate::depsgraph::HandleLoc;
 
 mod channel;
 mod connections;
@@ -77,6 +78,29 @@ fn snap_ms(t: f32) -> f32 {
 /// 时间 → 整数毫秒（用于"同一时间"判断：整数毫秒相等即同一时刻）。
 pub(super) fn ms_of(t: f32) -> i64 {
     (t * 1000.0).round() as i64
+}
+
+/// 关键帧位置标识：(通道, 关键帧下标)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KeyframeLoc {
+    pub curve: usize,
+    pub key: usize,
+}
+
+/// 关键帧数据更新请求（拖拽时 reducer 收集、统一写回）。
+#[derive(Debug, Clone)]
+pub struct KeyframeUpdate {
+    pub curve: usize,
+    pub key: usize,
+    pub keyframe: SlintKeyframe,
+}
+
+/// 关键帧时间更新请求（汇总拖拽时 reducer 收集、统一写回）。
+#[derive(Debug, Clone, Copy)]
+pub struct KeyframeTimeUpdate {
+    pub curve: usize,
+    pub key: usize,
+    pub time: f32,
 }
 
 /// 一个 Action 的 UI 侧清单项（装载时从 model 实时读取曲线数据）。
@@ -112,6 +136,9 @@ pub struct CurveEditorState {
     pub dope_connections: Rc<VecModel<SlintDopeConnection>>,
     /// 摄影表汇总条带的关键帧（按整数毫秒时间聚合所有通道同一时间的关键帧）
     pub summary_keyframes: Rc<VecModel<SlintSummaryKeyframe>>,
+    /// 每通道按时间排序后的首/末关键帧（投影输出；外推线数据源——
+    /// 关键帧模型拖拽期间保序，外推线必须读排序后首末，见 graph_editor.slint）
+    pub extrapolations: Rc<VecModel<SlintExtrapolation>>,
     /// 当前时间（播放头）
     pub current_time: f64,
     /// 当前 Action 名称（header 栏中区显示）
@@ -130,9 +157,9 @@ pub struct CurveEditorState {
     /// Shift 区间选择的锚点（最近一次普通/Shift 点击的通道；Ctrl 切换不更新）
     selection_anchor: isize,
     /// 关键帧 Shift 区间选择锚点（同一通道内按关键帧下标扩展）。
-    keyframe_selection_anchor: Option<(usize, usize)>,
+    keyframe_selection_anchor: Option<KeyframeLoc>,
     /// 控制柄 Shift 区间选择锚点（同一通道、同一侧扩展）。
-    handle_selection_anchor: Option<(usize, usize, bool)>,
+    handle_selection_anchor: Option<HandleLoc>,
     /// 通道选中**显示**掩码（`[bool]`，下标 = 通道下标）：按下/选择即更新，
     /// 供曲线高亮读取。与 `channels` 模型的 `selected` 字段解耦——后者嵌套在
     /// 关键帧 repeater 内，拖拽中更新会重建元素破坏 grab（见 tests/channel_select_drag.rs），
@@ -156,9 +183,9 @@ pub struct CurveEditorState {
     dope_matched: HashSet<usize>,
     /// 手柄拖拽时相邻关键帧软钳制的预览：被拖柄的有效控制点（与原始位置不同）
     pub preview_handles: Rc<VecModel<SlintHandleMarker>>,
-    /// 选中的贝塞尔控制柄：(通道, 关键帧下标, is_in)。
+    /// 选中的贝塞尔控制柄（`HandleLoc`）。
     /// 与关键帧选中独立；框选可同时选中关键帧与手柄；多选拖拽时同侧手柄按相同角度增量旋转。
-    pub selected_handles: HashSet<(usize, usize, bool)>,
+    pub selected_handles: HashSet<HandleLoc>,
     /// 当前视图缩放（px/单位）：命中检测容差随缩放变化（放大更精确）
     pub time_zoom: f32,
     pub value_zoom: f32,
@@ -186,6 +213,7 @@ impl Default for CurveEditorState {
             handles: Rc::new(VecModel::default()),
             dope_connections: Rc::new(VecModel::default()),
             summary_keyframes: Rc::new(VecModel::default()),
+            extrapolations: Rc::new(VecModel::default()),
             current_time: 0.0,
             action_name: SharedString::default(),
             actions: Vec::new(),
@@ -234,6 +262,7 @@ impl crate::store::AppStore {
         state.set_handles(ModelRc::from(self.ui_models.curve_editor.handles.clone()));
         state.set_dope_connections(ModelRc::from(self.ui_models.curve_editor.dope_connections.clone()));
         state.set_dope_summary_keyframes(ModelRc::from(self.ui_models.curve_editor.summary_keyframes.clone()));
+        state.set_extrapolations(ModelRc::from(self.ui_models.curve_editor.extrapolations.clone()));
         state.set_current_time(self.ui_models.curve_editor.current_time as f32);
         state.set_action_name(self.ui_models.curve_editor.action_name.clone());
         state.set_action_items(ModelRc::from(self.ui_models.curve_editor.action_items.clone()));

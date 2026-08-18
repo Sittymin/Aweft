@@ -12,12 +12,13 @@ use super::CurveEditorState;
 use crate::bridge::types::SlintKeyframe;
 use super::curve_math::{make_segment, mk_marker};
 use crate::bridge::types::{SlintHandleMarker, SlintInterpolation};
+use crate::depsgraph::HandleLoc;
 
 impl CurveEditorState {
     /// 计算一个通道内所有被拖关键帧的相邻段"软钳制后"有效控制点。
     /// 关键帧拖拽时：选中的是关键帧，被拖关键帧的相邻手柄需要钳制预览。
-    /// 返回 map：(关键帧下标, is_in) → 有效控制点。
-    fn clamped_overrides_for_curve(&self, curve: usize) -> HashMap<(usize, bool), (f32, f32)> {
+    /// 返回 map：手柄位置（通道 = 参数 curve）→ 有效控制点。
+    fn clamped_overrides_for_curve(&self, curve: usize) -> HashMap<HandleLoc, (f32, f32)> {
         let mut map = HashMap::new();
         let Some(kfs) = self.editing_keyframes.get(&curve) else {
             return map;
@@ -31,7 +32,7 @@ impl CurveEditorState {
         kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
 
         let eps = 1e-4;
-        let check = |map: &mut HashMap<(usize, bool), (f32, f32)>,
+        let check = |map: &mut HashMap<HandleLoc, (f32, f32)>,
                      midx: usize,
                      is_in: bool,
                      kf: &SlintKeyframe,
@@ -42,7 +43,7 @@ impl CurveEditorState {
                 (kf.time + kf.handle_out.time_offset, kf.value + kf.handle_out.value_offset)
             };
             if (eff.0 - raw.0).abs() > eps || (eff.1 - raw.1).abs() > eps {
-                map.insert((midx, is_in), eff);
+                map.insert(HandleLoc { curve, key: midx, is_in }, eff);
             }
         };
 
@@ -72,7 +73,7 @@ impl CurveEditorState {
     fn channel_handles_with_preview(
         &self,
         curve: usize,
-        overrides: &HashMap<(usize, bool), (f32, f32)>,
+        overrides: &HashMap<HandleLoc, (f32, f32)>,
     ) -> Vec<SlintHandleMarker> {
         let Some(kfs) = self.editing_keyframes.get(&curve) else {
             return Vec::new();
@@ -91,18 +92,20 @@ impl CurveEditorState {
             let key = *midx;
             // 入柄：仅当左侧段是贝塞尔（前一关键帧是贝塞尔）
             if pos > 0 && kfs[pos - 1].1.interpolation == SlintInterpolation::Bezier {
-                let sel = self.selected_handles.contains(&(curve, key, true));
+                let loc = HandleLoc { curve, key, is_in: true };
+                let sel = self.selected_handles.contains(&loc);
                 let raw = (kf.time + kf.handle_in.time_offset, kf.value + kf.handle_in.value_offset);
-                match overrides.get(&(key, true)) {
+                match overrides.get(&loc) {
                     Some(&eff) => out.push(mk_marker(curve, key, color, kf, eff.0, eff.1, true, true, sel)),
                     None => out.push(mk_marker(curve, key, color, kf, raw.0, raw.1, true, false, sel)),
                 }
             }
             // 出柄：本关键帧是贝塞尔 → 右侧段为贝塞尔
             if pos < last && kf.interpolation == SlintInterpolation::Bezier {
-                let sel = self.selected_handles.contains(&(curve, key, false));
+                let loc = HandleLoc { curve, key, is_in: false };
+                let sel = self.selected_handles.contains(&loc);
                 let raw = (kf.time + kf.handle_out.time_offset, kf.value + kf.handle_out.value_offset);
-                match overrides.get(&(key, false)) {
+                match overrides.get(&loc) {
                     Some(&eff) => out.push(mk_marker(curve, key, color, kf, eff.0, eff.1, false, true, sel)),
                     None => out.push(mk_marker(curve, key, color, kf, raw.0, raw.1, false, false, sel)),
                 }

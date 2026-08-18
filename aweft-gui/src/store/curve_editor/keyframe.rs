@@ -1,9 +1,9 @@
 //! 关键帧交互（reducer 侧）：只改数据层（`editing_keyframes` selected/time/value、
 //! 选中集）并返回 tag；曲线段/手柄/汇总/显示掩码由投影（projection.rs）完成。
 
-use super::{ms_of, snap_ms, CurveEditorState};
+use super::{ms_of, snap_ms, CurveEditorState, KeyframeLoc, KeyframeUpdate};
 use crate::bridge::types::{
-    SlintBezierHandle, SlintInterpolation, SlintKeyframe,
+    SlintBezierHandle, SlintInterpolation,
     SlintKeyframeDragMode, SlintSelectionModifier,
 };
 use crate::depsgraph::Tag;
@@ -34,23 +34,25 @@ impl CurveEditorState {
         // 找附近重合的关键帧（用于单击循环选择）
         let coincident = self.find_coincident_keyframes(curve, key);
         // pressed_was_selected = 自身已选中 或 附近有其他已选中的点
-        let has_other_selected = coincident.iter().any(|&(c, j)| {
-            (c != curve || j != key)
-                && self.editing_keyframes.get(&c).and_then(|kfs| kfs.get(j)).map(|k| k.selected).unwrap_or(false)
+        let has_other_selected = coincident.iter().any(|loc| {
+            (loc.curve != curve || loc.key != key)
+                && self.editing_keyframes.get(&loc.curve).and_then(|kfs| kfs.get(loc.key)).map(|k| k.selected).unwrap_or(false)
         });
         self.pressed_was_selected = already_selected || has_other_selected;
         let mut summary_ms = std::collections::HashSet::new();
 
         match modifier {
             SlintSelectionModifier::Shift => {
-                let anchor = self.keyframe_selection_anchor.unwrap_or((curve, key));
-                let (lo, hi) = if anchor.0 == curve {
-                    (anchor.1.min(key), anchor.1.max(key))
+                let anchor = self
+                    .keyframe_selection_anchor
+                    .unwrap_or(KeyframeLoc { curve, key });
+                let (lo, hi) = if anchor.curve == curve {
+                    (anchor.key.min(key), anchor.key.max(key))
                 } else {
                     (key, key)
                 };
-                if anchor.0 != curve {
-                    self.keyframe_selection_anchor = Some((curve, key));
+                if anchor.curve != curve {
+                    self.keyframe_selection_anchor = Some(KeyframeLoc { curve, key });
                 }
                 for index in lo..=hi {
                     if let Some(ms) = self.set_keyframe_selected(curve, index, false) {
@@ -79,7 +81,7 @@ impl CurveEditorState {
                 self.pending_channel_selection = pending;
             }
             SlintSelectionModifier::None => {
-                self.keyframe_selection_anchor = Some((curve, key));
+                self.keyframe_selection_anchor = Some(KeyframeLoc { curve, key });
                 if self.pressed_was_selected {
                     self.pending_channel_selection = self.effective_selected_channels();
                 } else {
@@ -101,7 +103,7 @@ impl CurveEditorState {
     }
 
     /// 找出被按关键帧附近（像素容差内）的全部关键帧（含自身，含其它通道）。
-    fn find_coincident_keyframes(&self, curve: usize, key: usize) -> Vec<(usize, usize)> {
+    fn find_coincident_keyframes(&self, curve: usize, key: usize) -> Vec<KeyframeLoc> {
         let Some(kfs) = self.editing_keyframes.get(&curve) else {
             return Vec::new();
         };
@@ -119,35 +121,39 @@ impl CurveEditorState {
                 if (kf.time - target.time).abs() <= eps_t
                     && (kf.value - target.value).abs() <= eps_v
                 {
-                    list.push((c, j));
+                    list.push(KeyframeLoc { curve: c, key: j });
                 }
             }
         }
-        list.sort_unstable();
+        list.sort_unstable_by_key(|loc| (loc.curve, loc.key));
         list
     }
 
     /// 单击已选中的关键帧：循环选中几乎重合的若干点（Blender 行为）。
     /// 收集被按位置附近的全部关键帧，取"当前选中"的下一个；只有一个时保持自身。
-    fn cycle_coincident(&mut self, coincident: &[(usize, usize)]) -> Vec<i64> {
+    fn cycle_coincident(&mut self, coincident: &[KeyframeLoc]) -> Vec<i64> {
         if coincident.is_empty() {
             return Vec::new();
         }
         // 当前选中者（在重合点中）的下一个；无选中则选第一个
-        let cur = coincident
-            .iter()
-            .position(|&(c, j)| self.editing_keyframes.get(&c).and_then(|kfs| kfs.get(j)).map(|k| k.selected).unwrap_or(false));
+        let cur = coincident.iter().position(|loc| {
+            self.editing_keyframes
+                .get(&loc.curve)
+                .and_then(|kfs| kfs.get(loc.key))
+                .map(|k| k.selected)
+                .unwrap_or(false)
+        });
         let next_idx = match cur {
             Some(i) => (i + 1) % coincident.len(),
             None => 0,
         };
-        let (nc, nj) = coincident[next_idx];
-        self.pending_channel_selection = vec![nc];
-        self.selection_anchor = nc as isize;
+        let next = coincident[next_idx];
+        self.pending_channel_selection = vec![next.curve];
+        self.selection_anchor = next.curve as isize;
         let mut summary_ms = self.deselect_all();
         self.selected_handles.clear();
-        self.current_channel = nc as isize;
-        if let Some(ms) = self.set_keyframe_selected(nc, nj, false) {
+        self.current_channel = next.curve as isize;
+        if let Some(ms) = self.set_keyframe_selected(next.curve, next.key, false) {
             summary_ms.push(ms);
         }
         summary_ms
@@ -185,7 +191,7 @@ impl CurveEditorState {
             return self.drag_out_handle(curve, key, delta_time, delta_value);
         }
         // 收集被移动的关键帧下标 + 记录旧 ms（汇总增量更新用）
-        let mut updates: Vec<(usize, usize, SlintKeyframe)> = Vec::new();
+        let mut updates: Vec<KeyframeUpdate> = Vec::new();
         let mut moved: Vec<usize> = Vec::new();
         let mut affected_ms: std::collections::HashSet<i64> = std::collections::HashSet::new();
         for (&c, kfs) in self.editing_keyframes.iter() {
@@ -200,7 +206,7 @@ impl CurveEditorState {
                     kf2.time = snap_ms(kf2.time + delta_time);
                     kf2.value += delta_value;
                     let new_ms = ms_of(kf2.time);
-                    updates.push((c, j, kf2));
+                    updates.push(KeyframeUpdate { curve: c, key: j, keyframe: kf2 });
                     affected_ms.insert(old_ms);
                     affected_ms.insert(new_ms);
                     idxs.push(j);
@@ -213,9 +219,9 @@ impl CurveEditorState {
         if moved.is_empty() {
             return Vec::new();
         }
-        for (c, j, kf2) in updates {
-            if let Some(kfs) = self.editing_keyframes.get_mut(&c) {
-                kfs[j] = kf2;
+        for update in updates {
+            if let Some(kfs) = self.editing_keyframes.get_mut(&update.curve) {
+                kfs[update.key] = update.keyframe;
             }
         }
         // 被拖通道的手柄软钳制预览（投影据此替换 handles 区间）

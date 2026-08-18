@@ -11,9 +11,15 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 **两层状态**（`src/store/curve_editor/`）：
 - **数据层**（reducer 可写）：`channels_data`（通道属性）、`editing_keyframes`（关键帧数据）、
   选中集与 UI 态（selected_handles/搜索/缩放/锚点/pending 选择）
-- **派生层**（只由投影写）：`channels`/`keyframe_models`（Slint 绑定模型）、`segments`/
-  `handles`/`dope_connections`/`summary_keyframes`/`selected_display`/`preview_handles`/
-  `action_start`/`action_end` 与 Slint 标量
+- **派生层**（只由投影写）：`channels`/`keyframe_models`/`extrapolations`（Slint 绑定模型）、
+  `segments`/`handles`/`dope_connections`/`summary_keyframes`/`selected_display`/
+  `preview_handles`/`action_start`/`action_end` 与 Slint 标量
+
+**位置/拖拽上下文类型**（元组语义化）：
+- `HandleLoc{curve, key, is_in}`（depsgraph/tag.rs）——selected_handles、handle_preview 等
+- `KeyframeLoc{curve, key}`（curve_editor）——关键帧锚点/重合点
+- `SummaryDrag{index, delta_time}`（depsgraph/tag.rs）——汇总拖拽
+- `KeyframeUpdate`/`KeyframeTimeUpdate`——reducer 收集后统一写回
 
 **Tag 细化**（`depsgraph/tag.rs`）：
 - `AnimationStructureChanged` — 装载/重置/搜索（全量重建 + 过滤视图重绑定）
@@ -22,18 +28,21 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 - `AnimationChannelChanged{curve}` — 可见/激活/可编辑/颜色模式
 - `AnimationScalarsChanged` — 播放头/标量
 
-**投影**（`projections/animation.rs` + `curve_editor/projection.rs`）：
-- `op_animation_structure` → apply_structure（重建 keyframe_models/channels 行/filters/派生模型/Action 菜单）+ 重新绑定过滤视图到 Slint
-- `op_animation_keyframes` → apply_keyframes（嵌套模型 diff 同步 + rebuild_curve（数量不变 set_row_data / 变化 splice）+ 汇总增量）
-- `op_animation_selection` → apply_selection（selected_display/嵌套 selected/手柄选中/汇总掩码）
+**投影**（`projections/animation.rs` + `curve_editor/projection.rs`，每个 apply_* 按职责拆单一目的子函数）：
+- `op_animation_structure` → apply_structure（重建 keyframe_models/channels 行/filters/派生模型/外推/Action 菜单）+ 重新绑定过滤视图到 Slint
+- `op_animation_keyframes` → apply_keyframes（sync_keyframe_model + rebuild_curve + update_extrapolation + 汇总/预览子函数）
+- `op_animation_selection` → apply_selection（clear_drag_preview（预览清空+恢复普通手柄）/ resort_keyframes / sync_keyframe_selection / update_handle_selection_visual / update_summary_entries）
 - `op_animation_channel` → apply_channel（通道行/段手柄颜色/连接线/汇总）
 - `op_animation_scalars` → 同步标量（handles 全部动画 kind）
 
 **拖拽语义**（对齐 LineEditor preview/commit）：
 - 拖拽（高频）只改数据层 + Keyframes tag，投影同帧同步嵌套模型（set_row_data 保住 grab）
+- 外推线：`extrapolations`（排序后首末）由投影每帧更新——拖拽期间实时切换新首末
+  （关键帧模型保序，Slint 外推线读 extrapolations 而非 keyframes[0]/[len-1]）；
+  松开后 `resort_keyframes` 重排乱序通道恢复模型有序
 - 汇总标记拖拽：`dragged_summary` 就地更新时间（不 insert/remove，保住 grab）
-- 手柄拖拽：`handle_preview`（被拖+同步手柄列表）→ 投影重建 `preview_handles`；
-  交互终止点（选中变化）/结构重建时投影清空
+- 手柄拖拽：`handle_preview`（被拖+同步+对向柄列表）→ 投影重建 `preview_handles`；
+  交互终止点（选中变化）`clear_drag_preview` 清空并恢复普通手柄
 - 松开/插值变更后 `write_view_to_model` 写回 model Action
 
 **已知 TODO**：调色盘（channel.rs）/ Dope Sheet UI / NLA
