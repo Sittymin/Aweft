@@ -23,15 +23,18 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 
 **Tag 细化**（`depsgraph/tag.rs`）：
 - `AnimationStructureChanged` — 装载/重置/搜索（全量重建 + 过滤视图重绑定）
-- `AnimationKeyframesChanged{curves, summary_ms, dragged_curve, dragged_summary}` — 拖拽/插值/手柄
-- `AnimationSelectionChanged{summary_ms}` — 关键帧/通道选中
+- `AnimationKeyframesChanged{curves, summary_ms, dragged_curve, dragged_summary, handle_preview}` — 拖拽/插值/手柄
+- `AnimationSelectionChanged{summary_ms}` — 关键帧/通道选中（纯选中视觉）
+- `AnimationDragEnded` — 拖拽结束整理（预览残留清理/重排/补柄），与选中分离——
+  keyframe_released/handle_released（moved=true）打它，其他组件（如 NLA）可单独依赖
 - `AnimationChannelChanged{curve}` — 可见/激活/可编辑/颜色模式
 - `AnimationScalarsChanged` — 播放头/标量
 
 **投影**（`projections/animation.rs` + `curve_editor/projection.rs`，每个 apply_* 按职责拆单一目的子函数）：
 - `op_animation_structure` → apply_structure（重建 keyframe_models/channels 行/filters/派生模型/外推/Action 菜单）+ 重新绑定过滤视图到 Slint
 - `op_animation_keyframes` → apply_keyframes（sync_keyframe_model + rebuild_curve + update_extrapolation + 汇总/预览子函数）
-- `op_animation_selection` → apply_selection（clear_drag_preview（预览清空+恢复普通手柄）/ resort_keyframes / sync_keyframe_selection / update_handle_selection_visual / update_summary_entries）
+- `op_animation_selection` → apply_selection（纯选中同步：sync_channel_rows / sync_selected_display / sync_keyframe_selection / update_handle_selection_visual / update_summary_entries）
+- `op_animation_drag_ended` → apply_drag_ended（clear_drag_preview（预览清空+恢复普通手柄）/ resort_keyframes / ensure_default_handles（Move 拖拽后为贝塞尔关键帧补缺失侧默认水平柄——边缘延伸是水平的，默认柄水平延伸 1/3 间距））
 - `op_animation_channel` → apply_channel（通道行/段手柄颜色/连接线/汇总）
 - `op_animation_scalars` → 同步标量（handles 全部动画 kind）
 

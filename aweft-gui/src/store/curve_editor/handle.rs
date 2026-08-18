@@ -176,6 +176,10 @@ impl CurveEditorState {
             }
             self.selected_handles.insert(HandleLoc { curve, key, is_in });
         }
-        vec![Tag::AnimationSelectionChanged { summary_ms }]
+        let mut tags = vec![Tag::AnimationSelectionChanged { summary_ms }];
+        if moved {
+            tags.push(Tag::AnimationDragEnded);
+        }
+        tags
     }
 }

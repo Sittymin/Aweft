@@ -12,7 +12,9 @@ use slint::Model;
 
 use super::CurveEditorState;
 use crate::bridge::converters::build_action_menu_items;
-use crate::bridge::types::{SlintBezierHandle, SlintExtrapolation, SlintHandleMarker, SlintKeyframe};
+use crate::bridge::types::{
+    SlintBezierHandle, SlintExtrapolation, SlintHandleMarker, SlintInterpolation, SlintKeyframe,
+};
 use crate::depsgraph::{HandleLoc, Tag};
 use slint::SharedString;
 
@@ -33,6 +35,7 @@ impl CurveEditorState {
                 Tag::AnimationSelectionChanged { summary_ms } => {
                     self.apply_selection(summary_ms)
                 }
+                Tag::AnimationDragEnded => self.apply_drag_ended(),
                 Tag::AnimationChannelChanged { curve } => self.apply_channel(*curve),
                 Tag::AnimationScalarsChanged => {}
                 _ => {}
@@ -78,6 +81,13 @@ impl CurveEditorState {
         dragged_summary: Option<crate::depsgraph::SummaryDrag>,
         handle_preview: &Option<Vec<HandleLoc>>,
     ) {
+        // 关键帧 Move 拖拽（summary_ms 非空 = 关键帧真的被移动）可能让边缘关键帧变成中间：
+        // 为贝塞尔关键帧补缺失侧的默认水平柄（写数据——恢复编辑不变量，与 resort_keyframes 同类）。
+        // 手柄拖拽（dragged_curve = None）与 Shift 拖出柄（DragOutHandle，summary_ms 空）
+        // 不触发——拖柄不改变边缘性，且用户可能故意把柄钳到 0 长度，不该被覆盖。
+        if dragged_curve.is_some() && !summary_ms.is_empty() {
+            self.ensure_default_handles(curves);
+        }
         for &curve in curves {
             // 嵌套模型同步（拖拽期间数量不变，set_row_data 保住 grab）
             self.sync_keyframe_model(curve);
@@ -101,10 +111,56 @@ impl CurveEditorState {
         }
     }
 
+    /// 为贝塞尔关键帧补缺失侧的默认水平柄（恢复编辑不变量）。
+    ///
+    /// 边缘关键帧只有一侧柄（另一侧无角度数据）；拖拽让它变成中间关键帧后，
+    /// 新的一侧相邻段若为贝塞尔，该侧手柄缺失（偏移为零，看不见也拖不动）。
+    /// 边缘延伸是水平的，因此默认柄也水平延伸 1/3 相邻间距（与插值切换补柄一致）。
+    /// 幂等：已补过的（偏移非零）不重复补。
+    fn ensure_default_handles(&mut self, curves: &[usize]) {
+        for &curve in curves {
+            let Some(kfs) = self.editing_keyframes.get_mut(&curve) else {
+                continue;
+            };
+            let mut sorted: Vec<usize> = (0..kfs.len()).collect();
+            sorted.sort_by(|&a, &b| {
+                kfs[a]
+                    .time
+                    .partial_cmp(&kfs[b].time)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (pos, &idx) in sorted.iter().enumerate() {
+                // 入柄：左侧段是贝塞尔才需要；偏移为零 → 补水平柄
+                if pos > 0 {
+                    let prev = kfs[sorted[pos - 1]].clone();
+                    if prev.interpolation == SlintInterpolation::Bezier {
+                        let kf = &mut kfs[idx];
+                        if kf.handle_in.time_offset == 0.0 && kf.handle_in.value_offset == 0.0 {
+                            kf.handle_in = SlintBezierHandle {
+                                time_offset: -(kf.time - prev.time) / 3.0,
+                                value_offset: 0.0,
+                            };
+                        }
+                    }
+                }
+                // 出柄：本关键帧是贝塞尔且右侧有邻居才需要；偏移为零 → 补水平柄
+                if pos + 1 < sorted.len() && kfs[idx].interpolation == SlintInterpolation::Bezier {
+                    let next = kfs[sorted[pos + 1]].clone();
+                    let kf = &mut kfs[idx];
+                    if kf.handle_out.time_offset == 0.0 && kf.handle_out.value_offset == 0.0 {
+                        kf.handle_out = SlintBezierHandle {
+                            time_offset: (next.time - kf.time) / 3.0,
+                            value_offset: 0.0,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
     /// 把通道的关键帧数据同步到嵌套 Slint 模型（逐行 set_row_data，只写变化的行）。
     /// 拖拽期间行数不变；行数变化（结构变化）由 apply_structure 重建。
-    fn sync_keyframe_model(&mut self, curve: usize) {
-        let Some(data) = self.editing_keyframes.get(&curve).cloned() else {
+    fn sync_keyframe_model(&mut self, curve: usize) {        let Some(data) = self.editing_keyframes.get(&curve).cloned() else {
             return;
         };
         let Some(model) = self.keyframe_models.get(&curve) else {
@@ -193,15 +249,20 @@ impl CurveEditorState {
 
     // ── 选中变化 ────────────────────────────────────────────────────────
 
-    /// 选中变化：交互终止点清理（拖拽预览/重排）+ 选中视觉同步 + 汇总掩码重算。
+    /// 选中变化：选中视觉同步 + 汇总掩码重算（拖拽整理见 apply_drag_ended）。
     fn apply_selection(&mut self, summary_ms: &[i64]) {
-        self.clear_drag_preview();
-        self.resort_keyframes();
         self.sync_channel_rows();
         self.sync_selected_display();
         self.sync_keyframe_selection();
         self.update_handle_selection_visual();
         self.update_summary_entries(summary_ms);
+    }
+
+    /// 拖拽结束整理：清理拖拽残留（preview 换回普通手柄）+ 重排乱序关键帧。
+    /// 独立于选中变化（独立 tag）——其他组件可单独依赖本整理。
+    fn apply_drag_ended(&mut self) {
+        self.clear_drag_preview();
+        self.resort_keyframes();
     }
 
     /// 交互终止点清理：清空手柄拖拽预览（preview_handles），并把关键帧拖拽期间

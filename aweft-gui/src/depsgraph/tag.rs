@@ -236,6 +236,10 @@ pub enum Tag {
     AnimationChannelChanged {
         curve: usize,
     },
+    /// 动画编辑器：拖拽结束后的数据整理（恢复编辑不变量）。
+    /// 投影清理拖拽残留（handles preview 替换换回普通）、重排乱序关键帧。
+    /// 与选中变化分离：其他组件（如 NLA）可单独依赖本整理。
+    AnimationDragEnded,
     /// 动画编辑器：标量变化（播放头/当前通道/选中数/插值聚合）。
     /// 投影只同步 Slint 全局标量。
     AnimationScalarsChanged,
@@ -280,6 +284,8 @@ pub enum TagKind {
     AnimationKeyframes,
     /// 动画编辑器：选中变化。
     AnimationSelection,
+    /// 动画编辑器：拖拽结束后的数据整理。
+    AnimationDragEnded,
     /// 动画编辑器：通道属性变化。
     AnimationChannel,
     /// 动画编辑器：标量变化。
@@ -328,6 +334,8 @@ pub enum OperationCode {
     AnimationCurve,
     /// 动画编辑器：选中变化（显示掩码/汇总掩码/手柄选中）。
     AnimationSelection,
+    /// 动画编辑器：拖拽结束整理（预览恢复/重排/补柄）。
+    AnimationDragEnded,
     /// 动画编辑器：通道属性变化（连接线/汇总）。
     AnimationChannel,
     /// 动画编辑器：标量同步到 Slint 全局。
@@ -367,6 +375,7 @@ impl Tag {
             Tag::AnimationStructureChanged
             | Tag::AnimationKeyframesChanged { .. }
             | Tag::AnimationSelectionChanged { .. }
+            | Tag::AnimationDragEnded
             | Tag::AnimationChannelChanged { .. }
             | Tag::AnimationScalarsChanged => DataId::Animation,
 
@@ -412,6 +421,7 @@ impl Tag {
             Tag::AnimationStructureChanged => TagKind::AnimationStructure,
             Tag::AnimationKeyframesChanged { .. } => TagKind::AnimationKeyframes,
             Tag::AnimationSelectionChanged { .. } => TagKind::AnimationSelection,
+            Tag::AnimationDragEnded => TagKind::AnimationDragEnded,
             Tag::AnimationChannelChanged { .. } => TagKind::AnimationChannel,
             Tag::AnimationScalarsChanged => TagKind::AnimationScalars,
 

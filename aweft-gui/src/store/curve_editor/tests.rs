@@ -2063,3 +2063,47 @@ fn extrapolation_follows_first_last_during_drag() {
     assert_eq!(ex.first_time, 2.0);
     assert_eq!(ex.last_time, 4.0);
 }
+
+/// 回归：Move 拖拽把边缘关键帧变成中间后，新的一侧补默认水平柄
+/// （贝塞尔段相邻但偏移为零；边缘延伸是水平的 → 默认柄水平延伸 1/3 间距）。
+#[test]
+fn edge_keyframe_becomes_interior_gets_default_handle() {
+    let mut st = CurveEditorState::default();
+    let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
+    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
+    let tags = st.push_channel(
+        "t",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![
+            k0,
+            key(2.0, 10.0, SlintInterpolation::Bezier),
+            key(4.0, 20.0, SlintInterpolation::Bezier),
+        ],
+    );
+    project(&mut st, tags);
+    // 边缘关键帧 kf0：无入柄
+    assert_eq!(st.editing_keyframes[&0][0].handle_in.time_offset, 0.0);
+
+    // 拖 kf0 到 3.0（越过 kf1）→ kf0 变中间：左侧段 [kf1(2), kf0(3)] 贝塞尔 → 补入柄
+    let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.keyframe_dragged(0, 0, 3.0, 0.0, SlintKeyframeDragMode::Move);
+    project(&mut st, tags);
+    // 拖拽中（未松开）新入柄已补：水平向左延伸 1/3 间距
+    let kf0 = &st.editing_keyframes[&0][0];
+    assert!(
+        (kf0.handle_in.time_offset - (-1.0 / 3.0)).abs() < 1e-4,
+        "新入柄应水平向左延伸间距/3，实际 {}",
+        kf0.handle_in.time_offset
+    );
+    assert_eq!(kf0.handle_in.value_offset, 0.0);
+    // 嵌套模型同步
+    let kf0m = st.keyframe_models[&0].row_data(0).unwrap();
+    assert_eq!(kf0m.handle_in.time_offset, kf0.handle_in.time_offset);
+    // 原 kf1 变为第一（边缘）：其入柄不再渲染；但它自身的出柄（贝塞尔且为零）也被补上
+    let kf1 = &st.editing_keyframes[&0][1];
+    assert!(
+        kf1.handle_out.time_offset > 0.0,
+        "中间关键帧缺出柄也应补默认水平柄"
+    );
+}

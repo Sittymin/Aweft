@@ -295,6 +295,11 @@ impl CurveEditorState {
         if let Tag::AnimationSelectionChanged { summary_ms: ms } = tags.first_mut().unwrap() {
             ms.extend(summary_ms);
         }
+        // 拖拽过：结束后的数据整理（预览残留清理/重排）走独立 tag——与选中变化分离，
+        // 未来其他组件（如 NLA）可单独依赖整理
+        if moved {
+            tags.push(Tag::AnimationDragEnded);
+        }
         tags
     }
 

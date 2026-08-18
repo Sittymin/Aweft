@@ -15,8 +15,8 @@ mod node_graph;
 mod screen;
 
 pub use animation::{
-    op_animation_channel, op_animation_keyframes, op_animation_scalars,
-    op_animation_selection, op_animation_structure,
+    op_animation_channel, op_animation_drag_ended, op_animation_keyframes,
+    op_animation_scalars, op_animation_selection, op_animation_structure,
 };
 pub use line_editor::{op_line_collapse, op_line_selection, op_line_structure, op_line_timecode};
 pub use node_graph::{
@@ -128,6 +128,13 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
             },
             Operation {
                 id: OperationId::new(),
+                code: OperationCode::AnimationDragEnded,
+                handles: &[TagKind::AnimationDragEnded],
+                depends_on: &[OperationCode::AnimationStructure],
+                exec: op_animation_drag_ended,
+            },
+            Operation {
+                id: OperationId::new(),
                 code: OperationCode::AnimationChannel,
                 handles: &[TagKind::AnimationChannel],
                 depends_on: &[OperationCode::AnimationStructure],
@@ -140,6 +147,7 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                     TagKind::AnimationStructure,
                     TagKind::AnimationKeyframes,
                     TagKind::AnimationSelection,
+                    TagKind::AnimationDragEnded,
                     TagKind::AnimationChannel,
                     TagKind::AnimationScalars,
                 ],
