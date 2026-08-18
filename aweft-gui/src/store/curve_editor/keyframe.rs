@@ -24,7 +24,6 @@ impl CurveEditorState {
         if !self.channel_editable(curve) {
             return Vec::new();
         }
-        self.preview_handles.clear();
         self.pressed_modifier = modifier;
         let already_selected = self
             .editing_keyframes
@@ -226,6 +225,7 @@ impl CurveEditorState {
             summary_ms: affected_ms.into_iter().collect(),
             dragged_curve,
             dragged_summary: None,
+            handle_preview: None,
         }]
     }
 
@@ -256,6 +256,7 @@ impl CurveEditorState {
             summary_ms: vec![],
             dragged_curve: Some(curve),
             dragged_summary: None,
+            handle_preview: None,
         }]
     }
 

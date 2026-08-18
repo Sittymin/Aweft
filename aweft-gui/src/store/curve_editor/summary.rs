@@ -250,6 +250,7 @@ impl CurveEditorState {
             summary_ms: vec![],
             dragged_curve: None,
             dragged_summary: Some((index, delta_time)),
+            handle_preview: None,
         }]
     }
 }

@@ -206,6 +206,9 @@ pub enum Tag {
         /// 从汇总条带拖拽时：被拖标记下标 + 累计时间增量（投影就地更新其 time，
         /// 不 insert/remove——拖拽期间重建汇总模型会破坏 Slint grab）。
         dragged_summary: Option<(usize, f32)>,
+        /// 手柄拖拽时被移动的手柄（被拖 + 同步）：投影据此重建 preview_handles
+        /// （软钳制有效控制点预览，拖拽上下文依赖）。
+        handle_preview: Option<Vec<(usize, usize, bool)>>,
     },
     /// 动画编辑器：关键帧/通道选中变化。
     /// 投影同步 selected_display、汇总条目选中掩码、手柄 selected 视觉。

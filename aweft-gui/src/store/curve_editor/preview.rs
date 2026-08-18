@@ -1,7 +1,8 @@
 //! 拖拽钳制预览：手柄/关键帧拖拽时，相邻关键帧边界软钳制的有效控制点预览。
 //!
-//! `preview_handles` 是独立模型（Slint 单独渲染层），只在拖拽期间填充，
-//! 松开时清空（handle_released / keyframe_released 已处理）。
+//! `preview_handles` 是独立模型（Slint 单独渲染层），由投影（apply_keyframes 的
+//! `handle_preview`）在拖拽期间填充，交互终止点（apply_selection）/结构重建
+//! （apply_structure）清空。
 
 use std::collections::HashMap;
 

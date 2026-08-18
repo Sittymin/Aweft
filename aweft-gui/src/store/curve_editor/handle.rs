@@ -1,9 +1,9 @@
 //! 控制柄交互（reducer 侧）：只改数据层（`editing_keyframes` 手柄偏移、`selected_handles`）
-//! 并返回 tag；手柄模型重建/钳制预览由投影（projection.rs）完成。
+//! 并返回 tag；手柄模型重建/钳制预览（preview_handles）由投影（projection.rs）完成。
 
 use super::CurveEditorState;
 use super::curve_math::{clamp_handle_own_side, apply_handle_mode};
-use crate::bridge::types::{SlintHandleDragMode, SlintHandleMarker, SlintSelectionModifier};
+use crate::bridge::types::{SlintHandleDragMode, SlintSelectionModifier};
 use crate::depsgraph::Tag;
 
 impl CurveEditorState {
@@ -48,8 +48,7 @@ impl CurveEditorState {
     }
 
     /// 控制柄拖拽：把增量累加到被拖控制柄，并按约束模式处理。
-    /// 只改数据层；手柄/曲线重建与软钳制预览走 tag 投影（preview_handles 除外——
-    /// 它依赖拖拽上下文，作为拖拽预览由本方法直接写，对齐 OverlayState 语义）。
+    /// 只改数据层；手柄/曲线重建与软钳制预览（preview_handles）走 tag 投影。
     pub fn handle_dragged(
         &mut self,
         curve: usize,
@@ -136,28 +135,22 @@ impl CurveEditorState {
             *dst = kf;
         }
 
-        // 软钳制预览：主手柄 + 所有被同步手柄的有效控制点（与原始不同才显示）。
-        // 拖拽上下文预览，直接写（不经 depsgraph）。
-        let mut preview: Vec<SlintHandleMarker> = Vec::new();
-        for &(curve_index, keyframe_index, is_incoming) in synchronized_handles.iter().chain(std::iter::once(&(curve, key, is_in))) {
-            if let Some(preview_marker) = self.dragged_handle_preview(curve_index, keyframe_index, is_incoming) {
-                preview.push(preview_marker);
-            }
-        }
-        self.preview_handles.set_vec(preview);
-
-        // 被拖通道 + 被同步通道的段/手柄重建走投影
+        // 被拖通道 + 被同步通道的段/手柄重建走投影；
+        // 被移动的手柄列表（被拖 + 同步）一并交给投影重建 preview_handles
         let mut curves: Vec<usize> = vec![curve];
-        for &(curve_index, _, _) in &synchronized_handles {
+        let mut handle_preview: Vec<(usize, usize, bool)> = vec![(curve, key, is_in)];
+        for &(curve_index, keyframe_index, is_incoming) in &synchronized_handles {
             if !curves.contains(&curve_index) {
                 curves.push(curve_index);
             }
+            handle_preview.push((curve_index, keyframe_index, is_incoming));
         }
         vec![Tag::AnimationKeyframesChanged {
             curves,
             summary_ms: vec![],
             dragged_curve: None,
             dragged_summary: None,
+            handle_preview: Some(handle_preview),
         }]
     }
 
@@ -171,7 +164,6 @@ impl CurveEditorState {
             }
             self.selected_handles.insert((curve, key, is_in));
         }
-        self.preview_handles.clear();
         vec![Tag::AnimationSelectionChanged { summary_ms }]
     }
 }

@@ -80,6 +80,7 @@ impl CurveEditorState {
             summary_ms: vec![],
             dragged_curve: None,
             dragged_summary: None,
+            handle_preview: None,
         }]
     }
 

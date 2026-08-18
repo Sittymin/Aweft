@@ -32,7 +32,8 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 **拖拽语义**（对齐 LineEditor preview/commit）：
 - 拖拽（高频）只改数据层 + Keyframes tag，投影同帧同步嵌套模型（set_row_data 保住 grab）
 - 汇总标记拖拽：`dragged_summary` 就地更新时间（不 insert/remove，保住 grab）
+- 手柄拖拽：`handle_preview`（被拖+同步手柄列表）→ 投影重建 `preview_handles`；
+  交互终止点（选中变化）/结构重建时投影清空
 - 松开/插值变更后 `write_view_to_model` 写回 model Action
-- `preview_handles`（手柄软钳制预览）依赖拖拽上下文，reducer 直写（对齐 OverlayState 语义）
 
 **已知 TODO**：调色盘（channel.rs）/ Dope Sheet UI / NLA

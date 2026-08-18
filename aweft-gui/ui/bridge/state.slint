@@ -99,7 +99,7 @@ export global AnimationState {
     in property <int> selected-keyframes: 0;
     // 选中关键帧的插值聚合状态（供侧边栏显示）
     in property <SlintInterpolationState> selected-interpolation: SlintInterpolationState.none;
-    // 手柄拖拽时相邻软钳制的有效控制点预览
+    // 手柄拖拽时相邻软钳制的有效控制点预览（拖拽上下文依赖，投影填充/清空）
     in property <[SlintHandleMarker]> preview-handles: [];
 }
 

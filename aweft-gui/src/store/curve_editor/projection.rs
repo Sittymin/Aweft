@@ -26,7 +26,8 @@ impl CurveEditorState {
                     summary_ms,
                     dragged_curve,
                     dragged_summary,
-                } => self.apply_keyframes(curves, summary_ms, *dragged_curve, *dragged_summary),
+                    handle_preview,
+                } => self.apply_keyframes(curves, summary_ms, *dragged_curve, *dragged_summary, handle_preview),
                 Tag::AnimationSelectionChanged { summary_ms } => {
                     self.apply_selection(summary_ms)
                 }
@@ -42,6 +43,8 @@ impl CurveEditorState {
     /// 结构变化：重建 keyframe_models（Slint 嵌套模型）、channels 行（含 keyframes 引用）、
     /// 过滤视图、全部派生模型与 Action 菜单。
     fn apply_structure(&mut self) {
+        // 0. 重置后无拖拽上下文：清空拖拽预览
+        self.preview_handles.clear();
         // 1. 重建 keyframe_models + channels 行的 keyframes 引用
         self.keyframe_models.clear();
         for (i, ch) in self.channels_data.iter_mut().enumerate() {
@@ -70,6 +73,7 @@ impl CurveEditorState {
         summary_ms: &[i64],
         dragged_curve: Option<usize>,
         dragged_summary: Option<(usize, f32)>,
+        handle_preview: &Option<Vec<(usize, usize, bool)>>,
     ) {
         for &curve in curves {
             // 嵌套模型同步（拖拽期间数量不变，set_row_data 保住 grab）
@@ -92,6 +96,16 @@ impl CurveEditorState {
         {
             sk.time = super::snap_ms(sk.time + delta_time);
             self.summary_keyframes.set_row_data(index, sk);
+        }
+        // 手柄拖拽的软钳制预览：重建 preview_handles（只含有效控制点与原始不同的手柄）
+        if let Some(handles) = handle_preview {
+            let mut preview: Vec<crate::bridge::types::SlintHandleMarker> = Vec::new();
+            for &(c, k, is_in) in handles {
+                if let Some(marker) = self.dragged_handle_preview(c, k, is_in) {
+                    preview.push(marker);
+                }
+            }
+            self.preview_handles.set_vec(preview);
         }
     }
 
@@ -127,6 +141,8 @@ impl CurveEditorState {
     /// 选中变化：同步 channels 行 selected、selected_display 掩码、嵌套关键帧模型
     /// selected、手柄 selected 视觉，并重算汇总条带受影响 ms 的选中掩码。
     fn apply_selection(&mut self, summary_ms: &[i64]) {
+        // 任何选中交互（按下/松开/框选）都是手柄拖拽的终止点：清空拖拽预览
+        self.preview_handles.clear();
         self.sync_channel_rows();
         self.sync_selected_display();
         // 嵌套关键帧模型 selected 同步（只写变化的行）
