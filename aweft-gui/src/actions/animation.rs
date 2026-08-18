@@ -91,6 +91,53 @@ pub enum AnimationAction {
         view_row: usize,
         modifier: SlintSelectionModifier,
     },
+
+    // —— 摄影表（Dope Sheet）：关键帧（共用曲线编辑器数据/选中，拖拽只调时间） ——
+    /// 关键帧按下（none=单选，shift=区间扩展，ctrl=切换）。
+    DopeKeyframePressed {
+        curve: usize,
+        key: usize,
+        modifier: SlintSelectionModifier,
+    },
+    /// 关键帧拖拽（只移动时间，值不变；mode 固定 Move）。
+    DopeKeyframeDragged {
+        curve: usize,
+        key: usize,
+        delta_time: f32,
+    },
+    /// 关键帧松开。`moved=false`（单击）时折叠为单选。
+    DopeKeyframeReleased {
+        curve: usize,
+        key: usize,
+        moved: bool,
+    },
+    /// 画布空白点击：清除关键帧选中。
+    DopeKeyframeDeselectAll,
+    /// 空白处框选（世界时间范围 + 行区间；none=替换，shift=区间扩展，ctrl=切换）。
+    DopeMarqueeSelect {
+        x_lo: f32,
+        x_hi: f32,
+        row_lo: i32,
+        row_hi: i32,
+        modifier: SlintSelectionModifier,
+    },
+
+    // —— 摄影表：汇总条带（聚合所有通道同一时刻的关键帧；跨通道同步拖拽） ——
+    /// 汇总关键帧按下（none=单选该时刻全部，shift=追加，ctrl=切换）。
+    DopeSummaryPressed {
+        index: usize,
+        modifier: SlintSelectionModifier,
+    },
+    /// 汇总关键帧拖拽（把增量累加到全部选中关键帧的时间上）。
+    DopeSummaryDragged {
+        index: usize,
+        delta_time: f32,
+    },
+    /// 汇总关键帧松开。`moved=false`（单击）时折叠为单选。
+    DopeSummaryReleased {
+        index: usize,
+        moved: bool,
+    },
     /// 侧边栏：曲线颜色来源（0=自动彩虹，1=用户设置）。
     CurveColorModeChanged {
         curve: usize,

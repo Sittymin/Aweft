@@ -8,6 +8,7 @@ export global AreaTypeMetadata {
         { icon: @image-url("../assets/icons/style_graph.svg"), text: "样式图" },
         { icon: @image-url("../assets/icons/app_graph.svg"), text: "应用图" },
         { icon: @image-url("../assets/icons/graph_editor.svg"), text: "曲线编辑器" },
+        { icon: @image-url("../assets/icons/dope_sheet.svg"), text: "摄影表" },
     ];
     
     // 转换函数：AreaType 枚举 -> 数组索引
@@ -23,6 +24,8 @@ export global AreaTypeMetadata {
             return 3;
         } else if area-type == SlintAreaType.graph-editor {
             return 4;
+        } else if area-type == SlintAreaType.dope-sheet {
+            return 5;
         }
         return -1;  // 未知类型
     }
@@ -40,6 +43,8 @@ export global AreaTypeMetadata {
             return SlintAreaType.app-graph-editor;
         } else if index == 4 {
             return SlintAreaType.graph-editor;
+        } else if index == 5 {
+            return SlintAreaType.dope-sheet;
         }
         return SlintAreaType.line-editor;
     }

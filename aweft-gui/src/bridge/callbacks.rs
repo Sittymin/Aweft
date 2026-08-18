@@ -1002,6 +1002,129 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         );
     });
 
+    // —— 摄影表（Dope Sheet）：关键帧（共用曲线编辑器数据/选中，拖拽只调时间） ——
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_keyframe_pressed(
+        move |curve, key, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeKeyframePressed {
+                    curve: curve as usize,
+                    key: key as usize,
+                    modifier,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_keyframe_dragged(
+        move |curve, key, delta_time| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeKeyframeDragged {
+                    curve: curve as usize,
+                    key: key as usize,
+                    delta_time,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_keyframe_released(
+        move |curve, key, moved| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeKeyframeReleased {
+                    curve: curve as usize,
+                    key: key as usize,
+                    moved,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_keyframe_deselect_all(move || {
+        dispatch_and_render(
+            &s,
+            Action::Animation(AnimationAction::DopeKeyframeDeselectAll),
+            &weak,
+        );
+    });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_marquee_select(
+        move |x_lo, x_hi, row_lo, row_hi, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeMarqueeSelect {
+                    x_lo,
+                    x_hi,
+                    row_lo,
+                    row_hi,
+                    modifier,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    // —— 摄影表：汇总条带（聚合所有通道同一时刻的关键帧；跨通道同步拖拽） ——
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_summary_pressed(
+        move |index, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeSummaryPressed {
+                    index: index as usize,
+                    modifier,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_summary_dragged(
+        move |index, delta_time| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeSummaryDragged {
+                    index: index as usize,
+                    delta_time,
+                }),
+                &weak,
+            );
+        },
+    );
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance.global::<AnimationCallbacks>().on_dope_summary_released(
+        move |index, moved| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeSummaryReleased {
+                    index: index as usize,
+                    moved,
+                }),
+                &weak,
+            );
+        },
+    );
+
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
     instance.global::<AnimationCallbacks>().on_curve_color_mode_changed(move |curve, mode| {

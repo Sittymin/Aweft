@@ -57,7 +57,7 @@ src/
 ```
 ui/
 ├── app/             # 根窗口（window.slint）
-├── areas/           # 编辑器 UI（line_editor / graph_editor（动画）/ node_graph / style_graph / app_graph / viewport / subtitle）
+├── areas/             # 编辑器 UI（line_editor / graph_editor（动画）/ dope_sheet（摄影表）/ node_graph / style_graph / app_graph / viewport / subtitle）
 ├── assets/          # 图标（icons/）与纹理（textures/）
 ├── bridge/          # 全局（callbacks / state）
 ├── core/            # 类型（types / animation_types / area_type_metadata）

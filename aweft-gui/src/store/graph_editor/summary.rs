@@ -255,4 +255,33 @@ impl GraphEditorState {
             handle_preview: None,
         }]
     }
+
+    /// 汇总关键帧松开。选中已在按下时立即写回（汇总标记独立于 channels 嵌套循环，
+    /// 按下期间更新安全），松开无需二次选中；拖拽过 → 打 DragEnded（投影重排乱序
+    /// 关键帧 + 补默认柄），并重算汇总条带全部条目——拖拽期间只有被拖标记就地移动
+    /// （各 ms 条目的 count/掩码已陈旧），此处逐 ms 精确重建 + 移除空条目（不整体
+    /// set_vec：拖拽刚结束，行级更新保住元素复用）。
+    pub fn summary_keyframe_released(&mut self, _index: usize, moved: bool) -> Vec<Tag> {
+        if !moved {
+            return Vec::new();
+        }
+        // 现有条目 ms ∪ 全部关键帧当前 ms：陈旧条目重建后 count=0 会被
+        // summary_remove_if_empty 移除，无需知道拖拽前的旧 ms。
+        let mut ms_set: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for i in 0..self.summary_keyframes.row_count() {
+            if let Some(sk) = self.summary_keyframes.row_data(i) {
+                ms_set.insert(ms_of(sk.time));
+            }
+        }
+        for kfs in self.editing_keyframes.values() {
+            for kf in kfs.iter() {
+                ms_set.insert(ms_of(kf.time));
+            }
+        }
+        let mut tags = vec![Tag::AnimationSelectionChanged {
+            summary_ms: ms_set.into_iter().collect(),
+        }];
+        tags.push(Tag::AnimationDragEnded);
+        tags
+    }
 }

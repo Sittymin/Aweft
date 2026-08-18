@@ -1,0 +1,376 @@
+// 摄影表（Dope Sheet / Action Editor）：
+//  - 布局参照 Blender：左侧通道列表 + 顶部时间标尺 + 主画布（每通道一行，按时间铺开关键帧）
+//  - 与曲线编辑器共用同一份数据（AnimationState.channels），选中态共享
+//  - 与曲线编辑器画布不同：
+//      * 滚轮只做横向缩放（时间轴），纵向缩放恒为 1（行高固定像素）→ CanvasNavigation.lock-y-zoom
+//      * 中键拖拽可上下左右平移
+//      * 左侧列表滚轮纵向滚动列表（内容高于空间时；与画布行同步）
+//  - 时间刻度独立于曲线编辑器，按本编辑器视图动态变化间隔（固定槽位即时计算，
+//    见 graph_editor/ruler.slint 顶部注释：pan/zoom 变化只重算槽位绑定，不重建元素）
+import { SlintFCurveChannel, SlintDopeConnection, SlintSummaryKeyframe } from "../../core/animation_types.slint";
+import { SlintSelectionModifier } from "../../core/types.slint";
+import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { TimeRuler, VerticalGrid } from "../graph_editor/ruler.slint";
+import { ChannelPanel } from "../../widgets/channel_panel.slint";
+import { DopeKeyframe, DopeSummaryKeyframe } from "elements.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { EditOverlayState } from "../../bridge/state.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component DopeSheet inherits Rectangle {
+    in property <[SlintFCurveChannel]> channels;
+    // 摄影表通道列表/画布的过滤压缩视图（FilterModel，只含匹配搜索的通道；元素带真实 curve-index）
+    in property <[SlintFCurveChannel]> dope-channels;
+    // 线性/常量插值段的连接线（Rust 派生扁平模型）
+    in property <[SlintDopeConnection]> dope-connections;
+    // 汇总条带关键帧（按整数毫秒时间聚合所有通道；Rust 派生）
+    in property <[SlintSummaryKeyframe]> summary-keyframes;
+    in property <float> current-time;
+    // 当前激活通道（行文字变黄、非当前行关键帧弱化）
+    in property <int> current-channel: 0;
+    // Action 时长范围（区间内亮、区间外暗，与曲线编辑器一致）
+    in property <float> action-start: 0.0;
+    in property <float> action-end: 0.0;
+    // 编辑器在 MainWindow 中的位置（area_container 传入，搜索框遮罩挖孔定位）
+    in property <length> window-x: 0px;
+    in property <length> window-y: 0px;
+
+    // 通道列表 / 标尺尺寸（主题）
+    private property <length> channel-width: Theme.data.animation-editor.channel-list-width;
+    private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+    private property <length> row-height: Theme.data.animation-editor.channel-row-height;
+
+    // 导航状态（画布、通道列表与标尺共享；仅时间轴缩放 + 双向平移）
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-pan-y: 0.0;
+    private property <float> nav-zoom: 30.0;
+
+    // 可见时间范围（世界坐标）：标尺刻度槽位 + 关键帧/连接线/汇总标记视口裁剪共用。
+    // 刻度为固定槽位即时计算（见 ruler.slint 顶部注释），pan/zoom 变化时只重算
+    // 这些绑定，不重建任何元素——pan 到任何位置都有标尺。
+    private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    private property <float> view-time-hi: ((root.width - root.channel-width) - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+
+    // 纵向滚动范围：只能滚到 [-(内容高-视口高), 0]，内容不足空间时不动。
+    // 列表滚轮与画布中键拖动共用同一套范围（列表滚动 → clamp 到 pan-y）。
+    // 汇总条带占顶部一行（固定不滚），通道行的可见视口相应少一行。
+    function content-height-px() -> float {
+        return root.dope-channels.length * (root.row-height / 1px);
+    }
+    function view-height-px() -> float {
+        return canvas.height / 1px - (root.row-height / 1px);
+    }
+    function max-scroll-y() -> float {
+        return max(0.0, root.content-height-px() - root.view-height-px());
+    }
+    function scroll-list(delta: float) -> float {
+        return min(0.0, max(-root.max-scroll-y(), root.nav-pan-y + delta));
+    }
+
+    // 框选矩形状态（画布局部像素坐标；visible 时渲染半透明选框）
+    private property <bool> marquee-visible: false;
+    private property <float> marquee-x1: 0.0;
+    private property <float> marquee-y1: 0.0;
+    private property <float> marquee-x2: 0.0;
+    private property <float> marquee-y2: 0.0;
+
+    // 空白处框选结束：把选框换算成世界坐标（时间 + 行区间）上报 Rust 选中关键帧
+    function marquee-select(x1: float, y1: float, x2: float, y2: float, modifier: SlintSelectionModifier) {
+        root.marquee-visible = false;
+        let x-lo: float = (x1 - root.nav-pan-x) / root.nav-zoom;
+        let x-hi: float = (x2 - root.nav-pan-x) / root.nav-zoom;
+        // 第一行为汇总条带（不参与通道行选中），通道行从第二行起
+        let row-lo: int = floor((y1 - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+        let row-hi: int = floor((y2 - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+        AnimationCallbacks.dope-marquee-select(x-lo, x-hi, row-lo, row-hi, modifier);
+    }
+
+    // 通道面板（左：顶部搜索框 + 通道列表；列表顶到左上角、行与画布条带对齐）
+    channel-panel := ChannelPanel {
+        x: 0;
+        y: 0;
+        width: root.channel-width;
+        height: root.height;
+        channels: root.dope-channels;
+        pan-y: root.nav-pan-y;
+        row-height: root.row-height;
+        current-channel: root.current-channel;
+        search-height: root.ruler-height;
+        summary-height: root.row-height;
+        search-changed(text) => {
+            AnimationCallbacks.dope-search-changed(text);
+        }
+        toggle-visible(i) => {
+            AnimationCallbacks.channel-toggle-visible(i);
+        }
+        toggle-modifier(i) => {
+            AnimationCallbacks.channel-toggle-modifier(i);
+        }
+        toggle-active(i) => {
+            AnimationCallbacks.channel-toggle-active(i);
+        }
+        toggle-editable(i) => {
+            AnimationCallbacks.channel-toggle-editable(i);
+        }
+        channel-pressed(i, modifier) => {
+            AnimationCallbacks.dope-channel-pressed(i, modifier);
+        }
+        scrolled(delta) => {
+            root.nav-pan-y = root.scroll-list(delta);
+        }
+        // 搜索框聚焦：设置全窗口编辑遮罩（挖孔 = 搜索框的窗口坐标）
+        search-active-mirror: EditOverlayState.active;
+        focus-changed(focused) => {
+            if focused {
+                EditOverlayState.active = true;
+                EditOverlayState.hole-x = root.window-x + channel-panel.x + channel-panel.search-box-x;
+                EditOverlayState.hole-y = root.window-y + channel-panel.y + channel-panel.search-box-y;
+                EditOverlayState.hole-width = channel-panel.search-box-width;
+                EditOverlayState.hole-height = channel-panel.search-box-height;
+            }
+        }
+    }
+
+    // 顶部时间标尺（位于画布上方、通道列表右侧；刻度用摄影表独立视图即时计算）
+    TimeRuler {
+        x: root.channel-width;
+        y: 0;
+        width: root.width - root.channel-width;
+        height: root.ruler-height;
+        view-lo: root.view-time-lo;
+        view-hi: root.view-time-hi;
+        zoom-x: root.nav-zoom;
+        pan-x: root.nav-pan-x;
+        current-time: root.current-time;
+        time-picked(time) => {
+            AnimationCallbacks.set-current-time(time);
+        }
+    }
+
+    // 主画布
+    canvas := Rectangle {
+        x: root.channel-width;
+        y: root.ruler-height;
+        width: root.width - root.channel-width;
+        height: root.height - root.ruler-height;
+        clip: true;
+        background: Theme.data.animation-editor.canvas-background;
+
+        // 当前可见时间范围（世界坐标）：关键帧/连接线据此做视口裁剪。
+        // `for` 的子元素是便宜容器，`if` 条件元素只在可见范围内实例化昂贵的
+        // 交互元素（Slint 惰性创建条件子组件），避免巨量关键帧全部创建拖垮 Slint。
+        // 完整机制与验证见 graph_editor.slint 同名的详细注释（勿删）。
+        // 刻度（标尺/网格）不再用这份裁剪——刻度是固定槽位即时计算（ruler.slint）。
+
+        // 汇总条带行（固定首行，不随纵向滚动）：背景 + 全通道聚合的关键帧标记。
+        // 标记在导航之后绘制（见下），可交互（拖拽跨通道同步移动同一时刻的关键帧）。
+        Rectangle {
+            y: 0px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            background: Theme.data.animation-editor.channel-row-selected;
+        }
+
+        // 每通道一行：条带背景 = 通道颜色淡化（不同属性以颜色区分）；
+        // 选中（多选高亮）最亮、当前激活次之、普通最暗；眼睛关闭更淡。
+        // dope-channels 为摄影表过滤压缩视图（无搜索空位，列表/画布行对齐）
+        for ch[i] in root.dope-channels: Rectangle {
+            y: root.row-height + i * root.row-height + root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            background: ch.visible
+                ? ch.color.with-alpha(ch.selected
+                    ? 0.24
+                    : ((ch.curve-index == root.current-channel && ch.active) ? 0.16 : 0.10))
+                : ch.color.with-alpha(0.04);
+        }
+
+        // 垂直时间线（与标尺刻度对齐，用摄影表独立视图即时计算；固定槽位）
+        VerticalGrid {
+            width: 100%;
+            height: 100%;
+            view-lo: root.view-time-lo;
+            view-hi: root.view-time-hi;
+            zoom-x: root.nav-zoom;
+            pan-x: root.nav-pan-x;
+            line-color: Theme.data.animation-editor.grid-color;
+            minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        // Action 时长之外区域（比时长内暗；半透明遮罩盖在行/网格上，与曲线编辑器一致；
+        // 关键帧与播放头在其上绘制，不受影响）
+        Rectangle {
+            x: 0px;
+            width: max(0px, min(parent.width, root.action-start * root.nav-zoom * 1px + root.nav-pan-x * 1px));
+            height: 100%;
+            background: Theme.data.animation-editor.action-outside;
+        }
+        Rectangle {
+            x: max(0px, root.action-end * root.nav-zoom * 1px + root.nav-pan-x * 1px);
+            width: max(0px, parent.width - max(0px, root.action-end * root.nav-zoom * 1px + root.nav-pan-x * 1px));
+            height: 100%;
+            background: Theme.data.animation-editor.action-outside;
+        }
+
+        // 导航（背景交互：滚轮仅横向缩放 / 中键双向平移 / 左键按位置命中行或清除选中）。
+        // lock-y-zoom：滚轮只缩放 X（时间轴），zoom-y 恒为 1（行高固定像素）。
+        // clamp-pan-y：中键纵向拖动与左侧列表滚动一致，不能超出内容上下界；横向时间轴自由平移。
+        // 行激活：左键空白按下 → 按鼠标 y 命中所在行（等价点击左侧列表行）；
+        // 空白处（行外）→ 清除选中。关键帧在更上层优先命中，不拦截。
+        nav := CanvasNavigation {
+            pan-x <=> root.nav-pan-x;
+            pan-y <=> root.nav-pan-y;
+            zoom-x <=> root.nav-zoom;
+            lock-y-zoom: true;
+            // 时间轴放大到能看清毫秒级跳动：1ms = zoom/1000 px，至少数像素可见
+            max-zoom: 12000.0;
+            // 上限高，用稍大步长快速滚到毫秒级（约 15 格滚轮）
+            zoom-step: 1.5;
+            clamp-pan-y: true;
+            clamp-pan-y-min: -root.max-scroll-y();
+            clamp-pan-y-max: 0.0;
+            marquee-enabled: true;
+            marquee-dragged(x1, y1, x2, y2) => {
+                // 回调传原始点（起点, 当前），框选矩形需规范化
+                root.marquee-x1 = min(x1, x2);
+                root.marquee-y1 = min(y1, y2);
+                root.marquee-x2 = max(x1, x2);
+                root.marquee-y2 = max(y1, y2);
+                root.marquee-visible = true;
+            }
+            marquee-done(x1, y1, x2, y2, modifier) => {
+                root.marquee-select(x1, y1, x2, y2, modifier);
+            }
+            background-pressed(_modifier) => {
+                // world-y = 画布局部 y - pan-y（zoom-y=1）；行号 = floor(world-y / 行高)（压缩视图行）。
+                // 第一行为汇总条带，通道行从第二行起（减一行）。
+                let row: int = floor((nav.mouse-y / 1px - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+                if row >= 0 && row < root.dope-channels.length {
+                    // 压缩视图行 → Rust 映射回真实通道（选中当前轨道）
+                    AnimationCallbacks.dope-channel-pressed(row, SlintSelectionModifier.none);
+                    // 但点击空白始终清除关键帧选择
+                    AnimationCallbacks.dope-keyframe-deselect-all();
+                } else {
+                    // 空白处（含汇总条带）：取消所有选择（关键帧 + 通道/行选中）
+                    AnimationCallbacks.dope-keyframe-deselect-all();
+                    AnimationCallbacks.channel-deselect-all();
+                }
+            }
+        }
+
+        // 汇总条带的关键帧标记（在导航之上，可交互；跨通道同步拖拽同一时刻的关键帧）
+        for s[i] in root.summary-keyframes: Rectangle {
+            width: 100%;
+            height: 100%;
+            if s.time >= root.view-time-lo && s.time <= root.view-time-hi: DopeSummaryKeyframe {
+                time: s.time;
+                count: s.count;
+                selected: s.selected;
+                all-selected: s.all-selected;
+                view-zoom: root.nav-zoom;
+                pan-x: root.nav-pan-x;
+                row-height: root.row-height;
+                pressed(modifier) => {
+                    AnimationCallbacks.dope-summary-pressed(i, modifier);
+                }
+                dragged(dt) => {
+                    AnimationCallbacks.dope-summary-dragged(i, dt);
+                }
+                released(moved) => {
+                    AnimationCallbacks.dope-summary-released(i, moved);
+                }
+            }
+        }
+
+        // 框选矩形（置顶可见但不拦截事件）
+        Rectangle {
+            visible: root.marquee-visible;
+            x: root.marquee-x1 * 1px;
+            y: root.marquee-y1 * 1px;
+            width: (root.marquee-x2 - root.marquee-x1) * 1px;
+            height: (root.marquee-y2 - root.marquee-y1) * 1px;
+            background: Theme.data.animation-editor.marquee-fill;
+            border-width: 1px;
+            border-color: Theme.data.animation-editor.marquee-border;
+        }
+
+        // 线性/常量插值段的连接线（行内水平线；常量=前半实线+后半虚线，
+        // 呼应曲线编辑器中"保持后跳变"）。位于关键帧之下，随行/时间轴缩放平移。
+        // 视口裁剪：线段与可见范围相交才实例化（连接线数量 = 关键帧数量，同样会失控）。
+        for conn in root.dope-connections: Rectangle {
+            width: 100%;
+            height: 100%;
+            if conn.visible && conn.x1 >= root.view-time-lo && conn.x0 <= root.view-time-hi: Rectangle {
+                y: root.row-height + conn.row-index * root.row-height + root.nav-pan-y * 1px + (root.row-height - 2px) / 2;
+                x: conn.x0 * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+                width: (conn.x1 - conn.x0) * root.nav-zoom * 1px;
+                height: 2px;
+
+                // 前半段实线（线性整段实线；常量前半实线）。
+                // 注意：必须显式 x:0px，否则 Slint 会把设了宽度但没有 x 的子元素自动居中。
+                Rectangle {
+                    x: 0px;
+                    width: conn.is-hold ? parent.width / 2 : parent.width;
+                    height: 100%;
+                    background: conn.color.with-alpha(0.5);
+                }
+
+                // 常量后半段虚线（水平平铺短划线贴图，同曲线编辑器 HoldStep 的模式）
+                if conn.is-hold: Image {
+                    x: parent.width / 2;
+                    width: parent.width / 2;
+                    height: 100%;
+                    source: @image-url("../../assets/textures/dash_h.svg");
+                    horizontal-tiling: repeat;
+                    colorize: conn.color.with-alpha(0.5);
+                }
+            }
+        }
+
+        // 每行关键帧（在导航之上，可交互；dope-channels 为摄影表过滤压缩视图，无空位）。
+        // 行级激活不在此放 TouchArea：Slint TouchArea 会抢走任意按钮的按下（含中键），
+        // 破坏中键平移；改为在导航的 background-pressed 里按鼠标位置命中行（见下）。
+        for ch[i] in root.dope-channels: Rectangle {
+            y: root.row-height + i * root.row-height + root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+
+            for key[j] in ch.keyframes: Rectangle {
+                width: 100%;
+                height: 100%;
+                // 视口裁剪：`if` 是条件元素，关键帧只在可见范围内实例化
+                if ch.visible && key.time >= root.view-time-lo && key.time <= root.view-time-hi: DopeKeyframe {
+                    // 选中通道（多选）或当前激活通道的关键帧全亮，其余弱化
+                    opacity: (ch.selected || (ch.curve-index == root.current-channel && ch.active)) ? 1.0 : 0.35;
+                    time: key.time;
+                    marker-color: ch.color;
+                    selected: key.selected;
+                    view-zoom: root.nav-zoom;
+                    pan-x: root.nav-pan-x;
+                    row-height: root.row-height;
+                    pressed(modifier) => {
+                        AnimationCallbacks.dope-keyframe-pressed(ch.curve-index, j, modifier);
+                    }
+                    dragged(dt) => {
+                        AnimationCallbacks.dope-keyframe-dragged(ch.curve-index, j, dt);
+                    }
+                    released(moved) => {
+                        AnimationCallbacks.dope-keyframe-released(ch.curve-index, j, moved);
+                    }
+                }
+            }
+        }
+
+        // 当前时间线（播放头，置顶但不拦截事件）
+        Rectangle {
+            x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: Theme.data.animation-editor.playhead;
+        }
+    }
+}

@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::actions::animation::AnimationAction;
+use crate::bridge::types::SlintKeyframeDragMode;
 use crate::depsgraph::Tag;
 
 /// 动画编辑器（图编辑器）域 reducer（`impl AppStore`）：reducer 只改数据层并返回
@@ -75,6 +76,35 @@ impl crate::store::AppStore {
                 GraphSearchChanged { text } => ce.set_graph_search(&text),
                 DopeSearchChanged { text } => ce.set_dope_search(&text),
                 DopeChannelPressed { view_row, modifier } => ce.dope_channel_pressed(view_row, modifier),
+                // —— 摄影表（Dope Sheet）：与曲线编辑器共用数据/选中，拖拽只调时间 ——
+                DopeKeyframePressed { curve, key, modifier } => ce.keyframe_pressed(curve, key, modifier),
+                DopeKeyframeDragged { curve, key, delta_time } => {
+                    // 与曲线编辑器同一条拖拽路径，值增量恒为 0（摄影表只有时间轴）
+                    ce.keyframe_dragged(curve, key, delta_time, 0.0, SlintKeyframeDragMode::Move)
+                }
+                DopeKeyframeReleased { curve, key, moved } => {
+                    let tags = ce.keyframe_released(curve, key, moved);
+                    self.write_view_to_model();
+                    tags
+                }
+                DopeKeyframeDeselectAll => {
+                    let ms = ce.deselect_all();
+                    vec![Tag::AnimationSelectionChanged { summary_ms: ms }]
+                }
+                DopeMarqueeSelect {
+                    x_lo,
+                    x_hi,
+                    row_lo,
+                    row_hi,
+                    modifier,
+                } => ce.dope_marquee_select(x_lo, x_hi, row_lo, row_hi, modifier),
+                DopeSummaryPressed { index, modifier } => ce.summary_keyframe_pressed(index, modifier),
+                DopeSummaryDragged { index, delta_time } => ce.summary_keyframe_dragged(index, delta_time),
+                DopeSummaryReleased { index, moved } => {
+                    let tags = ce.summary_keyframe_released(index, moved);
+                    self.write_view_to_model();
+                    tags
+                }
                 CurveColorModeChanged { curve, mode } => ce.set_curve_color_mode(curve, mode),
                 KeyframeInterpolationChanged { interpolation } => {
                     let tags = ce.set_selected_keyframes_interpolation(interpolation);

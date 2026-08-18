@@ -1,0 +1,36 @@
+// 摄影表标题栏：通用 AreaHeader + 中区 Action 下拉菜单 + 右侧操作按钮（占位）。
+// 中区注入 Dropdown（同样式图/应用图链选择器的位置与样式），数据来自 AnimationState。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AreaHeader } from "../area_header.slint";
+import { Dropdown } from "../../widgets/dropdown.slint";
+import { AnimationState } from "../../bridge/state.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+
+export component DopeSheetToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+
+        // 中区（@children 注入）：Action 选择下拉菜单
+        Dropdown {
+            items: AnimationState.action-items;
+            current-index: AnimationState.current-action;
+            current-text: AnimationState.action-name;
+            selected(i) => {
+                AnimationCallbacks.action-selected(i);
+            }
+        }
+
+        // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
+        right-actions: [
+            { icon: @image-url("../../assets/icons/dope_sheet.svg") },
+            { icon: @image-url("../../assets/icons/grid_4x4.svg") },
+            { icon: @image-url("../../assets/icons/grid_on.svg") },
+        ];
+    }
+}

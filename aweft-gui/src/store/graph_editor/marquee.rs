@@ -30,13 +30,15 @@ impl GraphEditorState {
         let replacing = modifier == SlintSelectionModifier::None;
         let toggling = modifier == SlintSelectionModifier::Ctrl;
 
-        if replacing {
-            self.deselect_all();
-            self.pending_channel_selection.clear();
-        }
-
         let mut hit_channels: Vec<usize> = Vec::new();
         let mut affected_ms: HashSet<i64> = HashSet::new();
+
+        if replacing {
+            // 替换模式：先清空现存选中。返回的 ms 并入受影响集合——否则空框替换
+            // （框内无关键帧）时 summary_ms 为空，投影不重算汇总条带掩码，残留高亮。
+            affected_ms.extend(self.deselect_all());
+            self.pending_channel_selection.clear();
+        }
 
         for curve in channels {
             let visible = self
@@ -102,6 +104,9 @@ impl GraphEditorState {
 
     /// 摄影表空白处框选：按世界时间范围 [x_lo, x_hi] 与行（通道）区间 [row_lo, row_hi]
     /// 选中范围内、且通道可见的关键帧（菱形中心落在框内）。
+    /// 行区间为**求交**语义：框选竖直范围与有效行区间无交集（如行区下方空白、
+    /// 汇总条带）时不命中任何通道——clamp 会把空框映射到首/末行，导致
+    /// "水平范围一覆盖关键帧就被选中"（竖直范围未命中任何行也误选）。
     /// 只在框选结束（grab 已结束）后调用，可直接更新 channels 外层模型。
     pub fn dope_marquee_select(
         &mut self,
@@ -115,14 +120,16 @@ impl GraphEditorState {
         if n <= 0 {
             return Vec::new();
         }
-        let r_lo = row_lo.max(0).min(n - 1);
-        let r_hi = row_hi.max(0).min(n - 1);
-        let (r_lo, r_hi) = (r_lo.min(r_hi), r_lo.max(r_hi));
+        let (r_lo, r_hi) = if row_lo <= row_hi { (row_lo, row_hi) } else { (row_hi, row_lo) };
+        let r_lo = r_lo.max(0);
+        let r_hi = r_hi.min(n - 1);
         let (t_lo, t_hi) = if x_lo <= x_hi { (x_lo, x_hi) } else { (x_hi, x_lo) };
         if t_hi < t_lo {
             return Vec::new();
         }
 
+        // r_lo > r_hi 时为空区间：竖直范围未命中任何通道（替换模式仍清空选择，
+        // 对齐曲线编辑器"空白框选 = 清除"的语义）
         let channels = r_lo as usize..=r_hi as usize;
         let (hit_channels, affected_ms) = self.marquee_select_keyframes(
             channels,

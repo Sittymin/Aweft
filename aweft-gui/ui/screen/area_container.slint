@@ -8,6 +8,8 @@ import { AppGraphToolbar } from "../areas/app_graph/toolbar.slint";
 import { NodeGraphEditor } from "../areas/node_graph/editor.slint";
 import { GraphEditor } from "../areas/graph_editor/graph_editor.slint";
 import { GraphEditorToolbar } from "../areas/graph_editor/toolbar.slint";
+import { DopeSheet } from "../areas/dope_sheet/dope_sheet.slint";
+import { DopeSheetToolbar } from "../areas/dope_sheet/toolbar.slint";
 import { VideoState } from "../bridge/state.slint";
 import { NodeGraphState, AnimationState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
@@ -56,6 +58,10 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
+        if area-type == SlintAreaType.dope-sheet: DopeSheetToolbar {
+            area-key: area-key;
+            area-type: area-type;
+        }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
         if area-type == SlintAreaType.viewport: VideoPlayer {
@@ -100,6 +106,19 @@ export component SlintScrArea inherits Rectangle {
             extrapolations: AnimationState.extrapolations;
             selected-keyframes: AnimationState.selected-keyframes;
             selected-interpolation: AnimationState.selected-interpolation;
+        }
+        if area-type == SlintAreaType.dope-sheet: dope-editor := DopeSheet {
+            channels: AnimationState.channels;
+            dope-channels: AnimationState.dope-channels;
+            dope-connections: AnimationState.dope-connections;
+            summary-keyframes: AnimationState.dope-summary-keyframes;
+            current-time: AnimationState.current-time;
+            current-channel: AnimationState.current-channel;
+            action-start: AnimationState.action-start;
+            action-end: AnimationState.action-end;
+            // 编辑器在窗口中的位置（搜索框遮罩挖孔定位）
+            window-x: root.container-x + self.x;
+            window-y: root.container-y + self.y;
         }
     }
 

@@ -1,0 +1,57 @@
+// 编辑器左侧面板共用搜索栏（摄影表 / NLA 等左侧面板的顶部搜索框）。
+// 顶部搜索框 + 底部分隔线；聚焦时上报激活、由全窗口编辑遮罩差集挖孔定位。
+//
+// ⚠️ 使用陷阱（Slint 1.17，曾排查很久）：本组件宽度/高度由内部绑定决定，
+// 在布局外作为子元素时**必须显式设置 x / y**（如 x:0px; y:0px），否则 Slint
+// 会把"没有 x/y 的隐式尺寸元素"**居中**到父元素内部，而不是放在左上角——
+// 导致搜索栏跑到面板中部（NLA/摄影表左侧顶部因此出现空白占位行）。
+import { InputBox } from "input_box.slint";
+import { Theme } from "../theme/index.slint";
+
+export component EditorSearchBar inherits Rectangle {
+    in property <length> search-height;
+    in property <bool> search-active-mirror: false;
+    in property <string> placeholder-text: "搜索";
+    callback text-changed(text: string);
+    callback focus-changed(focused: bool);
+    // 搜索框在本组件内的位置与大小（供编辑器遮罩据此挖孔；由 InputBox 上报）
+    out property <length> input-x <=> search-box.input-x;
+    out property <length> input-y <=> search-box.input-y;
+    out property <length> input-width <=> search-box.input-width;
+    out property <length> input-height <=> search-box.input-height;
+
+    width: 100%;
+    height: root.search-height;
+    background: Theme.data.animation-editor.ruler-background;
+
+    // 搜索框（与标尺同层背景）；通用输入框组件，聚焦时上报激活、由遮罩差集挖孔
+    search-box := InputBox {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        icon: @image-url("../assets/icons/search.svg");
+        show-icon: true;
+        search-overlay: true;
+        active-mirror: root.search-active-mirror;
+        placeholder-text: root.placeholder-text;
+        font-size: 11px;
+        text-color: Theme.data.animation-editor.ruler-text;
+        placeholder-color: Theme.data.animation-editor.channel-muted-text;
+        text-changed(text) => {
+            root.text-changed(text);
+        }
+        focus-changed(focused) => {
+            root.focus-changed(focused);
+        }
+    }
+
+    // 底部分隔线（与网格色一致）
+    Rectangle {
+        x: 0px;
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Theme.data.animation-editor.grid-color;
+    }
+}
