@@ -150,12 +150,11 @@ impl CurveEditorState {
             if !curves.contains(&loc.curve) {
                 curves.push(loc.curve);
             }
-            handle_preview.push(loc);
-            handle_preview.push(HandleLoc {
-                curve: loc.curve,
-                key: loc.key,
-                is_in: !loc.is_in,
-            });
+            for loc in [loc, HandleLoc { curve: loc.curve, key: loc.key, is_in: !loc.is_in }] {
+                if !handle_preview.contains(&loc) {
+                    handle_preview.push(loc);
+                }
+            }
         }
         vec![Tag::AnimationKeyframesChanged {
             curves,

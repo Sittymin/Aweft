@@ -34,7 +34,7 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 - `op_animation_structure` → apply_structure（重建 keyframe_models/channels 行/filters/派生模型/外推/Action 菜单）+ 重新绑定过滤视图到 Slint
 - `op_animation_keyframes` → apply_keyframes（sync_keyframe_model + rebuild_curve + update_extrapolation + 汇总/预览子函数）
 - `op_animation_selection` → apply_selection（纯选中同步：sync_channel_rows / sync_selected_display / sync_keyframe_selection / update_handle_selection_visual / update_summary_entries）
-- `op_animation_drag_ended` → apply_drag_ended（clear_drag_preview（预览清空+恢复普通手柄）/ resort_keyframes / ensure_default_handles（Move 拖拽后为贝塞尔关键帧补缺失侧默认水平柄——边缘延伸是水平的，默认柄水平延伸 1/3 间距））
+- `op_animation_drag_ended` → apply_drag_ended（clear_drag_preview（预览清空+恢复普通手柄）/ resort_keyframes / ensure_default_handles（Move 拖拽后为贝塞尔关键帧补缺失侧默认水平柄——边缘延伸是水平的，默认柄水平延伸 1/2 间距））
 - `op_animation_channel` → apply_channel（通道行/段手柄颜色/连接线/汇总）
 - `op_animation_scalars` → 同步标量（handles 全部动画 kind）
 

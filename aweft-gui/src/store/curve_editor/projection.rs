@@ -85,16 +85,19 @@ impl CurveEditorState {
         // 为贝塞尔关键帧补缺失侧的默认水平柄（写数据——恢复编辑不变量，与 resort_keyframes 同类）。
         // 手柄拖拽（dragged_curve = None）与 Shift 拖出柄（DragOutHandle，summary_ms 空）
         // 不触发——拖柄不改变边缘性，且用户可能故意把柄钳到 0 长度，不该被覆盖。
-        if dragged_curve.is_some() && !summary_ms.is_empty() {
-            self.ensure_default_handles(curves);
-        }
+        let ensure_handles = dragged_curve.is_some() && !summary_ms.is_empty();
         for &curve in curves {
+            // 每帧一次排序：ensure（邻居检查）与外推线（首末）复用，避免重复排序
+            let sorted = self.sorted_indices(curve);
+            if ensure_handles {
+                self.ensure_default_handles(curve, &sorted);
+            }
             // 嵌套模型同步（拖拽期间数量不变，set_row_data 保住 grab）
             self.sync_keyframe_model(curve);
             // 段/手柄/连接线：数量不变原地更新，数量变化 splice
             self.rebuild_curve(curve);
             // 外推线数据（排序后首末）——拖拽期间实时跟随
-            self.update_extrapolation(curve);
+            self.update_extrapolation(curve, &sorted);
         }
         // 关键帧拖拽的手柄软钳制预览：只对被拖通道替换 handles 区间
         if let Some(curve) = dragged_curve {
@@ -111,48 +114,76 @@ impl CurveEditorState {
         }
     }
 
+    /// 通道关键帧按时间排序后的下标（每帧一次，供 ensure/extrapolation 复用）。
+    fn sorted_indices(&self, curve: usize) -> Vec<usize> {
+        let Some(kfs) = self.editing_keyframes.get(&curve) else {
+            return Vec::new();
+        };
+        let mut sorted: Vec<usize> = (0..kfs.len()).collect();
+        sorted.sort_by(|&a, &b| {
+            kfs[a]
+                .time
+                .partial_cmp(&kfs[b].time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sorted
+    }
+
     /// 为贝塞尔关键帧补缺失侧的默认水平柄（恢复编辑不变量）。
     ///
     /// 边缘关键帧只有一侧柄（另一侧无角度数据）；拖拽让它变成中间关键帧后，
     /// 新的一侧相邻段若为贝塞尔，该侧手柄缺失（偏移为零，看不见也拖不动）。
-    /// 边缘延伸是水平的，因此默认柄也水平延伸 1/3 相邻间距（与插值切换补柄一致）。
+    /// 边缘延伸是水平的，因此默认柄也水平延伸 1/2 相邻间距（与插值切换补柄一致）。
     /// 幂等：已补过的（偏移非零）不重复补。
-    fn ensure_default_handles(&mut self, curves: &[usize]) {
-        for &curve in curves {
-            let Some(kfs) = self.editing_keyframes.get_mut(&curve) else {
-                continue;
-            };
-            let mut sorted: Vec<usize> = (0..kfs.len()).collect();
-            sorted.sort_by(|&a, &b| {
-                kfs[a]
-                    .time
-                    .partial_cmp(&kfs[b].time)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (pos, &idx) in sorted.iter().enumerate() {
-                // 入柄：左侧段是贝塞尔才需要；偏移为零 → 补水平柄
-                if pos > 0 {
-                    let prev = kfs[sorted[pos - 1]].clone();
-                    if prev.interpolation == SlintInterpolation::Bezier {
-                        let kf = &mut kfs[idx];
-                        if kf.handle_in.time_offset == 0.0 && kf.handle_in.value_offset == 0.0 {
-                            kf.handle_in = SlintBezierHandle {
-                                time_offset: -(kf.time - prev.time) / 3.0,
+    /// 复用调用方的排序结果（`sorted` = `sorted_indices` 输出），不再重复排序。
+    fn ensure_default_handles(&mut self, curve: usize, sorted: &[usize]) {
+        let Some(kfs) = self.editing_keyframes.get(&curve) else {
+            return;
+        };
+        // 先收集要补的柄（不可变读），再统一写回（避免借用冲突）
+        let mut fixes: Vec<(usize, bool, SlintBezierHandle)> = Vec::new();
+        for (pos, &idx) in sorted.iter().enumerate() {
+            // 入柄：左侧段是贝塞尔才需要；偏移为零 → 补水平柄
+            if pos > 0 {
+                let prev = &kfs[sorted[pos - 1]];
+                if prev.interpolation == SlintInterpolation::Bezier {
+                    let kf = &kfs[idx];
+                    if kf.handle_in.time_offset == 0.0 && kf.handle_in.value_offset == 0.0 {
+                        fixes.push((
+                            idx,
+                            true,
+                            SlintBezierHandle {
+                                time_offset: -(kf.time - prev.time) / 2.0,
                                 value_offset: 0.0,
-                            };
-                        }
+                            },
+                        ));
                     }
                 }
-                // 出柄：本关键帧是贝塞尔且右侧有邻居才需要；偏移为零 → 补水平柄
-                if pos + 1 < sorted.len() && kfs[idx].interpolation == SlintInterpolation::Bezier {
-                    let next = kfs[sorted[pos + 1]].clone();
-                    let kf = &mut kfs[idx];
-                    if kf.handle_out.time_offset == 0.0 && kf.handle_out.value_offset == 0.0 {
-                        kf.handle_out = SlintBezierHandle {
-                            time_offset: (next.time - kf.time) / 3.0,
+            }
+            // 出柄：本关键帧是贝塞尔且右侧有邻居才需要；偏移为零 → 补水平柄
+            if pos + 1 < sorted.len() && kfs[idx].interpolation == SlintInterpolation::Bezier {
+                let next = &kfs[sorted[pos + 1]];
+                let kf = &kfs[idx];
+                if kf.handle_out.time_offset == 0.0 && kf.handle_out.value_offset == 0.0 {
+                    fixes.push((
+                        idx,
+                        false,
+                        SlintBezierHandle {
+                            time_offset: (next.time - kf.time) / 2.0,
                             value_offset: 0.0,
-                        };
-                    }
+                        },
+                    ));
+                }
+            }
+        }
+        if !fixes.is_empty()
+            && let Some(kfs) = self.editing_keyframes.get_mut(&curve)
+        {
+            for (idx, is_in, handle) in fixes {
+                if is_in {
+                    kfs[idx].handle_in = handle;
+                } else {
+                    kfs[idx].handle_out = handle;
                 }
             }
         }
@@ -160,7 +191,7 @@ impl CurveEditorState {
 
     /// 把通道的关键帧数据同步到嵌套 Slint 模型（逐行 set_row_data，只写变化的行）。
     /// 拖拽期间行数不变；行数变化（结构变化）由 apply_structure 重建。
-    fn sync_keyframe_model(&mut self, curve: usize) {        let Some(data) = self.editing_keyframes.get(&curve).cloned() else {
+    fn sync_keyframe_model(&mut self, curve: usize) {        let Some(data) = self.editing_keyframes.get(&curve) else {
             return;
         };
         let Some(model) = self.keyframe_models.get(&curve) else {
@@ -186,24 +217,21 @@ impl CurveEditorState {
 
     /// 重建单通道的外推线数据：按时间排序取首/末关键帧。
     /// 拖拽期间关键帧模型保序（下标 0 不一定是时间最小），外推线必须读排序结果。
-    fn update_extrapolation(&mut self, curve: usize) {
+    /// 复用调用方的排序结果（`sorted` = `sorted_indices` 输出），不再重复排序。
+    fn update_extrapolation(&mut self, curve: usize, sorted: &[usize]) {
         let Some(kfs) = self.editing_keyframes.get(&curve) else {
             return;
         };
-        if kfs.is_empty() {
+        if sorted.is_empty() {
             return;
         }
-        let mut sorted: Vec<&SlintKeyframe> = kfs.iter().collect();
-        sorted.sort_by(|a, b| {
-            a.time
-                .partial_cmp(&b.time)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let first = &kfs[sorted[0]];
+        let last = &kfs[*sorted.last().unwrap()];
         let entry = SlintExtrapolation {
-            first_time: sorted[0].time,
-            first_value: sorted[0].value,
-            last_time: sorted[sorted.len() - 1].time,
-            last_value: sorted[sorted.len() - 1].value,
+            first_time: first.time,
+            first_value: first.value,
+            last_time: last.time,
+            last_value: last.value,
         };
         self.extrapolations.set_row_data(curve, entry);
     }

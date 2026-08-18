@@ -106,8 +106,8 @@ impl CurveEditorState {
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
 
-        // (模型下标, 关键帧)，按时间排序
-        let mut kfs: Vec<(usize, SlintKeyframe)> = kfs.iter().cloned().enumerate().collect();
+        // (模型下标, 关键帧引用)，按时间排序
+        let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
         kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut segments = Vec::new();

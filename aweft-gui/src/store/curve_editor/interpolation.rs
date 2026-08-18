@@ -34,18 +34,18 @@ impl CurveEditorState {
                         // 入柄：仅有左侧段是贝塞尔时才会显示；这里预置，右侧邻居切贝塞尔时即可用
                         if pos > 0 && handle_in.time_offset == 0.0 && handle_in.value_offset == 0.0 {
                             handle_in = SlintBezierHandle {
-                                time_offset: -(t - prev_t) / 3.0,
+                                time_offset: -(t - prev_t) / 2.0,
                                 value_offset: 0.0,
                             };
                         }
                         let mut handle_out = kf.handle_out.clone();
-                        // 出柄：本关键帧为贝塞尔 → 右侧段为贝塞尔，默认外伸 1/3 间距
+                        // 出柄：本关键帧为贝塞尔 → 右侧段为贝塞尔，默认外伸 1/2 间距
                         if pos + 1 < sorted.len()
                             && handle_out.time_offset == 0.0
                             && handle_out.value_offset == 0.0
                         {
                             handle_out = SlintBezierHandle {
-                                time_offset: (next_t - t) / 3.0,
+                                time_offset: (next_t - t) / 2.0,
                                 value_offset: 0.0,
                             };
                         }

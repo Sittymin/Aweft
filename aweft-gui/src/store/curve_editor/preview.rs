@@ -28,7 +28,7 @@ impl CurveEditorState {
             .get(curve)
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
-        let mut kfs: Vec<(usize, SlintKeyframe)> = kfs.iter().cloned().enumerate().collect();
+        let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
         kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
 
         let eps = 1e-4;
@@ -83,7 +83,7 @@ impl CurveEditorState {
             .get(curve)
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
-        let mut kfs: Vec<(usize, SlintKeyframe)> = kfs.iter().cloned().enumerate().collect();
+        let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
         kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
         let last = kfs.len().saturating_sub(1);
 
@@ -151,7 +151,7 @@ impl CurveEditorState {
             .get(curve)
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
-        let mut kfs: Vec<(usize, SlintKeyframe)> = kfs.iter().cloned().enumerate().collect();
+        let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
         kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
         let pos = kfs.iter().position(|&(i, _)| i == key)?;
         let eps = 1e-4;

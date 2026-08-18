@@ -16,7 +16,7 @@ impl CurveEditorState {
             let c = ch.curve_index as usize;
             let Some(kfs) = self.editing_keyframes.get(&c) else { continue };
             let Some(ch_data) = self.channels_data.get(c) else { continue };
-            let mut kfs: Vec<SlintKeyframe> = kfs.clone();
+            let mut kfs: Vec<&SlintKeyframe> = kfs.iter().collect();
             kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
             for i in 0..kfs.len().saturating_sub(1) {
                 let interp = kfs[i].interpolation;
@@ -64,7 +64,7 @@ impl CurveEditorState {
                 if ch.curve_index as usize == curve {
                     let Some(kfs) = self.editing_keyframes.get(&curve) else { continue };
                     let Some(ch_data) = self.channels_data.get(curve) else { continue };
-                    let mut kfs: Vec<SlintKeyframe> = kfs.clone();
+                    let mut kfs: Vec<&SlintKeyframe> = kfs.iter().collect();
                     kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
                     for i in 0..kfs.len().saturating_sub(1) {
                         let interp = kfs[i].interpolation;

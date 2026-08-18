@@ -928,8 +928,8 @@ fn linear_to_bezier_creates_out_handle_with_default_offset() {
     let h_out = st.handles.row_data(0).unwrap();
     assert!(!h_out.is_in);
     assert_eq!(h_out.keyframe_index, 1);
-    // 默认外伸 1/3 间距（4→8 为 4，外伸 4/3 ≈ 1.333）
-    assert!((h_out.handle_time - (4.0 + 4.0 / 3.0)).abs() < 0.001);
+    // 默认外伸 1/2 间距（4→8 为 4，外伸 4/2 = 2.0）
+    assert!((h_out.handle_time - (4.0 + 4.0 / 2.0)).abs() < 0.001);
     assert!((h_out.handle_value - 10.0).abs() < 0.001);
 
     let h_in = st.handles.row_data(1).unwrap();
@@ -939,7 +939,7 @@ fn linear_to_bezier_creates_out_handle_with_default_offset() {
     // 出柄在模型中的值同步更新
     let kf = st.keyframe_models[&0].row_data(1).unwrap();
     assert_eq!(kf.interpolation, SlintInterpolation::Bezier);
-    assert!((kf.handle_out.time_offset - 4.0 / 3.0).abs() < 0.001);
+    assert!((kf.handle_out.time_offset - 4.0 / 2.0).abs() < 0.001);
 
     // 右侧段应为贝塞尔，且控制点不再与端点重合（曲线呈弧形）
     let seg = st.segments.row_data(1).unwrap();
@@ -2092,8 +2092,8 @@ fn edge_keyframe_becomes_interior_gets_default_handle() {
     // 拖拽中（未松开）新入柄已补：水平向左延伸 1/3 间距
     let kf0 = &st.editing_keyframes[&0][0];
     assert!(
-        (kf0.handle_in.time_offset - (-1.0 / 3.0)).abs() < 1e-4,
-        "新入柄应水平向左延伸间距/3，实际 {}",
+        (kf0.handle_in.time_offset - (-1.0 / 2.0)).abs() < 1e-4,
+        "新入柄应水平向左延伸间距/2，实际 {}",
         kf0.handle_in.time_offset
     );
     assert_eq!(kf0.handle_in.value_offset, 0.0);
