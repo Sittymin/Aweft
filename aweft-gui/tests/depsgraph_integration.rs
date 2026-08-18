@@ -856,7 +856,7 @@ fn animation_init_creates_empty_editing_action() {
     store.new_editing_action("主 Action");
 
     let (list_len, current, channels, action_name) = {
-        let ce = &store.ui_models().curve_editor;
+        let ce = &store.ui_models().graph_editor;
         (
             ce.actions.len(),
             ce.current_action,
@@ -886,7 +886,7 @@ fn animation_hack_test_data_populates_model_and_view() {
     store.create_test_animation_data();
 
     let (list_len, current, channel_count) = {
-        let ce = &store.ui_models().curve_editor;
+        let ce = &store.ui_models().graph_editor;
         (
             ce.actions.len(),
             ce.current_action,
@@ -910,7 +910,7 @@ fn animation_dispatch_projects_derived_models() {
     let instance = MainWindow::new().unwrap();
     let mut store = AppStore::new(&instance);
     store.create_test_animation_data();
-    let ce = &mut store.ui_models_mut().curve_editor;
+    let ce = &mut store.ui_models_mut().graph_editor;
 
     use aweft_gui::actions::animation::AnimationAction;
     use aweft_gui::bridge::types::{SlintKeyframeDragMode, SlintSelectionModifier};
@@ -924,7 +924,7 @@ fn animation_dispatch_projects_derived_models() {
         }))
         .unwrap();
     store.evaluate_depsgraph();
-    let ce = &store.ui_models().curve_editor;
+    let ce = &store.ui_models().graph_editor;
     assert_eq!(ce.selected_display.row_data(0), Some(true), "投影应同步通道选中显示掩码");
     assert_eq!(ce.selected_keyframe_count(), 1, "投影后选中关键帧计数 = 1");
 
@@ -939,7 +939,7 @@ fn animation_dispatch_projects_derived_models() {
         }))
         .unwrap();
     store.evaluate_depsgraph();
-    let ce = &store.ui_models().curve_editor;
+    let ce = &store.ui_models().graph_editor;
     // 段 0 终点跟随关键帧新位置（投影重建）
     let seg0 = ce.segments.row_data(0).unwrap();
     assert_eq!(seg0.x1, 4.0);
@@ -954,7 +954,7 @@ fn animation_dispatch_projects_derived_models() {
         }))
         .unwrap();
     store.evaluate_depsgraph();
-    let id = store.ui_models().curve_editor.current_action_id().unwrap();
+    let id = store.ui_models().graph_editor.current_action_id().unwrap();
     let action = store.state().project.library.animation_library.actions.get(&id).unwrap();
     assert!(action.curves[0].curve.keyframes.iter().any(|k| (k.time - 4.0).abs() < 1e-6));
 }

@@ -2,10 +2,10 @@
 
 use slint::Model;
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use crate::bridge::types::{SlintDopeConnection, SlintInterpolation, SlintKeyframe};
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 重建摄影表连接线：遍历摄影表过滤视图（压缩，仅匹配搜索的通道），
     /// 每个通道内按时间排序后，相邻关键帧之间为线性/常量插值的加一条连接。
     /// row-index 为压缩视图行号（画布行位置用）；visible 反映通道眼睛。

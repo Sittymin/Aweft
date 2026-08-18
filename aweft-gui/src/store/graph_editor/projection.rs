@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use slint::Model;
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use crate::bridge::converters::build_action_menu_items;
 use crate::bridge::types::{
     SlintBezierHandle, SlintExtrapolation, SlintHandleMarker, SlintInterpolation, SlintKeyframe,
@@ -18,7 +18,7 @@ use crate::bridge::types::{
 use crate::depsgraph::{HandleLoc, Tag};
 use slint::SharedString;
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 投影入口：按 tag 语义分派到对应的派生层更新。
     /// 每个 op（`op_animation_*`）先过滤出自己处理的 tag 再调用这里。
     pub(crate) fn apply_tags(&mut self, tags: &[Tag]) {

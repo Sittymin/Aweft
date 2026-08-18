@@ -5,14 +5,14 @@
 
 use slint::{Color, Model};
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use super::curve_math::make_segment;
 use crate::bridge::types::{
     SlintHandleMarker, SlintInterpolation, SlintKeyframe, SlintCurveSegment,
 };
 use crate::depsgraph::HandleLoc;
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 全量重算派生数据。**仅用于初始化/重置**（load_action / reset_action）；
     /// 运行时交互应使用 `rebuild_curve`，不应调用此方法。
     pub(super) fn rebuild_all(&mut self) {

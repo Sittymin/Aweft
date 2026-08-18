@@ -59,9 +59,9 @@ pub struct AppState {
     // 保持 Sink 生命周期
     pub video_sink: Option<gstreamer::Element>,
     // WGPU 视频 Sink 实例
-    pub wgpu_sink: Option<crate::slint_video_sink::SlintWGPUSink>,
+    pub wgpu_sink: Option<crate::render::video_sink::SlintWGPUSink>,
     // 字幕渲染器
-    pub subtitle_renderer: Option<crate::wgpu_subtitle_renderer::SubtitleRenderer>,
+    pub subtitle_renderer: Option<crate::render::subtitle::SubtitleRenderer>,
     // libass 字幕渲染器
     pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
 }

@@ -1,6 +1,6 @@
 //! 动画投影：曲线编辑器（Graph Editor）/ 摄影表（Dope Sheet）派生层更新。
 //!
-//! 权威数据在编辑数据层（`CurveEditorState::channels_data`/`editing_keyframes`/UI 态）
+//! 权威数据在编辑数据层（`GraphEditorState::channels_data`/`editing_keyframes`/UI 态）
 //! 与 model（`Project.library.animation_library.actions`，松开时写回）。
 //! reducer 只改数据层 + 打精确 tag；各 op 按 TagKind 路由，把数据层同步到
 //! Slint 绑定模型（channels/keyframe_models/segments/handles/connections/summary/
@@ -22,7 +22,7 @@ pub fn op_animation_structure(store: &mut AppStore, tags: &[Tag]) {
     if structure.is_empty() {
         return;
     }
-    store.ui_models.curve_editor.apply_tags(&structure);
+    store.ui_models.graph_editor.apply_tags(&structure);
     store.rebind_animation_filters();
 }
 
@@ -36,7 +36,7 @@ pub fn op_animation_keyframes(store: &mut AppStore, tags: &[Tag]) {
     if keyframes.is_empty() {
         return;
     }
-    store.ui_models.curve_editor.apply_tags(&keyframes);
+    store.ui_models.graph_editor.apply_tags(&keyframes);
 }
 
 /// 动画：选中变化 → 显示掩码/嵌套模型 selected/手柄选中/汇总掩码同步。
@@ -49,7 +49,7 @@ pub fn op_animation_selection(store: &mut AppStore, tags: &[Tag]) {
     if selection.is_empty() {
         return;
     }
-    store.ui_models.curve_editor.apply_tags(&selection);
+    store.ui_models.graph_editor.apply_tags(&selection);
 }
 
 /// 动画：通道属性变化 → 通道行同步 + 连接线/汇总重建。
@@ -62,7 +62,7 @@ pub fn op_animation_channel(store: &mut AppStore, tags: &[Tag]) {
     if channel.is_empty() {
         return;
     }
-    store.ui_models.curve_editor.apply_tags(&channel);
+    store.ui_models.graph_editor.apply_tags(&channel);
 }
 
 /// 动画：拖拽结束整理（预览恢复/重排）→ 恢复编辑不变量。
@@ -76,7 +76,7 @@ pub fn op_animation_drag_ended(store: &mut AppStore, tags: &[Tag]) {
     if drag_ended.is_empty() {
         return;
     }
-    store.ui_models.curve_editor.apply_tags(&drag_ended);
+    store.ui_models.graph_editor.apply_tags(&drag_ended);
 }
 
 /// 动画：标量变化（播放头/当前通道/选中数/插值聚合）→ 同步到 Slint 全局。

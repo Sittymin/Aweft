@@ -4,11 +4,11 @@ use std::rc::Rc;
 
 use slint::{Model, ModelExt, ModelRc};
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use crate::depsgraph::Tag;
 use crate::bridge::types::{SlintCurveSegment, SlintFCurveChannel, SlintHandleMarker};
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 重建曲线编辑器 / 摄影表各自的通道过滤视图，以及曲线编辑器画布的段/手柄过滤视图
     /// （都通过 ModelExt::filter 语法糖构造 FilterModel，自动跟随底层模型变化）。
     pub(super) fn rebuild_filters(&mut self) {

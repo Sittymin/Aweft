@@ -3,7 +3,7 @@
 //! 路由与执行顺序由依赖图自动完成，操作内部不手动维护执行关系。
 //!
 //! 权威数据在 model（`Project.library.node_graphs` / `Project.style_layer.graphs`）。
-//! reducer 修改权威数据 + 打精确 tag（携带操作信息），投影据此调 `GraphEditorState::apply_change`
+//! reducer 修改权威数据 + 打精确 tag（携带操作信息），投影据此调 `NodeGraphState::apply_change`
 //! 局部更新（row_added/row_removed/row_changed）。
 //!
 //! 树类型（`NodeGraphKind`）只用于选择当前编辑图——经 `AppStore::with_graph`（唯一访问器，

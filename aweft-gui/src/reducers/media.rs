@@ -52,7 +52,7 @@ pub fn connect_video_to_wgpu(
         .clone();
 
     // 1. 创建 WGPU Sink
-    let (sink_element, mut wgpu_sink) = crate::slint_video_sink::create_sink(&pipeline);
+    let (sink_element, mut wgpu_sink) = crate::render::video_sink::create_sink(&pipeline);
 
     // 2. 获取消息总线
     let bus = pipeline.bus().context("无法获取 GStreamer Bus")?;

@@ -7,19 +7,19 @@ use crate::bridge::types::{
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
-use crate::store::curve_editor::CurveEditorState;
 use crate::store::graph_editor::GraphEditorState;
+use crate::store::node_graph::NodeGraphState;
 use crate::store::line_editor::LineEditorState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
 pub struct UiModels {
     pub line_editor_state: LineEditorState,
     /// 样式图编辑器状态（节点/连线/链/角色）
-    pub style_graph: GraphEditorState,
+    pub style_graph: NodeGraphState,
     /// 应用图编辑器状态
-    pub app_graph: GraphEditorState,
-    /// 曲线编辑器状态（通道/关键帧/段/手柄，自持 VecModels）
-    pub curve_editor: CurveEditorState,
+    pub app_graph: NodeGraphState,
+    /// 图编辑器（动画，Graph Editor）状态（通道/关键帧/段/手柄，自持 VecModels）
+    pub graph_editor: GraphEditorState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -33,9 +33,9 @@ impl UiModels {
     pub fn new() -> Self {
         Self {
             line_editor_state: LineEditorState::new(),
-            style_graph: GraphEditorState::default(),
-            app_graph: GraphEditorState::default(),
-            curve_editor: CurveEditorState::default(),
+            style_graph: NodeGraphState::default(),
+            app_graph: NodeGraphState::default(),
+            graph_editor: GraphEditorState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),

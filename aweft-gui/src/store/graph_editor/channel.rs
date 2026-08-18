@@ -4,11 +4,11 @@
 use log::warn;
 use slint::{Color, Model};
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use crate::bridge::types::{SlintColorMode, SlintSelectionModifier};
 use crate::depsgraph::Tag;
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 摄影表点击压缩视图中的一行：把显示行映射回真实通道下标再选中。
     pub fn dope_channel_pressed(&mut self, view_row: usize, modifier: SlintSelectionModifier) -> Vec<Tag> {
         let real = self

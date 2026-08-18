@@ -8,7 +8,7 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
   → 返回精确 tag → depsgraph → op_animation_*（投影，更新派生层）
 ```
 
-**两层状态**（`src/store/curve_editor/`）：
+**两层状态**（`src/store/graph_editor/`，即图编辑器）：
 - **数据层**（reducer 可写）：`channels_data`（通道属性）、`editing_keyframes`（关键帧数据）、
   选中集与 UI 态（selected_handles/搜索/缩放/锚点/pending 选择）
 - **派生层**（只由投影写）：`channels`/`keyframe_models`/`extrapolations`（Slint 绑定模型）、
@@ -17,7 +17,7 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 
 **位置/拖拽上下文类型**（元组语义化）：
 - `HandleLoc{curve, key, is_in}`（depsgraph/tag.rs）——selected_handles、handle_preview 等
-- `KeyframeLoc{curve, key}`（curve_editor）——关键帧锚点/重合点
+- `KeyframeLoc{curve, key}`（graph_editor）——关键帧锚点/重合点
 - `SummaryDrag{index, delta_time}`（depsgraph/tag.rs）——汇总拖拽
 - `KeyframeUpdate`/`KeyframeTimeUpdate`——reducer 收集后统一写回
 
@@ -30,7 +30,7 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 - `AnimationChannelChanged{curve}` — 可见/激活/可编辑/颜色模式
 - `AnimationScalarsChanged` — 播放头/标量
 
-**投影**（`projections/animation.rs` + `curve_editor/projection.rs`，每个 apply_* 按职责拆单一目的子函数）：
+**投影**（`projections/animation.rs` + `graph_editor/projection.rs`，每个 apply_* 按职责拆单一目的子函数）：
 - `op_animation_structure` → apply_structure（重建 keyframe_models/channels 行/filters/派生模型/外推/Action 菜单）+ 重新绑定过滤视图到 Slint
 - `op_animation_keyframes` → apply_keyframes（sync_keyframe_model + rebuild_curve + update_extrapolation + 汇总/预览子函数）
 - `op_animation_selection` → apply_selection（纯选中同步：sync_channel_rows / sync_selected_display / sync_keyframe_selection / update_handle_selection_visual / update_summary_entries）

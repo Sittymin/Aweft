@@ -1,6 +1,6 @@
 //! 实证：按下关键帧时更新**外层通道模型**（`selected`）会破坏 Slint 拖拽抓取。
 //!
-//! 背景：`curve_editor` 因此把通道选中延迟到 released 写回，另设 `selected_display`
+//! 背景：`graph_editor` 因此把通道选中延迟到 released 写回，另设 `selected_display`
 //! 掩码（独立模型）让曲线在按下时即时高亮（"显示先动"）。本测试**锁定该约束**：
 //! 一旦 Slint 行为变化（外层模型更新不再破坏 grab），此测试会失败——那时即可移除
 //! 延迟写回与 `selected_display` 的解耦，直接在按下时更新 channels 模型。

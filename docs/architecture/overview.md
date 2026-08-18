@@ -11,7 +11,7 @@ UI 事件 → callbacks → Action → AppStore::dispatch
 
 **crate**：
 - `aweft-model`：数据模型（Project / AnimationLibrary / NodeGraph）
-- `aweft-gui`：GUI（actions / bridge / depsgraph / store / ui）
+- `aweft-gui`：GUI（actions / bridge / depsgraph / store / reducers / projections / screen / render / ui）
 - `aweft-libass`：ASS 渲染绑定
 
 **区域类型**：LineEditor ✅ | Viewport 占位 | StyleGraphEditor ✅ | AppGraphEditor ✅ | GraphEditor（动画）✅

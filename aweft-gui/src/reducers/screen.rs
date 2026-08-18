@@ -80,3 +80,24 @@ pub fn handle_initialize(state: &mut AppState, width: u32, height: u32) -> Resul
 
     Ok(vec![Tag::ScreenInitialized])
 }
+
+impl crate::store::AppStore {
+    pub(crate) fn dispatch_screen(
+        &mut self,
+        action: crate::actions::screen::ScreenAction,
+    ) -> Result<Vec<Tag>> {
+        use crate::actions::screen::ScreenAction;
+
+        match action {
+            ScreenAction::WindowResized { width, height } => {
+                handle_resize(&mut self.state, width, height)
+            }
+            ScreenAction::ScaleFactorChanged { scale_factor } => {
+                handle_scale_change(&mut self.state, scale_factor)
+            }
+            ScreenAction::InitializeLayout { width, height } => {
+                handle_initialize(&mut self.state, width, height)
+            }
+        }
+    }
+}

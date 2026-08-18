@@ -113,7 +113,7 @@ pub struct ActionData {
 }
 
 /// 曲线编辑器状态
-pub struct CurveEditorState {
+pub struct GraphEditorState {
     /// 通道属性数据（编辑权威；`keyframes` 字段为占位，投影写入真实 inner 模型）。
     pub(crate) channels_data: Vec<SlintFCurveChannel>,
     /// 关键帧数据（编辑权威）：通道下标 → 关键帧列表（与 `keyframe_models` 同序）。
@@ -199,7 +199,7 @@ pub struct CurveEditorState {
     pub(crate) handle_offsets: Vec<usize>,
 }
 
-impl Default for CurveEditorState {
+impl Default for GraphEditorState {
     fn default() -> Self {
         Self {
             channels_data: Vec::new(),
@@ -253,25 +253,25 @@ impl crate::store::AppStore {
         use slint::ComponentHandle;
 
         let state = instance.global::<crate::bridge::types::AnimationState>();
-        state.set_channels(ModelRc::from(self.ui_models.curve_editor.channels.clone()));
-        state.set_graph_channels(self.ui_models.curve_editor.graph_filter.clone());
-        state.set_dope_channels(self.ui_models.curve_editor.dope_filter.clone());
-        state.set_graph_segments(self.ui_models.curve_editor.graph_segments.clone());
-        state.set_graph_handles(self.ui_models.curve_editor.graph_handles.clone());
-        state.set_segments(ModelRc::from(self.ui_models.curve_editor.segments.clone()));
-        state.set_handles(ModelRc::from(self.ui_models.curve_editor.handles.clone()));
-        state.set_dope_connections(ModelRc::from(self.ui_models.curve_editor.dope_connections.clone()));
-        state.set_dope_summary_keyframes(ModelRc::from(self.ui_models.curve_editor.summary_keyframes.clone()));
-        state.set_extrapolations(ModelRc::from(self.ui_models.curve_editor.extrapolations.clone()));
-        state.set_current_time(self.ui_models.curve_editor.current_time as f32);
-        state.set_action_name(self.ui_models.curve_editor.action_name.clone());
-        state.set_action_items(ModelRc::from(self.ui_models.curve_editor.action_items.clone()));
-        state.set_current_action(self.ui_models.curve_editor.current_action);
-        state.set_action_start(self.ui_models.curve_editor.action_start);
-        state.set_action_end(self.ui_models.curve_editor.action_end);
-        state.set_current_channel(self.ui_models.curve_editor.current_channel as i32);
-        state.set_selected_channels(ModelRc::from(self.ui_models.curve_editor.selected_display.clone()));
-        state.set_preview_handles(ModelRc::from(self.ui_models.curve_editor.preview_handles.clone()));
+        state.set_channels(ModelRc::from(self.ui_models.graph_editor.channels.clone()));
+        state.set_graph_channels(self.ui_models.graph_editor.graph_filter.clone());
+        state.set_dope_channels(self.ui_models.graph_editor.dope_filter.clone());
+        state.set_graph_segments(self.ui_models.graph_editor.graph_segments.clone());
+        state.set_graph_handles(self.ui_models.graph_editor.graph_handles.clone());
+        state.set_segments(ModelRc::from(self.ui_models.graph_editor.segments.clone()));
+        state.set_handles(ModelRc::from(self.ui_models.graph_editor.handles.clone()));
+        state.set_dope_connections(ModelRc::from(self.ui_models.graph_editor.dope_connections.clone()));
+        state.set_dope_summary_keyframes(ModelRc::from(self.ui_models.graph_editor.summary_keyframes.clone()));
+        state.set_extrapolations(ModelRc::from(self.ui_models.graph_editor.extrapolations.clone()));
+        state.set_current_time(self.ui_models.graph_editor.current_time as f32);
+        state.set_action_name(self.ui_models.graph_editor.action_name.clone());
+        state.set_action_items(ModelRc::from(self.ui_models.graph_editor.action_items.clone()));
+        state.set_current_action(self.ui_models.graph_editor.current_action);
+        state.set_action_start(self.ui_models.graph_editor.action_start);
+        state.set_action_end(self.ui_models.graph_editor.action_end);
+        state.set_current_channel(self.ui_models.graph_editor.current_channel as i32);
+        state.set_selected_channels(ModelRc::from(self.ui_models.graph_editor.selected_display.clone()));
+        state.set_preview_handles(ModelRc::from(self.ui_models.graph_editor.preview_handles.clone()));
     }
 
     /// 新建一个**空的**编辑 Action 并装载（正确初始化路径）。
@@ -286,7 +286,7 @@ impl crate::store::AppStore {
             .library
             .animation_library
             .insert_action(action);
-        let ce = &mut self.ui_models.curve_editor;
+        let ce = &mut self.ui_models.graph_editor;
         ce.actions.push(ActionData {
             name: name.into(),
             id,
@@ -301,7 +301,7 @@ impl crate::store::AppStore {
             .expect("刚插入的 Action 应存在");
         let tags = ce.load_action(ce.current_action as usize, action);
         // 不经 dispatch 的直接调用路径：手动跑投影（结构变化 → 派生层重建 + 过滤视图重绑定）
-        self.ui_models.curve_editor.apply_tags(&tags);
+        self.ui_models.graph_editor.apply_tags(&tags);
         self.rebind_animation_filters();
     }
 
@@ -438,7 +438,7 @@ impl crate::store::AppStore {
         let run_id = lib.insert_action(run);
         let jump_id = lib.insert_action(jump);
 
-        let ce = &mut self.ui_models.curve_editor;
+        let ce = &mut self.ui_models.graph_editor;
         ce.actions = vec![
             ActionData {
                 name: "主 Action".into(),
@@ -466,7 +466,7 @@ impl crate::store::AppStore {
             .get_action(first_id)
             .expect("ActionId 应存在");
         let tags = ce.load_action(0, action);
-        self.ui_models.curve_editor.apply_tags(&tags);
+        self.ui_models.graph_editor.apply_tags(&tags);
         self.rebind_animation_filters();
     }
 }

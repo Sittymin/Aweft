@@ -1,14 +1,14 @@
 //! 关键帧交互（reducer 侧）：只改数据层（`editing_keyframes` selected/time/value、
 //! 选中集）并返回 tag；曲线段/手柄/汇总/显示掩码由投影（projection.rs）完成。
 
-use super::{ms_of, snap_ms, CurveEditorState, KeyframeLoc, KeyframeUpdate};
+use super::{ms_of, snap_ms, GraphEditorState, KeyframeLoc, KeyframeUpdate};
 use crate::bridge::types::{
     SlintBezierHandle, SlintInterpolation,
     SlintKeyframeDragMode, SlintSelectionModifier,
 };
 use crate::depsgraph::Tag;
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 关键帧按下：none=单选，shift=同通道区间扩展，ctrl=切换。锁定通道不可交互。
     ///
     /// 选中语义（对齐 Blender，避免拖拽反馈问题）：

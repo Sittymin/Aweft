@@ -97,3 +97,25 @@ pub fn handle_join(
         merged_into: target_area_key,
     }])
 }
+
+impl crate::store::AppStore {
+    pub(crate) fn dispatch_area(&mut self, action: crate::actions::area::AreaAction) -> Result<Vec<Tag>> {
+        use crate::actions::area::AreaAction;
+
+        match action {
+            AreaAction::SwitchType {
+                area_key,
+                area_type,
+            } => handle_switch_type(&mut self.state, area_key, area_type),
+            AreaAction::Split {
+                area_key,
+                preview_data,
+            } => handle_split(&mut self.state, area_key, preview_data),
+            AreaAction::Join {
+                source_area_key,
+                target_area_key,
+                adjacency,
+            } => handle_join(&mut self.state, source_area_key, target_area_key, adjacency),
+        }
+    }
+}

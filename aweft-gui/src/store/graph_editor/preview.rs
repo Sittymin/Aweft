@@ -8,13 +8,13 @@ use std::collections::HashMap;
 
 use slint::{Color, Model};
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use crate::bridge::types::SlintKeyframe;
 use super::curve_math::{make_segment, mk_marker};
 use crate::bridge::types::{SlintHandleMarker, SlintInterpolation};
 use crate::depsgraph::HandleLoc;
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 计算一个通道内所有被拖关键帧的相邻段"软钳制后"有效控制点。
     /// 关键帧拖拽时：选中的是关键帧，被拖关键帧的相邻手柄需要钳制预览。
     /// 返回 map：手柄位置（通道 = 参数 curve）→ 有效控制点。

@@ -1,8 +1,8 @@
-use super::CurveEditorState;
+use super::GraphEditorState;
 use crate::bridge::types::{SlintBezierHandle, SlintInterpolation, SlintInterpolationState};
 use crate::depsgraph::Tag;
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 设置全部选中关键帧的插值类型。选中集为空则忽略。
     /// 插值变化会改变手柄数量，需要全量重建。
     pub fn set_selected_keyframes_interpolation(&mut self, interpolation: SlintInterpolation) -> Vec<Tag> {

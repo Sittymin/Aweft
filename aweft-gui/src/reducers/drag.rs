@@ -114,7 +114,7 @@ pub fn handle_actionzone_end(
         } => {
             // 执行分割
             // HACK: 无视此函数的正常返回，!! 会导致未来撤销操作无法覆盖到分割
-            tags.extend(crate::store::reducers::area::handle_split(
+            tags.extend(crate::reducers::area::handle_split(
                 state,
                 source_area,
                 preview_data,
@@ -128,7 +128,7 @@ pub fn handle_actionzone_end(
         } => {
             // 执行合并
             // HACK: 无视此函数的正常返回，!! 会导致未来撤销操作无法覆盖到合并
-            tags.extend(crate::store::reducers::area::handle_join(
+            tags.extend(crate::reducers::area::handle_join(
                 state,
                 source_area_key,
                 target_area_key,
@@ -334,4 +334,48 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<Vec<Tag>
         areas_changed,
         topology_changed,
     }])
+}
+
+impl crate::store::AppStore {
+    pub(crate) fn dispatch_drag(&mut self, action: crate::actions::drag::DragAction) -> Result<Vec<Tag>> {
+        use crate::actions::drag::DragAction;
+
+        match action {
+            DragAction::ActionZone(az_action) => self.dispatch_actionzone_drag(az_action),
+            DragAction::Edge(edge_action) => self.dispatch_edge_drag(edge_action),
+        }
+    }
+
+    pub(crate) fn dispatch_actionzone_drag(
+        &mut self,
+        action: crate::actions::drag::ActionZoneDrag,
+    ) -> Result<Vec<Tag>> {
+        use crate::actions::drag::ActionZoneDrag;
+
+        match action {
+            ActionZoneDrag::Update {
+                area_key,
+                corner,
+                offset_x,
+                offset_y,
+            } => handle_actionzone_update(&mut self.state, area_key, corner, offset_x, offset_y),
+            ActionZoneDrag::End {
+                area_key,
+                is_cancel,
+            } => handle_actionzone_end(&mut self.state, area_key, is_cancel),
+        }
+    }
+
+    pub(crate) fn dispatch_edge_drag(&mut self, action: crate::actions::drag::EdgeDrag) -> Result<Vec<Tag>> {
+        use crate::actions::drag::EdgeDrag;
+
+        match action {
+            EdgeDrag::Update {
+                vert_keys,
+                offset_x,
+                offset_y,
+            } => handle_edge_update(&mut self.state, vert_keys, offset_x, offset_y),
+            EdgeDrag::End { is_cancel } => handle_edge_end(&mut self.state, is_cancel),
+        }
+    }
 }

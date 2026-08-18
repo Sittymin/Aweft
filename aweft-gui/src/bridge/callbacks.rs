@@ -5,7 +5,7 @@ use crate::bridge::types::{
     NodeGraphCallbacks,
 };
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
-use crate::store::reducers::media::connect_video_to_wgpu;
+use crate::reducers::media::connect_video_to_wgpu;
 use crate::store::AppStore;
 use aweft_model::ids::ItemId;
 use log::warn;

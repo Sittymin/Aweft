@@ -20,7 +20,7 @@ use slint::{ComponentHandle, Model};
 fn setup() -> (MainWindow, Rc<RefCell<aweft_gui::store::AppStore>>) {
     let instance = MainWindow::new().unwrap();
     let store = Rc::new(RefCell::new(aweft_gui::store::AppStore::new(&instance)));
-    store.borrow_mut().initialize_graph_editors(&instance);
+    store.borrow_mut().initialize_node_graph_editors(&instance);
     (instance, store)
 }
 

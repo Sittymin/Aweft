@@ -12,7 +12,7 @@ use crate::bridge::types::{
 use slint::{Color, Model};
 
 /// 调用 reducer 后手动跑投影（测试中替代 depsgraph evaluate）。
-fn project(st: &mut CurveEditorState, tags: Vec<Tag>) {
+fn project(st: &mut GraphEditorState, tags: Vec<Tag>) {
     st.apply_tags(&tags);
 }
 
@@ -35,7 +35,7 @@ fn key(time: f32, value: f32, interpolation: SlintInterpolation) -> SlintKeyfram
 
 #[test]
 fn segments_derived_for_each_interpolation() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle {
         time_offset: 1.0,
@@ -76,7 +76,7 @@ fn segments_derived_for_each_interpolation() {
 
 #[test]
 fn keyframe_drag_updates_model_and_segments() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -116,7 +116,7 @@ fn keyframe_drag_updates_model_and_segments() {
 
 #[test]
 fn action_range_derived_from_keyframe_times() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -136,7 +136,7 @@ fn action_selection_switches_curves() {
     use aweft_model::animation::{
         action::ActionCurve, fcurve::FCurve, Action as ModelAction, Keyframe as Mk,
     };
-    use crate::store::curve_editor::ActionData;
+    use crate::store::graph_editor::ActionData;
 
     fn action_with(name: &str, property: PropertyPath, kfs: Vec<Mk>) -> ModelAction {
         let mut fcurve = FCurve::default();
@@ -146,7 +146,7 @@ fn action_selection_switches_curves() {
         a
     }
 
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     // 默认：无 Action
     assert_eq!(st.current_action, -1);
     st.apply_tags(&[Tag::AnimationStructureChanged]);
@@ -221,7 +221,7 @@ fn load_action_preserves_model_bezier_handles() {
     let mut a = ModelAction::new("测试");
     a.curves = vec![ActionCurve::new(PropertyPath::FontSize, fcurve)];
 
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.load_action(0, &a);
     project(&mut st, tags);
     assert_eq!(st.channels.row_count(), 1);
@@ -257,7 +257,7 @@ fn commit_to_model_writes_view_keyframes_sorted() {
     let mut a = ModelAction::new("测试");
     a.curves = vec![ActionCurve::new(PropertyPath::PositionX, fcurve)];
 
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.load_action(0, &a);
     project(&mut st, tags);
 
@@ -298,7 +298,7 @@ fn commit_to_model_round_trips_bezier_handles() {
     let mut a = ModelAction::new("测试");
     a.curves = vec![ActionCurve::new(PropertyPath::FontSize, fcurve)];
 
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.load_action(0, &a);
     project(&mut st, tags);
     st.commit_to_model(&mut a);
@@ -319,7 +319,7 @@ fn commit_to_model_round_trips_bezier_handles() {
 
 #[test]
 fn handle_drag_updates_bezier_offset() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -351,8 +351,8 @@ fn handle_drag_updates_bezier_offset() {
 
 #[test]
 fn handle_drag_modes_constrain_opposite() {
-    fn setup() -> CurveEditorState {
-        let mut st = CurveEditorState::default();
+    fn setup() -> GraphEditorState {
+        let mut st = GraphEditorState::default();
         let tags = st.push_channel(
             "t",
             Color::from_rgb_u8(255, 0, 0),
@@ -419,7 +419,7 @@ fn handle_drag_modes_constrain_opposite() {
 
 #[test]
 fn endpoint_handles_only_outward_side() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -447,7 +447,7 @@ fn endpoint_handles_only_outward_side() {
 
 #[test]
 fn segment_render_soft_clamps_to_keyframe_interval() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     // k0 出柄 +5（P1.x=5），k1 入柄 -3（P2.x=1）→ 各自钳到 [0,4]，不取中点
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 5.0, value_offset: 0.0 };
@@ -470,7 +470,7 @@ fn segment_render_soft_clamps_to_keyframe_interval() {
 #[test]
 fn handle_dragged_own_keyframe_hard_clamped() {
     // 手柄拖拽时只有"自己关键帧"是硬钳制；相邻关键帧边界是软钳制（渲染期处理）
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -515,7 +515,7 @@ fn handle_dragged_own_keyframe_hard_clamped() {
 
 #[test]
 fn keyframe_drag_past_neighbor_resorts_curve() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -552,7 +552,7 @@ fn dope_drag_moves_only_time_and_is_shared_source() {
     // 摄影表拖拽路径 = keyframe_dragged(curve, key, dt, dv=0)：只移动时间。
     // 摄影表与曲线编辑器必须同源：channels[i].keyframes 指向与权威 keyframe_models 同一 inner 模型，
     // 拖拽后曲线编辑器的 segments 也同步重算。
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -593,7 +593,7 @@ fn dope_drag_moves_only_time_and_is_shared_source() {
 #[test]
 fn handles_respect_neighbor_interpolation() {
     // A(0) 贝塞尔、B(2) 线性、C(4) 贝塞尔
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -617,7 +617,7 @@ fn handles_respect_neighbor_interpolation() {
 
 #[test]
 fn pressing_controls_activates_channel() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -646,7 +646,7 @@ fn pressing_controls_activates_channel() {
 fn display_selection_updates_at_press_without_touching_channels_model() {
     use slint::Model as _;
 
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -696,7 +696,7 @@ fn display_selection_updates_at_press_without_touching_channels_model() {
 
 #[test]
 fn channel_plain_click_selects_only_one() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     for name in ["a", "b", "c", "d"] {
         let tags = st.push_channel(
             name,
@@ -722,7 +722,7 @@ fn channel_plain_click_selects_only_one() {
 
 #[test]
 fn channel_shift_selects_range_from_anchor() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     for name in ["a", "b", "c", "d", "e"] {
         let tags = st.push_channel(
             name,
@@ -753,7 +753,7 @@ fn channel_shift_selects_range_from_anchor() {
 
 #[test]
 fn channel_ctrl_toggles_selection() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     for name in ["a", "b", "c"] {
         let tags = st.push_channel(
             name,
@@ -785,7 +785,7 @@ fn channel_ctrl_toggles_selection() {
 
 #[test]
 fn deselect_channel_clears_all_selection() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     for name in ["a", "b", "c"] {
         let tags = st.push_channel(
             name,
@@ -806,7 +806,7 @@ fn deselect_channel_clears_all_selection() {
 
 #[test]
 fn curve_color_mode_switches_auto_rainbow_and_user() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let user = Color::from_rgb_u8(12, 34, 56);
     let tags = st.push_channel(
         "t",
@@ -824,7 +824,7 @@ fn curve_color_mode_switches_auto_rainbow_and_user() {
     assert_eq!(ch.color_mode, SlintColorMode::AutoRainbow);
     assert_eq!(ch.user_color, user);
     assert_ne!(ch.color, user);
-    assert_eq!(ch.color, CurveEditorState::rainbow_color(0));
+    assert_eq!(ch.color, GraphEditorState::rainbow_color(0));
 
     // 切到用户设置：显示色恢复为用户色
     let tags = st.set_curve_color_mode(0, SlintColorMode::User);
@@ -841,12 +841,12 @@ fn curve_color_mode_switches_auto_rainbow_and_user() {
     project(&mut st, tags);
     let ch = st.channels.row_data(0).unwrap();
     assert_eq!(ch.color_mode, SlintColorMode::AutoRainbow);
-    assert_eq!(ch.color, CurveEditorState::rainbow_color(0));
+    assert_eq!(ch.color, GraphEditorState::rainbow_color(0));
 }
 
 #[test]
 fn selected_keyframes_interpolation_change() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -903,7 +903,7 @@ fn selected_keyframes_interpolation_change() {
 
 #[test]
 fn linear_to_bezier_creates_out_handle_with_default_offset() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -950,7 +950,7 @@ fn linear_to_bezier_creates_out_handle_with_default_offset() {
 
 #[test]
 fn dope_marquee_select_picks_keyframes_in_box() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1000,7 +1000,7 @@ fn dope_marquee_select_picks_keyframes_in_box() {
 
 #[test]
 fn dope_marquee_select_additive_keeps_existing() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1028,7 +1028,7 @@ fn dope_marquee_select_additive_keeps_existing() {
 
 #[test]
 fn dope_marquee_select_ignores_invisible_channels() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1056,7 +1056,7 @@ fn dope_marquee_select_ignores_invisible_channels() {
 
 #[test]
 fn keyframe_drag_moves_all_selected_keyframes() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1097,7 +1097,7 @@ fn keyframe_drag_moves_all_selected_keyframes() {
 
 #[test]
 fn keyframe_drag_skips_locked_channels() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1131,7 +1131,7 @@ fn keyframe_drag_skips_locked_channels() {
 
 #[test]
 fn keyframe_press_on_selected_keeps_multi_selection() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1163,7 +1163,7 @@ fn keyframe_press_on_selected_keeps_multi_selection() {
 
 #[test]
 fn shift_press_adds_never_deselects_grabbed() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1194,7 +1194,7 @@ fn shift_press_adds_never_deselects_grabbed() {
 
 #[test]
 fn graph_marquee_select_picks_keyframes_and_handles() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 5.0 };
     let tags = st.push_channel(
@@ -1229,7 +1229,7 @@ fn graph_marquee_select_picks_keyframes_and_handles() {
 
 #[test]
 fn graph_marquee_select_additive_keeps_existing() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1252,7 +1252,7 @@ fn graph_marquee_select_additive_keeps_existing() {
 
 #[test]
 fn multi_handle_drag_same_screen_offset() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     // 两个贝塞尔关键帧，各自有出柄
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 }; // (1,0)
@@ -1286,7 +1286,7 @@ fn multi_handle_drag_same_screen_offset() {
 
 #[test]
 fn multi_handle_drag_clamps_and_previews_synced_handles() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
     let mut k1 = key(2.0, 0.0, SlintInterpolation::Bezier);
@@ -1318,7 +1318,7 @@ fn multi_handle_drag_clamps_and_previews_synced_handles() {
 
 #[test]
 fn click_on_selected_keyframe_collapses_to_single() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1351,7 +1351,7 @@ fn click_on_selected_keyframe_collapses_to_single() {
 
 #[test]
 fn click_on_selected_handle_collapses_to_single() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
     let mut k1 = key(2.0, 10.0, SlintInterpolation::Bezier);
@@ -1378,7 +1378,7 @@ fn click_on_selected_handle_collapses_to_single() {
 
 #[test]
 fn shift_drag_pulls_out_handle_on_bezier_keyframe() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1418,7 +1418,7 @@ fn shift_drag_pulls_out_handle_on_bezier_keyframe() {
 
 #[test]
 fn multi_handle_drag_applies_mode_to_synced_handles() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
     k0.handle_in = SlintBezierHandle { time_offset: -1.0, value_offset: 0.0 };
@@ -1452,7 +1452,7 @@ fn multi_handle_drag_applies_mode_to_synced_handles() {
 
 #[test]
 fn click_cycles_through_coincident_keyframes() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     // 三个通道在相同位置 (1, 5) 有几乎重合的关键帧
     let tags = st.push_channel("a", Color::from_rgb_u8(255, 0, 0), vec![key(1.0, 5.0, SlintInterpolation::Linear)]);
     project(&mut st, tags);
@@ -1496,7 +1496,7 @@ fn click_cycles_through_coincident_keyframes() {
 
 #[test]
 fn channel_search_filters_per_editor_independently() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel("Position X", Color::from_rgb_u8(255, 0, 0), vec![key(0.0, 0.0, SlintInterpolation::Linear)]);
     project(&mut st, tags);
     let tags = st.push_channel("Rotation Y", Color::from_rgb_u8(0, 255, 0), vec![key(0.0, 0.0, SlintInterpolation::Linear)]);
@@ -1531,7 +1531,7 @@ fn channel_search_filters_per_editor_independently() {
 
 #[test]
 fn graph_segments_and_handles_filtered_by_search() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 1.0 };
     let tags = st.push_channel(
@@ -1572,7 +1572,7 @@ fn graph_segments_and_handles_filtered_by_search() {
 
 #[test]
 fn dope_connections_cover_linear_and_hold_segments() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1597,7 +1597,7 @@ fn dope_connections_cover_linear_and_hold_segments() {
 
 #[test]
 fn dope_connections_skip_bezier_and_follow_visibility() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1627,7 +1627,7 @@ fn dope_connections_skip_bezier_and_follow_visibility() {
 
 #[test]
 fn keyframe_times_snap_to_integer_ms() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1648,7 +1648,7 @@ fn keyframe_times_snap_to_integer_ms() {
 
 #[test]
 fn summary_aggregates_coincident_keyframes_by_ms() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1682,7 +1682,7 @@ fn summary_aggregates_coincident_keyframes_by_ms() {
 
 #[test]
 fn reset_action_clears_current_action() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1708,7 +1708,7 @@ fn reset_action_clears_current_action() {
 
 #[test]
 fn summary_selected_reflects_any_underlying() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1752,7 +1752,7 @@ fn summary_selected_reflects_any_underlying() {
 
 #[test]
 fn summary_drag_snaps_to_integer_ms() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1773,7 +1773,7 @@ fn summary_drag_snaps_to_integer_ms() {
 fn summary_drag_moves_whole_group_even_if_partially_selected() {
     // 回归：先单独选中某个通道的关键帧，再去拖它上面的汇总帧——
     // 应移动该时刻的全部关键帧（而不是只移动已选中的那个）。
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1812,7 +1812,7 @@ fn summary_drag_moves_whole_group_even_if_partially_selected() {
 #[test]
 fn marquee_selects_channel_when_box_covers_curve() {
     // 对齐 Blender：框选矩形覆盖到曲线本身（即使没有关键帧在框内）也应选中该通道。
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "c",
         Color::from_rgb_u8(255, 0, 0),
@@ -1836,7 +1836,7 @@ fn marquee_selects_channel_when_box_covers_curve() {
 #[test]
 fn marquee_selects_channel_when_curve_bends_into_box() {
     // 贝塞尔曲线弯曲进框内（框内无关键帧）也应选中通道。
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     // 曲线 (0,0)→(4,0) 凸到 y≈1.73；框取 y∈[1,2] 只罩住弯起部分
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 2.0, value_offset: 6.0 };
@@ -1858,7 +1858,7 @@ fn marquee_selects_channel_when_curve_bends_into_box() {
 #[test]
 fn marquee_ignores_box_above_below_curve() {
     // 框选矩形完全在曲线上方/下方（没有罩住曲线）→ 不选中该通道
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "c",
         Color::from_rgb_u8(255, 0, 0),
@@ -1883,7 +1883,7 @@ fn marquee_ignores_box_above_below_curve() {
 fn ctrl_toggle_keyframe_activates_display_mask() {
     use slint::Model as _;
 
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1938,7 +1938,7 @@ fn ctrl_toggle_keyframe_activates_display_mask() {
 /// 回归：移动关键帧产生的 preview 钳制（handles 区间替换）在取消选中/松开时换回普通手柄。
 #[test]
 fn keyframe_drag_preview_restored_on_release() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 5.0 };
     let tags = st.push_channel(
@@ -1966,7 +1966,7 @@ fn keyframe_drag_preview_restored_on_release() {
 /// 回归：Aligned（共线）拖手柄时，对向手柄被约束后越过段边界 → 也显示钳制预览。
 #[test]
 fn handle_drag_preview_includes_opposite_handle() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     // 中间关键帧：出柄向左长柄 (-6,0)。拖入柄 (-10,0) Aligned → 出柄共线反向 (+6,0)，
     // 控制点 (10,10) 越过段 [4,8] 右边界 → 软钳制预览（入柄自身向左侧也被钳制）
     let mut k1 = key(4.0, 10.0, SlintInterpolation::Bezier);
@@ -1996,7 +1996,7 @@ fn handle_drag_preview_includes_opposite_handle() {
 /// （Slint 外推线读 keyframes[0]/[len-1]，保序模型下必须恢复有序）。
 #[test]
 fn drag_first_keyframe_past_neighbor_resorts_on_release() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -2031,7 +2031,7 @@ fn drag_first_keyframe_past_neighbor_resorts_on_release() {
 /// 在拖拽期间实时更新——不依赖松开后的重排。
 #[test]
 fn extrapolation_follows_first_last_during_drag() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -2068,7 +2068,7 @@ fn extrapolation_follows_first_last_during_drag() {
 /// （贝塞尔段相邻但偏移为零；边缘延伸是水平的 → 默认柄水平延伸 1/3 间距）。
 #[test]
 fn edge_keyframe_becomes_interior_gets_default_handle() {
-    let mut st = CurveEditorState::default();
+    let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
     k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
     let tags = st.push_channel(

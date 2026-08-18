@@ -161,7 +161,7 @@ O(1)，不做任何线性扫描。
 2. ✅ **入口索引 + 数据依赖边传播**：`entry_ops` 构建期预建 `(DataId, TagKind) → 入口操作`
    （O(1) 查表），`Operation::depends_on` → `resolve_relations` 建跨组件边，
    flush 沿全部出边 BFS 闭包 + Kahn 拓扑
-3. ✅ 投影声明与注册（`store/projections/`）：LineEditor / Screen 按 TagKind 拆细操作
+3. ✅ 投影声明与注册（`src/projections/`）：LineEditor / Screen 按 TagKind 拆细操作
 4. ✅ **LineEditor 数据源化**：`LineRowsModel` 实现 `slint::Model` 产出轻量 `RowData`，
    `FilterModel` 在 RowData 层做折叠过滤（用 `ancestor_ids` ItemId 判断，零 UUID parse，
    被过滤掉的行完全不构造 UI 行），`LineRowMapper`（`MapModel`）映射为

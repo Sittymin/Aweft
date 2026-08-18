@@ -184,7 +184,7 @@ impl Model for GraphLinksModel {
 }
 
 /// 一个节点图类型的编辑器状态。
-pub struct GraphEditorState {
+pub struct NodeGraphState {
     /// 节点数据源模型（title/x/y/sockets，含 UI 位置数据）
     pub nodes: Rc<GraphNodesModel>,
     /// 连线数据源模型（端口均以 nodes 模型下标引用）
@@ -210,7 +210,7 @@ pub struct GraphEditorState {
     pub metrics: EditorMetrics,
 }
 
-impl Default for GraphEditorState {
+impl Default for NodeGraphState {
     fn default() -> Self {
         Self {
             nodes: Rc::new(GraphNodesModel::new()),
@@ -228,7 +228,7 @@ impl Default for GraphEditorState {
     }
 }
 
-impl GraphEditorState {
+impl NodeGraphState {
     /// 节点位置：有记录用记录，否则自动排布（横向平铺）
     fn pos(&self, node_id: NodeId, order_index: usize) -> (f32, f32) {
         self.positions
@@ -934,7 +934,7 @@ pub fn new_app_chain(
 /// 返回新增节点 id（供投影精确定位）。
 pub fn add_node<G: GraphEditable>(
     graph: &mut G,
-    editor: &mut GraphEditorState,
+    editor: &mut NodeGraphState,
     kind: G::Kind,
     x: f32,
     y: f32,
@@ -948,7 +948,7 @@ pub fn add_node<G: GraphEditable>(
 }
 
 /// 删除节点（自动断开相关连线）。只改权威图，不 sync。
-pub fn delete_node<G: GraphEditable>(graph: &mut G, editor: &mut GraphEditorState, index: usize) -> Option<NodeId> {
+pub fn delete_node<G: GraphEditable>(graph: &mut G, editor: &mut NodeGraphState, index: usize) -> Option<NodeId> {
     let node_id = editor.id_at(index)?;
     graph.graph_delete(node_id);
     editor.positions.remove(&node_id);
@@ -958,7 +958,7 @@ pub fn delete_node<G: GraphEditable>(graph: &mut G, editor: &mut GraphEditorStat
 /// 找喂给某输入端口的连线（模型下标）；无则 -1。拖输入端时用它隐藏该线。
 pub fn find_link_for_input<G: GraphEditable>(
     graph: &G,
-    editor: &GraphEditorState,
+    editor: &NodeGraphState,
     node_index: usize,
     socket_index: usize,
 ) -> i32 {
@@ -981,7 +981,7 @@ pub fn find_link_for_input<G: GraphEditable>(
 /// = socket-size，多个候选端口同时命中时取距离最近者（拖拽释放应选最近的输入）。
 pub fn find_drop_socket<G: GraphEditable>(
     graph: &G,
-    editor: &GraphEditorState,
+    editor: &NodeGraphState,
     x: f32,
     y: f32,
     want: SocketType,
@@ -1031,7 +1031,7 @@ pub fn find_drop_socket<G: GraphEditable>(
 /// 返回 connected 标记发生变化的节点（供投影只 row_changed 这些行，而非全量重建）。
 pub fn socket_drag_ended<G: GraphEditable>(
     graph: &mut G,
-    editor: &mut GraphEditorState,
+    editor: &mut NodeGraphState,
     node_index: usize,
     socket_index: usize,
     is_input: bool,
@@ -1091,7 +1091,7 @@ pub fn socket_drag_ended<G: GraphEditable>(
 
 fn target_socket<G: GraphEditable>(
     graph: &G,
-    editor: &GraphEditorState,
+    editor: &NodeGraphState,
     hit: &SocketHit,
 ) -> Option<SocketId> {
     if !hit.found {
@@ -1149,7 +1149,7 @@ pub(crate) enum GraphEditorAccess<'a> {
 impl<'a> GraphEditorAccess<'a> {
     pub(crate) fn apply_change(
         self,
-        editor: &mut GraphEditorState,
+        editor: &mut NodeGraphState,
         change: &crate::depsgraph::NodeGraphChange,
     ) {
         match self {
@@ -1160,7 +1160,7 @@ impl<'a> GraphEditorAccess<'a> {
 
     pub(crate) fn add_node(
         self,
-        editor: &mut GraphEditorState,
+        editor: &mut NodeGraphState,
         template_index: usize,
         x: f32,
         y: f32,
@@ -1180,7 +1180,7 @@ impl<'a> GraphEditorAccess<'a> {
 
     pub(crate) fn delete_node(
         self,
-        editor: &mut GraphEditorState,
+        editor: &mut NodeGraphState,
         node_index: usize,
     ) -> Option<NodeId> {
         match self {
@@ -1191,7 +1191,7 @@ impl<'a> GraphEditorAccess<'a> {
 
     pub(crate) fn socket_drag_ended(
         self,
-        editor: &mut GraphEditorState,
+        editor: &mut NodeGraphState,
         node_index: usize,
         socket_index: usize,
         is_input: bool,
@@ -1210,7 +1210,7 @@ impl<'a> GraphEditorAccess<'a> {
 
     pub(crate) fn set_reference(
         self,
-        editor: &mut GraphEditorState,
+        editor: &mut NodeGraphState,
         node_index: usize,
         style_id: NodeGraphId,
     ) {
@@ -1222,7 +1222,7 @@ impl<'a> GraphEditorAccess<'a> {
 
     pub(crate) fn set_socket_text_default(
         self,
-        editor: &mut GraphEditorState,
+        editor: &mut NodeGraphState,
         node_index: usize,
         socket_index: usize,
         text: &str,
@@ -1235,7 +1235,7 @@ impl<'a> GraphEditorAccess<'a> {
 
     pub(crate) fn socket_id_at(
         self,
-        editor: &GraphEditorState,
+        editor: &NodeGraphState,
         node_index: usize,
         socket_index: usize,
     ) -> Option<SocketId> {
@@ -1245,14 +1245,14 @@ impl<'a> GraphEditorAccess<'a> {
         }
     }
 
-    pub(crate) fn rebuild(self, editor: &mut GraphEditorState) {
+    pub(crate) fn rebuild(self, editor: &mut NodeGraphState) {
         match self {
             Self::Style(g) => editor.rebuild(g),
             Self::App(g) => editor.rebuild(g),
         }
     }
 
-    pub(crate) fn set_default_layout(&mut self, editor: &mut GraphEditorState) {
+    pub(crate) fn set_default_layout(&mut self, editor: &mut NodeGraphState) {
         if let Self::App(g) = self {
             let mut pos: HashMap<NodeId, (f32, f32)> = HashMap::new();
             for (nid, n) in &g.nodes {
@@ -1280,7 +1280,7 @@ pub(crate) enum GraphEditorAccessRo<'a> {
 impl<'a> GraphEditorAccessRo<'a> {
     pub(crate) fn find_socket_at(
         self,
-        editor: &GraphEditorState,
+        editor: &NodeGraphState,
         node: usize,
         x: f32,
         y: f32,
@@ -1293,7 +1293,7 @@ impl<'a> GraphEditorAccessRo<'a> {
 
     pub(crate) fn find_link_for_input(
         self,
-        editor: &GraphEditorState,
+        editor: &NodeGraphState,
         node: usize,
         sock: usize,
     ) -> i32 {
@@ -1305,7 +1305,7 @@ impl<'a> GraphEditorAccessRo<'a> {
 
     pub(crate) fn find_drop_socket(
         self,
-        editor: &GraphEditorState,
+        editor: &NodeGraphState,
         x: f32,
         y: f32,
         want: SocketType,
@@ -1323,7 +1323,7 @@ impl AppStore {
     pub(crate) fn with_graph<R>(
         &mut self,
         kind: NodeGraphKind,
-        f: impl FnOnce(&mut GraphEditorState, GraphEditorAccess<'_>) -> R,
+        f: impl FnOnce(&mut NodeGraphState, GraphEditorAccess<'_>) -> R,
     ) -> Option<R> {
         match kind {
             NodeGraphKind::Style => {
@@ -1346,7 +1346,7 @@ impl AppStore {
     fn with_graph_ro<R>(
         &self,
         kind: NodeGraphKind,
-        f: impl FnOnce(&GraphEditorState, GraphEditorAccessRo<'_>) -> R,
+        f: impl FnOnce(&NodeGraphState, GraphEditorAccessRo<'_>) -> R,
     ) -> Option<R> {
         match kind {
             NodeGraphKind::Style => {
@@ -1423,7 +1423,7 @@ impl AppStore {
     }
 
     /// 初始化两个编辑器：建链菜单/右键菜单，绑定视图模型到 Slint 全局，加载第 0 条链。
-    pub fn initialize_graph_editors(&mut self, instance: &crate::bridge::types::MainWindow) {
+    pub fn initialize_node_graph_editors(&mut self, instance: &crate::bridge::types::MainWindow) {
         use slint::ComponentHandle;
 
         let theme = instance.global::<crate::bridge::types::Theme>().get_data().node_editor;
@@ -1753,7 +1753,7 @@ impl AppStore {
 /// 设置端口文本默认值（字符串常量输出 / 角色下拉等）。
 fn set_socket_text_default<G: GraphEditable>(
     graph: &mut G,
-    editor: &mut GraphEditorState,
+    editor: &mut NodeGraphState,
     node_index: usize,
     socket_index: usize,
     text: &str,
@@ -1778,7 +1778,7 @@ fn set_socket_text_default<G: GraphEditable>(
 /// 取指定图类型某端口的真实 SocketId。
 fn socket_id_at<G: GraphEditable>(
     graph: &G,
-    editor: &GraphEditorState,
+    editor: &NodeGraphState,
     node_index: usize,
     socket_index: usize,
 ) -> Option<SocketId> {
@@ -1796,7 +1796,7 @@ fn socket_id_at<G: GraphEditable>(
 /// 投影收到 `ReferenceChanged` 后单行重建该节点（menu_selected/端口/高度）。
 fn set_reference<G: GraphEditable>(
     graph: &mut G,
-    editor: &mut GraphEditorState,
+    editor: &mut NodeGraphState,
     node_index: usize,
     style_id: NodeGraphId,
 ) {
@@ -1843,7 +1843,7 @@ mod tests {
 
     // 节点 i 的第 sock 个输入端口中心（世界坐标）：node 左缘 + 端口全局行号偏移。
     // 行号从 sockets 视图模型取（输出先排，输入在输出之后）。
-    fn input_center(st: &GraphEditorState, node: usize, sock: usize) -> (f32, f32) {
+    fn input_center(st: &NodeGraphState, node: usize, sock: usize) -> (f32, f32) {
         let (nx, ny) = st.nodes.row_data(node).map(|r| (r.x, r.y)).unwrap();
         let sockets = st.nodes.row_data(node).unwrap().sockets;
         let mut in_idx = 0usize;
@@ -1862,7 +1862,7 @@ mod tests {
     }
 
     // 按标题查节点下标（自动布局顺序与插入序无关，用标题定位更稳）
-    fn idx_by_title(st: &GraphEditorState, title: &str) -> usize {
+    fn idx_by_title(st: &NodeGraphState, title: &str) -> usize {
         (0..st.nodes.row_count())
             .find(|&i| st.nodes.row_data(i).unwrap().title.as_str() == title)
             .unwrap()
@@ -1871,7 +1871,7 @@ mod tests {
     #[test]
     fn add_node_returns_index_and_stores_position() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
 
         let a = add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
@@ -1893,7 +1893,7 @@ mod tests {
     #[test]
     fn output_drag_connects_on_drop() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
         st.rebuild(&g);
@@ -1918,7 +1918,7 @@ mod tests {
     #[test]
     fn output_drag_to_empty_discards() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
         st.rebuild(&g);
@@ -1932,7 +1932,7 @@ mod tests {
     #[test]
     fn input_drag_to_empty_disconnects() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
         st.rebuild(&g);
@@ -1956,7 +1956,7 @@ mod tests {
     #[test]
     fn input_drag_moves_connection_to_other_node() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
         st.rebuild(&g);
@@ -1990,7 +1990,7 @@ mod tests {
     #[test]
     fn delete_node_removes_links_and_rebuilds_indices() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
         st.rebuild(&g);
@@ -2013,7 +2013,7 @@ mod tests {
     #[test]
     fn find_link_for_input_returns_model_index() {
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0);
         st.rebuild(&g);
@@ -2034,7 +2034,7 @@ mod tests {
     fn default_chain_layout_source_left() {
         // 默认样式链（无位置记录）自动布局：样式源在最左、组输出在最右，且确定
         let g = new_style_chain("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         st.rebuild(&g);
 
@@ -2050,7 +2050,7 @@ mod tests {
     #[test]
     fn default_app_chain_layout_source_left() {
         let g = new_app_chain("t", Some(NodeGraphId::new()), None);
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         st.rebuild(&g);
 
@@ -2069,7 +2069,7 @@ mod tests {
         // C1 修复：端口命中 Rust 化，不再受 Slint 硬编码 4 上限约束。
         // 用 GroupOutput 节点（声明可扩展输入）构造 5 个输入端口验证。
         let mut g = NodeGraph::new("t");
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         // GroupOutput 输入数可由 add_node 的 inputs 声明控制
         let decls: Vec<SocketDecl> = (0..5)
@@ -2098,7 +2098,7 @@ mod tests {
         // 切换链（加载另一条图再回来）后布局与顺序都保持不变
         let g1 = new_style_chain("a");
         let g2 = new_app_chain("b", None, None);
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         st.rebuild(&g1);
         let before: Vec<(String, f32, f32)> = (0..st.nodes.row_count())
@@ -2126,7 +2126,7 @@ mod tests {
         let nid = g
             .add_node::<NodeId>(NodeKind::Reference(NodeGraphId::new()), &[], &[])
             .unwrap();
-        let mut st = GraphEditorState::default();
+        let mut st = NodeGraphState::default();
         st.metrics = metrics();
         st.positions.insert(nid, (40.0, 40.0));
         st.rebuild(&g);

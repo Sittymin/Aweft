@@ -2,7 +2,7 @@
 
 use slint::{Color, ModelRc, SharedString};
 
-use super::{snap_ms, CurveEditorState};
+use super::{snap_ms, GraphEditorState};
 use crate::bridge::converters::{model_key_to_slint, slint_key_to_model};
 use crate::bridge::types::{SlintColorMode, SlintFCurveChannel, SlintKeyframe};
 use crate::depsgraph::Tag;
@@ -17,7 +17,7 @@ fn property_display_name(p: &PropertyPath) -> SharedString {
     format!("{:?}", p).into()
 }
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 追加一个通道（数据层）：写入 `channels_data` + `editing_keyframes`。
     /// 颜色默认"自动彩虹"：显示色取自彩虹调色板（按通道下标），传入的 color 作为用户色。
     /// 返回结构变化 tag（投影重建派生层）。

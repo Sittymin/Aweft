@@ -1,12 +1,12 @@
 //! 控制柄交互（reducer 侧）：只改数据层（`editing_keyframes` 手柄偏移、`selected_handles`）
 //! 并返回 tag；手柄模型重建/钳制预览（preview_handles）由投影（projection.rs）完成。
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use super::curve_math::{clamp_handle_own_side, apply_handle_mode};
 use crate::bridge::types::{SlintHandleDragMode, SlintSelectionModifier};
 use crate::depsgraph::{HandleLoc, Tag};
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 控制柄按下：none=单选，shift=同通道同侧区间扩展，ctrl=切换。
     /// 锁定通道不可交互。只改 selected_handles 数据，返回选中变化 tag。
     pub fn handle_pressed(&mut self, curve: usize, key: usize, is_in: bool, modifier: SlintSelectionModifier) -> Vec<Tag> {

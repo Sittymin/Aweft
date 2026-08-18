@@ -3,10 +3,12 @@ pub mod app;
 pub mod bridge;
 pub mod clipboard;
 pub mod depsgraph;
+pub mod projections;
+pub mod reducers;
+pub mod render;
 pub mod screen;
-pub mod slint_video_sink;
 pub mod store;
-mod wgpu_subtitle_renderer;
+
 
 use anyhow::{Context, Result};
 

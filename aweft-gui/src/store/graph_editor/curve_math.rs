@@ -1,5 +1,5 @@
 //! 纯数学/构建函数：曲线段、控制柄标记、贝塞尔运算。
-//! 不依赖 CurveEditorState，可在任何上下文调用。
+//! 不依赖 GraphEditorState，可在任何上下文调用。
 
 use crate::bridge::types::{
     SlintBezierHandle, SlintCurveSegment, SlintHandleMarker, SlintInterpolation, SlintKeyframe,

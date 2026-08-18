@@ -9,13 +9,13 @@ use std::rc::Rc;
 
 use slint::{Model, ModelRc};
 
-use super::{ms_of, CurveEditorState, KeyframeLoc};
+use super::{ms_of, GraphEditorState, KeyframeLoc};
 use crate::bridge::types::{
     SlintSelectionModifier, SlintSummaryKeyframe,
 };
 use crate::depsgraph::{SummaryDrag, Tag};
 
-impl CurveEditorState {
+impl GraphEditorState {
     /// 重建摄影表汇总条带：把全部通道的关键帧按整数毫秒时间聚合，
     /// 同一毫秒的关键帧合并为一个汇总标记（count = 该时刻关键帧总数，
     /// selected = 逐通道选中掩码，按通道在过滤视图中的顺序）。

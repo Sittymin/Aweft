@@ -2,13 +2,13 @@ use std::collections::HashSet;
 
 use slint::Model;
 
-use super::CurveEditorState;
+use super::GraphEditorState;
 use super::curve_math::segment_intersects_rect;
 use crate::depsgraph::{HandleLoc, Tag};
 use super::ms_of;
 use crate::bridge::types::SlintSelectionModifier;
 
-impl CurveEditorState {
+impl GraphEditorState {
     // ── 共享框选核心逻辑 ──────────────────────────────────────────────────
 
     /// 框选核心逻辑：在指定通道范围内，按时间+值范围选中关键帧。
