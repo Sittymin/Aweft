@@ -6,8 +6,10 @@ import { VideoPlayer } from "../areas/viewport/view.slint";
 import { StyleGraphToolbar } from "../areas/style_graph/toolbar.slint";
 import { AppGraphToolbar } from "../areas/app_graph/toolbar.slint";
 import { NodeGraphEditor } from "../areas/node_graph/editor.slint";
+import { GraphEditor } from "../areas/graph_editor/graph_editor.slint";
+import { GraphEditorToolbar } from "../areas/graph_editor/toolbar.slint";
 import { VideoState } from "../bridge/state.slint";
-import { NodeGraphState } from "../bridge/state.slint";
+import { NodeGraphState, AnimationState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
 
 // Area 容器组件：包含 Area 的边框、ActionZone 和内容
@@ -50,6 +52,10 @@ export component SlintScrArea inherits Rectangle {
             area-type: area-type;
             chain-editing <=> root.chain-editing;
         }
+        if area-type == SlintAreaType.graph-editor: GraphEditorToolbar {
+            area-key: area-key;
+            area-type: area-type;
+        }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
         if area-type == SlintAreaType.viewport: VideoPlayer {
@@ -77,6 +83,23 @@ export component SlintScrArea inherits Rectangle {
             lattice-triangular: true;
             window-x: root.container-x + self.x;
             window-y: root.container-y + self.y;
+        }
+        if area-type == SlintAreaType.graph-editor: GraphEditor {
+            channels: AnimationState.channels;
+            graph-channels: AnimationState.graph-channels;
+            segments: AnimationState.segments;
+            graph-segments: AnimationState.graph-segments;
+            handles: AnimationState.handles;
+            graph-handles: AnimationState.graph-handles;
+            current-time: AnimationState.current-time;
+            action-start: AnimationState.action-start;
+            action-end: AnimationState.action-end;
+            current-channel: AnimationState.current-channel;
+            selected-channels: AnimationState.selected-channels;
+            preview-handles: AnimationState.preview-handles;
+            extrapolations: AnimationState.extrapolations;
+            selected-keyframes: AnimationState.selected-keyframes;
+            selected-interpolation: AnimationState.selected-interpolation;
         }
     }
 

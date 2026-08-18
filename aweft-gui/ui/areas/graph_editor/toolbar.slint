@@ -1,0 +1,34 @@
+// 曲线编辑器标题栏：通用 AreaHeader + 右侧操作按钮（占位）。
+// 中区显示当前 Action 名称（来自 AnimationState），经 AreaHeader @children 插槽注入。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AnimationState } from "../../bridge/state.slint";
+import { AreaHeader } from "../area_header.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component GraphEditorToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+
+        // 中区内容（@children）：当前 Action 名称
+        Text {
+            text: AnimationState.action-name;
+            color: #ffffff;
+            vertical-alignment: center;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
+        right-actions: [
+            { icon: @image-url("../../assets/icons/graph_editor.svg") },
+            { icon: @image-url("../../assets/icons/grid_4x4.svg") },
+            { icon: @image-url("../../assets/icons/grid_on.svg") },
+        ];
+    }
+}

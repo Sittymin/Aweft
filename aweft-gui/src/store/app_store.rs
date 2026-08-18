@@ -21,7 +21,7 @@ pub struct AppStore {
     /// OverlayState global 弱引用：overlay 投影经此写出拖拽预览。
     /// 在 `AppStore::new` 中从 MainWindow 注入。
     pub(crate) overlay_state: Option<slint::Weak<crate::bridge::types::OverlayState<'static>>>,
-    /// AnimationState global 弱引用：动画投影（op_animation_curve）经此同步标量到 Slint。
+    /// AnimationState global 弱引用：动画投影经此同步标量/重新绑定过滤视图到 Slint。
     pub(crate) animation_state: Option<slint::Weak<crate::bridge::types::AnimationState<'static>>>,
     clipboard: Clipboard,
 }
@@ -495,93 +495,101 @@ impl AppStore {
         .flatten()
     }
 
-    /// 分发动画编辑器（曲线编辑器）交互操作：修改权威数据（model）+ 更新视图 + 打 `Tag::AnimationChanged`。
+    /// 分发动画编辑器（曲线编辑器）交互操作：reducer 只改数据层并返回精确 tag。
     ///
     /// 权威数据在 model（`Project.library.animation_library.actions`）：
-    ///  - **拖拽（高频）**：`KeyframeDragged`/`HandleDragged` 只改视图（preview，对齐
+    ///  - **拖拽（高频）**：`KeyframeDragged`/`HandleDragged` 只改编辑数据（preview，对齐
     ///    LineEditor 的 preview 语义），保住 Slint 拖拽抓取；
-    ///  - **提交**：松开/插值变更后 `commit_current_action` 把视图关键帧写回 model Action；
-    ///  - **装载**：`ActionSelected` 读 model Action 重建视图。
+    ///  - **视图写回**：松开/插值变更后 `write_view_to_model` 把编辑数据写回 model Action；
+    ///  - **装载**：`ActionSelected` 读 model Action 重建编辑数据。
     ///
-    /// UI 态（选中/搜索/视图缩放/通道可见性/颜色）留在 store，不入 model。
+    /// 派生层（段/手柄/连接线/汇总/显示掩码/标量）由 depsgraph 投影更新，
+    /// reducer 不直接触碰 Slint 模型。
     fn dispatch_animation(&mut self, action: AnimationAction) -> Result<Vec<Tag>> {
         use AnimationAction::*;
 
-        let ce = &mut self.ui_models.curve_editor;
-        match action {
-            KeyframePressed { curve, key, modifier } => ce.keyframe_pressed(curve, key, modifier),
-            KeyframeDragged {
-                curve,
-                key,
-                delta_time,
-                delta_value,
-                mode,
-            } => ce.keyframe_dragged(curve, key, delta_time, delta_value, mode),
-            KeyframeReleased { curve, key, moved } => {
-                ce.keyframe_released(curve, key, moved);
-                self.commit_current_action();
+        let tags = {
+            let ce = &mut self.ui_models.curve_editor;
+            match action {
+                KeyframePressed { curve, key, modifier } => ce.keyframe_pressed(curve, key, modifier),
+                KeyframeDragged {
+                    curve,
+                    key,
+                    delta_time,
+                    delta_value,
+                    mode,
+                } => ce.keyframe_dragged(curve, key, delta_time, delta_value, mode),
+                KeyframeReleased { curve, key, moved } => {
+                    let tags = ce.keyframe_released(curve, key, moved);
+                    self.write_view_to_model();
+                    tags
+                }
+                DeselectKeyframes => {
+                    let ms = ce.deselect_all();
+                    vec![Tag::AnimationSelectionChanged { summary_ms: ms }]
+                }
+                HandlePressed {
+                    curve,
+                    key,
+                    is_in,
+                    modifier,
+                } => ce.handle_pressed(curve, key, is_in, modifier),
+                HandleDragged {
+                    curve,
+                    key,
+                    is_in,
+                    delta_time,
+                    delta_value,
+                    mode,
+                } => ce.handle_dragged(curve, key, is_in, delta_time, delta_value, mode),
+                HandleReleased {
+                    curve,
+                    key,
+                    is_in,
+                    moved,
+                } => {
+                    let tags = ce.handle_released(curve, key, is_in, moved);
+                    self.write_view_to_model();
+                    tags
+                }
+                GraphMarqueeSelect {
+                    x_lo,
+                    x_hi,
+                    y_lo,
+                    y_hi,
+                    modifier,
+                } => ce.graph_marquee_select(x_lo, x_hi, y_lo, y_hi, modifier),
+                ChannelPressed { curve, modifier } => ce.channel_pressed(curve, modifier),
+                ChannelDeselectAll => ce.deselect_channel(),
+                GraphSearchChanged { text } => ce.set_graph_search(&text),
+                DopeSearchChanged { text } => ce.set_dope_search(&text),
+                DopeChannelPressed { view_row, modifier } => ce.dope_channel_pressed(view_row, modifier),
+                CurveColorModeChanged { curve, mode } => ce.set_curve_color_mode(curve, mode),
+                KeyframeInterpolationChanged { interpolation } => {
+                    let tags = ce.set_selected_keyframes_interpolation(interpolation);
+                    self.write_view_to_model();
+                    tags
+                }
+                ChannelToggleVisible { curve } => ce.toggle_channel_visible(curve),
+                ChannelToggleModifier { curve } => ce.toggle_channel_modifier(curve),
+                ChannelToggleActive { curve } => ce.toggle_channel_active(curve),
+                ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
+                SetCurrentTime { time } => {
+                    ce.current_time = time as f64;
+                    vec![Tag::AnimationScalarsChanged]
+                }
+                ViewChanged {
+                    zoom_x,
+                    zoom_y,
+                } => ce.set_view(zoom_x, zoom_y),
+                ActionSelected { index } => self.rebuild_view_from_model(index),
             }
-            DeselectKeyframes => ce.deselect_all(),
-            HandlePressed {
-                curve,
-                key,
-                is_in,
-                modifier,
-            } => ce.handle_pressed(curve, key, is_in, modifier),
-            HandleDragged {
-                curve,
-                key,
-                is_in,
-                delta_time,
-                delta_value,
-                mode,
-            } => ce.handle_dragged(curve, key, is_in, delta_time, delta_value, mode),
-            HandleReleased {
-                curve,
-                key,
-                is_in,
-                moved,
-            } => {
-                ce.handle_released(curve, key, is_in, moved);
-                self.commit_current_action();
-            }
-            GraphMarqueeSelect {
-                x_lo,
-                x_hi,
-                y_lo,
-                y_hi,
-                modifier,
-            } => ce.graph_marquee_select(x_lo, x_hi, y_lo, y_hi, modifier),
-            ChannelPressed { curve, modifier } => ce.channel_pressed(curve, modifier),
-            ChannelDeselectAll => ce.deselect_channel(),
-            GraphSearchChanged { text } => ce.set_graph_search(&text),
-            DopeSearchChanged { text } => ce.set_dope_search(&text),
-            DopeChannelPressed { view_row, modifier } => ce.dope_channel_pressed(view_row, modifier),
-            CurveColorModeChanged { curve, mode } => ce.set_curve_color_mode(curve, mode),
-            KeyframeInterpolationChanged { interpolation } => {
-                ce.set_selected_keyframes_interpolation(interpolation);
-                self.commit_current_action();
-            }
-            ChannelToggleVisible { curve } => ce.toggle_channel_visible(curve),
-            ChannelToggleModifier { curve } => ce.toggle_channel_modifier(curve),
-            ChannelToggleActive { curve } => ce.toggle_channel_active(curve),
-            ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
-            SetCurrentTime { time } => ce.current_time = time as f64,
-            ViewChanged {
-                zoom_x,
-                zoom_y,
-                pan_x,
-                pan_y,
-                width,
-                height,
-            } => ce.set_view(zoom_x, zoom_y, pan_x, pan_y, width, height),
-            ActionSelected { index } => self.load_animation_action(index),
-        }
-        Ok(vec![Tag::AnimationChanged])
+        };
+        Ok(tags)
     }
 
-    /// 提交当前 Action 的视图改动到 model（`dispatch_animation` 的 commit 步骤）。
-    fn commit_current_action(&mut self) {
+    /// 视图关键帧写回 model Action（model 是唯一真相，store 视图是派生状态）。
+    fn write_view_to_model(&mut self) {
         let Some(id) = self.ui_models.curve_editor.current_action_id() else {
             return;
         };
@@ -598,11 +606,11 @@ impl AppStore {
         self.ui_models.curve_editor.commit_to_model(action);
     }
 
-    /// 装载 model 的第 `index` 个 Action 到编辑器（`ActionSelected` 的 reducer 步骤）。
-    fn load_animation_action(&mut self, index: i32) {
+    /// 从 model 重建视图（`ActionSelected` 的 reducer 步骤）：读 model Action 重建编辑数据，
+    /// 返回结构变化 tag（投影重建派生层）。
+    fn rebuild_view_from_model(&mut self, index: i32) -> Vec<Tag> {
         if index < 0 {
-            self.ui_models.curve_editor.reset_action();
-            return;
+            return self.ui_models.curve_editor.reset_action();
         }
         let Some(id) = self
             .ui_models
@@ -611,7 +619,7 @@ impl AppStore {
             .get(index as usize)
             .map(|a| a.id)
         else {
-            return;
+            return Vec::new();
         };
         let Some(action) = self
             .state
@@ -621,12 +629,28 @@ impl AppStore {
             .actions
             .get(&id)
         else {
-            return;
+            return Vec::new();
         };
-        self.ui_models.curve_editor.load_action(index as usize, action);
+        self.ui_models.curve_editor.load_action(index as usize, action)
     }
 
-    /// 同步动画编辑器标量到 Slint 全局（`op_animation_curve` 调用）。
+    /// 把投影重建的过滤视图重新绑定到 Slint 全局（`op_animation_structure` 调用）。
+    /// FilterModel 构造时捕获搜索词，重建后旧实例不感知新词，必须重新 set_。
+    pub(crate) fn rebind_animation_filters(&mut self) {
+        let Some(weak) = &self.animation_state else {
+            return;
+        };
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        let ce = &self.ui_models.curve_editor;
+        state.set_graph_channels(ce.graph_filter.clone());
+        state.set_dope_channels(ce.dope_filter.clone());
+        state.set_graph_segments(ce.graph_segments.clone());
+        state.set_graph_handles(ce.graph_handles.clone());
+    }
+
+    /// 同步动画编辑器标量到 Slint 全局（`op_animation_scalars` 调用）。
     /// 通道/关键帧等 VecModel 一次性绑定（共享 inner 模型，变更自动通知），
     /// 只有 current-time/action-name/current-action/action-range/current-channel/
     /// 选中数/插值等标量需要在此推送。
@@ -645,7 +669,7 @@ impl AppStore {
         state.set_action_end(ce.action_end);
         state.set_current_channel(ce.current_channel as i32);
         state.set_selected_keyframes(ce.selected_keyframe_count() as i32);
-        state.set_selected_interpolation(ce.selected_interpolation_index());
+        state.set_selected_interpolation(ce.selected_interpolation_state());
     }
 
     // 处理 LineEditor 相关 Action。

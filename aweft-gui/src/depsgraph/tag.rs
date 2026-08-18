@@ -27,6 +27,21 @@ pub enum DataId {
 /// 节点图类型（tag 内区分样式图/应用图，定义在 model 侧）。
 pub use aweft_model::node_graph::NodeGraphKind;
 
+/// 手柄位置标识：(通道, 关键帧下标, 入/出柄)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HandleLoc {
+    pub curve: usize,
+    pub key: usize,
+    pub is_in: bool,
+}
+
+/// 汇总条带拖拽上下文：被拖标记下标 + 累计时间增量（投影就地更新其 time）。
+#[derive(Debug, Clone, Copy)]
+pub struct SummaryDrag {
+    pub index: usize,
+    pub delta_time: f32,
+}
+
 /// 节点图一次变更的精确描述（投影据此精确定位局部更新）。
 #[derive(Debug, Clone)]
 pub enum NodeGraphChange {
@@ -192,8 +207,42 @@ pub enum Tag {
     },
 
     // ── Animation ─────────────────────────────────────────────────────
-    /// 当前 Action / 关键帧数据变化（曲线、Dope、NLA 相关投影依赖）。
-    AnimationChanged,
+    /// 动画编辑器：装载/重置/新建 Action / 搜索变化（过滤视图重建 + 全量派生重建）。
+    AnimationStructureChanged,
+    /// 动画编辑器：关键帧数据值变化（拖拽/插值/手柄调整）。
+    /// 投影重建受影响通道的曲线段/手柄/连接线，并重算汇总条带中受影响的 ms 条目。
+    AnimationKeyframesChanged {
+        /// 数据变化的通道。
+        curves: Vec<usize>,
+        /// 汇总条带需要重算的 ms（拖拽移动时含旧位置 + 新位置）。
+        summary_ms: Vec<i64>,
+        /// 关键帧拖拽的被拖通道（投影对其做相邻手柄软钳制预览替换）。
+        dragged_curve: Option<usize>,
+        /// 从汇总条带拖拽时：被拖标记 + 累计时间增量（投影就地更新其 time，
+        /// 不 insert/remove——拖拽期间重建汇总模型会破坏 Slint grab）。
+        dragged_summary: Option<SummaryDrag>,
+        /// 手柄拖拽时被移动的手柄（被拖 + 同步 + 对向柄）：投影据此重建
+        /// preview_handles（软钳制有效控制点预览，拖拽上下文依赖）。
+        handle_preview: Option<Vec<HandleLoc>>,
+    },
+    /// 动画编辑器：关键帧/通道选中变化。
+    /// 投影同步 selected_display、汇总条目选中掩码、手柄 selected 视觉。
+    AnimationSelectionChanged {
+        /// 汇总条带需要重算选中掩码的 ms。
+        summary_ms: Vec<i64>,
+    },
+    /// 动画编辑器：通道属性变化（可见/激活/可编辑/颜色模式）。
+    /// 投影更新连接线（visible/颜色）与汇总条目（可见性影响聚合）。
+    AnimationChannelChanged {
+        curve: usize,
+    },
+    /// 动画编辑器：拖拽结束后的数据整理（恢复编辑不变量）。
+    /// 投影清理拖拽残留（handles preview 替换换回普通）、重排乱序关键帧。
+    /// 与选中变化分离：其他组件（如 NLA）可单独依赖本整理。
+    AnimationDragEnded,
+    /// 动画编辑器：标量变化（播放头/当前通道/选中数/插值聚合）。
+    /// 投影只同步 Slint 全局标量。
+    AnimationScalarsChanged,
 
     // ── NodeGraph ─────────────────────────────────────────────────────
     /// 节点图结构/值变化（携带精确操作信息，投影据此局部更新）。
@@ -229,8 +278,18 @@ pub enum TagKind {
     DragEdgeMove,
     /// 拖拽结束（全量重建）。
     DragEnded,
-    /// 动画数据变化。
-    Animation,
+    /// 动画编辑器：结构（装载/重置/搜索）。
+    AnimationStructure,
+    /// 动画编辑器：关键帧数据值变化。
+    AnimationKeyframes,
+    /// 动画编辑器：选中变化。
+    AnimationSelection,
+    /// 动画编辑器：拖拽结束后的数据整理。
+    AnimationDragEnded,
+    /// 动画编辑器：通道属性变化。
+    AnimationChannel,
+    /// 动画编辑器：标量变化。
+    AnimationScalars,
     /// 节点图：结构（节点增删）。
     NodeGraphStructure,
     /// 节点图：连线（增删/重连）。
@@ -269,6 +328,18 @@ pub enum OperationCode {
     NodeGraphSocket,
     /// 节点图：新建链操作（全量重建）。
     NodeGraphChain,
+    /// 动画编辑器：结构变化（装载/重置/搜索）。
+    AnimationStructure,
+    /// 动画编辑器：关键帧值变化（段/手柄/连接线/汇总增量重建）。
+    AnimationCurve,
+    /// 动画编辑器：选中变化（显示掩码/汇总掩码/手柄选中）。
+    AnimationSelection,
+    /// 动画编辑器：拖拽结束整理（预览恢复/重排/补柄）。
+    AnimationDragEnded,
+    /// 动画编辑器：通道属性变化（连接线/汇总）。
+    AnimationChannel,
+    /// 动画编辑器：标量同步到 Slint 全局。
+    AnimationScalars,
 }
 
 impl Tag {
@@ -301,7 +372,12 @@ impl Tag {
             | Tag::EdgeUpdated { .. }
             | Tag::DragEnded { .. } => DataId::DragState,
 
-            Tag::AnimationChanged => DataId::Animation,
+            Tag::AnimationStructureChanged
+            | Tag::AnimationKeyframesChanged { .. }
+            | Tag::AnimationSelectionChanged { .. }
+            | Tag::AnimationDragEnded
+            | Tag::AnimationChannelChanged { .. }
+            | Tag::AnimationScalarsChanged => DataId::Animation,
 
             Tag::NodeGraph { .. } => DataId::NodeGraph,
         }
@@ -342,7 +418,12 @@ impl Tag {
 
             Tag::DragEnded { .. } => TagKind::DragEnded,
 
-            Tag::AnimationChanged => TagKind::Animation,
+            Tag::AnimationStructureChanged => TagKind::AnimationStructure,
+            Tag::AnimationKeyframesChanged { .. } => TagKind::AnimationKeyframes,
+            Tag::AnimationSelectionChanged { .. } => TagKind::AnimationSelection,
+            Tag::AnimationDragEnded => TagKind::AnimationDragEnded,
+            Tag::AnimationChannelChanged { .. } => TagKind::AnimationChannel,
+            Tag::AnimationScalarsChanged => TagKind::AnimationScalars,
 
             Tag::NodeGraph { change, .. } => match change {
                 NodeGraphChange::NodesInserted { .. } | NodeGraphChange::NodesRemoved { .. } => {

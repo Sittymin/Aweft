@@ -1,0 +1,238 @@
+// 通用侧边栏（Blender N 面板风格）。
+//
+// `Sidebar`：
+//  - 右侧恒为分类 Tab 条（文字竖排，参考 Blender：收起时仍显示分类文字）；
+//  - 展开时左侧为内容区，由使用方通过 @children 注入面板（按 panel-order 渲染即可支持拖拽排序）；
+//  - 收起 = 仅显示右侧分类 Tab 条（点击任一分类自动展开并激活）。
+//
+// `SidebarPanel`：
+//  - Blender 式面板区块：头部（三角箭头 + 标题）+ 主体内容（@children）。
+//  - 折叠：主体高度归零 + 不绘制（Slint 的 visible:false 单独用仍占布局空间，须配合高度归零）；
+//  - 头部可整条拖拽排序（pointer-event 区分点击与拖拽）。
+import { Theme } from "../theme/index.slint";
+
+// 面板区块：头部略亮、主体略暗；头部点击折叠/展开、拖拽排序
+export component SidebarPanel inherits Rectangle {
+    in property <string> title;
+    in-out property <bool> expanded: true;
+    in property <bool> disabled: false;
+    // 拖拽排序：cumulative 屏幕像素位移（相对按下点）；拖拽结束时 drag-released
+    callback drag-moved(delta-y: float);
+    callback drag-released();
+
+    private property <color> header-bg: Theme.data.animation-editor.panel-header-background;
+    private property <color> body-bg: Theme.data.animation-editor.panel-background;
+    private property <color> text-c: Theme.data.animation-editor.sidebar-header-text;
+    private property <color> muted-c: Theme.data.animation-editor.sidebar-muted-text;
+    // 拖拽状态：是否按下、是否进入拖拽、按下点
+    private property <bool> pressed: false;
+    private property <bool> dragging: false;
+    private property <float> press-y: 0.0;
+    private property <float> drag-accum: 0.0;
+    private property <float> drag-threshold: 6.0;
+
+    background: root.body-bg;
+    border-radius: 2px;
+
+    VerticalLayout {
+        // 头部：点击折叠/展开；按住拖拽排序
+        Rectangle {
+            height: 26px;
+            background: root.header-bg;
+            border-radius: 2px;
+            TouchArea {
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                        root.pressed = true;
+                        root.dragging = false;
+                        root.press-y = self.mouse-y / 1px;
+                        root.drag-accum = 0.0;
+                    } else if event.kind == PointerEventKind.move && root.pressed {
+                        if !root.dragging {
+                            let dy: float = self.mouse-y / 1px - root.press-y;
+                            if Math.abs(dy) > root.drag-threshold {
+                                root.dragging = true;
+                            }
+                        }
+                        if root.dragging {
+                            root.drag-accum = self.mouse-y / 1px - root.press-y;
+                            root.drag-moved(root.drag-accum);
+                        }
+                    } else if event.kind == PointerEventKind.up && root.pressed {
+                        if root.dragging {
+                            root.drag-released();
+                        } else {
+                            root.expanded = !root.expanded;
+                        }
+                        root.pressed = false;
+                        root.dragging = false;
+                    }
+                }
+            }
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 6px;
+                spacing: 4px;
+
+                // 三角箭头（展开朝下，收起朝右）
+                Text {
+                    text: root.expanded ? "▾" : "▸";
+                    vertical-alignment: center;
+                    color: root.disabled ? root.muted-c : root.text-c;
+                    font-size: 11px;
+                }
+                Text {
+                    text: root.title;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    color: root.disabled ? root.muted-c : root.text-c;
+                    font-size: 12px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // 主体（折叠时高度归零 + 不绘制 → 不占布局空间；@children 不能放进 if）
+        Rectangle {
+            visible: root.expanded;
+            clip: true;
+            width: 100%;
+            height: root.expanded ? self.preferred-height : 0px;
+            VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+                @children
+            }
+        }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    // 分类名列表（右侧竖排 Tab；收起时仍显示文字）
+    in property <[string]> categories: [];
+    in-out property <int> active-category: 0;
+    // 展开 = 显示内容区；收起 = 仅右侧分类 Tab 条
+    in-out property <bool> open: false;
+    callback category-activated(index: int);
+    // 拖拽分类 Tab 排序（from → to）
+    callback tab-reordered(from: int, to: int);
+
+    private property <color> bg: Theme.data.animation-editor.sidebar-background;
+    private property <color> border-c: Theme.data.animation-editor.sidebar-border;
+    private property <color> text-c: Theme.data.animation-editor.sidebar-header-text;
+    private property <color> muted-c: Theme.data.animation-editor.sidebar-muted-text;
+    private property <color> hover-c: Theme.data.animation-editor.option-hover;
+    private property <color> active-bg: Theme.data.animation-editor.option-selected;
+    private property <length> tab-width: Theme.data.animation-editor.sidebar-tab-width;
+    private property <length> tab-height: Theme.data.animation-editor.sidebar-tab-height;
+    private property <length> content-width: Theme.data.animation-editor.sidebar-content-width;
+    // Tab 拖拽状态
+    private property <int> drag-from: -1;
+    private property <float> press-y: 0.0;
+    private property <float> drag-accum: 0.0;
+    private property <float> tab-step: (root.tab-height + 2px) / 1px;
+
+    // 侧边栏左缘分隔线（与画布区分；绝对定位，非布局子元素）
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 1px;
+        height: 100%;
+        background: root.border-c;
+    }
+
+    HorizontalLayout {
+        x: 1px;
+        width: parent.width - 1px;
+        height: 100%;
+
+        // —— 内容区（展开时显示；收起时宽度归零 → 仅剩右侧 Tab 条）——
+        Rectangle {
+            visible: root.open;
+            clip: true;
+            width: root.open ? root.content-width : 0px;
+            height: 100%;
+            background: root.bg;
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 4px;
+                @children
+            }
+        }
+
+        // —— 分类 Tab 条（恒在右侧，文字竖排）——
+        Rectangle {
+            width: root.tab-width;
+            height: 100%;
+            background: root.bg;
+
+            // 与内容区的分隔线
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 1px;
+                height: 100%;
+                background: root.border-c;
+            }
+
+            VerticalLayout {
+                padding-top: 4px;
+                spacing: 2px;
+
+                for cat[i] in root.categories: Rectangle {
+                    width: root.tab-width;
+                    height: root.tab-height;
+                    background: root.drag-from == i
+                        ? root.hover-c
+                        : ((i == root.active-category && root.open)
+                            ? root.active-bg
+                            : (touch.has-hover ? root.hover-c : transparent));
+                    touch := TouchArea {
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                root.drag-from = i;
+                                root.press-y = self.mouse-y / 1px;
+                                root.drag-accum = 0.0;
+                            } else if event.kind == PointerEventKind.move && root.drag-from >= 0 {
+                                root.drag-accum = self.mouse-y / 1px - root.press-y;
+                            } else if event.kind == PointerEventKind.up && root.drag-from >= 0 {
+                                let target: int = Math.max(0, Math.min(root.categories.length - 1,
+                                    root.drag-from + Math.round(root.drag-accum / root.tab-step)));
+                                if target != root.drag-from {
+                                    root.tab-reordered(root.drag-from, target);
+                                } else {
+                                    // 未拖拽 → 视为点击：展开并激活 / 收起
+                                    if !root.open || i != root.active-category {
+                                        root.open = true;
+                                        root.active-category = i;
+                                        root.category-activated(i);
+                                    } else {
+                                        root.open = false;
+                                    }
+                                }
+                                root.drag-from = -1;
+                            }
+                        }
+                    }
+                    // 竖排文字（旋转 90°，读向向下）
+                    Text {
+                        text: cat;
+                        font-size: 12px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-rotation: 90deg;
+                        color: root.drag-from == i
+                            ? root.text-c
+                            : ((i == root.active-category && root.open)
+                                ? #ffffff
+                                : (i == root.active-category ? root.text-c : root.muted-c));
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}

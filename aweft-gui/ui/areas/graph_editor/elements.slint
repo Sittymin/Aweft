@@ -1,0 +1,403 @@
+// 曲线编辑器的基础渲染元素：曲线段、关键帧标记、贝塞尔控制柄。
+// 所有坐标均为世界坐标（time, value），通过 view-zoom/pan 换算到屏幕。
+import {
+    SlintSegmentKind,
+    SlintKeyframeDragMode,
+    SlintHandleDragMode,
+} from "../../core/animation_types.slint";
+import { SlintSelectionModifier } from "../../core/types.slint";
+import { Theme } from "../../theme/index.slint";
+
+// 一段曲线：相邻两个关键帧之间的三次贝塞尔（线性/保持也退化为贝塞尔）。
+// 与节点连线的 GraphNodeLink 同样使用 Path 源盒 + 1:1 fit 的渲染方案。
+// 外层包一层 Rectangle：Path 渲染。不带 TouchArea（不拦截中键平移），选中由
+// 画布级框选/点关键帧完成（对齐 Blender），这里只负责画。
+export component CurveSegment inherits Rectangle {
+    in property <float> x0: 0.0;
+    in property <float> y0: 0.0;
+    in property <float> cx1: 0.0;
+    in property <float> cy1: 0.0;
+    in property <float> cx2: 0.0;
+    in property <float> cy2: 0.0;
+    in property <float> x1: 0.0;
+    in property <float> y1: 0.0;
+    in property <SlintSegmentKind> kind: SlintSegmentKind.bezier;
+    in property <color> stroke-color;
+    // X 轴缩放（时间）与 Y 轴缩放（值）独立
+    in property <float> view-zoom-x: 1.0;
+    in property <float> view-zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+    in property <float> line-width: 1.5;
+
+    // 屏幕坐标（世界→屏幕）
+    private property <length> sx0: root.x0 * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> sy0: root.y0 * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> scx1: root.cx1 * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> scy1: root.cy1 * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> scx2: root.cx2 * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> scy2: root.cy2 * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> sx1: root.x1 * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> sy1: root.y1 * root.view-zoom-y * 1px + root.pan-y * 1px;
+
+    // 线宽为固定屏幕宽度（不随缩放变化）
+    private property <length> line-w: root.line-width * 1px;
+    // 源盒每侧外扩一个线宽
+    private property <length> box-pad: line-w;
+    // 路径源盒：所有点（含控制点）的包围盒外扩线宽
+    private property <length> src-x: min(min(min(sx0, sx1), scx1), scx2) - box-pad;
+    private property <length> src-y: min(min(min(sy0, sy1), scy1), scy2) - box-pad;
+    private property <length> src-w: max(max(max(sx0, sx1), scx1), scx2) - src-x + box-pad * 2;
+    private property <length> src-h: max(max(max(sy0, sy1), scy1), scy2) - src-y + box-pad * 2;
+
+    // 元素 = 源盒 + 线宽，bounds == viewbox，fit 精确 1:1
+    x: src-x;
+    y: src-y;
+    width: src-w + line-w;
+    height: src-h + line-w;
+
+    // 曲线本体（Path 铺满元素，viewbox 与元素 1:1 fit）
+    path := Path {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.src-w / 1px;
+        viewbox-height: root.src-h / 1px;
+        fill: transparent;
+        stroke: root.stroke-color;
+        stroke-width: root.line-w;
+        stroke-line-cap: round;
+
+        // 起点
+        MoveTo {
+            x: (root.sx0 - root.src-x) / 1px;
+            y: (root.sy0 - root.src-y) / 1px;
+        }
+        // 三次贝塞尔
+        CubicTo {
+            control-1-x: (root.scx1 - root.src-x) / 1px;
+            control-1-y: (root.scy1 - root.src-y) / 1px;
+            control-2-x: (root.scx2 - root.src-x) / 1px;
+            control-2-y: (root.scy2 - root.src-y) / 1px;
+            x: (root.sx1 - root.src-x) / 1px;
+            y: (root.sy1 - root.src-y) / 1px;
+        }
+    }
+
+    // 命中统一交给画布级框选/点关键帧（对齐 Blender），这里不设矩形命中区。
+}
+
+// 关键帧标记：菱形（选中时白边/泛白），可点击选中、拖拽移动。
+export component KeyframeMarker inherits Rectangle {
+    in property <float> time: 0.0;
+    in property <float> value: 0.0;
+    in property <color> marker-color;
+    in property <bool> selected: false;
+    // X 轴缩放（时间）与 Y 轴缩放（值）独立
+    in property <float> view-zoom-x: 1.0;
+    in property <float> view-zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+
+    callback pressed(modifier: SlintSelectionModifier);
+    // mode: 0=普通移动，1=Shift 拖出手柄（从贝塞尔关键帧拉出控制柄）
+    callback dragged(delta-time: float, delta-value: float, mode: SlintKeyframeDragMode);
+    // moved：是否发生过拖拽（false = 单击，编辑器据此折叠为单选）
+    callback released(moved: bool);
+
+    private property <length> marker-size: 9px;
+    // 命中区域比菱形视觉略大
+    private property <length> hit-size: marker-size + 8px;
+    private property <length> cx: root.time * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> cy: root.value * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <bool> dragging: false;
+    private property <bool> moved: false;
+    // 按下时的光标位置（标记本地像素），拖拽中保持不变，用于计算位移增量
+    private property <float> press-mouse-x: 0.0;
+    private property <float> press-mouse-y: 0.0;
+
+    x: cx - hit-size / 2;
+    y: cy - hit-size / 2;
+    width: hit-size;
+    height: hit-size;
+    background: transparent;
+
+    // 菱形视觉（旋转 45° 的方块）
+    Rectangle {
+        width: root.marker-size;
+        height: root.marker-size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        transform-origin: { x: root.marker-size / 2, y: root.marker-size / 2 };
+        transform-rotation: 45deg;
+        background: root.selected ? root.marker-color.brighter(0.4) : root.marker-color;
+        border-width: root.selected ? 2px : 1px;
+        border-color: root.selected ? #ffffff : #101014;
+    }
+
+    ta := TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.dragging = true;
+                root.moved = false;
+                root.press-mouse-x = self.mouse-x / 1px;
+                root.press-mouse-y = self.mouse-y / 1px;
+                root.pressed(event.modifiers.control
+                    ? SlintSelectionModifier.ctrl
+                    : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+            } else if (event.kind == PointerEventKind.move && root.dragging) {
+                // 增量 = 光标相对按下位置的位移 / 缩放（与节点拖拽一致，避免反馈振荡）
+                root.moved = true;
+                root.dragged(
+                    (self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom-x,
+                    (self.mouse-y / 1px - root.press-mouse-y) / root.view-zoom-y,
+                    event.modifiers.shift
+                        ? SlintKeyframeDragMode.drag-out-handle
+                        : SlintKeyframeDragMode.move
+                );
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                if root.dragging {
+                    root.released(root.moved);
+                }
+                root.dragging = false;
+            }
+        }
+    }
+}
+
+// 贝塞尔控制柄标记：关键帧 → 控制点的连线 + 控制点圆点（可拖拽调整柄）。
+// 高亮只跟随自身拖拽状态，与关键帧选中无关。
+// preview=true 时：显示“渲染期钳制后”的有效控制点（不同颜色、不可交互），
+// 用于移动关键帧时替换被钳制的手柄。
+export component HandleMarker inherits Rectangle {
+    in property <float> key-time: 0.0;
+    in property <float> key-value: 0.0;
+    in property <float> handle-time: 0.0;
+    in property <float> handle-value: 0.0;
+    in property <color> handle-color;
+    in property <bool> preview: false;
+    in property <bool> selected: false;
+    in property <float> view-zoom-x: 1.0;
+    in property <float> view-zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+
+    callback pressed(modifier: SlintSelectionModifier);
+    // mode: 0=Ctrl 自由，1=默认对齐，2=Shift 原点对称
+    callback dragged(delta-time: float, delta-value: float, mode: SlintHandleDragMode);
+    // moved：是否发生过拖拽（false = 单击，编辑器据此折叠为单选）
+    callback released(moved: bool);
+
+    private property <length> ax: root.key-time * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> ay: root.key-value * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> bx: root.handle-time * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> by: root.handle-value * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <float> dxf: (bx - ax) / 1px;
+    private property <float> dyf: (by - ay) / 1px;
+    private property <length> line-length: Math.sqrt(dxf * dxf + dyf * dyf) * 1px;
+    private property <angle> line-angle: Math.atan2(dyf, dxf);
+    private property <length> line-w: root.dragging ? 2px : 1px;
+    private property <length> handle-size: 8px;
+    private property <length> hit-size: handle-size + 8px;
+    // 显示尺寸（拖拽时放大）
+    private property <length> display-size: root.dragging ? root.handle-size + 4px : root.handle-size;
+    private property <bool> dragging: false;
+    private property <bool> moved: false;
+    private property <float> press-mouse-x: 0.0;
+    private property <float> press-mouse-y: 0.0;
+
+    // 预览色（钳制后有效控制点）；选中手柄为白色；普通为通道色
+    private property <color> line-color: root.preview
+        ? Theme.data.animation-editor.preview-handle
+        : (root.selected ? #ffffff : root.handle-color);
+
+    // 根元素铺满画布（子元素以画布坐标绝对定位；无 TouchArea 不拦截事件）
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+
+    // 连线：旋转矩形，左中为轴心并精确落在关键帧 (ax, ay)，控制点端点 (bx, by) 在线上。
+    // 不用 opacity（旋转元素会让 Slint 开离屏 layer，尺寸=连线包围盒，放大后超出 wgpu 纹理上限），
+    // 用颜色 alpha 代替。
+    line := Rectangle {
+        x: root.ax;
+        y: root.ay - root.line-w / 2;
+        width: root.line-length;
+        height: root.line-w;
+        transform-origin: { x: 0px, y: self.height / 2 };
+        transform-rotation: root.line-angle;
+        background: (root.dragging ? #ffffff : root.line-color).with-alpha(0.65);
+    }
+
+    // 控制点视觉（拖拽时放大点亮；预览时用预览色）
+    handle-vis := Rectangle {
+        x: root.bx - root.display-size / 2;
+        y: root.by - root.display-size / 2;
+        width: root.display-size;
+        height: root.display-size;
+        border-radius: self.height / 2;
+        background: root.dragging ? #ffffff : root.line-color;
+        border-width: 1px;
+        border-color: #101014;
+    }
+
+    // 控制点命中区域（可拖拽；预览态禁用）
+    handle-hit := Rectangle {
+        x: root.bx - root.hit-size / 2;
+        y: root.by - root.hit-size / 2;
+        width: root.hit-size;
+        height: root.hit-size;
+        background: transparent;
+
+        ta := TouchArea {
+            enabled: !root.preview;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.dragging = true;
+                    root.moved = false;
+                    root.press-mouse-x = self.mouse-x / 1px;
+                    root.press-mouse-y = self.mouse-y / 1px;
+                    root.pressed(event.modifiers.control
+                        ? SlintSelectionModifier.ctrl
+                        : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+                } else if (event.kind == PointerEventKind.move && root.dragging) {
+                    root.moved = true;
+                    root.dragged(
+                        (self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom-x,
+                        (self.mouse-y / 1px - root.press-mouse-y) / root.view-zoom-y,
+                        // 默认=对齐，Shift=原点对称，Ctrl=自由
+                        event.modifiers.control
+                            ? SlintHandleDragMode.free
+                            : (event.modifiers.shift ? SlintHandleDragMode.symmetric : SlintHandleDragMode.aligned)
+                    );
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    if root.dragging {
+                        root.released(root.moved);
+                    }
+                    root.dragging = false;
+                }
+            }
+        }
+    }
+}
+
+// 手柄拖拽时相邻软钳制的预览：显示“软钳制后”的有效控制点（与原始手柄位置不同），
+// 亮青色，与普通手柄并存（被拖柄仍显示原始位置）。
+export component PreviewHandle inherits Rectangle {
+    in property <float> key-time: 0.0;
+    in property <float> key-value: 0.0;
+    in property <float> handle-time: 0.0;
+    in property <float> handle-value: 0.0;
+    in property <color> marker-color;
+    in property <float> view-zoom-x: 1.0;
+    in property <float> view-zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+
+    private property <length> ax: root.key-time * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> ay: root.key-value * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> bx: root.handle-time * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> by: root.handle-value * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <float> dxf: (bx - ax) / 1px;
+    private property <float> dyf: (by - ay) / 1px;
+    private property <length> line-length: Math.sqrt(dxf * dxf + dyf * dyf) * 1px;
+    private property <angle> line-angle: Math.atan2(dyf, dxf);
+    private property <length> line-w: 1px;
+    private property <length> handle-size: 7px;
+
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+
+    // 连线（关键帧 → 有效控制点，旋转矩形左中轴心落在关键帧）。
+    // 与 HandleMarker 同理：用颜色 alpha 代替 opacity，避免旋转元素开超大离屏 layer。
+    line := Rectangle {
+        x: root.ax;
+        y: root.ay - root.line-w / 2;
+        width: root.line-length;
+        height: root.line-w;
+        transform-origin: { x: 0px, y: self.height / 2 };
+        transform-rotation: root.line-angle;
+        background: root.marker-color.with-alpha(0.7);
+    }
+
+    // 有效控制点圆点
+    Rectangle {
+        x: root.bx - root.handle-size / 2;
+        y: root.by - root.handle-size / 2;
+        width: root.handle-size;
+        height: root.handle-size;
+        border-radius: self.height / 2;
+        background: root.marker-color;
+        border-width: 1px;
+        border-color: #101014;
+    }
+}
+
+// 外推线：从首/末关键帧沿水平方向延伸到视口边缘。
+// 不硬编码长度——内端是关键帧屏幕位置，外端由视口（area-width/pan/zoom）决定，
+// 超出画布的部分被 clip 裁剪。
+export component ExtrapolationLine inherits Rectangle {
+    in property <float> key-time: 0.0;
+    in property <float> key-value: 0.0;
+    in property <float> view-zoom-x: 1.0;
+    in property <float> view-zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+    // true=向左延伸到左边缘，false=向右延伸到右边缘
+    in property <bool> left-side: false;
+    in property <color> line-color;
+    in property <length> line-width: 1.5px;
+    // 画布可视宽度（用于把外端钳到边缘）
+    in property <length> area-width: 100px;
+
+    private property <length> key-x: root.key-time * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> key-y: root.key-value * root.view-zoom-y * 1px + root.pan-y * 1px;
+    // 关键帧屏幕 x 钳到 [0, 画布宽]
+    private property <length> edge-x: min(max(key-x, 0px), root.area-width);
+
+    y: key-y - line-width / 2;
+    height: line-width;
+    x: root.left-side ? 0px : edge-x;
+    width: root.left-side ? edge-x : max(0px, root.area-width - edge-x);
+
+    background: root.line-color;
+}
+
+// Hold 插值“保持后瞬变”的竖直虚线：连接保持线末端 (step-x, y0) 与下一个关键帧 (step-x, y1)。
+// Slint Path 无 stroke-dash-array，用竖直平铺的短划线贴图实现虚线。
+export component HoldStep inherits Rectangle {
+    in property <float> step-x: 0.0;
+    in property <float> y0: 0.0;
+    in property <float> y1: 0.0;
+    in property <color> line-color;
+    in property <float> view-zoom-x: 1.0;
+    in property <float> view-zoom-y: 1.0;
+    in property <float> pan-x: 0.0;
+    in property <float> pan-y: 0.0;
+    in property <length> line-width: 2px;
+
+    private property <length> sx: root.step-x * root.view-zoom-x * 1px + root.pan-x * 1px;
+    private property <length> sy0: root.y0 * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> sy1: root.y1 * root.view-zoom-y * 1px + root.pan-y * 1px;
+    private property <length> top-y: min(sy0, sy1);
+    private property <length> line-h: max(sy0, sy1) - top-y;
+
+    x: sx - line-width / 2;
+    y: top-y;
+    width: line-width;
+    height: line-h;
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("../../assets/textures/dash_v.svg");
+        vertical-tiling: repeat;
+        colorize: root.line-color;
+    }
+}

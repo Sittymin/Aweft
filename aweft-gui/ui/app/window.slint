@@ -20,12 +20,13 @@ import {
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
-import { VideoState, SubtitleState, OverlayState, NodeGraphState, EditOverlayState } from "../bridge/state.slint";
+import { VideoState, SubtitleState, OverlayState, NodeGraphState, EditOverlayState, AnimationState } from "../bridge/state.slint";
 import {
     DragCallbacks,
     AreaCallbacks,
     LineEditorCallbacks,
     NodeGraphCallbacks,
+    AnimationCallbacks,
 } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -36,10 +37,12 @@ export {
     OverlayState,
     NodeGraphState,
     EditOverlayState,
+    AnimationState,
     DragCallbacks,
     AreaCallbacks,
     LineEditorCallbacks,
     NodeGraphCallbacks,
+    AnimationCallbacks,
     Theme
 }
 

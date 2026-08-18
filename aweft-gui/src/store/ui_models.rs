@@ -7,6 +7,7 @@ use crate::bridge::types::{
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
+use crate::store::curve_editor::CurveEditorState;
 use crate::store::graph_editor::GraphEditorState;
 use crate::store::line_editor::LineEditorState;
 
@@ -17,6 +18,8 @@ pub struct UiModels {
     pub style_graph: GraphEditorState,
     /// 应用图编辑器状态
     pub app_graph: GraphEditorState,
+    /// 曲线编辑器状态（通道/关键帧/段/手柄，自持 VecModels）
+    pub curve_editor: CurveEditorState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -32,6 +35,7 @@ impl UiModels {
             line_editor_state: LineEditorState::new(),
             style_graph: GraphEditorState::default(),
             app_graph: GraphEditorState::default(),
+            curve_editor: CurveEditorState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),

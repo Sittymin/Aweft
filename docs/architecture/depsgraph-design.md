@@ -171,6 +171,10 @@ O(1)，不做任何线性扫描。
 6. ✅ 删除旧管线（`ui_update/`、`state_change.rs`）+ 行副本缓存（旧 `all_rows_model`、
    index map 平移）；全量映射 `all_rows` 移入测试模块（仅测试用）
 7. ✅ 接入 `dispatch_and_render`，无头集成测试通过
+8. ✅ **动画编辑器接入依赖图**：reducer 只改数据层（`channels_data`/`editing_keyframes`）返回
+   精确 tag（Structure/Keyframes/Selection/Channel/Scalars），投影 `op_animation_*` 同步
+   派生层（Slint 绑定模型 + 标量）；过滤视图重建后重新绑定 Slint global
+   （FilterModel 捕获搜索词，旧实例不感知新词）
 
 **最终数据流**：
 
@@ -184,6 +188,7 @@ AppStore::evaluate_depsgraph()
     └─ LineEditor.Selection：set_selected + notify 受影响行
     └─ LineEditor.Structure：notify.row_added/row_removed 精确增删
     └─ Screen：areas/edges 更新 / OverlayState 覆盖层
+    └─ Animation：channels/keyframe_models/segments/handles/connections/summary 增量同步 + 标量
 ```
 
 **Slint 标准复用**（不重复造轮子）：
