@@ -143,6 +143,46 @@ impl CurveEditorState {
     fn apply_selection(&mut self, summary_ms: &[i64]) {
         // 任何选中交互（按下/松开/框选）都是手柄拖拽的终止点：清空拖拽预览
         self.preview_handles.clear();
+        // 恢复被拖通道的普通手柄：拖拽期间 preview 替换（handles 区间带 preview 标记）
+        // 在交互终止时换回普通几何
+        let mut previewed: Vec<usize> = Vec::new();
+        for i in 0..self.handles.row_count() {
+            if let Some(h) = self.handles.row_data(i)
+                && h.preview
+            {
+                let curve = h.curve_index as usize;
+                if !previewed.contains(&curve) {
+                    previewed.push(curve);
+                }
+            }
+        }
+        for curve in previewed {
+            self.rebuild_curve(curve);
+        }
+        // 拖拽可能破坏关键帧时间序（模型保序）：松开后重排受影响通道，
+        // 恢复"下标 0 = 时间最小"（Slint 外推线读 keyframes[0]/[len-1]）。
+        // 拖拽期间（Keyframes tag）不重排——保住 grab 与拖拽抓手下标映射。
+        let mut to_resort: Vec<usize> = Vec::new();
+        for curve in 0..self.channels_data.len() {
+            if let Some(kfs) = self.editing_keyframes.get(&curve)
+                && kfs.windows(2).any(|w| w[0].time > w[1].time)
+            {
+                to_resort.push(curve);
+            }
+        }
+        for curve in to_resort {
+            if let Some(kfs) = self.editing_keyframes.get_mut(&curve) {
+                kfs.sort_by(|a, b| {
+                    a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            if let Some(model) = self.keyframe_models.get(&curve) {
+                let kfs = self.editing_keyframes.get(&curve).cloned().unwrap_or_default();
+                model.set_vec(kfs);
+            }
+            // 关键帧下标变化 → 段/手柄/连接线重建（keyframe_index 字段跟随）
+            self.rebuild_curve(curve);
+        }
         self.sync_channel_rows();
         self.sync_selected_display();
         // 嵌套关键帧模型 selected 同步（只写变化的行）

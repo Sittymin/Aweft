@@ -136,14 +136,18 @@ impl CurveEditorState {
         }
 
         // 被拖通道 + 被同步通道的段/手柄重建走投影；
-        // 被移动的手柄列表（被拖 + 同步）一并交给投影重建 preview_handles
+        // 被移动的手柄列表（被拖 + 同步 + 各自对向柄）一并交给投影重建 preview_handles。
+        // 对向柄在 Aligned（共线）/Symmetric（原点对称）模式下被 apply_handle_mode 约束，
+        // 可能越过相邻关键帧边界被软钳制——同样需要预览。
         let mut curves: Vec<usize> = vec![curve];
-        let mut handle_preview: Vec<(usize, usize, bool)> = vec![(curve, key, is_in)];
+        let mut handle_preview: Vec<(usize, usize, bool)> =
+            vec![(curve, key, is_in), (curve, key, !is_in)];
         for &(curve_index, keyframe_index, is_incoming) in &synchronized_handles {
             if !curves.contains(&curve_index) {
                 curves.push(curve_index);
             }
             handle_preview.push((curve_index, keyframe_index, is_incoming));
+            handle_preview.push((curve_index, keyframe_index, !is_incoming));
         }
         vec![Tag::AnimationKeyframesChanged {
             curves,

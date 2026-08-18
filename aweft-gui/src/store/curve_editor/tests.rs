@@ -1934,3 +1934,95 @@ fn ctrl_toggle_keyframe_activates_display_mask() {
     assert_eq!(st.selected_display.row_data(0), Some(false), "通道 0 应取消激活");
     assert_eq!(st.selected_display.row_data(1), Some(true), "通道 1 应保持激活");
 }
+
+/// 回归：移动关键帧产生的 preview 钳制（handles 区间替换）在取消选中/松开时换回普通手柄。
+#[test]
+fn keyframe_drag_preview_restored_on_release() {
+    let mut st = CurveEditorState::default();
+    let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
+    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 5.0 };
+    let tags = st.push_channel(
+        "t",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![k0, key(2.0, 10.0, SlintInterpolation::Bezier)],
+    );
+    project(&mut st, tags);
+    // 选中并拖第一个关键帧（出柄越过第二个 → 被软钳制 → handles 区间被 preview 替换）
+    let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.keyframe_dragged(0, 0, 1.5, 8.0, SlintKeyframeDragMode::Move);
+    project(&mut st, tags);
+    let has_preview = (0..st.handles.row_count())
+        .any(|i| st.handles.row_data(i).map(|h| h.preview).unwrap_or(false));
+    assert!(has_preview, "拖拽中应产生钳制预览标记");
+    // 松开：投影恢复普通手柄
+    let tags = st.keyframe_released(0, 0, true);
+    project(&mut st, tags);
+    let has_preview = (0..st.handles.row_count())
+        .any(|i| st.handles.row_data(i).map(|h| h.preview).unwrap_or(false));
+    assert!(!has_preview, "松开后 preview 钳制应恢复为普通手柄");
+}
+
+/// 回归：Aligned（共线）拖手柄时，对向手柄被约束后越过段边界 → 也显示钳制预览。
+#[test]
+fn handle_drag_preview_includes_opposite_handle() {
+    let mut st = CurveEditorState::default();
+    // 中间关键帧：出柄向左长柄 (-6,0)。拖入柄 (-10,0) Aligned → 出柄共线反向 (+6,0)，
+    // 控制点 (10,10) 越过段 [4,8] 右边界 → 软钳制预览（入柄自身向左侧也被钳制）
+    let mut k1 = key(4.0, 10.0, SlintInterpolation::Bezier);
+    k1.handle_out = SlintBezierHandle { time_offset: -6.0, value_offset: 0.0 };
+    let tags = st.push_channel(
+        "t",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![
+            key(0.0, 0.0, SlintInterpolation::Bezier),
+            k1,
+            key(8.0, 0.0, SlintInterpolation::Bezier),
+        ],
+    );
+    project(&mut st, tags);
+    let tags = st.handle_pressed(0, 1, true, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.handle_dragged(0, 1, true, -10.0, 0.0, SlintHandleDragMode::Aligned);
+    project(&mut st, tags);
+    let found = (0..st.preview_handles.row_count()).any(|i| {
+        let m = st.preview_handles.row_data(i).unwrap();
+        m.curve_index == 0 && m.keyframe_index == 1 && !m.is_in && m.preview
+    });
+    assert!(found, "Aligned 模式对向出柄应显示钳制预览");
+}
+
+/// 回归：拖第一个关键帧越过第二个 → 松开后重排，下标 0 = 时间最小
+/// （Slint 外推线读 keyframes[0]/[len-1]，保序模型下必须恢复有序）。
+#[test]
+fn drag_first_keyframe_past_neighbor_resorts_on_release() {
+    let mut st = CurveEditorState::default();
+    let tags = st.push_channel(
+        "t",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![
+            key(0.0, 0.0, SlintInterpolation::Linear),
+            key(2.0, 10.0, SlintInterpolation::Linear),
+            key(4.0, 20.0, SlintInterpolation::Linear),
+        ],
+    );
+    project(&mut st, tags);
+    // 拖第一个关键帧到 3.0（越过第二个 2.0）
+    let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.keyframe_dragged(0, 0, 3.0, 0.0, SlintKeyframeDragMode::Move);
+    project(&mut st, tags);
+    // 拖拽中保序（下标 0 仍是被拖关键帧，时间 3.0——grab 抓手按原下标命中）
+    assert_eq!(st.keyframe_models[&0].row_data(0).unwrap().time, 3.0);
+    let tags = st.keyframe_released(0, 0, true);
+    project(&mut st, tags);
+    // 松开后重排：下标 0 = 时间最小
+    let kfs = &st.editing_keyframes[&0];
+    assert_eq!(kfs[0].time, 2.0);
+    assert_eq!(kfs[1].time, 3.0);
+    assert_eq!(kfs[2].time, 4.0);
+    assert_eq!(st.keyframe_models[&0].row_data(0).unwrap().time, 2.0);
+    // 段模型同步重建（首段从 2.0 开始）
+    let seg0 = st.segments.row_data(0).unwrap();
+    assert_eq!(seg0.x0, 2.0);
+}
