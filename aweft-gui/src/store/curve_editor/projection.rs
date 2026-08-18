@@ -81,17 +81,10 @@ impl CurveEditorState {
         dragged_summary: Option<crate::depsgraph::SummaryDrag>,
         handle_preview: &Option<Vec<HandleLoc>>,
     ) {
-        // 关键帧 Move 拖拽（summary_ms 非空 = 关键帧真的被移动）可能让边缘关键帧变成中间：
-        // 为贝塞尔关键帧补缺失侧的默认水平柄（写数据——恢复编辑不变量，与 resort_keyframes 同类）。
-        // 手柄拖拽（dragged_curve = None）与 Shift 拖出柄（DragOutHandle，summary_ms 空）
-        // 不触发——拖柄不改变边缘性，且用户可能故意把柄钳到 0 长度，不该被覆盖。
-        let ensure_handles = dragged_curve.is_some() && !summary_ms.is_empty();
         for &curve in curves {
-            // 每帧一次排序：ensure（邻居检查）与外推线（首末）复用，避免重复排序
+            // 每帧一次排序：外推线（首末）用；补柄不在此做——拖拽中无必要，
+            // 拖拽结束（apply_drag_ended）才为"现在应当有柄但缺失"的侧补默认柄
             let sorted = self.sorted_indices(curve);
-            if ensure_handles {
-                self.ensure_default_handles(curve, &sorted);
-            }
             // 嵌套模型同步（拖拽期间数量不变，set_row_data 保住 grab）
             self.sync_keyframe_model(curve);
             // 段/手柄/连接线：数量不变原地更新，数量变化 splice
@@ -129,16 +122,31 @@ impl CurveEditorState {
         sorted
     }
 
-    /// 为贝塞尔关键帧补缺失侧的默认水平柄（恢复编辑不变量）。
+    /// 为贝塞尔关键帧补缺失侧的默认水平柄（恢复编辑不变量，拖拽结束时调用）。
     ///
     /// 边缘关键帧只有一侧柄（另一侧无角度数据）；拖拽让它变成中间关键帧后，
     /// 新的一侧相邻段若为贝塞尔，该侧手柄缺失（偏移为零，看不见也拖不动）。
     /// 边缘延伸是水平的，因此默认柄也水平延伸 1/2 相邻间距（与插值切换补柄一致）。
-    /// 幂等：已补过的（偏移非零）不重复补。
-    /// 复用调用方的排序结果（`sorted` = `sorted_indices` 输出），不再重复排序。
-    fn ensure_default_handles(&mut self, curve: usize, sorted: &[usize]) {
+    /// 幂等：已补过的（偏移非零）不重复补。扫描全部通道（拖拽结束低频，成本可忽略）。
+    fn ensure_default_handles(&mut self) {
+        let mut changed: Vec<usize> = Vec::new();
+        for curve in 0..self.channels_data.len() {
+            if self.ensure_default_handles_for_curve(curve) {
+                changed.push(curve);
+            }
+        }
+        // 补柄是数据变化：同步嵌套模型 + 重建段/手柄/连接线
+        for curve in changed {
+            self.sync_keyframe_model(curve);
+            self.rebuild_curve(curve);
+        }
+    }
+
+    /// 单通道补柄（内部）：复用调用方排序结果；返回是否补了柄。
+    fn ensure_default_handles_for_curve(&mut self, curve: usize) -> bool {
+        let sorted = self.sorted_indices(curve);
         let Some(kfs) = self.editing_keyframes.get(&curve) else {
-            return;
+            return false;
         };
         // 先收集要补的柄（不可变读），再统一写回（避免借用冲突）
         let mut fixes: Vec<(usize, bool, SlintBezierHandle)> = Vec::new();
@@ -176,9 +184,10 @@ impl CurveEditorState {
                 }
             }
         }
-        if !fixes.is_empty()
-            && let Some(kfs) = self.editing_keyframes.get_mut(&curve)
-        {
+        if fixes.is_empty() {
+            return false;
+        }
+        if let Some(kfs) = self.editing_keyframes.get_mut(&curve) {
             for (idx, is_in, handle) in fixes {
                 if is_in {
                     kfs[idx].handle_in = handle;
@@ -187,6 +196,7 @@ impl CurveEditorState {
                 }
             }
         }
+        true
     }
 
     /// 把通道的关键帧数据同步到嵌套 Slint 模型（逐行 set_row_data，只写变化的行）。
@@ -278,7 +288,9 @@ impl CurveEditorState {
     // ── 选中变化 ────────────────────────────────────────────────────────
 
     /// 选中变化：选中视觉同步 + 汇总掩码重算（拖拽整理见 apply_drag_ended）。
+    /// 任何选中交互（按下/松开/框选）都是手柄拖拽的终止点：清空拖拽预览。
     fn apply_selection(&mut self, summary_ms: &[i64]) {
+        self.preview_handles.clear();
         self.sync_channel_rows();
         self.sync_selected_display();
         self.sync_keyframe_selection();
@@ -286,17 +298,20 @@ impl CurveEditorState {
         self.update_summary_entries(summary_ms);
     }
 
-    /// 拖拽结束整理：清理拖拽残留（preview 换回普通手柄）+ 重排乱序关键帧。
+    /// 拖拽结束整理：恢复关键帧拖拽期间被 preview 替换的 handles 区间 +
+    /// 重排乱序关键帧 + 为"现在应当有柄但缺失"的贝塞尔关键帧补默认水平柄。
     /// 独立于选中变化（独立 tag）——其他组件可单独依赖本整理。
+    /// 注意：只由关键帧拖拽结束（keyframe_released moved=true）触发；
+    /// 手柄拖拽结束不打本 tag（手柄可能被故意钳到 0，不补柄）。
     fn apply_drag_ended(&mut self) {
-        self.clear_drag_preview();
+        self.restore_handle_preview();
         self.resort_keyframes();
+        self.ensure_default_handles();
     }
 
-    /// 交互终止点清理：清空手柄拖拽预览（preview_handles），并把关键帧拖拽期间
-    /// preview 替换过的 handles 区间恢复为普通手柄（拖拽残留换回）。
-    fn clear_drag_preview(&mut self) {
-        self.preview_handles.clear();
+    /// 把关键帧拖拽期间 preview 替换过的 handles 区间恢复为普通手柄（拖拽残留换回）。
+    /// preview_handles 模型的清空在 apply_selection（任何选中交互的终止点）。
+    fn restore_handle_preview(&mut self) {
         let mut previewed: Vec<usize> = Vec::new();
         for i in 0..self.handles.row_count() {
             if let Some(h) = self.handles.row_data(i)

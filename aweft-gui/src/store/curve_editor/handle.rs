@@ -175,10 +175,9 @@ impl CurveEditorState {
             }
             self.selected_handles.insert(HandleLoc { curve, key, is_in });
         }
-        let mut tags = vec![Tag::AnimationSelectionChanged { summary_ms }];
-        if moved {
-            tags.push(Tag::AnimationDragEnded);
-        }
-        tags
+        // 手柄拖拽结束不打 AnimationDragEnded：补柄（ensure_default_handles）只适用于
+        // 关键帧拖拽改变边缘性的场景；手柄可能被故意钳到 0 长度，不该被覆盖。
+        // preview_handles 由投影在选中变化时清空。
+        vec![Tag::AnimationSelectionChanged { summary_ms }]
     }
 }

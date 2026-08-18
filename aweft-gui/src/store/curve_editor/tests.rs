@@ -2084,24 +2084,30 @@ fn edge_keyframe_becomes_interior_gets_default_handle() {
     // 边缘关键帧 kf0：无入柄
     assert_eq!(st.editing_keyframes[&0][0].handle_in.time_offset, 0.0);
 
-    // 拖 kf0 到 3.0（越过 kf1）→ kf0 变中间：左侧段 [kf1(2), kf0(3)] 贝塞尔 → 补入柄
+    // 拖 kf0 到 3.0（越过 kf1）→ kf0 变中间：左侧段 [kf1(2), kf0(3)] 贝塞尔
     let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
     let tags = st.keyframe_dragged(0, 0, 3.0, 0.0, SlintKeyframeDragMode::Move);
     project(&mut st, tags);
-    // 拖拽中（未松开）新入柄已补：水平向左延伸 1/3 间距
-    let kf0 = &st.editing_keyframes[&0][0];
+    // 拖拽中（未松开）：不补柄（移动过程无必要，避免干扰拖拽）
+    assert_eq!(st.editing_keyframes[&0][0].handle_in.time_offset, 0.0);
+
+    // 松开 → DragEnded 整理：重排后 [kf1(2), kf0(3), kf2(4)]，kf0 在下标 1
+    let tags = st.keyframe_released(0, 0, true);
+    project(&mut st, tags);
+    // kf0 变中间：新入柄补上——水平向左延伸 1/2 间距
+    let kf0 = &st.editing_keyframes[&0][1];
     assert!(
         (kf0.handle_in.time_offset - (-1.0 / 2.0)).abs() < 1e-4,
         "新入柄应水平向左延伸间距/2，实际 {}",
         kf0.handle_in.time_offset
     );
     assert_eq!(kf0.handle_in.value_offset, 0.0);
-    // 嵌套模型同步
-    let kf0m = st.keyframe_models[&0].row_data(0).unwrap();
+    // 嵌套模型同步（重排后下标 1）
+    let kf0m = st.keyframe_models[&0].row_data(1).unwrap();
     assert_eq!(kf0m.handle_in.time_offset, kf0.handle_in.time_offset);
-    // 原 kf1 变为第一（边缘）：其入柄不再渲染；但它自身的出柄（贝塞尔且为零）也被补上
-    let kf1 = &st.editing_keyframes[&0][1];
+    // 原 kf1 变为第一（边缘，下标 0）：它自身的出柄（贝塞尔且为零）被补上
+    let kf1 = &st.editing_keyframes[&0][0];
     assert!(
         kf1.handle_out.time_offset > 0.0,
         "中间关键帧缺出柄也应补默认水平柄"

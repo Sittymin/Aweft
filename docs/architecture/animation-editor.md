@@ -34,7 +34,7 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
 - `op_animation_structure` → apply_structure（重建 keyframe_models/channels 行/filters/派生模型/外推/Action 菜单）+ 重新绑定过滤视图到 Slint
 - `op_animation_keyframes` → apply_keyframes（sync_keyframe_model + rebuild_curve + update_extrapolation + 汇总/预览子函数）
 - `op_animation_selection` → apply_selection（纯选中同步：sync_channel_rows / sync_selected_display / sync_keyframe_selection / update_handle_selection_visual / update_summary_entries）
-- `op_animation_drag_ended` → apply_drag_ended（clear_drag_preview（预览清空+恢复普通手柄）/ resort_keyframes / ensure_default_handles（Move 拖拽后为贝塞尔关键帧补缺失侧默认水平柄——边缘延伸是水平的，默认柄水平延伸 1/2 间距））
+- `op_animation_drag_ended` → apply_drag_ended（restore_handle_preview（关键帧拖拽的 preview 替换恢复普通手柄）/ resort_keyframes / ensure_default_handles（拖拽结束后为贝塞尔关键帧补缺失侧默认水平柄——边缘延伸是水平的，默认柄水平延伸 1/2 间距；拖拽中不补柄，仅结束整理））
 - `op_animation_channel` → apply_channel（通道行/段手柄颜色/连接线/汇总）
 - `op_animation_scalars` → 同步标量（handles 全部动画 kind）
 
@@ -45,7 +45,8 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
   松开后 `resort_keyframes` 重排乱序通道恢复模型有序
 - 汇总标记拖拽：`dragged_summary` 就地更新时间（不 insert/remove，保住 grab）
 - 手柄拖拽：`handle_preview`（被拖+同步+对向柄列表）→ 投影重建 `preview_handles`；
-  交互终止点（选中变化）`clear_drag_preview` 清空并恢复普通手柄
+  交互终止点（选中变化）清空 preview_handles；手柄拖拽结束不打 DragEnded
+  （手柄可能被故意钳到 0 长度，ensure 不该覆盖）
 - 松开/插值变更后 `write_view_to_model` 写回 model Action
 
 **已知 TODO**：调色盘（channel.rs）/ Dope Sheet UI / NLA
