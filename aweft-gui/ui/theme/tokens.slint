@@ -86,6 +86,67 @@ export struct NodeEditorPalette {
     lattice: color,
 }
 
+export struct AnimationEditorPalette {
+    // 可用区（时长内）最亮，但不过曝
+    canvas-background: color,
+    // 列表面板稍亮，衬托最暗的属性行
+    channel-list-background: color,
+    // 属性行背景（最暗）
+    channel-row-background: color,
+    // 选中行背景（比普通行亮，突出多选）
+    channel-row-selected: color,
+    // Action 时长之外：比行亮、比时长内暗（半透明遮罩，盖在网格上）
+    action-outside: color,
+    channel-text: color,
+    channel-muted-text: color,
+    // 时间标尺背景：比画布深，衬托数字与播放头
+    ruler-background: color,
+    ruler-tick: color,
+    ruler-text: color,
+    lane-even: color,
+    lane-odd: color,
+    lane-active: color,
+    strip-outline: color,
+    strip-text: color,
+    // NLA 片断空隙/延伸条带：比画布更暗的灰
+    strip-gap: color,
+    // NLA 未激活片断：黑色（仅全局 Action 轨与选中/移动中片断有颜色）
+    strip-inactive: color,
+    // NLA 激活色：与全局 Action 轨同绿系，保证激活视觉统一
+    strip-active: color,
+    // 时间线分组头块：暖金棕色（与激活绿、未激活黑明显区分）
+    strip-group: color,
+    // NLA 片断拖拽（移动）中的高亮颜色
+    strip-moving: color,
+    // NLA 全局 Action 轨上的只读关键帧标记（暗，区别于可编辑通道彩色）
+    action-keyframe: color,
+    // NLA 全局 Action 轨亮色：中等绿（亮于空隙，暗于普通片断高亮）
+    action-strip: color,
+    // NLA 全局 Action 轨（激活态）延伸：带绿意的暗色，与普通空隙区分
+    action-strip-gap: color,
+    playhead: color,
+    // 控制柄方形框背景：比标尺背景更暗，衬托数字
+    playhead-handle-bg: color,
+    // 预览钳制控制点：亮青色，与普通手柄区分
+    preview-handle: color,
+    // 框选矩形：淡蓝填充 + 亮蓝边框
+    marquee-fill: color,
+    marquee-border: color,
+    grid: color,
+    // 次要网格线：比画布亮、比主网格线暗
+    grid-minor: color,
+    // 右侧边栏（Blender N 面板风格）：略深于画布、浅于通道列表
+    sidebar-background: color,
+    sidebar-border: color,
+    sidebar-header-text: color,
+    sidebar-muted-text: color,
+    // 面板区块：头部略亮、主体略暗
+    panel-header-background: color,
+    panel-background: color,
+    option-selected: color,
+    option-hover: color,
+}
+
 export struct SpacingTokens {
     xs: length,
     sm: length,
@@ -126,6 +187,16 @@ export struct ControlTokens {
     node-editor-title-font-size: length,
     node-editor-socket-font-size: length,
     node-editor-lattice-base: length,
+    // 动画编辑器
+    channel-row-height: length,
+    track-row-height: length,
+    ruler-height: length,
+    channel-list-width: length,
+    track-list-width: length,
+    value-ruler-width: length,
+    sidebar-tab-width: length,
+    sidebar-tab-height: length,
+    sidebar-content-width: length,
 }
 
 export struct LayoutTokens {
@@ -148,6 +219,7 @@ export struct ThemeTokens {
     edge: EdgePalette,
     table: TablePalette,
     node-editor: NodeEditorPalette,
+    animation-editor: AnimationEditorPalette,
     spacing: SpacingTokens,
     border: BorderTokens,
     control: ControlTokens,
@@ -246,6 +318,66 @@ export global Tokens {
             link: #63c763,
             lattice: #3a3a40,
         },
+        animation-editor: {
+            // 可用区（时长内）最亮，但不过曝
+            canvas-background: #202026,
+            // 列表面板稍亮，衬托最暗的属性行
+            channel-list-background: #151519,
+            // 属性行背景（最暗）
+            channel-row-background: #0c0c0f,
+            // 选中行背景（比普通行亮，突出多选）
+            channel-row-selected: #232330,
+            // Action 时长之外：比行亮、比时长内暗（半透明遮罩，盖在网格上）
+            action-outside: rgba(0, 0, 0, 0.35),
+            channel-text: #d6d6dc,
+            channel-muted-text: #8a8a92,
+            // 时间标尺背景：比画布深（画布 #202026），衬托数字与播放头
+            ruler-background: #17171b,
+            ruler-tick: #5c5c66,
+            ruler-text: #a9adb8,
+            lane-even: #26262b,
+            lane-odd: #2b2b31,
+            lane-active: #34343c,
+            strip-outline: #101014,
+            strip-text: #18181c,
+            // NLA 片断空隙/延伸条带：比画布更暗的灰
+            strip-gap: #17171b,
+            // NLA 未激活片断：黑色（仅全局 Action 轨与选中/移动中片断有颜色）
+            strip-inactive: #232329,
+            // NLA 激活色：与全局 Action 轨同绿系，保证激活视觉统一
+            strip-active: #55a06a,
+            // 时间线分组头块：暖金棕色（与激活绿、未激活黑明显区分）
+            strip-group: #a17e2a,
+            // NLA 片断拖拽（移动）中的高亮颜色
+            strip-moving: #7fc1ff,
+            // NLA 全局 Action 轨上的只读关键帧标记（暗，区别于可编辑通道彩色）
+            action-keyframe: #3c3c46,
+            // NLA 全局 Action 轨亮色：中等绿（亮于空隙，暗于普通片断高亮）
+            action-strip: #3f7d4f,
+            // NLA 全局 Action 轨（激活态）延伸：带绿意的暗色，与普通空隙区分
+            action-strip-gap: #20291c,
+            playhead: #e6a23c,
+            // 控制柄方形框背景：比标尺背景更暗，衬托数字
+            playhead-handle-bg: #0f0f13,
+            // 预览钳制控制点：亮青色，与普通手柄区分
+            preview-handle: #4ecdc4,
+            // 框选矩形：淡蓝填充 + 亮蓝边框
+            marquee-fill: rgba(80, 140, 255, 0.18),
+            marquee-border: #5a9dff,
+            grid: #2e2e34,
+            // 次要网格线：比画布亮、比主网格线暗
+            grid-minor: #27272d,
+            // 右侧边栏（Blender N 面板风格）：略深于画布、浅于通道列表
+            sidebar-background: #141418,
+            sidebar-border: #2e2e34,
+            sidebar-header-text: #d6d6dc,
+            sidebar-muted-text: #8a8a92,
+            // 面板区块：头部略亮、主体略暗
+            panel-header-background: #232327,
+            panel-background: #1c1c20,
+            option-selected: #4772b3,
+            option-hover: rgba(255, 255, 255, 0.08),
+        },
         spacing: {
             xs: 4px,
             sm: 5px,
@@ -284,6 +416,15 @@ export global Tokens {
             node-editor-title-font-size: 13px,
             node-editor-socket-font-size: 12px,
             node-editor-lattice-base: 28px,
+            channel-row-height: 24px,
+            track-row-height: 28px,
+            ruler-height: 22px,
+            channel-list-width: 170px,
+            track-list-width: 170px,
+            value-ruler-width: 46px,
+            sidebar-tab-width: 24px,
+            sidebar-tab-height: 64px,
+            sidebar-content-width: 200px,
         },
         layout: {
             main-border-width: 2px,

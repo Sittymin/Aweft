@@ -4,6 +4,15 @@ import { SlintSubtitleRow } from "../core/types.slint";
 import { GraphLink, GraphNode } from "../areas/node_graph/node_frame.slint";
 import { ContextMenuItem } from "../widgets/context_menu.slint";
 import {
+    SlintFCurveChannel,
+    SlintCurveSegment,
+    SlintHandleMarker,
+    SlintDopeConnection,
+    SlintSummaryKeyframe,
+    SlintNlaTrack,
+    SlintInterpolationState,
+} from "../core/animation_types.slint";
+import {
     SplitPreviewOverlayData,
 } from "../screen/overlays/split_preview.slint";
 import {
@@ -48,6 +57,50 @@ export global NodeGraphState {
     in property <[GraphNode]> app-nodes: [];
     in property <[GraphLink]> app-links: [];
     in property <[ContextMenuItem]> app-menu-items: [];
+}
+
+/// 动画编辑器状态：曲线编辑器（Graph Editor）/ 摄影表（Dope Sheet）共用数据，
+/// 由 Rust 侧驱动。通道/关键帧模型为 Rust 持有的 VecModel。
+export global AnimationState {
+    // 曲线编辑器
+    in property <[SlintFCurveChannel]> channels: [];
+    // 曲线编辑器 / 摄影表各自的过滤压缩视图（Rust FilterModel，按各自搜索词过滤）
+    in property <[SlintFCurveChannel]> graph-channels: [];
+    in property <[SlintFCurveChannel]> dope-channels: [];
+    // 曲线编辑器画布：只含匹配搜索通道的段/手柄（FilterModel）
+    in property <[SlintCurveSegment]> graph-segments: [];
+    in property <[SlintHandleMarker]> graph-handles: [];
+    in property <[SlintCurveSegment]> segments: [];
+    in property <[SlintHandleMarker]> handles: [];
+    // 摄影表：线性/常量插值段的连接线（扁平模型，Rust 派生）
+    in property <[SlintDopeConnection]> dope-connections: [];
+    // 摄影表：汇总条带关键帧（按整数毫秒时间聚合所有通道，Rust 派生）
+    in property <[SlintSummaryKeyframe]> dope-summary-keyframes: [];
+    // NLA 编辑器
+    in property <[SlintNlaTrack]> nla-tracks: [];
+    // 共享：当前时间（播放头）
+    in property <float> current-time: 0.0;
+    // 当前 Action 名称（header 栏中区显示）
+    in property <string> action-name: "";
+    // Action 选择下拉菜单项（摄影表 Header 中区）
+    in property <[ContextMenuItem]> action-items: [];
+    // 当前选中的 Action 下标（-1 = 无）
+    in property <int> current-action: 0;
+    // 共享：Action 时长范围（画布上用于明暗分段，时长内亮 / 时长外暗）
+    in property <float> action-start: 0.0;
+    in property <float> action-end: 0.0;
+    // 共享：当前激活通道（-1 = 无激活；侧边栏判断当前是哪一条曲线）
+    in property <int> current-channel: -1;
+    // 通道选中**显示**掩码（Rust 即时同步）：与 channels 模型的 selected 字段解耦——
+    // 后者因嵌套在关键帧 repeater 内、拖拽中更新会破坏 grab，故延迟到 released 写回；
+    // 此掩码是独立模型，按下/选择即更新，曲线高亮读它（"显示先动"）。
+    in property <[bool]> selected-channels: [];
+    // 侧边栏：选中关键帧数量（0 = 未选中关键帧，插值面板禁用）
+    in property <int> selected-keyframes: 0;
+    // 选中关键帧的插值聚合状态（供侧边栏显示）
+    in property <SlintInterpolationState> selected-interpolation: SlintInterpolationState.none;
+    // 手柄拖拽时相邻软钳制的有效控制点预览
+    in property <[SlintHandleMarker]> preview-handles: [];
 }
 
 /// 拖拽预览覆盖层状态（UI 自持有的临时交互数据）。

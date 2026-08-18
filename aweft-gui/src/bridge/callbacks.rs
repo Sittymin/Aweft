@@ -1088,16 +1088,12 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
     instance.global::<AnimationCallbacks>().on_view_changed(
-        move |zoom_x, zoom_y, pan_x, pan_y, width, height| {
+        move |zoom_x, zoom_y| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::ViewChanged {
                     zoom_x,
                     zoom_y,
-                    pan_x,
-                    pan_y,
-                    width,
-                    height,
                 }),
                 &weak,
             );

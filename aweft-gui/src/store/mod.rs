@@ -1,4 +1,5 @@
 pub mod app_store;
+pub mod curve_editor;
 pub mod graph_editor;
 pub mod line_editor;
 pub mod line_rows_model;

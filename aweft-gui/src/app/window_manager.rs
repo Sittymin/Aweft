@@ -46,6 +46,11 @@ impl AppWindowManager {
         let store = Rc::new(RefCell::new(AppStore::new(&instance)));
         // 初始化节点图编辑器（建链/右键菜单、绑定全局、加载第 0 条链）
         store.borrow_mut().initialize_graph_editors(&instance);
+        // HACK: 初始化曲线编辑器。视图/属性 Area 未实现、无法 K 帧，暂时直接用测试数据
+        // 填充（便于交互测试）。正确路径是 `new_editing_action` 新建空 Action，由用户在
+        // 编辑器中 K 帧构建——未来删除本行、改调 `new_editing_action`（见 create_test_animation_data）。
+        store.borrow_mut().create_test_animation_data();
+        store.borrow_mut().initialize_animation_editors(&instance);
         // HACK: 临时直接加载一个视频，并且失败直接崩溃
         // initialize_media(
         //     &mut store.borrow_mut(),

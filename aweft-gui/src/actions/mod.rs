@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod area;
 pub mod drag;
 pub mod line_editor;
@@ -19,4 +20,6 @@ pub enum Action {
     LineEditor(line_editor::LineEditorAction),
     /// 节点图（样式图/应用图）结构/值操作
     NodeGraph(node_graph::NodeGraphAction),
+    /// 动画编辑器（曲线编辑器等）交互操作
+    Animation(animation::AnimationAction),
 }

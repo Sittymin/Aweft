@@ -56,6 +56,8 @@ pub enum AreaType {
     StyleGraphEditor,
     // 应用图编辑器（aweft-model 的 application_graph）
     AppGraphEditor,
+    // 曲线编辑器（aweft-model 的 animation::Action/FCurve）
+    GraphEditor,
     // StyleManager,
     // FileBrowser,
 

@@ -1,0 +1,150 @@
+// 曲线编辑器 / 摄影表左侧通道列表：
+// 布局（从左到右）：高条颜色色块 → 眼睛（是否显示）→ 属性名 → 右对齐：
+// 扳手（启用修改器）、复选框（实际起作用）、锁（可编辑）。
+// 图标点亮/置灰区分开关状态；行使用绝对定位并支持 pan-y 纵向滚动。
+import { SlintFCurveChannel } from "../../core/animation_types.slint";
+import { SlintSelectionModifier } from "../../core/types.slint";
+import { Theme } from "../../theme/index.slint";
+
+// 单个通道开关按钮（图标 + 点亮/置灰）
+component ChannelToggle inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    callback clicked();
+    width: 20px;
+    height: 20px;
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+    Image {
+        source: root.icon;
+        width: 16px;
+        height: 16px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        opacity: root.active ? 1.0 : 0.4;
+    }
+}
+
+export component ChannelList inherits Rectangle {
+    in property <[SlintFCurveChannel]> channels;
+    in property <float> pan-y: 0.0;
+    in property <length> row-height: Theme.data.animation-editor.channel-row-height;
+    // 当前激活通道
+    in property <int> current-channel: -1;
+    callback toggle-visible(index: int);
+    callback toggle-modifier(index: int);
+    callback toggle-active(index: int);
+    callback toggle-editable(index: int);
+    // 点击行空白处（none=普通，shift=区间，ctrl=切换）
+    callback channel-pressed(index: int, modifier: SlintSelectionModifier);
+    // 滚轮纵向滚动（delta 为像素；调用方按内容高度 clamp 到 pan-y）
+    callback scrolled(delta: float);
+
+    clip: true;
+    background: Theme.data.animation-editor.channel-list-background;
+
+    // 背景滚轮事件（置于行之下；行级 TouchArea 只处理点击不处理 scroll，事件上浮到此处）
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        scroll-event(event) => {
+            root.scrolled(event.delta-y / 1px);
+            return EventResult.accept;
+        }
+    }
+
+    // 行（channels 为过滤压缩视图，全部匹配，无需再隐藏）
+    for c[i] in root.channels: Rectangle {
+        y: i * root.row-height + root.pan-y * 1px;
+        x: 0px;
+        width: 100%;
+        height: root.row-height;
+        // 选中行背景提亮，衬托选中状态
+        background: c.selected
+            ? Theme.data.animation-editor.channel-row-selected
+            : Theme.data.animation-editor.channel-row-background;
+
+        // 行级点击：选中通道（置于开关之下，开关优先命中）
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    root.channel-pressed(c.curve-index, event.modifiers.control
+                        ? SlintSelectionModifier.ctrl
+                        : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 4px;
+            padding-left: 6px;
+            padding-right: 5px;
+
+            // 高条颜色色块（眼睛关闭时随之变暗）
+            Rectangle {
+                width: 6px;
+                height: root.row-height - 8px;
+                border-radius: 1px;
+                background: c.color;
+                opacity: c.visible ? 1.0 : 0.35;
+            }
+
+            // 眼睛：是否在曲线图中显示
+            ChannelToggle {
+                icon: c.visible
+                    ? @image-url("../../assets/icons/visibility.svg")
+                    : @image-url("../../assets/icons/visibility_off.svg");
+                active: c.visible;
+                clicked => {
+                    root.toggle-visible(c.curve-index);
+                }
+            }
+
+            // 属性名（选中通道变黄，未选中跟随激活/置灰）
+            Text {
+                text: c.name;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: c.selected ? #f2c14e : (c.active ? Theme.data.animation-editor.channel-text : Theme.data.animation-editor.channel-muted-text);
+                font-size: 12px;
+                overflow: elide;
+            }
+
+            // 扳手：是否启用曲线修改器
+            ChannelToggle {
+                icon: @image-url("../../assets/icons/build.svg");
+                active: c.modifier-enabled;
+                clicked => {
+                    root.toggle-modifier(c.curve-index);
+                }
+            }
+
+            // 复选框：是否实际起作用
+            ChannelToggle {
+                icon: c.active
+                    ? @image-url("../../assets/icons/check_box.svg")
+                    : @image-url("../../assets/icons/check_box_outline_blank.svg");
+                active: c.active;
+                clicked => {
+                    root.toggle-active(c.curve-index);
+                }
+            }
+
+            // 锁：是否可编辑（锁住时点亮锁图标）
+            ChannelToggle {
+                icon: c.editable
+                    ? @image-url("../../assets/icons/lock_open.svg")
+                    : @image-url("../../assets/icons/lock.svg");
+                active: !c.editable;
+                clicked => {
+                    root.toggle-editable(c.curve-index);
+                }
+            }
+        }
+    }
+}

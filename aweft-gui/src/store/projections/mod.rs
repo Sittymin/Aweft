@@ -9,10 +9,15 @@ use crate::depsgraph::{
     Component, ComponentId, DataId, Depsgraph, Operation, OperationCode, OperationId, TagKind,
 };
 
+mod animation;
 mod line_editor;
 mod node_graph;
 mod screen;
 
+pub use animation::{
+    op_animation_channel, op_animation_keyframes, op_animation_scalars,
+    op_animation_selection, op_animation_structure,
+};
 pub use line_editor::{op_line_collapse, op_line_selection, op_line_structure, op_line_timecode};
 pub use node_graph::{
     op_node_graph_chain, op_node_graph_links, op_node_graph_socket, op_node_graph_structure,
@@ -97,8 +102,56 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
 
     depsgraph.register(Component {
         id: ComponentId::new(),
-        depends_on: &[DataId::ScreenLayout, DataId::DragState],
+        depends_on: &[DataId::Animation],
         operations: vec![
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::AnimationStructure,
+                handles: &[TagKind::AnimationStructure],
+                depends_on: &[],
+                exec: op_animation_structure,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::AnimationCurve,
+                handles: &[TagKind::AnimationKeyframes],
+                // 依赖结构操作：keyframe_models/过滤视图由 apply_structure 重建
+                depends_on: &[OperationCode::AnimationStructure],
+                exec: op_animation_keyframes,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::AnimationSelection,
+                handles: &[TagKind::AnimationSelection],
+                depends_on: &[OperationCode::AnimationStructure],
+                exec: op_animation_selection,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::AnimationChannel,
+                handles: &[TagKind::AnimationChannel],
+                depends_on: &[OperationCode::AnimationStructure],
+                exec: op_animation_channel,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::AnimationScalars,
+                handles: &[
+                    TagKind::AnimationStructure,
+                    TagKind::AnimationKeyframes,
+                    TagKind::AnimationSelection,
+                    TagKind::AnimationChannel,
+                    TagKind::AnimationScalars,
+                ],
+                depends_on: &[],
+                exec: op_animation_scalars,
+            },
+        ],
+    });
+
+    depsgraph.register(Component {
+        id: ComponentId::new(),
+        depends_on: &[DataId::ScreenLayout, DataId::DragState],        operations: vec![
             Operation {
                 id: OperationId::new(),
                 code: OperationCode::ScreenOverlays,

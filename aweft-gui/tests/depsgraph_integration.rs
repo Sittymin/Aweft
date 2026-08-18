@@ -843,3 +843,118 @@ fn edge_move_keeps_single_margin() {
         layout.xmin
     );
 }
+
+// ── 曲线编辑器：初始化新建空 Action vs 测试数据 ────────────────────────────────
+
+#[test]
+fn animation_init_creates_empty_editing_action() {
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = MainWindow::new().unwrap();
+    let mut store = AppStore::new(&instance);
+
+    // 正确初始化路径：新建空 Action
+    store.new_editing_action("主 Action");
+
+    let (list_len, current, channels, action_name) = {
+        let ce = &store.ui_models().curve_editor;
+        (
+            ce.actions.len(),
+            ce.current_action,
+            ce.channels.row_count(),
+            ce.action_name.to_string(),
+        )
+    };
+    assert_eq!(list_len, 1, "初始化应只有一个 Action");
+    assert_eq!(current, 0, "应装载第 0 个 Action");
+    assert_eq!(action_name, "主 Action");
+    assert_eq!(channels, 0, "新建的 Action 应为空（无通道/关键帧）");
+
+    // model 侧：确实有一个 Action，且无曲线
+    let lib = &store.state().project.library.animation_library;
+    assert_eq!(lib.actions.len(), 1);
+    assert!(lib.actions.values().next().unwrap().curves.is_empty());
+}
+
+/// HACK 测试数据的验证（见 `create_test_animation_data` 的 HACK 注释）：
+/// 保证该临时函数仍可用（多 Action 演示下拉/切换）。
+#[test]
+fn animation_hack_test_data_populates_model_and_view() {
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = MainWindow::new().unwrap();
+    let mut store = AppStore::new(&instance);
+
+    store.create_test_animation_data();
+
+    let (list_len, current, channel_count) = {
+        let ce = &store.ui_models().curve_editor;
+        (
+            ce.actions.len(),
+            ce.current_action,
+            ce.channels.row_count(),
+        )
+    };
+    assert_eq!(list_len, 3, "测试数据应有 3 个 Action");
+    assert_eq!(current, 0, "应装载第 0 个 Action（主 Action）");
+    assert_eq!(channel_count, 4, "主 Action 应有 4 条通道");
+
+    // model 侧：3 个 Action 都已写入 AnimationLibrary
+    let lib = &store.state().project.library.animation_library;
+    assert_eq!(lib.actions.len(), 3);
+}
+
+/// 动画投影全链路：dispatch(AnimationAction) → tag → evaluate → 投影更新 UI 模型。
+/// 验证 reducer 只改数据层、派生层由 depsgraph 投影驱动（对齐 LineEditor 管线）。
+#[test]
+fn animation_dispatch_projects_derived_models() {
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = MainWindow::new().unwrap();
+    let mut store = AppStore::new(&instance);
+    store.create_test_animation_data();
+    let ce = &mut store.ui_models_mut().curve_editor;
+
+    use aweft_gui::actions::animation::AnimationAction;
+    use aweft_gui::bridge::types::{SlintKeyframeDragMode, SlintSelectionModifier};
+
+    // 按下关键帧 (通道 0, 关键帧 1)：reducer 改数据 → Selection tag → 投影同步选中
+    store
+        .dispatch(Action::Animation(AnimationAction::KeyframePressed {
+            curve: 0,
+            key: 1,
+            modifier: SlintSelectionModifier::None,
+        }))
+        .unwrap();
+    store.evaluate_depsgraph();
+    let ce = &store.ui_models().curve_editor;
+    assert_eq!(ce.selected_display.row_data(0), Some(true), "投影应同步通道选中显示掩码");
+    assert_eq!(ce.selected_keyframe_count(), 1, "投影后选中关键帧计数 = 1");
+
+    // 拖拽关键帧：Keyframes tag → 投影重建段/手柄/汇总
+    store
+        .dispatch(Action::Animation(AnimationAction::KeyframeDragged {
+            curve: 0,
+            key: 1,
+            delta_time: 1.0,
+            delta_value: -5.0,
+            mode: SlintKeyframeDragMode::Move,
+        }))
+        .unwrap();
+    store.evaluate_depsgraph();
+    let ce = &store.ui_models().curve_editor;
+    // 段 0 终点跟随关键帧新位置（投影重建）
+    let seg0 = ce.segments.row_data(0).unwrap();
+    assert_eq!(seg0.x1, 4.0);
+    assert_eq!(seg0.y1, 61.0);
+
+    // 松开：写回 model（reducer）+ 折叠选中 → 投影同步
+    store
+        .dispatch(Action::Animation(AnimationAction::KeyframeReleased {
+            curve: 0,
+            key: 1,
+            moved: true,
+        }))
+        .unwrap();
+    store.evaluate_depsgraph();
+    let id = store.ui_models().curve_editor.current_action_id().unwrap();
+    let action = store.state().project.library.animation_library.actions.get(&id).unwrap();
+    assert!(action.curves[0].curve.keyframes.iter().any(|k| (k.time - 4.0).abs() < 1e-6));
+}
