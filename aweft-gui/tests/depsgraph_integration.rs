@@ -958,3 +958,39 @@ fn animation_dispatch_projects_derived_models() {
     let action = store.state().project.library.animation_library.actions.get(&id).unwrap();
     assert!(action.curves[0].curve.keyframes.iter().any(|k| (k.time - 4.0).abs() < 1e-6));
 }
+
+/// 曲线编辑器搜索：graph_filter 独立过滤（与摄影表互不干扰）；
+/// 段/手柄过滤视图随匹配集合收缩（画布只显示匹配通道的曲线）。
+#[test]
+fn graph_search_filters_channels_and_canvas() {
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = MainWindow::new().unwrap();
+    let mut store = AppStore::new(&instance);
+    store.create_test_animation_data();
+
+    use aweft_gui::actions::animation::AnimationAction;
+
+    store
+        .dispatch(Action::Animation(AnimationAction::GraphSearchChanged {
+            text: "font".to_string(),
+        }))
+        .unwrap();
+    store.evaluate_depsgraph();
+
+    let ce = &store.ui_models().graph_editor;
+    assert_eq!(ce.graph_filter.row_count(), 2, "曲线编辑器过滤视图应只剩 Font 开头通道");
+    assert_eq!(ce.dope_filter.row_count(), 4, "摄影表过滤视图不受影响");
+    // 段/手柄过滤视图 = 匹配通道的段（通道 0 FontSize 6 关键帧 = 5 段 + 通道 2 FontRotationZ 5 关键帧 = 4 段）
+    assert_eq!(ce.graph_segments.row_count(), 9, "画布段应只含匹配通道");
+    assert_eq!(ce.graph_handles.row_count(), 10, "画布手柄应只含匹配通道");
+
+    // 空串恢复全部
+    store
+        .dispatch(Action::Animation(AnimationAction::GraphSearchChanged {
+            text: String::new(),
+        }))
+        .unwrap();
+    store.evaluate_depsgraph();
+    let ce = &store.ui_models().graph_editor;
+    assert_eq!(ce.graph_filter.row_count(), 4, "空串应恢复全部通道");
+}

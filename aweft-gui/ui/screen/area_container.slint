@@ -106,6 +106,9 @@ export component SlintScrArea inherits Rectangle {
             extrapolations: AnimationState.extrapolations;
             selected-keyframes: AnimationState.selected-keyframes;
             selected-interpolation: AnimationState.selected-interpolation;
+            // 编辑器在窗口中的位置（搜索框遮罩挖孔定位）
+            window-x: root.container-x + self.x;
+            window-y: root.container-y + self.y;
         }
         if area-type == SlintAreaType.dope-sheet: dope-editor := DopeSheet {
             channels: AnimationState.channels;

@@ -17,9 +17,10 @@ import { SlintSelectionModifier } from "../../core/types.slint";
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { CurveSegment, KeyframeMarker, HandleMarker, HoldStep, ExtrapolationLine, PreviewHandle } from "elements.slint";
 import { TimeRuler, ValueAxisLabels, GraphGrid } from "ruler.slint";
-import { ChannelList } from "channel_list.slint";
+import { ChannelPanel } from "../../widgets/channel_panel.slint";
 import { RightSidebar } from "sidebar.slint";
 import { AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { EditOverlayState } from "../../bridge/state.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component GraphEditor inherits Rectangle {
@@ -45,6 +46,9 @@ export component GraphEditor inherits Rectangle {
     // 侧边栏：选中关键帧数量 / 选中关键帧插值聚合状态
     in property <int> selected-keyframes: 0;
     in property <SlintInterpolationState> selected-interpolation: SlintInterpolationState.none;
+    // 编辑器在 MainWindow 中的位置（area_container 传入，搜索框遮罩挖孔定位）
+    in property <length> window-x: 0px;
+    in property <length> window-y: 0px;
 
     // 通道列表 / 标尺尺寸（主题）
     private property <length> channel-width: Theme.data.animation-editor.channel-list-width;
@@ -62,6 +66,8 @@ export component GraphEditor inherits Rectangle {
     private property <float> nav-pan-y: 100.0;
     private property <float> nav-zoom-x: 30.0;
     private property <float> nav-zoom-y: 2.0;
+    // 左侧通道列表自身的纵向滚动（独立于画布：列表是行堆叠，画布是值轴平移）
+    private property <float> list-pan-y: 0.0;
 
     // 可见世界范围（时间×值）：标尺/网格/曲线/关键帧共用。
     // 纯 Slint 即时派生（见 ruler.slint 顶部注释）——pan/zoom 变化时只重算这些绑定，
@@ -104,14 +110,23 @@ export component GraphEditor inherits Rectangle {
         AnimationCallbacks.graph-marquee-select(x-lo, x-hi, y-lo, y-hi, modifier);
     }
 
-    // 通道列表（左）
-    ChannelList {
+    // 左侧通道面板（顶部搜索框 + 通道列表）：搜索框与顶部时间标尺同高同行；
+    // 列表用 graph-channels 过滤压缩视图（与画布段/手柄/关键帧同一 FilterModel，
+    // 搜索后列表与画布同步只留匹配通道，无空位行对齐）。pan-y 恒 0（列表不随画布滚动）。
+    channel-panel := ChannelPanel {
         x: 0;
         y: 0;
         width: root.channel-width;
         height: root.height;
-        channels: root.channels;
+        channels: root.graph-channels;
+        pan-y: root.list-pan-y;
+        row-height: Theme.data.animation-editor.channel-row-height;
         current-channel: root.current-channel;
+        search-height: root.ruler-height;
+        summary-height: 0px;
+        search-changed(text) => {
+            AnimationCallbacks.graph-search-changed(text);
+        }
         toggle-visible(curve) => {
             AnimationCallbacks.channel-toggle-visible(curve);
         }
@@ -126,6 +141,24 @@ export component GraphEditor inherits Rectangle {
         }
         channel-pressed(curve, mode) => {
             AnimationCallbacks.channel-pressed(curve, mode);
+        }
+        scrolled(delta) => {
+            // 列表独立纵向滚动：只能滚到 [-(内容高-视口高), 0]，内容不足时不动
+            let content: float = root.graph-channels.length * (Theme.data.animation-editor.channel-row-height / 1px);
+            let view: float = (root.height - root.ruler-height) / 1px;
+            let max-scroll: float = max(0.0, content - view);
+            root.list-pan-y = min(0.0, max(-max-scroll, root.list-pan-y + delta));
+        }
+        // 搜索框聚焦：设置全窗口编辑遮罩（挖孔 = 搜索框的窗口坐标）
+        search-active-mirror: EditOverlayState.active;
+        focus-changed(focused) => {
+            if focused {
+                EditOverlayState.active = true;
+                EditOverlayState.hole-x = root.window-x + channel-panel.x + channel-panel.search-box-x;
+                EditOverlayState.hole-y = root.window-y + channel-panel.y + channel-panel.search-box-y;
+                EditOverlayState.hole-width = channel-panel.search-box-width;
+                EditOverlayState.hole-height = channel-panel.search-box-height;
+            }
         }
     }
 
