@@ -1,4 +1,4 @@
-use crate::bridge::types::{key_to_slint_key, rust_area_type_to_slint, ScrAreaData};
+use crate::bridge::types::{ScrAreaData, key_to_slint_key, rust_area_type_to_slint};
 use crate::screen::area::ScrAreaKey;
 use crate::store::state::AppState;
 

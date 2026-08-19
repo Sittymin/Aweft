@@ -8,7 +8,7 @@ use slint::{Color, Model};
 use super::GraphEditorState;
 use super::curve_math::make_segment;
 use crate::bridge::types::{
-    SlintHandleMarker, SlintInterpolation, SlintKeyframe, SlintCurveSegment,
+    SlintCurveSegment, SlintHandleMarker, SlintInterpolation, SlintKeyframe,
 };
 use crate::depsgraph::HandleLoc;
 
@@ -93,10 +93,7 @@ impl GraphEditorState {
     ///
     /// 关键帧可能因拖拽而暂时乱序：这里先按时间排序再推导曲线段/端点手柄，
     /// 保证曲线始终是时间的函数；但模型顺序不变（拖拽抓手仍按原模型下标命中）。
-    fn curve_elements(
-        &self,
-        curve: usize,
-    ) -> (Vec<SlintCurveSegment>, Vec<SlintHandleMarker>) {
+    fn curve_elements(&self, curve: usize) -> (Vec<SlintCurveSegment>, Vec<SlintHandleMarker>) {
         let Some(kfs) = self.editing_keyframes.get(&curve) else {
             return (Vec::new(), Vec::new());
         };
@@ -108,7 +105,11 @@ impl GraphEditorState {
 
         // (模型下标, 关键帧引用)，按时间排序
         let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
-        kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
+        kfs.sort_by(|a, b| {
+            a.1.time
+                .partial_cmp(&b.1.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut segments = Vec::new();
         for i in 0..kfs.len().saturating_sub(1) {
@@ -130,7 +131,11 @@ impl GraphEditorState {
                     handle_time: kf.time + kf.handle_in.time_offset,
                     handle_value: kf.value + kf.handle_in.value_offset,
                     preview: false,
-                    selected: self.selected_handles.contains(&HandleLoc { curve, key: *model_idx, is_in: true }),
+                    selected: self.selected_handles.contains(&HandleLoc {
+                        curve,
+                        key: *model_idx,
+                        is_in: true,
+                    }),
                 });
             }
             // 出柄：本关键帧是贝塞尔 → 右侧段为贝塞尔
@@ -145,7 +150,11 @@ impl GraphEditorState {
                     handle_time: kf.time + kf.handle_out.time_offset,
                     handle_value: kf.value + kf.handle_out.value_offset,
                     preview: false,
-                    selected: self.selected_handles.contains(&HandleLoc { curve, key: *model_idx, is_in: false }),
+                    selected: self.selected_handles.contains(&HandleLoc {
+                        curve,
+                        key: *model_idx,
+                        is_in: false,
+                    }),
                 });
             }
         }

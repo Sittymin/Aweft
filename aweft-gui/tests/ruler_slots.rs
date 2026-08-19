@@ -3,7 +3,7 @@
 //   * 槽位 repeater 常驻不重建——pan 只移动平移容器（grid-group），槽位绑定不引用 pan，
 //     元素树稳定（主刻度恒为 96 个，不会随 pan 重建/消失）。
 //   * 刻度对齐可见左边界（Math.floor(view-lo/step)*step），pan 到任何位置仍有刻度。
-use i_slint_backend_testing::{init_integration_test_with_system_time, ElementHandle};
+use i_slint_backend_testing::{ElementHandle, init_integration_test_with_system_time};
 use slint::ComponentHandle;
 
 slint::slint! {
@@ -72,7 +72,10 @@ fn ticks_are_static_and_follow_pan() {
     inst.set_pan(-1000.0);
     inst.window().request_redraw();
     let panned = ElementHandle::find_by_element_type_name(&inst, "TickMark").count();
-    assert!((94..=96).contains(&panned), "pan 后槽位应几乎全常驻（94-96 个），得 {panned}");
+    assert!(
+        (94..=96).contains(&panned),
+        "pan 后槽位应几乎全常驻（94-96 个），得 {panned}"
+    );
 
     // pan 到更远位置：仍几乎全常驻（pan 到任意位置都有刻度，不重建）
     inst.set_view_lo(100.0);
@@ -80,5 +83,8 @@ fn ticks_are_static_and_follow_pan() {
     inst.set_pan(-3000.0);
     inst.window().request_redraw();
     let far = ElementHandle::find_by_element_type_name(&inst, "TickMark").count();
-    assert!((94..=96).contains(&far), "pan 到任意位置都应几乎全常驻（94-96 个），得 {far}");
+    assert!(
+        (94..=96).contains(&far),
+        "pan 到任意位置都应几乎全常驻（94-96 个），得 {far}"
+    );
 }

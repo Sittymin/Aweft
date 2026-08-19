@@ -5,7 +5,7 @@
 //! 一旦 Slint 行为变化（外层模型更新不再破坏 grab），此测试会失败——那时即可移除
 //! 延迟写回与 `selected_display` 的解耦，直接在按下时更新 channels 模型。
 
-use i_slint_backend_testing::{init_integration_test_with_system_time, ElementHandle};
+use i_slint_backend_testing::{ElementHandle, init_integration_test_with_system_time};
 use slint::platform::PointerEventButton;
 use slint::{ComponentHandle, LogicalPosition, Model, ModelRc, VecModel};
 use std::cell::RefCell;
@@ -84,8 +84,20 @@ fn outer_channel_selected_update_on_press_interrupts_drag() {
     slint::spawn_local(async move {
         let app = DragTest::new().unwrap();
         let channels = Rc::new(VecModel::from(vec![
-            Channel { keyframes: ModelRc::from(Rc::new(VecModel::from(vec![Keyframe { time: 0.0, selected: false }]))), selected: false },
-            Channel { keyframes: ModelRc::from(Rc::new(VecModel::from(vec![Keyframe { time: 2.0, selected: false }]))), selected: false },
+            Channel {
+                keyframes: ModelRc::from(Rc::new(VecModel::from(vec![Keyframe {
+                    time: 0.0,
+                    selected: false,
+                }]))),
+                selected: false,
+            },
+            Channel {
+                keyframes: ModelRc::from(Rc::new(VecModel::from(vec![Keyframe {
+                    time: 2.0,
+                    selected: false,
+                }]))),
+                selected: false,
+            },
         ]));
         app.set_channels(ModelRc::from(channels.clone()));
 
@@ -135,13 +147,18 @@ fn outer_channel_selected_update_on_press_interrupts_drag() {
         let elem = ElementHandle::find_by_element_type_name(&app, "Marker")
             .nth(1)
             .expect("找不到第 2 个 marker");
-        elem.drag(LogicalPosition::new(210.0, 28.5), PointerEventButton::Left).await;
+        elem.drag(LogicalPosition::new(210.0, 28.5), PointerEventButton::Left)
+            .await;
 
         let got = dts.borrow().clone();
         let ch1 = channels.row_data(1).unwrap();
         let final_time = ch1.keyframes.row_data(0).unwrap().time;
-        println!("收到 dragged 次数: {}，dt 累计: {:.3}，最终 time: {final_time:.3}，released: {}",
-            got.len(), got.iter().sum::<f32>(), *released.borrow());
+        println!(
+            "收到 dragged 次数: {}，dt 累计: {:.3}，最终 time: {final_time:.3}，released: {}",
+            got.len(),
+            got.iter().sum::<f32>(),
+            *released.borrow()
+        );
         // 锁定约束：更新外层 channels 模型会重建嵌套关键帧 repeater → grab 中断，
         // marker 不再收到 move（time 停在 2.0）。若此断言失败（拖拽存活），
         // 说明 Slint 已不破坏 grab，可移除"延迟写回 + selected_display 解耦"。

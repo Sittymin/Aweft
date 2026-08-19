@@ -31,10 +31,14 @@ impl GraphEditorState {
                     dragged_curve,
                     dragged_summary,
                     handle_preview,
-                } => self.apply_keyframes(curves, summary_ms, *dragged_curve, *dragged_summary, handle_preview),
-                Tag::AnimationSelectionChanged { summary_ms } => {
-                    self.apply_selection(summary_ms)
-                }
+                } => self.apply_keyframes(
+                    curves,
+                    summary_ms,
+                    *dragged_curve,
+                    *dragged_summary,
+                    handle_preview,
+                ),
+                Tag::AnimationSelectionChanged { summary_ms } => self.apply_selection(summary_ms),
                 Tag::AnimationDragEnded => self.apply_drag_ended(),
                 Tag::AnimationChannelChanged { curve } => self.apply_channel(*curve),
                 Tag::AnimationScalarsChanged => {}
@@ -201,7 +205,8 @@ impl GraphEditorState {
 
     /// 把通道的关键帧数据同步到嵌套 Slint 模型（逐行 set_row_data，只写变化的行）。
     /// 拖拽期间行数不变；行数变化（结构变化）由 apply_structure 重建。
-    fn sync_keyframe_model(&mut self, curve: usize) {        let Some(data) = self.editing_keyframes.get(&curve) else {
+    fn sync_keyframe_model(&mut self, curve: usize) {
+        let Some(data) = self.editing_keyframes.get(&curve) else {
             return;
         };
         let Some(model) = self.keyframe_models.get(&curve) else {
@@ -349,7 +354,11 @@ impl GraphEditorState {
                 });
             }
             if let Some(model) = self.keyframe_models.get(&curve) {
-                let kfs = self.editing_keyframes.get(&curve).cloned().unwrap_or_default();
+                let kfs = self
+                    .editing_keyframes
+                    .get(&curve)
+                    .cloned()
+                    .unwrap_or_default();
                 model.set_vec(kfs);
             }
             // 关键帧下标变化 → 段/手柄/连接线重建（keyframe_index 字段跟随）
@@ -437,8 +446,7 @@ impl GraphEditorState {
     /// 由 `actions` 清单重建下拉菜单项模型（Action 列表变化时调用）。
     fn rebuild_action_menu(&mut self) {
         let names: Vec<SharedString> = self.actions.iter().map(|a| a.name.clone()).collect();
-        self.action_items
-            .set_vec(build_action_menu_items(&names));
+        self.action_items.set_vec(build_action_menu_items(&names));
     }
 
     // ── 共享同步 ────────────────────────────────────────────────────────
@@ -476,7 +484,10 @@ fn handle_equal(a: &SlintBezierHandle, b: &SlintBezierHandle) -> bool {
 }
 
 /// 通道行是否与数据相等（比较除 keyframes 引用外的全部字段）。
-fn channel_equal(a: &crate::bridge::types::SlintFCurveChannel, b: &crate::bridge::types::SlintFCurveChannel) -> bool {
+fn channel_equal(
+    a: &crate::bridge::types::SlintFCurveChannel,
+    b: &crate::bridge::types::SlintFCurveChannel,
+) -> bool {
     a.curve_index == b.curve_index
         && a.name == b.name
         && a.color == b.color

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use slint::{Color, Model};
 
 use super::GraphEditorState;
-use crate::bridge::types::SlintKeyframe;
 use super::curve_math::{make_segment, mk_marker};
+use crate::bridge::types::SlintKeyframe;
 use crate::bridge::types::{SlintHandleMarker, SlintInterpolation};
 use crate::depsgraph::HandleLoc;
 
@@ -29,7 +29,11 @@ impl GraphEditorState {
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
         let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
-        kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
+        kfs.sort_by(|a, b| {
+            a.1.time
+                .partial_cmp(&b.1.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let eps = 1e-4;
         let check = |map: &mut HashMap<HandleLoc, (f32, f32)>,
@@ -38,12 +42,25 @@ impl GraphEditorState {
                      kf: &SlintKeyframe,
                      eff: (f32, f32)| {
             let raw = if is_in {
-                (kf.time + kf.handle_in.time_offset, kf.value + kf.handle_in.value_offset)
+                (
+                    kf.time + kf.handle_in.time_offset,
+                    kf.value + kf.handle_in.value_offset,
+                )
             } else {
-                (kf.time + kf.handle_out.time_offset, kf.value + kf.handle_out.value_offset)
+                (
+                    kf.time + kf.handle_out.time_offset,
+                    kf.value + kf.handle_out.value_offset,
+                )
             };
             if (eff.0 - raw.0).abs() > eps || (eff.1 - raw.1).abs() > eps {
-                map.insert(HandleLoc { curve, key: midx, is_in }, eff);
+                map.insert(
+                    HandleLoc {
+                        curve,
+                        key: midx,
+                        is_in,
+                    },
+                    eff,
+                );
             }
         };
 
@@ -56,14 +73,26 @@ impl GraphEditorState {
             // 左侧段 [prev, dragged]
             if pos > 0 && kfs[pos - 1].1.interpolation == SlintInterpolation::Bezier {
                 let seg = make_segment(curve, color, &kfs[pos - 1].1, &kfs[pos].1);
-                check(&mut map, kfs[pos - 1].0, false, &kfs[pos - 1].1, (seg.cx1, seg.cy1));
+                check(
+                    &mut map,
+                    kfs[pos - 1].0,
+                    false,
+                    &kfs[pos - 1].1,
+                    (seg.cx1, seg.cy1),
+                );
                 check(&mut map, kfs[pos].0, true, &kfs[pos].1, (seg.cx2, seg.cy2));
             }
             // 右侧段 [dragged, next]
             if pos < kfs.len() - 1 && kf.interpolation == SlintInterpolation::Bezier {
                 let seg = make_segment(curve, color, &kfs[pos].1, &kfs[pos + 1].1);
                 check(&mut map, kfs[pos].0, false, &kfs[pos].1, (seg.cx1, seg.cy1));
-                check(&mut map, kfs[pos + 1].0, true, &kfs[pos + 1].1, (seg.cx2, seg.cy2));
+                check(
+                    &mut map,
+                    kfs[pos + 1].0,
+                    true,
+                    &kfs[pos + 1].1,
+                    (seg.cx2, seg.cy2),
+                );
             }
         }
         map
@@ -84,7 +113,11 @@ impl GraphEditorState {
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
         let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
-        kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
+        kfs.sort_by(|a, b| {
+            a.1.time
+                .partial_cmp(&b.1.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let last = kfs.len().saturating_sub(1);
 
         let mut out = Vec::new();
@@ -92,22 +125,44 @@ impl GraphEditorState {
             let key = *midx;
             // 入柄：仅当左侧段是贝塞尔（前一关键帧是贝塞尔）
             if pos > 0 && kfs[pos - 1].1.interpolation == SlintInterpolation::Bezier {
-                let loc = HandleLoc { curve, key, is_in: true };
+                let loc = HandleLoc {
+                    curve,
+                    key,
+                    is_in: true,
+                };
                 let sel = self.selected_handles.contains(&loc);
-                let raw = (kf.time + kf.handle_in.time_offset, kf.value + kf.handle_in.value_offset);
+                let raw = (
+                    kf.time + kf.handle_in.time_offset,
+                    kf.value + kf.handle_in.value_offset,
+                );
                 match overrides.get(&loc) {
-                    Some(&eff) => out.push(mk_marker(curve, key, color, kf, eff.0, eff.1, true, true, sel)),
-                    None => out.push(mk_marker(curve, key, color, kf, raw.0, raw.1, true, false, sel)),
+                    Some(&eff) => out.push(mk_marker(
+                        curve, key, color, kf, eff.0, eff.1, true, true, sel,
+                    )),
+                    None => out.push(mk_marker(
+                        curve, key, color, kf, raw.0, raw.1, true, false, sel,
+                    )),
                 }
             }
             // 出柄：本关键帧是贝塞尔 → 右侧段为贝塞尔
             if pos < last && kf.interpolation == SlintInterpolation::Bezier {
-                let loc = HandleLoc { curve, key, is_in: false };
+                let loc = HandleLoc {
+                    curve,
+                    key,
+                    is_in: false,
+                };
                 let sel = self.selected_handles.contains(&loc);
-                let raw = (kf.time + kf.handle_out.time_offset, kf.value + kf.handle_out.value_offset);
+                let raw = (
+                    kf.time + kf.handle_out.time_offset,
+                    kf.value + kf.handle_out.value_offset,
+                );
                 match overrides.get(&loc) {
-                    Some(&eff) => out.push(mk_marker(curve, key, color, kf, eff.0, eff.1, false, true, sel)),
-                    None => out.push(mk_marker(curve, key, color, kf, raw.0, raw.1, false, false, sel)),
+                    Some(&eff) => out.push(mk_marker(
+                        curve, key, color, kf, eff.0, eff.1, false, true, sel,
+                    )),
+                    None => out.push(mk_marker(
+                        curve, key, color, kf, raw.0, raw.1, false, false, sel,
+                    )),
                 }
             }
         }
@@ -120,7 +175,11 @@ impl GraphEditorState {
         let overrides = self.clamped_overrides_for_curve(curve);
         let (handles, old_hg, old_he) = {
             let hg = self.handle_offsets[curve];
-            let he = self.handle_offsets.get(curve + 1).copied().unwrap_or(self.handles.row_count());
+            let he = self
+                .handle_offsets
+                .get(curve + 1)
+                .copied()
+                .unwrap_or(self.handles.row_count());
             (self.channel_handles_with_preview(curve, &overrides), hg, he)
         };
         let old_count = old_he - old_hg;
@@ -144,7 +203,12 @@ impl GraphEditorState {
     }
 
     /// 计算被拖手柄的"软钳制后"有效控制点预览标记；未被钳制（有效 == 原始）时返回 None。
-    pub(super) fn dragged_handle_preview(&self, curve: usize, key: usize, is_in: bool) -> Option<SlintHandleMarker> {
+    pub(super) fn dragged_handle_preview(
+        &self,
+        curve: usize,
+        key: usize,
+        is_in: bool,
+    ) -> Option<SlintHandleMarker> {
         let kfs = self.editing_keyframes.get(&curve)?;
         let color = self
             .channels_data
@@ -152,7 +216,11 @@ impl GraphEditorState {
             .map(|c| c.color)
             .unwrap_or_else(|| Color::from_rgb_u8(200, 200, 200));
         let mut kfs: Vec<(usize, &SlintKeyframe)> = kfs.iter().enumerate().collect();
-        kfs.sort_by(|a, b| a.1.time.partial_cmp(&b.1.time).unwrap_or(std::cmp::Ordering::Equal));
+        kfs.sort_by(|a, b| {
+            a.1.time
+                .partial_cmp(&b.1.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let pos = kfs.iter().position(|&(i, _)| i == key)?;
         let eps = 1e-4;
         // 出柄 → 右侧段 [dragged, next]（dragged 是贝塞尔才软钳）；入柄 → 左侧段 [prev, dragged]（prev 是贝塞尔）
@@ -164,7 +232,10 @@ impl GraphEditorState {
             let kf = &kfs[pos].1;
             (
                 (seg.cx2, seg.cy2),
-                (kf.time + kf.handle_in.time_offset, kf.value + kf.handle_in.value_offset),
+                (
+                    kf.time + kf.handle_in.time_offset,
+                    kf.value + kf.handle_in.value_offset,
+                ),
             )
         } else {
             if pos + 1 >= kfs.len() || kfs[pos].1.interpolation != SlintInterpolation::Bezier {
@@ -174,11 +245,24 @@ impl GraphEditorState {
             let kf = &kfs[pos].1;
             (
                 (seg.cx1, seg.cy1),
-                (kf.time + kf.handle_out.time_offset, kf.value + kf.handle_out.value_offset),
+                (
+                    kf.time + kf.handle_out.time_offset,
+                    kf.value + kf.handle_out.value_offset,
+                ),
             )
         };
         if (eff.0 - raw.0).abs() > eps || (eff.1 - raw.1).abs() > eps {
-            Some(mk_marker(curve, key, color, &kfs[pos].1, eff.0, eff.1, is_in, true, false))
+            Some(mk_marker(
+                curve,
+                key,
+                color,
+                &kfs[pos].1,
+                eff.0,
+                eff.1,
+                is_in,
+                true,
+                false,
+            ))
         } else {
             None
         }

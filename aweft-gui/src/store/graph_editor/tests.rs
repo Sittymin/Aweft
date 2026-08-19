@@ -1,13 +1,12 @@
 use super::*;
-use crate::depsgraph::{HandleLoc, Tag};
-use aweft_model::animation::{
-    action::ActionCurve, fcurve::FCurve, Action as ModelAction, Keyframe as Mk,
-    PropertyPath,
-};
 use crate::bridge::types::{
     SlintBezierHandle, SlintColorMode, SlintHandleDragMode, SlintInterpolation,
     SlintInterpolationState, SlintKeyframe, SlintKeyframeDragMode, SlintSegmentKind,
     SlintSelectionModifier,
+};
+use crate::depsgraph::{HandleLoc, Tag};
+use aweft_model::animation::{
+    Action as ModelAction, Keyframe as Mk, PropertyPath, action::ActionCurve, fcurve::FCurve,
 };
 use slint::{Color, Model};
 
@@ -133,10 +132,10 @@ fn action_range_derived_from_keyframe_times() {
 
 #[test]
 fn action_selection_switches_curves() {
-    use aweft_model::animation::{
-        action::ActionCurve, fcurve::FCurve, Action as ModelAction, Keyframe as Mk,
-    };
     use crate::store::graph_editor::ActionData;
+    use aweft_model::animation::{
+        Action as ModelAction, Keyframe as Mk, action::ActionCurve, fcurve::FCurve,
+    };
 
     fn action_with(name: &str, property: PropertyPath, kfs: Vec<Mk>) -> ModelAction {
         let mut fcurve = FCurve::default();
@@ -206,8 +205,8 @@ fn action_selection_switches_curves() {
 #[test]
 fn load_action_preserves_model_bezier_handles() {
     use aweft_model::animation::{
-        action::ActionCurve, fcurve::FCurve, Action as ModelAction, BezierHandle,
-        Interpolation as ModelInterp, Keyframe as Mk,
+        Action as ModelAction, BezierHandle, Interpolation as ModelInterp, Keyframe as Mk,
+        action::ActionCurve, fcurve::FCurve,
     };
 
     let k0 = Mk::bezier(
@@ -237,14 +236,20 @@ fn load_action_preserves_model_bezier_handles() {
     assert_eq!(first.handle_in.value_offset, -1.5);
     assert_eq!(first.handle_out.time_offset, 0.4);
     assert_eq!(first.handle_out.value_offset, 2.0);
-    assert_eq!(model.row_data(1).unwrap().interpolation, SlintInterpolation::Hold);
-    assert_eq!(model.row_data(2).unwrap().interpolation, SlintInterpolation::Linear);
+    assert_eq!(
+        model.row_data(1).unwrap().interpolation,
+        SlintInterpolation::Hold
+    );
+    assert_eq!(
+        model.row_data(2).unwrap().interpolation,
+        SlintInterpolation::Linear
+    );
 }
 
 #[test]
 fn commit_to_model_writes_view_keyframes_sorted() {
     use aweft_model::animation::{
-        action::ActionCurve, fcurve::FCurve, Action as ModelAction, Keyframe as Mk,
+        Action as ModelAction, Keyframe as Mk, action::ActionCurve, fcurve::FCurve,
     };
 
     // model 初始关键帧
@@ -276,15 +281,18 @@ fn commit_to_model_writes_view_keyframes_sorted() {
     sorted.sort_by(|x, y| x.partial_cmp(y).unwrap());
     assert_eq!(times, sorted, "提交后 model 关键帧必须按时间排序");
     // 被拖关键帧（含增量）出现在 3.0；原 2.0 关键帧仍在
-    assert!(kfs.iter().any(|k| (k.time - 3.0).abs() < 1e-6 && (k.value - 1.0).abs() < 1e-6));
+    assert!(
+        kfs.iter()
+            .any(|k| (k.time - 3.0).abs() < 1e-6 && (k.value - 1.0).abs() < 1e-6)
+    );
     assert!(kfs.iter().any(|k| (k.time - 2.0).abs() < 1e-6));
 }
 
 #[test]
 fn commit_to_model_round_trips_bezier_handles() {
     use aweft_model::animation::{
-        action::ActionCurve, fcurve::FCurve, Action as ModelAction, BezierHandle,
-        Interpolation as ModelInterp, Keyframe as Mk,
+        Action as ModelAction, BezierHandle, Interpolation as ModelInterp, Keyframe as Mk,
+        action::ActionCurve, fcurve::FCurve,
     };
 
     let k0 = Mk::bezier(
@@ -306,7 +314,10 @@ fn commit_to_model_round_trips_bezier_handles() {
     let kfs = &a.curves[0].curve.keyframes;
     assert_eq!(kfs.len(), 1);
     match kfs[0].interpolation {
-        ModelInterp::Bezier { handle_in, handle_out } => {
+        ModelInterp::Bezier {
+            handle_in,
+            handle_out,
+        } => {
             // f32 → f64 有精度损失，用容差比较
             assert!((handle_in.time_offset - (-0.2)).abs() < 1e-5);
             assert!((handle_in.value_offset - (-1.0)).abs() < 1e-5);
@@ -386,8 +397,14 @@ fn handle_drag_modes_constrain_opposite() {
         time: 0.0,
         value: 0.0,
         interpolation: SlintInterpolation::Bezier,
-        handle_in: SlintBezierHandle { time_offset: 0.0, value_offset: 4.0 },
-        handle_out: SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 },
+        handle_in: SlintBezierHandle {
+            time_offset: 0.0,
+            value_offset: 4.0,
+        },
+        handle_out: SlintBezierHandle {
+            time_offset: 1.0,
+            value_offset: 0.0,
+        },
         selected: false,
     };
     let tags = st.handle_pressed(0, 0, false, SlintSelectionModifier::None);
@@ -450,9 +467,15 @@ fn segment_render_soft_clamps_to_keyframe_interval() {
     let mut st = GraphEditorState::default();
     // k0 出柄 +5（P1.x=5），k1 入柄 -3（P2.x=1）→ 各自钳到 [0,4]，不取中点
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 5.0, value_offset: 0.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 5.0,
+        value_offset: 0.0,
+    };
     let mut k1 = key(4.0, 10.0, SlintInterpolation::Bezier);
-    k1.handle_in = SlintBezierHandle { time_offset: -3.0, value_offset: 0.0 };
+    k1.handle_in = SlintBezierHandle {
+        time_offset: -3.0,
+        value_offset: 0.0,
+    };
     let tags = st.push_channel("t", Color::from_rgb_u8(255, 0, 0), vec![k0, k1]);
     project(&mut st, tags);
     st.rebuild_all();
@@ -670,7 +693,11 @@ fn display_selection_updates_at_press_without_touching_channels_model() {
     project(&mut st, tags);
     assert_eq!(st.selected_display.row_data(0), Some(true), "按下即高亮 a");
     assert_eq!(st.selected_display.row_data(1), Some(false));
-    assert_eq!(st.channels.row_data(0).unwrap().selected, false, "channels.selected 应延迟写回");
+    assert_eq!(
+        st.channels.row_data(0).unwrap().selected,
+        false,
+        "channels.selected 应延迟写回"
+    );
 
     // Shift 追加 b：两个都高亮（显示掩码即时反映多选）
     let tags = st.keyframe_pressed(1, 0, SlintSelectionModifier::Shift);
@@ -709,7 +736,10 @@ fn channel_plain_click_selects_only_one() {
     project(&mut st, tags);
     assert!(st.channels.row_data(2).unwrap().selected);
     for i in [0, 1, 3] {
-        assert!(!st.channels.row_data(i).unwrap().selected, "channel {i} 不应被选中");
+        assert!(
+            !st.channels.row_data(i).unwrap().selected,
+            "channel {i} 不应被选中"
+        );
     }
     assert_eq!(st.selected_channel_count(), 1);
     // 再点另一个：普通点击只选它
@@ -738,7 +768,10 @@ fn channel_shift_selects_range_from_anchor() {
     let tags = st.channel_pressed(4, SlintSelectionModifier::Shift);
     project(&mut st, tags);
     for i in 1..=4 {
-        assert!(st.channels.row_data(i).unwrap().selected, "channel {i} 应在区间内");
+        assert!(
+            st.channels.row_data(i).unwrap().selected,
+            "channel {i} 应在区间内"
+        );
     }
     assert!(!st.channels.row_data(0).unwrap().selected);
     assert_eq!(st.selected_channel_count(), 4);
@@ -747,7 +780,10 @@ fn channel_shift_selects_range_from_anchor() {
     let tags = st.channel_pressed(0, SlintSelectionModifier::Shift);
     project(&mut st, tags);
     for i in 0..=4 {
-        assert!(st.channels.row_data(i).unwrap().selected, "channel {i} 应在区间内");
+        assert!(
+            st.channels.row_data(i).unwrap().selected,
+            "channel {i} 应在区间内"
+        );
     }
 }
 
@@ -865,7 +901,10 @@ fn selected_keyframes_interpolation_change() {
     st.rebuild_all();
 
     assert_eq!(st.selected_keyframe_count(), 0);
-    assert_eq!(st.selected_interpolation_state(), SlintInterpolationState::None);
+    assert_eq!(
+        st.selected_interpolation_state(),
+        SlintInterpolationState::None
+    );
 
     // 无选中时修改无效
     let tags = st.set_selected_keyframes_interpolation(SlintInterpolation::Bezier);
@@ -878,7 +917,10 @@ fn selected_keyframes_interpolation_change() {
     let tags = st.keyframe_pressed(0, 1, SlintSelectionModifier::Shift);
     project(&mut st, tags);
     assert_eq!(st.selected_keyframe_count(), 2);
-    assert_eq!(st.selected_interpolation_state(), SlintInterpolationState::Linear);
+    assert_eq!(
+        st.selected_interpolation_state(),
+        SlintInterpolationState::Linear
+    );
 
     // 改成贝塞尔：全部选中关键帧生效，未选中的不受影响
     let tags = st.set_selected_keyframes_interpolation(SlintInterpolation::Bezier);
@@ -889,7 +931,10 @@ fn selected_keyframes_interpolation_change() {
     assert_eq!(kf0.interpolation, SlintInterpolation::Bezier);
     assert_eq!(kf1.interpolation, SlintInterpolation::Bezier);
     assert_eq!(kf2.interpolation, SlintInterpolation::Hold);
-    assert_eq!(st.selected_interpolation_state(), SlintInterpolationState::Bezier);
+    assert_eq!(
+        st.selected_interpolation_state(),
+        SlintInterpolationState::Bezier
+    );
 
     // 改成常量（hold）
     let tags = st.set_selected_keyframes_interpolation(SlintInterpolation::Hold);
@@ -898,7 +943,10 @@ fn selected_keyframes_interpolation_change() {
         st.keyframe_models[&0].row_data(0).unwrap().interpolation,
         SlintInterpolation::Hold
     );
-    assert_eq!(st.selected_interpolation_state(), SlintInterpolationState::Hold);
+    assert_eq!(
+        st.selected_interpolation_state(),
+        SlintInterpolationState::Hold
+    );
 }
 
 #[test]
@@ -1004,7 +1052,10 @@ fn dope_marquee_select_additive_keeps_existing() {
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
-        vec![key(0.0, 5.0, SlintInterpolation::Linear), key(2.0, 10.0, SlintInterpolation::Linear)],
+        vec![
+            key(0.0, 5.0, SlintInterpolation::Linear),
+            key(2.0, 10.0, SlintInterpolation::Linear),
+        ],
     );
     project(&mut st, tags);
     let tags = st.push_channel(
@@ -1050,7 +1101,10 @@ fn dope_marquee_select_ignores_invisible_channels() {
     let tags = st.dope_marquee_select(-1.0, 10.0, 0, 1, SlintSelectionModifier::None);
     project(&mut st, tags);
     assert!(st.keyframe_models[&0].row_data(0).unwrap().selected);
-    assert!(!st.keyframe_models[&1].row_data(0).unwrap().selected, "不可见通道的关键帧不应被框选");
+    assert!(
+        !st.keyframe_models[&1].row_data(0).unwrap().selected,
+        "不可见通道的关键帧不应被框选"
+    );
     assert_eq!(st.selected_channel_count(), 1);
 }
 
@@ -1090,7 +1144,11 @@ fn keyframe_drag_moves_all_selected_keyframes() {
     assert_eq!(st.keyframe_models[&0].row_data(0).unwrap().time, 0.5);
     assert_eq!(st.keyframe_models[&0].row_data(1).unwrap().time, 2.5);
     assert_eq!(st.keyframe_models[&1].row_data(0).unwrap().time, 1.5);
-    assert_eq!(st.keyframe_models[&1].row_data(1).unwrap().time, 3.0, "未选中的关键帧不应移动");
+    assert_eq!(
+        st.keyframe_models[&1].row_data(1).unwrap().time,
+        3.0,
+        "未选中的关键帧不应移动"
+    );
     // 值不变（dope 拖拽 dv=0 路径）
     assert_eq!(st.keyframe_models[&1].row_data(0).unwrap().value, 5.0);
 }
@@ -1126,7 +1184,11 @@ fn keyframe_drag_skips_locked_channels() {
     let tags = st.keyframe_dragged(0, 0, 1.0, 0.0, SlintKeyframeDragMode::Move);
     project(&mut st, tags);
     assert_eq!(st.keyframe_models[&0].row_data(0).unwrap().time, 1.0);
-    assert_eq!(st.keyframe_models[&1].row_data(0).unwrap().time, 1.0, "锁定通道的关键帧不应移动");
+    assert_eq!(
+        st.keyframe_models[&1].row_data(0).unwrap().time,
+        1.0,
+        "锁定通道的关键帧不应移动"
+    );
 }
 
 #[test]
@@ -1154,11 +1216,18 @@ fn keyframe_press_on_selected_keeps_multi_selection() {
     assert!(st.keyframe_models[&0].row_data(1).unwrap().selected);
 
     st.keyframe_pressed(0, 0, SlintSelectionModifier::None); // 点已选中的 a0，不应清空选择
-    assert!(st.keyframe_models[&0].row_data(1).unwrap().selected, "点已选中的关键帧不应清空多选");
+    assert!(
+        st.keyframe_models[&0].row_data(1).unwrap().selected,
+        "点已选中的关键帧不应清空多选"
+    );
     let tags = st.keyframe_dragged(0, 0, 0.5, 0.0, SlintKeyframeDragMode::Move);
     project(&mut st, tags);
     assert_eq!(st.keyframe_models[&0].row_data(0).unwrap().time, 0.5);
-    assert_eq!(st.keyframe_models[&0].row_data(1).unwrap().time, 2.5, "多选中被拖的关键帧外的其它选中关键帧也应移动");
+    assert_eq!(
+        st.keyframe_models[&0].row_data(1).unwrap().time,
+        2.5,
+        "多选中被拖的关键帧外的其它选中关键帧也应移动"
+    );
 }
 
 #[test]
@@ -1196,7 +1265,10 @@ fn shift_press_adds_never_deselects_grabbed() {
 fn graph_marquee_select_picks_keyframes_and_handles() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 5.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 5.0,
+    };
     let tags = st.push_channel(
         "a",
         Color::from_rgb_u8(255, 0, 0),
@@ -1216,8 +1288,22 @@ fn graph_marquee_select_picks_keyframes_and_handles() {
     assert!(st.keyframe_models[&0].row_data(0).unwrap().selected);
     assert!(!st.keyframe_models[&0].row_data(1).unwrap().selected);
     assert!(!st.keyframe_models[&0].row_data(2).unwrap().selected);
-    assert!(st.selected_handles.contains(&HandleLoc { curve: 0, key: 0, is_in: false }), "A 的出柄应被选中");
-    assert!(!st.selected_handles.contains(&HandleLoc { curve: 0, key: 2, is_in: false }), "C 的出柄不应被选中");
+    assert!(
+        st.selected_handles.contains(&HandleLoc {
+            curve: 0,
+            key: 0,
+            is_in: false
+        }),
+        "A 的出柄应被选中"
+    );
+    assert!(
+        !st.selected_handles.contains(&HandleLoc {
+            curve: 0,
+            key: 2,
+            is_in: false
+        }),
+        "C 的出柄不应被选中"
+    );
 
     // selected 反映到 Slint 手柄模型
     let h = (0..st.handles.row_count())
@@ -1255,9 +1341,15 @@ fn multi_handle_drag_same_screen_offset() {
     let mut st = GraphEditorState::default();
     // 两个贝塞尔关键帧，各自有出柄
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 }; // (1,0)
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 0.0,
+    }; // (1,0)
     let mut k1 = key(2.0, 0.0, SlintInterpolation::Bezier);
-    k1.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 1.0 }; // (1,1)
+    k1.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 1.0,
+    }; // (1,1)
     let tags = st.push_channel("a", Color::from_rgb_u8(255, 0, 0), vec![k0, k1]);
     project(&mut st, tags);
     st.rebuild_all();
@@ -1266,7 +1358,17 @@ fn multi_handle_drag_same_screen_offset() {
     project(&mut st, tags);
     let tags = st.handle_pressed(0, 1, false, SlintSelectionModifier::Shift);
     project(&mut st, tags);
-    assert!(st.selected_handles.contains(&HandleLoc { curve: 0, key: 0, is_in: false }) && st.selected_handles.contains(&HandleLoc { curve: 0, key: 1, is_in: false }));
+    assert!(
+        st.selected_handles.contains(&HandleLoc {
+            curve: 0,
+            key: 0,
+            is_in: false
+        }) && st.selected_handles.contains(&HandleLoc {
+            curve: 0,
+            key: 1,
+            is_in: false
+        })
+    );
 
     // 拖 A 出柄 +1s,+1 值：A (1,0)→(2,1)，B 相同屏幕偏移 (1,1)→(2,2)
     let tags = st.handle_dragged(0, 0, false, 1.0, 1.0, SlintHandleDragMode::Free);
@@ -1288,9 +1390,15 @@ fn multi_handle_drag_same_screen_offset() {
 fn multi_handle_drag_clamps_and_previews_synced_handles() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 0.0,
+    };
     let mut k1 = key(2.0, 0.0, SlintInterpolation::Bezier);
-    k1.handle_out = SlintBezierHandle { time_offset: -1.0, value_offset: 1.0 }; // 出柄时间偏移为负（会被硬钳到 ≥0）
+    k1.handle_out = SlintBezierHandle {
+        time_offset: -1.0,
+        value_offset: 1.0,
+    }; // 出柄时间偏移为负（会被硬钳到 ≥0）
     let tags = st.push_channel("a", Color::from_rgb_u8(255, 0, 0), vec![k0, k1]);
     project(&mut st, tags);
     st.rebuild_all();
@@ -1305,7 +1413,11 @@ fn multi_handle_drag_clamps_and_previews_synced_handles() {
     project(&mut st, tags);
     st.handle_dragged(0, 0, false, -4.0, 0.0, SlintHandleDragMode::Free); // 累计 A：(3,0)→(-1,0)→硬钳到 (0,0)
     let kf0 = st.keyframe_models[&0].row_data(0).unwrap();
-    assert!(kf0.handle_out.time_offset >= 0.0, "主手柄出柄应硬钳到 ≥0，got {}", kf0.handle_out.time_offset);
+    assert!(
+        kf0.handle_out.time_offset >= 0.0,
+        "主手柄出柄应硬钳到 ≥0，got {}",
+        kf0.handle_out.time_offset
+    );
     let kf1 = st.keyframe_models[&0].row_data(1).unwrap();
     // B 跟随 A：(-1,1)→(1,1)→(-3,1)→硬钳到 (0,1)
     assert!(
@@ -1346,16 +1458,25 @@ fn click_on_selected_keyframe_collapses_to_single() {
     let tags = st.keyframe_released(0, 0, false);
     project(&mut st, tags);
     assert!(st.keyframe_models[&0].row_data(0).unwrap().selected);
-    assert!(!st.keyframe_models[&0].row_data(1).unwrap().selected, "单击已选中的关键帧应折叠为单选");
+    assert!(
+        !st.keyframe_models[&0].row_data(1).unwrap().selected,
+        "单击已选中的关键帧应折叠为单选"
+    );
 }
 
 #[test]
 fn click_on_selected_handle_collapses_to_single() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 0.0,
+    };
     let mut k1 = key(2.0, 10.0, SlintInterpolation::Bezier);
-    k1.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 1.0 };
+    k1.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 1.0,
+    };
     let tags = st.push_channel("a", Color::from_rgb_u8(255, 0, 0), vec![k0, k1]);
     project(&mut st, tags);
     st.rebuild_all();
@@ -1372,8 +1493,16 @@ fn click_on_selected_handle_collapses_to_single() {
     let tags = st.handle_released(0, 0, false, false);
     project(&mut st, tags);
     assert_eq!(st.selected_handles.len(), 1);
-    assert!(st.selected_handles.contains(&HandleLoc { curve: 0, key: 0, is_in: false }));
-    assert!(!st.selected_handles.contains(&HandleLoc { curve: 0, key: 1, is_in: false }));
+    assert!(st.selected_handles.contains(&HandleLoc {
+        curve: 0,
+        key: 0,
+        is_in: false
+    }));
+    assert!(!st.selected_handles.contains(&HandleLoc {
+        curve: 0,
+        key: 1,
+        is_in: false
+    }));
 }
 
 #[test]
@@ -1420,11 +1549,23 @@ fn shift_drag_pulls_out_handle_on_bezier_keyframe() {
 fn multi_handle_drag_applies_mode_to_synced_handles() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
-    k0.handle_in = SlintBezierHandle { time_offset: -1.0, value_offset: 0.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 0.0,
+    };
+    k0.handle_in = SlintBezierHandle {
+        time_offset: -1.0,
+        value_offset: 0.0,
+    };
     let mut k1 = key(2.0, 0.0, SlintInterpolation::Bezier);
-    k1.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
-    k1.handle_in = SlintBezierHandle { time_offset: -1.0, value_offset: 0.0 };
+    k1.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 0.0,
+    };
+    k1.handle_in = SlintBezierHandle {
+        time_offset: -1.0,
+        value_offset: 0.0,
+    };
     let tags = st.push_channel("a", Color::from_rgb_u8(255, 0, 0), vec![k0, k1]);
     project(&mut st, tags);
     st.rebuild_all();
@@ -1440,13 +1581,19 @@ fn multi_handle_drag_applies_mode_to_synced_handles() {
     // 主手柄 A 出柄 (1,0)→(2,1)，其入柄原点对称 = -(2,1)
     let kf0 = st.keyframe_models[&0].row_data(0).unwrap();
     assert!((kf0.handle_out.time_offset - 2.0).abs() < 1e-3);
-    assert!((kf0.handle_in.time_offset + 2.0).abs() < 1e-3, "主手柄入柄应原点对称");
+    assert!(
+        (kf0.handle_in.time_offset + 2.0).abs() < 1e-3,
+        "主手柄入柄应原点对称"
+    );
     assert!((kf0.handle_in.value_offset + 1.0).abs() < 1e-3);
 
     // 被同步的 B 出柄同样 +1,+1 → (2,1)，其入柄同样原点对称 = -(2,1)（模式一致）
     let kf1 = st.keyframe_models[&0].row_data(1).unwrap();
     assert!((kf1.handle_out.time_offset - 2.0).abs() < 1e-3);
-    assert!((kf1.handle_in.time_offset + 2.0).abs() < 1e-3, "被同步手柄的对手柄也应原点对称（模式一致）");
+    assert!(
+        (kf1.handle_in.time_offset + 2.0).abs() < 1e-3,
+        "被同步手柄的对手柄也应原点对称（模式一致）"
+    );
     assert!((kf1.handle_in.value_offset + 1.0).abs() < 1e-3);
 }
 
@@ -1454,11 +1601,23 @@ fn multi_handle_drag_applies_mode_to_synced_handles() {
 fn click_cycles_through_coincident_keyframes() {
     let mut st = GraphEditorState::default();
     // 三个通道在相同位置 (1, 5) 有几乎重合的关键帧
-    let tags = st.push_channel("a", Color::from_rgb_u8(255, 0, 0), vec![key(1.0, 5.0, SlintInterpolation::Linear)]);
+    let tags = st.push_channel(
+        "a",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![key(1.0, 5.0, SlintInterpolation::Linear)],
+    );
     project(&mut st, tags);
-    let tags = st.push_channel("b", Color::from_rgb_u8(0, 255, 0), vec![key(1.0, 5.0, SlintInterpolation::Linear)]);
+    let tags = st.push_channel(
+        "b",
+        Color::from_rgb_u8(0, 255, 0),
+        vec![key(1.0, 5.0, SlintInterpolation::Linear)],
+    );
     project(&mut st, tags);
-    let tags = st.push_channel("c", Color::from_rgb_u8(0, 0, 255), vec![key(1.0, 5.0, SlintInterpolation::Linear)]);
+    let tags = st.push_channel(
+        "c",
+        Color::from_rgb_u8(0, 0, 255),
+        vec![key(1.0, 5.0, SlintInterpolation::Linear)],
+    );
     project(&mut st, tags);
     st.rebuild_all();
 
@@ -1497,9 +1656,17 @@ fn click_cycles_through_coincident_keyframes() {
 #[test]
 fn channel_search_filters_per_editor_independently() {
     let mut st = GraphEditorState::default();
-    let tags = st.push_channel("Position X", Color::from_rgb_u8(255, 0, 0), vec![key(0.0, 0.0, SlintInterpolation::Linear)]);
+    let tags = st.push_channel(
+        "Position X",
+        Color::from_rgb_u8(255, 0, 0),
+        vec![key(0.0, 0.0, SlintInterpolation::Linear)],
+    );
     project(&mut st, tags);
-    let tags = st.push_channel("Rotation Y", Color::from_rgb_u8(0, 255, 0), vec![key(0.0, 0.0, SlintInterpolation::Linear)]);
+    let tags = st.push_channel(
+        "Rotation Y",
+        Color::from_rgb_u8(0, 255, 0),
+        vec![key(0.0, 0.0, SlintInterpolation::Linear)],
+    );
     project(&mut st, tags);
     st.rebuild_all();
     assert_eq!(st.graph_filter.row_count(), 2);
@@ -1509,9 +1676,20 @@ fn channel_search_filters_per_editor_independently() {
     let tags = st.set_graph_search("pos"); // 忽略大小写子串匹配
     project(&mut st, tags);
     assert_eq!(st.graph_filter.row_count(), 1, "曲线编辑器过滤只影响自己");
-    assert_eq!(st.dope_filter.row_count(), 2, "摄影表不受曲线编辑器搜索影响");
-    assert_eq!(st.graph_filter.row_data(0).unwrap().curve_index, 0, "过滤视图元素保留真实索引");
-    assert_eq!(st.graph_filter.row_data(0).unwrap().name.as_str(), "Position X");
+    assert_eq!(
+        st.dope_filter.row_count(),
+        2,
+        "摄影表不受曲线编辑器搜索影响"
+    );
+    assert_eq!(
+        st.graph_filter.row_data(0).unwrap().curve_index,
+        0,
+        "过滤视图元素保留真实索引"
+    );
+    assert_eq!(
+        st.graph_filter.row_data(0).unwrap().name.as_str(),
+        "Position X"
+    );
 
     // 摄影表搜索独立
     let tags = st.set_dope_search("rot");
@@ -1533,7 +1711,10 @@ fn channel_search_filters_per_editor_independently() {
 fn graph_segments_and_handles_filtered_by_search() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 1.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 1.0,
+    };
     let tags = st.push_channel(
         "Position X",
         Color::from_rgb_u8(255, 0, 0),
@@ -1543,7 +1724,10 @@ fn graph_segments_and_handles_filtered_by_search() {
     let tags = st.push_channel(
         "Rotation Y",
         Color::from_rgb_u8(0, 255, 0),
-        vec![key(0.0, 0.0, SlintInterpolation::Linear), key(2.0, 5.0, SlintInterpolation::Linear)],
+        vec![
+            key(0.0, 0.0, SlintInterpolation::Linear),
+            key(2.0, 5.0, SlintInterpolation::Linear),
+        ],
     );
     project(&mut st, tags);
     st.rebuild_all();
@@ -1622,7 +1806,10 @@ fn dope_connections_skip_bezier_and_follow_visibility() {
     project(&mut st, tags);
     let tags = st.toggle_channel_visible(0); // 再关掉（true→false）
     project(&mut st, tags);
-    assert!(!st.dope_connections.row_data(0).unwrap().visible, "眼睛关闭后连接应隐藏");
+    assert!(
+        !st.dope_connections.row_data(0).unwrap().visible,
+        "眼睛关闭后连接应隐藏"
+    );
 }
 
 #[test]
@@ -1642,8 +1829,16 @@ fn keyframe_times_snap_to_integer_ms() {
     let k0 = m.row_data(0).unwrap();
     let k1 = m.row_data(1).unwrap();
     // 0.1234 → 123ms → 0.123；2.9996 → 3000ms → 3.0
-    assert!((k0.time - 0.123).abs() < 1e-6, "应吸附到 123ms，得 {}", k0.time);
-    assert!((k1.time - 3.0).abs() < 1e-6, "应吸附到 3000ms，得 {}", k1.time);
+    assert!(
+        (k0.time - 0.123).abs() < 1e-6,
+        "应吸附到 123ms，得 {}",
+        k0.time
+    );
+    assert!(
+        (k1.time - 3.0).abs() < 1e-6,
+        "应吸附到 3000ms，得 {}",
+        k1.time
+    );
 }
 
 #[test]
@@ -1674,7 +1869,11 @@ fn summary_aggregates_coincident_keyframes_by_ms() {
         .collect();
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(times.len(), 3);
-    assert_eq!(st.summary_keyframes.row_data(0).unwrap().count, 2, "同一毫秒应合并计数");
+    assert_eq!(
+        st.summary_keyframes.row_data(0).unwrap().count,
+        2,
+        "同一毫秒应合并计数"
+    );
     assert!((times[0] - 0.0).abs() < 1e-6);
     assert!((times[1] - 2.0).abs() < 1e-6);
     assert!((times[2] - 2.5).abs() < 1e-6);
@@ -1723,21 +1922,58 @@ fn summary_selected_reflects_any_underlying() {
     project(&mut st, tags);
     st.rebuild_all();
     // 初始无选中（逐通道掩码全 false）
-    assert!(!st.summary_keyframes.row_data(0).unwrap().selected.iter().any(|s| s));
+    assert!(
+        !st.summary_keyframes
+            .row_data(0)
+            .unwrap()
+            .selected
+            .iter()
+            .any(|s| s)
+    );
 
     // 普通点击汇总关键帧：按下立即高亮（掩码全 true），选中该时刻全部（两通道）
     let tags = st.summary_keyframe_pressed(0, SlintSelectionModifier::None);
     project(&mut st, tags);
     assert!(
-        st.summary_keyframes.row_data(0).unwrap().selected.iter().all(|s| s),
+        st.summary_keyframes
+            .row_data(0)
+            .unwrap()
+            .selected
+            .iter()
+            .all(|s| s),
         "按下应立即高亮汇总标记，不用等松开"
     );
-    assert!(st.channels.row_data(0).unwrap().selected, "按下应立即亮起关联轨道");
-    assert!(st.channels.row_data(1).unwrap().selected, "按下应立即亮起全部关联轨道");
-    assert!(st.keyframe_models.get(&0).unwrap().row_data(0).unwrap().selected);
-    assert!(st.keyframe_models.get(&1).unwrap().row_data(0).unwrap().selected);
     assert!(
-        st.summary_keyframes.row_data(0).unwrap().selected.iter().all(|s| s),
+        st.channels.row_data(0).unwrap().selected,
+        "按下应立即亮起关联轨道"
+    );
+    assert!(
+        st.channels.row_data(1).unwrap().selected,
+        "按下应立即亮起全部关联轨道"
+    );
+    assert!(
+        st.keyframe_models
+            .get(&0)
+            .unwrap()
+            .row_data(0)
+            .unwrap()
+            .selected
+    );
+    assert!(
+        st.keyframe_models
+            .get(&1)
+            .unwrap()
+            .row_data(0)
+            .unwrap()
+            .selected
+    );
+    assert!(
+        st.summary_keyframes
+            .row_data(0)
+            .unwrap()
+            .selected
+            .iter()
+            .all(|s| s),
         "按下后仍全部高亮"
     );
 
@@ -1766,7 +2002,11 @@ fn summary_drag_snaps_to_integer_ms() {
     let tags = st.summary_keyframe_dragged(0, 1.2345);
     project(&mut st, tags);
     let k0 = st.keyframe_models.get(&0).unwrap().row_data(0).unwrap();
-    assert!((k0.time - 1.235).abs() < 1e-6, "拖拽应吸附整数毫秒，得 {}", k0.time);
+    assert!(
+        (k0.time - 1.235).abs() < 1e-6,
+        "拖拽应吸附整数毫秒，得 {}",
+        k0.time
+    );
 }
 
 #[test]
@@ -1795,8 +2035,22 @@ fn summary_drag_moves_whole_group_even_if_partially_selected() {
     project(&mut st, tags);
     let tags = st.keyframe_released(0, 0, false);
     project(&mut st, tags);
-    assert!(st.keyframe_models.get(&0).unwrap().row_data(0).unwrap().selected);
-    assert!(!st.keyframe_models.get(&1).unwrap().row_data(0).unwrap().selected);
+    assert!(
+        st.keyframe_models
+            .get(&0)
+            .unwrap()
+            .row_data(0)
+            .unwrap()
+            .selected
+    );
+    assert!(
+        !st.keyframe_models
+            .get(&1)
+            .unwrap()
+            .row_data(0)
+            .unwrap()
+            .selected
+    );
 
     // 按下汇总帧（t=0）并拖 1 秒：应跨通道移动 a、b 全部同时刻关键帧
     let tags = st.summary_keyframe_pressed(0, SlintSelectionModifier::None);
@@ -1805,8 +2059,16 @@ fn summary_drag_moves_whole_group_even_if_partially_selected() {
     project(&mut st, tags);
     let a0 = st.keyframe_models.get(&0).unwrap().row_data(0).unwrap();
     let b0 = st.keyframe_models.get(&1).unwrap().row_data(0).unwrap();
-    assert!((a0.time - 1.0).abs() < 1e-6, "a 通道 t=0 关键帧应随汇总帧移到 1s，得 {}", a0.time);
-    assert!((b0.time - 1.0).abs() < 1e-6, "b 通道同时刻关键帧也应一起移动，得 {}", b0.time);
+    assert!(
+        (a0.time - 1.0).abs() < 1e-6,
+        "a 通道 t=0 关键帧应随汇总帧移到 1s，得 {}",
+        a0.time
+    );
+    assert!(
+        (b0.time - 1.0).abs() < 1e-6,
+        "b 通道同时刻关键帧也应一起移动，得 {}",
+        b0.time
+    );
 }
 
 #[test]
@@ -1839,9 +2101,15 @@ fn marquee_selects_channel_when_curve_bends_into_box() {
     let mut st = GraphEditorState::default();
     // 曲线 (0,0)→(4,0) 凸到 y≈1.73；框取 y∈[1,2] 只罩住弯起部分
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 2.0, value_offset: 6.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 2.0,
+        value_offset: 6.0,
+    };
     let mut k1 = key(4.0, 0.0, SlintInterpolation::Bezier);
-    k1.handle_in = SlintBezierHandle { time_offset: -2.0, value_offset: -6.0 };
+    k1.handle_in = SlintBezierHandle {
+        time_offset: -2.0,
+        value_offset: -6.0,
+    };
     let tags = st.push_channel("c", Color::from_rgb_u8(255, 0, 0), vec![k0, k1]);
     project(&mut st, tags);
     st.rebuild_all();
@@ -1906,15 +2174,33 @@ fn ctrl_toggle_keyframe_activates_display_mask() {
     // Ctrl 点击通道 0 关键帧 0
     let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::Ctrl);
     project(&mut st, tags);
-    assert!(st.keyframe_models[&0].row_data(0).unwrap().selected, "关键帧应被选中");
-    assert_eq!(st.selected_display.row_data(0), Some(true), "通道 0 曲线应激活");
-    assert_eq!(st.selected_display.row_data(1), Some(false), "通道 1 不应激活");
+    assert!(
+        st.keyframe_models[&0].row_data(0).unwrap().selected,
+        "关键帧应被选中"
+    );
+    assert_eq!(
+        st.selected_display.row_data(0),
+        Some(true),
+        "通道 0 曲线应激活"
+    );
+    assert_eq!(
+        st.selected_display.row_data(1),
+        Some(false),
+        "通道 1 不应激活"
+    );
 
     // Ctrl 点击通道 0 关键帧 0（取消选中）→ 通道应取消激活
     let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::Ctrl);
     project(&mut st, tags);
-    assert!(!st.keyframe_models[&0].row_data(0).unwrap().selected, "关键帧应取消选中");
-    assert_eq!(st.selected_display.row_data(0), Some(false), "通道 0 应取消激活");
+    assert!(
+        !st.keyframe_models[&0].row_data(0).unwrap().selected,
+        "关键帧应取消选中"
+    );
+    assert_eq!(
+        st.selected_display.row_data(0),
+        Some(false),
+        "通道 0 应取消激活"
+    );
     assert_eq!(st.selected_display.row_data(1), Some(false));
 
     // Ctrl 点击通道 0 关键帧 0 + 通道 1 关键帧 0 → 两个通道都激活
@@ -1931,8 +2217,16 @@ fn ctrl_toggle_keyframe_activates_display_mask() {
     let tags = st.keyframe_pressed(0, 0, SlintSelectionModifier::Ctrl);
     project(&mut st, tags);
     assert!(!st.keyframe_models[&0].row_data(0).unwrap().selected);
-    assert_eq!(st.selected_display.row_data(0), Some(false), "通道 0 应取消激活");
-    assert_eq!(st.selected_display.row_data(1), Some(true), "通道 1 应保持激活");
+    assert_eq!(
+        st.selected_display.row_data(0),
+        Some(false),
+        "通道 0 应取消激活"
+    );
+    assert_eq!(
+        st.selected_display.row_data(1),
+        Some(true),
+        "通道 1 应保持激活"
+    );
 }
 
 /// 回归：移动关键帧产生的 preview 钳制（handles 区间替换）在取消选中/松开时换回普通手柄。
@@ -1940,7 +2234,10 @@ fn ctrl_toggle_keyframe_activates_display_mask() {
 fn keyframe_drag_preview_restored_on_release() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 5.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 5.0,
+    };
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -1970,7 +2267,10 @@ fn handle_drag_preview_includes_opposite_handle() {
     // 中间关键帧：出柄向左长柄 (-6,0)。拖入柄 (-10,0) Aligned → 出柄共线反向 (+6,0)，
     // 控制点 (10,10) 越过段 [4,8] 右边界 → 软钳制预览（入柄自身向左侧也被钳制）
     let mut k1 = key(4.0, 10.0, SlintInterpolation::Bezier);
-    k1.handle_out = SlintBezierHandle { time_offset: -6.0, value_offset: 0.0 };
+    k1.handle_out = SlintBezierHandle {
+        time_offset: -6.0,
+        value_offset: 0.0,
+    };
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),
@@ -2070,7 +2370,10 @@ fn extrapolation_follows_first_last_during_drag() {
 fn edge_keyframe_becomes_interior_gets_default_handle() {
     let mut st = GraphEditorState::default();
     let mut k0 = key(0.0, 0.0, SlintInterpolation::Bezier);
-    k0.handle_out = SlintBezierHandle { time_offset: 1.0, value_offset: 0.0 };
+    k0.handle_out = SlintBezierHandle {
+        time_offset: 1.0,
+        value_offset: 0.0,
+    };
     let tags = st.push_channel(
         "t",
         Color::from_rgb_u8(255, 0, 0),

@@ -2,13 +2,11 @@
 
 use slint::{Color, ModelRc, SharedString};
 
-use super::{snap_ms, GraphEditorState};
+use super::{GraphEditorState, snap_ms};
 use crate::bridge::converters::{model_key_to_slint, slint_key_to_model};
 use crate::bridge::types::{SlintColorMode, SlintFCurveChannel, SlintKeyframe};
 use crate::depsgraph::Tag;
-use aweft_model::animation::{
-    Action as ModelAction, Keyframe as ModelKeyframe, PropertyPath,
-};
+use aweft_model::animation::{Action as ModelAction, Keyframe as ModelKeyframe, PropertyPath};
 use aweft_model::ids::ActionId;
 
 /// model `PropertyPath` → 通道显示名（GUI 侧映射；model 无 Display）。
@@ -64,7 +62,8 @@ impl GraphEditorState {
         self.editing_keyframes.clear();
         for ac in action.curves.iter() {
             let name = property_display_name(&ac.property);
-            let kfs: Vec<SlintKeyframe> = ac.curve.keyframes.iter().map(model_key_to_slint).collect();
+            let kfs: Vec<SlintKeyframe> =
+                ac.curve.keyframes.iter().map(model_key_to_slint).collect();
             // NOTE: model 的 ActionCurve 暂无颜色字段，通道色目前仅 UI 态（彩虹）；
             // 若需持久化用户色，应给 model 的 ActionCurve 加 color 字段。
             self.push_channel(name, Color::from_rgb_u8(0, 0, 0), kfs);
@@ -93,7 +92,11 @@ impl GraphEditorState {
                 continue;
             };
             let mut kfs: Vec<ModelKeyframe> = kfs.iter().map(slint_key_to_model).collect();
-            kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+            kfs.sort_by(|a, b| {
+                a.time
+                    .partial_cmp(&b.time)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             ac.curve.keyframes = kfs;
         }
     }

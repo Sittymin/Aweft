@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::UnboundedSender;
-use gstreamer::{prelude::*, BusSyncReply};
 use gstreamer::{Buffer, Bus, Element, Fraction, Message, Pipeline};
+use gstreamer::{BusSyncReply, prelude::*};
 use gstreamer_app::{AppSink, AppSinkCallbacks};
 use gstreamer_video::{VideoCapsBuilder, VideoFormat, VideoInfo};
 use slint::wgpu_29::wgpu;

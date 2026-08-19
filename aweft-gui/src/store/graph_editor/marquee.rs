@@ -4,9 +4,9 @@ use slint::Model;
 
 use super::GraphEditorState;
 use super::curve_math::segment_intersects_rect;
-use crate::depsgraph::{HandleLoc, Tag};
 use super::ms_of;
 use crate::bridge::types::SlintSelectionModifier;
+use crate::depsgraph::{HandleLoc, Tag};
 
 impl GraphEditorState {
     // ── 共享框选核心逻辑 ──────────────────────────────────────────────────
@@ -120,10 +120,18 @@ impl GraphEditorState {
         if n <= 0 {
             return Vec::new();
         }
-        let (r_lo, r_hi) = if row_lo <= row_hi { (row_lo, row_hi) } else { (row_hi, row_lo) };
+        let (r_lo, r_hi) = if row_lo <= row_hi {
+            (row_lo, row_hi)
+        } else {
+            (row_hi, row_lo)
+        };
         let r_lo = r_lo.max(0);
         let r_hi = r_hi.min(n - 1);
-        let (t_lo, t_hi) = if x_lo <= x_hi { (x_lo, x_hi) } else { (x_hi, x_lo) };
+        let (t_lo, t_hi) = if x_lo <= x_hi {
+            (x_lo, x_hi)
+        } else {
+            (x_hi, x_lo)
+        };
         if t_hi < t_lo {
             return Vec::new();
         }
@@ -160,8 +168,16 @@ impl GraphEditorState {
         y_hi: f32,
         modifier: SlintSelectionModifier,
     ) -> Vec<Tag> {
-        let (t_lo, t_hi) = if x_lo <= x_hi { (x_lo, x_hi) } else { (x_hi, x_lo) };
-        let (v_lo, v_hi) = if y_lo <= y_hi { (y_lo, y_hi) } else { (y_hi, y_lo) };
+        let (t_lo, t_hi) = if x_lo <= x_hi {
+            (x_lo, x_hi)
+        } else {
+            (x_hi, x_lo)
+        };
+        let (v_lo, v_hi) = if y_lo <= y_hi {
+            (y_lo, y_hi)
+        } else {
+            (y_hi, y_lo)
+        };
 
         let toggling = modifier == SlintSelectionModifier::Ctrl;
 
@@ -196,7 +212,11 @@ impl GraphEditorState {
                     let hx = kf.time + ho_t;
                     let hy = kf.value + ho_v;
                     if hx >= t_lo && hx <= t_hi && hy >= v_lo && hy <= v_hi {
-                        let loc = HandleLoc { curve, key: j, is_in: si };
+                        let loc = HandleLoc {
+                            curve,
+                            key: j,
+                            is_in: si,
+                        };
                         if toggling {
                             if self.selected_handles.contains(&loc) {
                                 self.selected_handles.remove(&loc);

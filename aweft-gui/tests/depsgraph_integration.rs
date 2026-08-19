@@ -10,10 +10,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use aweft_gui::actions::Action;
 use aweft_gui::actions::area::AreaAction;
 use aweft_gui::actions::line_editor::LineEditorAction;
 use aweft_gui::actions::screen::ScreenAction;
-use aweft_gui::actions::Action;
 use aweft_gui::bridge::slint_area_key_to_key;
 use aweft_gui::bridge::types::{MainWindow, SplitPreviewOverlayData};
 use aweft_gui::screen::area::ScrAreaKey;
@@ -887,11 +887,7 @@ fn animation_hack_test_data_populates_model_and_view() {
 
     let (list_len, current, channel_count) = {
         let ce = &store.ui_models().graph_editor;
-        (
-            ce.actions.len(),
-            ce.current_action,
-            ce.channels.row_count(),
-        )
+        (ce.actions.len(), ce.current_action, ce.channels.row_count())
     };
     assert_eq!(list_len, 3, "测试数据应有 3 个 Action");
     assert_eq!(current, 0, "应装载第 0 个 Action（主 Action）");
@@ -925,7 +921,11 @@ fn animation_dispatch_projects_derived_models() {
         .unwrap();
     store.evaluate_depsgraph();
     let ce = &store.ui_models().graph_editor;
-    assert_eq!(ce.selected_display.row_data(0), Some(true), "投影应同步通道选中显示掩码");
+    assert_eq!(
+        ce.selected_display.row_data(0),
+        Some(true),
+        "投影应同步通道选中显示掩码"
+    );
     assert_eq!(ce.selected_keyframe_count(), 1, "投影后选中关键帧计数 = 1");
 
     // 拖拽关键帧：Keyframes tag → 投影重建段/手柄/汇总
@@ -955,8 +955,21 @@ fn animation_dispatch_projects_derived_models() {
         .unwrap();
     store.evaluate_depsgraph();
     let id = store.ui_models().graph_editor.current_action_id().unwrap();
-    let action = store.state().project.library.animation_library.actions.get(&id).unwrap();
-    assert!(action.curves[0].curve.keyframes.iter().any(|k| (k.time - 4.0).abs() < 1e-6));
+    let action = store
+        .state()
+        .project
+        .library
+        .animation_library
+        .actions
+        .get(&id)
+        .unwrap();
+    assert!(
+        action.curves[0]
+            .curve
+            .keyframes
+            .iter()
+            .any(|k| (k.time - 4.0).abs() < 1e-6)
+    );
 }
 
 /// 曲线编辑器搜索：graph_filter 独立过滤（与摄影表互不干扰）；
@@ -978,7 +991,11 @@ fn graph_search_filters_channels_and_canvas() {
     store.evaluate_depsgraph();
 
     let ce = &store.ui_models().graph_editor;
-    assert_eq!(ce.graph_filter.row_count(), 2, "曲线编辑器过滤视图应只剩 Font 开头通道");
+    assert_eq!(
+        ce.graph_filter.row_count(),
+        2,
+        "曲线编辑器过滤视图应只剩 Font 开头通道"
+    );
     assert_eq!(ce.dope_filter.row_count(), 4, "摄影表过滤视图不受影响");
     // 段/手柄过滤视图 = 匹配通道的段（通道 0 FontSize 6 关键帧 = 5 段 + 通道 2 FontRotationZ 5 关键帧 = 4 段）
     assert_eq!(ce.graph_segments.row_count(), 9, "画布段应只含匹配通道");

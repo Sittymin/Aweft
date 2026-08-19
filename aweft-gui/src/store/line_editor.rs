@@ -154,7 +154,10 @@ impl LineEditorState {
             dirty.insert(id);
             dirty.extend(self.rows_model.ancestors_of(id));
         }
-        self.rows_model.refresh_ids(&project.structure, &dirty.iter().copied().collect::<Vec<_>>());
+        self.rows_model.refresh_ids(
+            &project.structure,
+            &dirty.iter().copied().collect::<Vec<_>>(),
+        );
     }
 
     /// 计算某个 item 的祖先分组链（叶子到根，不含自身）。
@@ -430,7 +433,8 @@ impl LineEditorState {
             // 更新父组头聚合（若有父组）。父组在 structure 中仍在，可查。
             if let Some(parent) = parent {
                 if let Some(pidx) = self.rows_model.row_index_of(parent) {
-                    self.rows_model.rebuild_row_content(pidx, &project.structure);
+                    self.rows_model
+                        .rebuild_row_content(pidx, &project.structure);
                     self.rows_model.notify_row_changed(pidx);
                 }
             }

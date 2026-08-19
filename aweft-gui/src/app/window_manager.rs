@@ -1,10 +1,10 @@
-use crate::bridge::types::MainWindow;
 use crate::bridge::SubtitleState;
+use crate::bridge::types::MainWindow;
 use crate::store::AppStore;
 use anyhow::{Context, Result};
 use aweft_model::structure::GroupData;
-use slint::wgpu_29::{WGPUConfiguration, WGPUSettings};
 use slint::ComponentHandle;
+use slint::wgpu_29::{WGPUConfiguration, WGPUSettings};
 use std::{cell::RefCell, rc::Rc};
 
 /// 简化的应用窗口管理器

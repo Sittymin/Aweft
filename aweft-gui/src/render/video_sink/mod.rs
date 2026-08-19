@@ -1,2 +1,2 @@
 pub mod wgpu_integration;
-pub use wgpu_integration::{create_sink, SlintWGPUSink};
+pub use wgpu_integration::{SlintWGPUSink, create_sink};

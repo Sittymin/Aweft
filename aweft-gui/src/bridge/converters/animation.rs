@@ -5,9 +5,7 @@ use aweft_model::animation::{
 };
 use slint::SharedString;
 
-use crate::bridge::types::{
-    ContextMenuItem, SlintBezierHandle, SlintInterpolation, SlintKeyframe,
-};
+use crate::bridge::types::{ContextMenuItem, SlintBezierHandle, SlintInterpolation, SlintKeyframe};
 
 /// model `Keyframe` → `SlintKeyframe`（f64→f32；`Interpolation` → `SlintInterpolation`）。
 pub fn model_key_to_slint(k: &ModelKeyframe) -> SlintKeyframe {

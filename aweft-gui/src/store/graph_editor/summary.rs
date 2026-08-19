@@ -9,10 +9,8 @@ use std::rc::Rc;
 
 use slint::{Model, ModelRc};
 
-use super::{ms_of, GraphEditorState, KeyframeLoc};
-use crate::bridge::types::{
-    SlintSelectionModifier, SlintSummaryKeyframe,
-};
+use super::{GraphEditorState, KeyframeLoc, ms_of};
+use crate::bridge::types::{SlintSelectionModifier, SlintSummaryKeyframe};
 use crate::depsgraph::{SummaryDrag, Tag};
 
 impl GraphEditorState {
@@ -24,13 +22,21 @@ impl GraphEditorState {
     pub(super) fn rebuild_summary(&mut self) {
         let mut groups: BTreeMap<i64, Vec<bool>> = BTreeMap::new();
         for row in 0..self.dope_filter.row_count() {
-            let Some(ch) = self.dope_filter.row_data(row) else { continue };
+            let Some(ch) = self.dope_filter.row_data(row) else {
+                continue;
+            };
             let curve = ch.curve_index as usize;
-            let visible = self.channels_data.get(curve).map(|c| c.visible).unwrap_or(false);
+            let visible = self
+                .channels_data
+                .get(curve)
+                .map(|c| c.visible)
+                .unwrap_or(false);
             if !visible {
                 continue;
             }
-            let Some(kfs) = self.editing_keyframes.get(&curve) else { continue };
+            let Some(kfs) = self.editing_keyframes.get(&curve) else {
+                continue;
+            };
             for kf in kfs {
                 groups.entry(ms_of(kf.time)).or_default().push(kf.selected);
             }
@@ -63,9 +69,15 @@ impl GraphEditorState {
     fn summary_build_entry_for_ms(&self, ms: i64) -> SlintSummaryKeyframe {
         let mut sel = Vec::new();
         for row in 0..self.dope_filter.row_count() {
-            let Some(ch) = self.dope_filter.row_data(row) else { continue };
+            let Some(ch) = self.dope_filter.row_data(row) else {
+                continue;
+            };
             let curve = ch.curve_index as usize;
-            let visible = self.channels_data.get(curve).map(|c| c.visible).unwrap_or(false);
+            let visible = self
+                .channels_data
+                .get(curve)
+                .map(|c| c.visible)
+                .unwrap_or(false);
             if !visible {
                 continue;
             }
@@ -108,7 +120,13 @@ impl GraphEditorState {
     /// 移除汇总条带中的一个 ms 条目（若存在）。
     pub(super) fn summary_remove_if_empty(&mut self, ms: i64) {
         if let Some(idx) = self.summary_find_by_ms(ms) {
-            if self.summary_keyframes.row_data(idx).map(|sk| sk.count).unwrap_or(0) == 0 {
+            if self
+                .summary_keyframes
+                .row_data(idx)
+                .map(|sk| sk.count)
+                .unwrap_or(0)
+                == 0
+            {
                 self.summary_keyframes.remove(idx);
             }
         }
@@ -121,8 +139,14 @@ impl GraphEditorState {
     /// 单选该时刻全部（不会因为其中某个已选中而"保持现状"，否则拖拽时只剩已选中的
     /// 那几个会移动，与用户预期不符）；Shift/Ctrl 才追加到现有选择。
     /// 通道选中用 pending（grab 结束后写回）。
-    pub fn summary_keyframe_pressed(&mut self, index: usize, modifier: SlintSelectionModifier) -> Vec<Tag> {
-        let Some(sk) = self.summary_keyframes.row_data(index) else { return Vec::new() };
+    pub fn summary_keyframe_pressed(
+        &mut self,
+        index: usize,
+        modifier: SlintSelectionModifier,
+    ) -> Vec<Tag> {
+        let Some(sk) = self.summary_keyframes.row_data(index) else {
+            return Vec::new();
+        };
         let target_ms = ms_of(sk.time);
         // 收集该时刻跨通道的全部关键帧（可见且可编辑的通道；与拖拽一致）
         let mut group: Vec<KeyframeLoc> = Vec::new();
@@ -130,7 +154,11 @@ impl GraphEditorState {
             if !self.channel_editable(c) {
                 continue;
             }
-            let visible = self.channels_data.get(c).map(|ch| ch.visible).unwrap_or(true);
+            let visible = self
+                .channels_data
+                .get(c)
+                .map(|ch| ch.visible)
+                .unwrap_or(true);
             if !visible {
                 continue;
             }
@@ -156,8 +184,14 @@ impl GraphEditorState {
             // 加入：全部选上（不取消），并确保其通道在期望选中集合里
             for &loc in &group {
                 let should_toggle_off = modifier == SlintSelectionModifier::Ctrl
-                    && self.editing_keyframes.get(&loc.curve).and_then(|kfs| kfs.get(loc.key)).map(|keyframe| keyframe.selected).unwrap_or(false);
-                if let Some(ms) = self.set_keyframe_selected(loc.curve, loc.key, should_toggle_off) {
+                    && self
+                        .editing_keyframes
+                        .get(&loc.curve)
+                        .and_then(|kfs| kfs.get(loc.key))
+                        .map(|keyframe| keyframe.selected)
+                        .unwrap_or(false);
+                if let Some(ms) = self.set_keyframe_selected(loc.curve, loc.key, should_toggle_off)
+                {
                     summary_ms.insert(ms);
                 }
             }

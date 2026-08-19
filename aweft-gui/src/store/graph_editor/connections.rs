@@ -12,12 +12,22 @@ impl GraphEditorState {
     pub(super) fn rebuild_dope_connections(&mut self) {
         let mut conns: Vec<SlintDopeConnection> = Vec::new();
         for row in 0..self.dope_filter.row_count() {
-            let Some(ch) = self.dope_filter.row_data(row) else { continue };
+            let Some(ch) = self.dope_filter.row_data(row) else {
+                continue;
+            };
             let c = ch.curve_index as usize;
-            let Some(kfs) = self.editing_keyframes.get(&c) else { continue };
-            let Some(ch_data) = self.channels_data.get(c) else { continue };
+            let Some(kfs) = self.editing_keyframes.get(&c) else {
+                continue;
+            };
+            let Some(ch_data) = self.channels_data.get(c) else {
+                continue;
+            };
             let mut kfs: Vec<&SlintKeyframe> = kfs.iter().collect();
-            kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+            kfs.sort_by(|a, b| {
+                a.time
+                    .partial_cmp(&b.time)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             for i in 0..kfs.len().saturating_sub(1) {
                 let interp = kfs[i].interpolation;
                 if interp == SlintInterpolation::Linear || interp == SlintInterpolation::Hold {
@@ -53,7 +63,11 @@ impl GraphEditorState {
                 }
             }
         }
-        let old_start = old_indices.iter().next().copied().unwrap_or(self.dope_connections.row_count());
+        let old_start = old_indices
+            .iter()
+            .next()
+            .copied()
+            .unwrap_or(self.dope_connections.row_count());
         let old_count = old_indices.len();
 
         // 2. 算该通道的新连接
@@ -62,13 +76,23 @@ impl GraphEditorState {
         for row in 0..row_count {
             if let Some(ch) = self.dope_filter.row_data(row) {
                 if ch.curve_index as usize == curve {
-                    let Some(kfs) = self.editing_keyframes.get(&curve) else { continue };
-                    let Some(ch_data) = self.channels_data.get(curve) else { continue };
+                    let Some(kfs) = self.editing_keyframes.get(&curve) else {
+                        continue;
+                    };
+                    let Some(ch_data) = self.channels_data.get(curve) else {
+                        continue;
+                    };
                     let mut kfs: Vec<&SlintKeyframe> = kfs.iter().collect();
-                    kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+                    kfs.sort_by(|a, b| {
+                        a.time
+                            .partial_cmp(&b.time)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
                     for i in 0..kfs.len().saturating_sub(1) {
                         let interp = kfs[i].interpolation;
-                        if interp == SlintInterpolation::Linear || interp == SlintInterpolation::Hold {
+                        if interp == SlintInterpolation::Linear
+                            || interp == SlintInterpolation::Hold
+                        {
                             new_conns.push(SlintDopeConnection {
                                 curve_index: curve_i32,
                                 row_index: row as i32,
@@ -89,7 +113,8 @@ impl GraphEditorState {
         if old_count == new_conns.len() {
             // 数量不变：原地 set_row_data
             for (i, conn) in new_conns.iter().enumerate() {
-                self.dope_connections.set_row_data(old_start + i, conn.clone());
+                self.dope_connections
+                    .set_row_data(old_start + i, conn.clone());
             }
         } else if old_count == 0 {
             // 无旧连接：插入新连接

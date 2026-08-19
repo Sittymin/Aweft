@@ -1,10 +1,9 @@
 //! 关键帧交互（reducer 侧）：只改数据层（`editing_keyframes` selected/time/value、
 //! 选中集）并返回 tag；曲线段/手柄/汇总/显示掩码由投影（projection.rs）完成。
 
-use super::{ms_of, snap_ms, GraphEditorState, KeyframeLoc, KeyframeUpdate};
+use super::{GraphEditorState, KeyframeLoc, KeyframeUpdate, ms_of, snap_ms};
 use crate::bridge::types::{
-    SlintBezierHandle, SlintInterpolation,
-    SlintKeyframeDragMode, SlintSelectionModifier,
+    SlintBezierHandle, SlintInterpolation, SlintKeyframeDragMode, SlintSelectionModifier,
 };
 use crate::depsgraph::Tag;
 
@@ -20,7 +19,12 @@ impl GraphEditorState {
     /// 等 `keyframe_released`（grab 结束后）才写回。原因是关键帧标记渲染在
     /// `for ch in channels: for kf in ch.keyframes` 的嵌套循环里，按下期间对外层
     /// channels 模型 `set_row_data` 会破坏 Slint 的拖拽抓取（见 tests/dope_drag.rs）。
-    pub fn keyframe_pressed(&mut self, curve: usize, key: usize, modifier: SlintSelectionModifier) -> Vec<Tag> {
+    pub fn keyframe_pressed(
+        &mut self,
+        curve: usize,
+        key: usize,
+        modifier: SlintSelectionModifier,
+    ) -> Vec<Tag> {
         if !self.channel_editable(curve) {
             return Vec::new();
         }
@@ -36,7 +40,12 @@ impl GraphEditorState {
         // pressed_was_selected = 自身已选中 或 附近有其他已选中的点
         let has_other_selected = coincident.iter().any(|loc| {
             (loc.curve != curve || loc.key != key)
-                && self.editing_keyframes.get(&loc.curve).and_then(|kfs| kfs.get(loc.key)).map(|k| k.selected).unwrap_or(false)
+                && self
+                    .editing_keyframes
+                    .get(&loc.curve)
+                    .and_then(|kfs| kfs.get(loc.key))
+                    .map(|k| k.selected)
+                    .unwrap_or(false)
         });
         self.pressed_was_selected = already_selected || has_other_selected;
         let mut summary_ms = std::collections::HashSet::new();
@@ -71,7 +80,8 @@ impl GraphEditorState {
                 }
                 // Ctrl 切换后：从全量选择集重建 pending，移除已无选中关键帧的通道。
                 // 兜底：被按通道若刚被选中但尚未在 effective 集合中，手动加入。
-                let mut pending: Vec<usize> = self.effective_selected_channels()
+                let mut pending: Vec<usize> = self
+                    .effective_selected_channels()
                     .into_iter()
                     .filter(|&c| self.channel_has_selected_keyframe(c))
                     .collect();
@@ -114,7 +124,12 @@ impl GraphEditorState {
         let eps_v = 5.0 / self.value_zoom.max(0.01);
         let mut list = Vec::new();
         for (&c, kfs) in self.editing_keyframes.iter() {
-            if !self.channels_data.get(c).map(|ch| ch.visible).unwrap_or(false) {
+            if !self
+                .channels_data
+                .get(c)
+                .map(|ch| ch.visible)
+                .unwrap_or(false)
+            {
                 continue;
             }
             for (j, kf) in kfs.iter().enumerate() {
@@ -206,7 +221,11 @@ impl GraphEditorState {
                     kf2.time = snap_ms(kf2.time + delta_time);
                     kf2.value += delta_value;
                     let new_ms = ms_of(kf2.time);
-                    updates.push(KeyframeUpdate { curve: c, key: j, keyframe: kf2 });
+                    updates.push(KeyframeUpdate {
+                        curve: c,
+                        key: j,
+                        keyframe: kf2,
+                    });
                     affected_ms.insert(old_ms);
                     affected_ms.insert(new_ms);
                     idxs.push(j);
@@ -305,7 +324,12 @@ impl GraphEditorState {
 
     /// 设置单个关键帧的选中状态（additive=true 时取反，否则置为选中）。
     /// 只改数据层，返回选中状态变化的 ms（投影重算汇总条目掩码）。
-    pub(crate) fn set_keyframe_selected(&mut self, curve: usize, key: usize, additive: bool) -> Option<i64> {
+    pub(crate) fn set_keyframe_selected(
+        &mut self,
+        curve: usize,
+        key: usize,
+        additive: bool,
+    ) -> Option<i64> {
         let Some(kfs) = self.editing_keyframes.get_mut(&curve) else {
             return None;
         };

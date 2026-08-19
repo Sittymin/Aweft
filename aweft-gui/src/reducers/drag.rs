@@ -1,4 +1,4 @@
-use crate::bridge::types::{slint_area_key_to_key, SlintKey};
+use crate::bridge::types::{SlintKey, slint_area_key_to_key};
 use crate::depsgraph::Tag;
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
@@ -283,49 +283,48 @@ pub fn handle_edge_update(
 
 /// 处理边缘拖拽结束
 pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<Vec<Tag>> {
-    let (areas_changed, topology_changed) =
-        if let DragOperation::MoveEdge {
-            dir_axis_horizontal,
-            origval,
-            bigger,
-            smaller,
-            moving_vert_keys,
-            edge_keys_rc: _,
-            area_keys_rc: _,
-        } = &state.current_drag_operation.clone()
-        {
-            let theme_settings = state.theme_settings;
+    let (areas_changed, topology_changed) = if let DragOperation::MoveEdge {
+        dir_axis_horizontal,
+        origval,
+        bigger,
+        smaller,
+        moving_vert_keys,
+        edge_keys_rc: _,
+        area_keys_rc: _,
+    } = &state.current_drag_operation.clone()
+    {
+        let theme_settings = state.theme_settings;
 
-            if is_cancel {
-                // 取消：恢复到原始位置
-                log::info!("取消边移动，恢复到原始位置");
-                state.screen_map.apply_verts_move(
-                    *dir_axis_horizontal,
-                    moving_vert_keys,
-                    *origval,
-                    0, // delta = 0 恢复原位置
-                    *bigger,
-                    *smaller,
-                );
-                state.screen_map.update_all_areas_rcti(&theme_settings);
-                (false, false)
-            } else {
-                // 确认：保持当前位置
-                log::info!("确认边移动");
-                // 顶点合并会改变边结构（才需全量重建 edges）
-                let topology_changed = state.screen_map.remove_duplicate_vertices();
-
-                // 标记窗口边框边缘
-                let current_rect = state.current_window_rect();
-                state
-                    .screen_map
-                    .mark_window_border_edges(&current_rect, &theme_settings);
-
-                (true, topology_changed)
-            }
-        } else {
+        if is_cancel {
+            // 取消：恢复到原始位置
+            log::info!("取消边移动，恢复到原始位置");
+            state.screen_map.apply_verts_move(
+                *dir_axis_horizontal,
+                moving_vert_keys,
+                *origval,
+                0, // delta = 0 恢复原位置
+                *bigger,
+                *smaller,
+            );
+            state.screen_map.update_all_areas_rcti(&theme_settings);
             (false, false)
-        };
+        } else {
+            // 确认：保持当前位置
+            log::info!("确认边移动");
+            // 顶点合并会改变边结构（才需全量重建 edges）
+            let topology_changed = state.screen_map.remove_duplicate_vertices();
+
+            // 标记窗口边框边缘
+            let current_rect = state.current_window_rect();
+            state
+                .screen_map
+                .mark_window_border_edges(&current_rect, &theme_settings);
+
+            (true, topology_changed)
+        }
+    } else {
+        (false, false)
+    };
 
     // 清除拖拽状态
     state.current_drag_operation = DragOperation::None;
@@ -337,7 +336,10 @@ pub fn handle_edge_end(state: &mut AppState, is_cancel: bool) -> Result<Vec<Tag>
 }
 
 impl crate::store::AppStore {
-    pub(crate) fn dispatch_drag(&mut self, action: crate::actions::drag::DragAction) -> Result<Vec<Tag>> {
+    pub(crate) fn dispatch_drag(
+        &mut self,
+        action: crate::actions::drag::DragAction,
+    ) -> Result<Vec<Tag>> {
         use crate::actions::drag::DragAction;
 
         match action {
@@ -366,7 +368,10 @@ impl crate::store::AppStore {
         }
     }
 
-    pub(crate) fn dispatch_edge_drag(&mut self, action: crate::actions::drag::EdgeDrag) -> Result<Vec<Tag>> {
+    pub(crate) fn dispatch_edge_drag(
+        &mut self,
+        action: crate::actions::drag::EdgeDrag,
+    ) -> Result<Vec<Tag>> {
         use crate::actions::drag::EdgeDrag;
 
         match action {

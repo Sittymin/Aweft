@@ -25,7 +25,11 @@ impl crate::store::AppStore {
                 y,
             } => {
                 let node_id = crate::store::node_graph::add_node_dispatch(
-                    self, graph_type, template_index, x, y,
+                    self,
+                    graph_type,
+                    template_index,
+                    x,
+                    y,
                 );
                 let Some(node_id) = node_id else {
                     return Ok(vec![]);
@@ -65,12 +69,15 @@ impl crate::store::AppStore {
                 y,
             } => {
                 let affected_nodes = crate::store::node_graph::socket_drag_ended_dispatch(
-                    self, graph_type, node_index, socket_index, is_input, x, y,
-                );
-                (
+                    self,
                     graph_type,
-                    NodeGraphChange::LinksChanged { affected_nodes },
-                )
+                    node_index,
+                    socket_index,
+                    is_input,
+                    x,
+                    y,
+                );
+                (graph_type, NodeGraphChange::LinksChanged { affected_nodes })
             }
             NodeGraphAction::MenuSelected {
                 graph_type,
@@ -96,7 +103,11 @@ impl crate::store::AppStore {
                 option_index,
             } => {
                 crate::store::node_graph::socket_option_selected_dispatch(
-                    self, graph_type, node_index, socket_index, option_index,
+                    self,
+                    graph_type,
+                    node_index,
+                    socket_index,
+                    option_index,
                 );
                 let Some((node_id, socket_id)) =
                     self.node_and_socket_id(graph_type, node_index, socket_index)
@@ -115,7 +126,11 @@ impl crate::store::AppStore {
                 name,
             } => {
                 crate::store::node_graph::create_actor_dispatch(
-                    self, graph_type, node_index, socket_index, &name,
+                    self,
+                    graph_type,
+                    node_index,
+                    socket_index,
+                    &name,
                 );
                 let Some((node_id, socket_id)) =
                     self.node_and_socket_id(graph_type, node_index, socket_index)
@@ -134,7 +149,11 @@ impl crate::store::AppStore {
                 text,
             } => {
                 crate::store::node_graph::set_socket_text_default_dispatch(
-                    self, graph_type, node_index, socket_index, &text,
+                    self,
+                    graph_type,
+                    node_index,
+                    socket_index,
+                    &text,
                 );
                 let Some((node_id, socket_id)) =
                     self.node_and_socket_id(graph_type, node_index, socket_index)

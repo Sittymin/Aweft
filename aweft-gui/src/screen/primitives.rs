@@ -16,7 +16,7 @@
 //! 引用 Blender：几何以物理像素存储（与 Blender 一致），仅在 UI 输出时换算
 //! 逻辑像素（对应 Slint 的 `LogicalLength`/`PhysicalLength` 区分）。
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 #[derive(Debug, Clone)]
 pub struct Vec2u32 {

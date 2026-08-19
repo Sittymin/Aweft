@@ -16,7 +16,7 @@ use aweft_model::{
 use chrono::TimeDelta;
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, ToSharedString};
 
-use crate::bridge::{format_time, SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType};
+use crate::bridge::{SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, format_time};
 
 /// 一个扁平化行的索引锚点：结构变化时重建，`row_data(i)` 用它 O(1) 定位。
 #[derive(Debug, Clone)]
@@ -364,7 +364,12 @@ impl LineRowsModel {
     /// - 参考行是 event → 插到其后（depth 相同）；
     /// - 参考行是 group → 插到其子树末尾（depth+1，作为组内首项）。
     /// `notify.row_added`——Slint 只新建该行实例，存量复用。
-    pub fn insert_after(&self, structure: &ProjectStructure, item_id: ItemId, new_item_id: ItemId) -> usize {
+    pub fn insert_after(
+        &self,
+        structure: &ProjectStructure,
+        item_id: ItemId,
+        new_item_id: ItemId,
+    ) -> usize {
         let mut flattened = self.flattened.borrow_mut();
         let Some(ref_idx) = flattened.anchors.iter().position(|a| a.item_id == item_id) else {
             return 0;
@@ -439,20 +444,18 @@ impl LineRowsModel {
     /// 在指定索引批量插入多个子树（粘贴）。
     ///
     /// 一次 `notify.row_added(at, total_count)`——Slint splice 批量插入，存量复用。
-    pub fn insert_subtrees(&self, structure: &ProjectStructure, at: usize, items: &[ItemId]) -> usize {
+    pub fn insert_subtrees(
+        &self,
+        structure: &ProjectStructure,
+        at: usize,
+        items: &[ItemId],
+    ) -> usize {
         let mut flattened = self.flattened.borrow_mut();
         let depth = anchor_depth(&flattened, at.saturating_sub(1));
         let ancestors = anchor_ancestors(&flattened, at.saturating_sub(1));
         let ancestor_ids = anchor_ancestor_ids(&flattened, at.saturating_sub(1));
         let mut sub = Flattened::default();
-        flatten_items(
-            items,
-            structure,
-            depth,
-            ancestors,
-            ancestor_ids,
-            &mut sub,
-        );
+        flatten_items(items, structure, depth, ancestors, ancestor_ids, &mut sub);
         let count = sub.anchors.len();
         if count == 0 {
             return 0;
@@ -739,12 +742,7 @@ fn flatten_items(
             depth,
             ancestors: ancestors.clone(),
             ancestor_ids: ancestor_ids.clone(),
-            content: empty_row(
-                &item_id,
-                depth,
-                ancestors.clone(),
-                ancestor_ids.clone(),
-            ),
+            content: empty_row(&item_id, depth, ancestors.clone(), ancestor_ids.clone()),
         };
         let content = build_row(&row_data, structure)
             .unwrap_or_else(|| empty_row(&item_id, depth, ancestors.clone(), ancestor_ids.clone()));
@@ -1208,7 +1206,7 @@ mod tests {
         let (group_idx, parent) = model.ungroup_anchor(&structure, group_id).unwrap();
         assert_eq!(parent, None); // 根级分组，无父
         assert_eq!(model.row_count(), before - 1); // 只删分组头
-                                                   // 子事件提升为根级（index 移到原来 group 位置）
+        // 子事件提升为根级（index 移到原来 group 位置）
         let child_after = model.row_data(group_idx).unwrap();
         assert_eq!(child_after.item_id, child_before.item_id);
         assert_eq!(child_after.depth, 0); // 提升到根级

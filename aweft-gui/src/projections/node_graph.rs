@@ -43,7 +43,8 @@ pub fn op_node_graph_socket(store: &mut AppStore, tags: &[Tag]) {
         if let Tag::NodeGraph { kind, change } = tag
             && matches!(
                 change,
-                NodeGraphChange::SocketValueChanged { .. } | NodeGraphChange::ReferenceChanged { .. }
+                NodeGraphChange::SocketValueChanged { .. }
+                    | NodeGraphChange::ReferenceChanged { .. }
             )
         {
             store.with_graph(*kind, |editor, access| access.apply_change(editor, change));

@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use aweft_gui::actions::{node_graph::NodeGraphAction, Action};
+use aweft_gui::actions::{Action, node_graph::NodeGraphAction};
 use aweft_gui::bridge::types::MainWindow;
 use aweft_model::node_graph::NodeGraphKind;
 use i_slint_backend_testing::init_no_event_loop;
@@ -62,17 +62,21 @@ fn edge_drag_end_preserves_editor_and_areas() {
     // 初始化屏幕三区 + 把第一个 area 切成样式图编辑器
     {
         let mut s = store.borrow_mut();
-        s.dispatch(Action::Screen(aweft_gui::actions::screen::ScreenAction::InitializeLayout {
-            width: 1600,
-            height: 1200,
-        }))
+        s.dispatch(Action::Screen(
+            aweft_gui::actions::screen::ScreenAction::InitializeLayout {
+                width: 1600,
+                height: 1200,
+            },
+        ))
         .unwrap();
         s.evaluate_depsgraph();
         let key = s.state().screen_map.areas.keys().next().unwrap();
-        s.dispatch(Action::Area(aweft_gui::actions::area::AreaAction::SwitchType {
-            area_key: key,
-            area_type: aweft_gui::screen::area::AreaType::StyleGraphEditor,
-        }))
+        s.dispatch(Action::Area(
+            aweft_gui::actions::area::AreaAction::SwitchType {
+                area_key: key,
+                area_type: aweft_gui::screen::area::AreaType::StyleGraphEditor,
+            },
+        ))
         .unwrap();
         s.evaluate_depsgraph();
     }
@@ -107,16 +111,15 @@ fn edge_drag_end_preserves_editor_and_areas() {
     };
     {
         let mut s = store.borrow_mut();
-        s.state_mut().current_drag_operation =
-            aweft_gui::store::state::DragOperation::MoveEdge {
-                dir_axis_horizontal: false,
-                origval: 800,
-                bigger: 300,
-                smaller: 300,
-                moving_vert_keys: vec![v1, v2],
-                edge_keys_rc: Rc::new(Vec::new()),
-                area_keys_rc: Rc::new(Vec::new()),
-            };
+        s.state_mut().current_drag_operation = aweft_gui::store::state::DragOperation::MoveEdge {
+            dir_axis_horizontal: false,
+            origval: 800,
+            bigger: 300,
+            smaller: 300,
+            moving_vert_keys: vec![v1, v2],
+            edge_keys_rc: Rc::new(Vec::new()),
+            area_keys_rc: Rc::new(Vec::new()),
+        };
     }
     {
         let mut s = store.borrow_mut();

@@ -8,8 +8,8 @@
 //! 参考 Slint examples/todo 的测试模式：
 //! `i_slint_backend_testing::init_no_event_loop()` + `MainWindow::new()`。
 
-use aweft_gui::actions::animation::AnimationAction;
 use aweft_gui::actions::Action;
+use aweft_gui::actions::animation::AnimationAction;
 use aweft_gui::bridge::types::{MainWindow, SlintSelectionModifier};
 use aweft_gui::store::AppStore;
 use slint::Model;
@@ -62,12 +62,15 @@ fn dope_keyframe_drag_moves_only_time_and_commits() {
         assert_eq!(seg0.x1, 4.0);
         // 汇总条带：新 ms(4000) 加入；旧 ms(3000) 的聚合更新（通道 3 BorderX 仍有 t=3 关键帧，count=1）
         let n = ce.summary_keyframes.row_count();
-        assert!((0..n).any(|i| {
-            ce.summary_keyframes
-                .row_data(i)
-                .map(|sk| (sk.time - 4.0).abs() < 1e-6)
-                .unwrap_or(false)
-        }), "汇总条带应出现新 ms(4000) 条目");
+        assert!(
+            (0..n).any(|i| {
+                ce.summary_keyframes
+                    .row_data(i)
+                    .map(|sk| (sk.time - 4.0).abs() < 1e-6)
+                    .unwrap_or(false)
+            }),
+            "汇总条带应出现新 ms(4000) 条目"
+        );
         let sk3 = (0..n)
             .filter_map(|i| ce.summary_keyframes.row_data(i))
             .find(|sk| (sk.time - 3.0).abs() < 1e-6);
@@ -171,7 +174,11 @@ fn dope_summary_press_drag_release_moves_all_channels() {
     store.evaluate_depsgraph();
     {
         let ce = &store.ui_models().graph_editor;
-        assert_eq!(ce.selected_keyframe_count(), 4, "t=0 时刻应有 4 个关键帧被选中");
+        assert_eq!(
+            ce.selected_keyframe_count(),
+            4,
+            "t=0 时刻应有 4 个关键帧被选中"
+        );
     }
 
     // 拖拽 dt=0.5：4 个关键帧同步移动到 t=0.5
@@ -185,7 +192,13 @@ fn dope_summary_press_drag_release_moves_all_channels() {
     {
         let ce = &store.ui_models().graph_editor;
         for c in 0..4 {
-            let kf = ce.channels.row_data(c).unwrap().keyframes.row_data(0).unwrap();
+            let kf = ce
+                .channels
+                .row_data(c)
+                .unwrap()
+                .keyframes
+                .row_data(0)
+                .unwrap();
             assert_eq!(kf.time, 0.5, "通道 {c} 的关键帧应同步移动到 t=0.5");
         }
         // 被拖汇总标记就地跟随（拖拽期间不重建模型）
@@ -204,12 +217,15 @@ fn dope_summary_press_drag_release_moves_all_channels() {
     {
         let ce = &store.ui_models().graph_editor;
         let n = ce.summary_keyframes.row_count();
-        assert!(!(0..n).any(|i| {
-            ce.summary_keyframes
-                .row_data(i)
-                .map(|sk| (sk.time - 0.0).abs() < 1e-6)
-                .unwrap_or(false)
-        }), "松开后 t=0 空条目应移除");
+        assert!(
+            !(0..n).any(|i| {
+                ce.summary_keyframes
+                    .row_data(i)
+                    .map(|sk| (sk.time - 0.0).abs() < 1e-6)
+                    .unwrap_or(false)
+            }),
+            "松开后 t=0 空条目应移除"
+        );
         let sk = (0..n)
             .filter_map(|i| ce.summary_keyframes.row_data(i))
             .find(|sk| (sk.time - 0.5).abs() < 1e-6)
@@ -269,7 +285,11 @@ fn dope_marquee_below_rows_selects_nothing() {
     store.evaluate_depsgraph();
 
     let ce = &store.ui_models().graph_editor;
-    assert_eq!(ce.selected_keyframe_count(), 0, "空框替换应清空选择，且不误选末行");
+    assert_eq!(
+        ce.selected_keyframe_count(),
+        0,
+        "空框替换应清空选择，且不误选末行"
+    );
     // 汇总条带掩码刷新：t=3 条目的逐通道选中掩码应全部为 false
     let n = ce.summary_keyframes.row_count();
     let sk3 = (0..n)
@@ -300,7 +320,11 @@ fn dope_search_filters_independently() {
     store.evaluate_depsgraph();
 
     let ce = &store.ui_models().graph_editor;
-    assert_eq!(ce.dope_filter.row_count(), 2, "摄影表过滤视图应只剩 Font 开头通道");
+    assert_eq!(
+        ce.dope_filter.row_count(),
+        2,
+        "摄影表过滤视图应只剩 Font 开头通道"
+    );
     assert_eq!(ce.graph_filter.row_count(), 4, "曲线编辑器过滤视图不受影响");
 
     // 空串恢复全部

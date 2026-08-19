@@ -64,9 +64,7 @@ pub enum NodeGraphAction {
         text: String,
     },
     /// 新建一条默认链并切换到它。
-    NewChain {
-        graph_type: NodeGraphKind,
-    },
+    NewChain { graph_type: NodeGraphKind },
 }
 
 // ── 右键菜单模板 ──────────────────────────────────────────────────────────────

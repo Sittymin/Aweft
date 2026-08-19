@@ -99,7 +99,10 @@ pub fn handle_join(
 }
 
 impl crate::store::AppStore {
-    pub(crate) fn dispatch_area(&mut self, action: crate::actions::area::AreaAction) -> Result<Vec<Tag>> {
+    pub(crate) fn dispatch_area(
+        &mut self,
+        action: crate::actions::area::AreaAction,
+    ) -> Result<Vec<Tag>> {
         use crate::actions::area::AreaAction;
 
         match action {

@@ -2,45 +2,60 @@
 //! 并返回 tag；手柄模型重建/钳制预览（preview_handles）由投影（projection.rs）完成。
 
 use super::GraphEditorState;
-use super::curve_math::{clamp_handle_own_side, apply_handle_mode};
+use super::curve_math::{apply_handle_mode, clamp_handle_own_side};
 use crate::bridge::types::{SlintHandleDragMode, SlintSelectionModifier};
 use crate::depsgraph::{HandleLoc, Tag};
 
 impl GraphEditorState {
     /// 控制柄按下：none=单选，shift=同通道同侧区间扩展，ctrl=切换。
     /// 锁定通道不可交互。只改 selected_handles 数据，返回选中变化 tag。
-    pub fn handle_pressed(&mut self, curve: usize, key: usize, is_in: bool, modifier: SlintSelectionModifier) -> Vec<Tag> {
+    pub fn handle_pressed(
+        &mut self,
+        curve: usize,
+        key: usize,
+        is_in: bool,
+        modifier: SlintSelectionModifier,
+    ) -> Vec<Tag> {
         if !self.channel_editable(curve) {
             return Vec::new();
         }
-        let key_in_sel = self.selected_handles.contains(&HandleLoc { curve, key, is_in });
+        let key_in_sel = self
+            .selected_handles
+            .contains(&HandleLoc { curve, key, is_in });
         match modifier {
             SlintSelectionModifier::Shift => {
-                let anchor = self
-                    .handle_selection_anchor
-                    .unwrap_or(HandleLoc { curve, key, is_in });
+                let anchor =
+                    self.handle_selection_anchor
+                        .unwrap_or(HandleLoc { curve, key, is_in });
                 let (lo, hi) = if anchor.curve == curve && anchor.is_in == is_in {
                     (anchor.key.min(key), anchor.key.max(key))
                 } else {
                     (key, key)
                 };
                 for index in lo..=hi {
-                    self.selected_handles.insert(HandleLoc { curve, key: index, is_in });
+                    self.selected_handles.insert(HandleLoc {
+                        curve,
+                        key: index,
+                        is_in,
+                    });
                 }
                 self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
             }
             SlintSelectionModifier::Ctrl => {
                 if key_in_sel {
-                    self.selected_handles.remove(&HandleLoc { curve, key, is_in });
+                    self.selected_handles
+                        .remove(&HandleLoc { curve, key, is_in });
                 } else {
-                    self.selected_handles.insert(HandleLoc { curve, key, is_in });
+                    self.selected_handles
+                        .insert(HandleLoc { curve, key, is_in });
                 }
             }
             SlintSelectionModifier::None => {
                 self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
                 if !key_in_sel {
                     self.deselect_all();
-                    self.selected_handles.insert(HandleLoc { curve, key, is_in });
+                    self.selected_handles
+                        .insert(HandleLoc { curve, key, is_in });
                 }
             }
         }
@@ -144,13 +159,24 @@ impl GraphEditorState {
         let mut curves: Vec<usize> = vec![curve];
         let mut handle_preview: Vec<HandleLoc> = vec![
             HandleLoc { curve, key, is_in },
-            HandleLoc { curve, key, is_in: !is_in },
+            HandleLoc {
+                curve,
+                key,
+                is_in: !is_in,
+            },
         ];
         for &loc in &synchronized_handles {
             if !curves.contains(&loc.curve) {
                 curves.push(loc.curve);
             }
-            for loc in [loc, HandleLoc { curve: loc.curve, key: loc.key, is_in: !loc.is_in }] {
+            for loc in [
+                loc,
+                HandleLoc {
+                    curve: loc.curve,
+                    key: loc.key,
+                    is_in: !loc.is_in,
+                },
+            ] {
                 if !handle_preview.contains(&loc) {
                     handle_preview.push(loc);
                 }
@@ -166,14 +192,21 @@ impl GraphEditorState {
     }
 
     /// 控制柄松开。moved=true 表示发生过拖拽（保持多选）；false 为单击 → 折叠为单选该手柄。
-    pub fn handle_released(&mut self, curve: usize, key: usize, is_in: bool, moved: bool) -> Vec<Tag> {
+    pub fn handle_released(
+        &mut self,
+        curve: usize,
+        key: usize,
+        is_in: bool,
+        moved: bool,
+    ) -> Vec<Tag> {
         let mut summary_ms = Vec::new();
         if !moved {
             // 单击已选中的手柄：折叠为单选
             for ms in self.deselect_all() {
                 summary_ms.push(ms);
             }
-            self.selected_handles.insert(HandleLoc { curve, key, is_in });
+            self.selected_handles
+                .insert(HandleLoc { curve, key, is_in });
         }
         // 手柄拖拽结束不打 AnimationDragEnded：补柄（ensure_default_handles）只适用于
         // 关键帧拖拽改变边缘性的场景；手柄可能被故意钳到 0 长度，不该被覆盖。

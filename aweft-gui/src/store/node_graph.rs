@@ -17,14 +17,16 @@ use aweft_model::{
     application_graph::{ApplicationGraph, ApplicationNodeKind},
     ids::{NodeGraphId, NodeId, SocketId},
     node_graph::{
-        error::EvalError, ColorRole, Link, Node, NodeGraph, NodeGraphKind, NodeKind, NodeTreeType,
-        Socket, SocketDecl, SocketType, SocketValue, StyleOpKind, VecOpKind,
+        ColorRole, Link, Node, NodeGraph, NodeGraphKind, NodeKind, NodeTreeType, Socket,
+        SocketDecl, SocketType, SocketValue, StyleOpKind, VecOpKind, error::EvalError,
     },
 };
 use slint::{Color, Model, ModelNotify, ModelRc, ModelTracker, SharedString, VecModel};
 
 use crate::{
-    bridge::types::{ContextMenuItem, GraphLink, GraphNode, NodeSocketData, NodeSocketType, SocketHit},
+    bridge::types::{
+        ContextMenuItem, GraphLink, GraphNode, NodeSocketData, NodeSocketType, SocketHit,
+    },
     store::AppStore,
 };
 
@@ -32,9 +34,9 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EditorMetrics {
-    pub header: f32, // 节点标题栏高度
-    pub row: f32,    // 端口行高
-    pub radius: f32, // 端口命中半径（= socket-size）
+    pub header: f32,     // 节点标题栏高度
+    pub row: f32,        // 端口行高
+    pub radius: f32,     // 端口命中半径（= socket-size）
     pub node_width: f32, // 节点宽度（输出端口中心判定用）
 }
 
@@ -358,10 +360,14 @@ impl NodeGraphState {
             .links()
             .iter()
             .filter_map(|link| {
-                let from_index =
-                    self.order.iter().position(|&node_id| node_id == graph.socket(link.from).node)?;
-                let to_index =
-                    self.order.iter().position(|&node_id| node_id == graph.socket(link.to).node)?;
+                let from_index = self
+                    .order
+                    .iter()
+                    .position(|&node_id| node_id == graph.socket(link.from).node)?;
+                let to_index = self
+                    .order
+                    .iter()
+                    .position(|&node_id| node_id == graph.socket(link.to).node)?;
                 // 端口下标 = 列内 row：from 是输出列内下标，to 是输入列内下标
                 let from_socket = G::outputs(graph.node(self.order[from_index]))
                     .iter()
@@ -383,7 +389,8 @@ impl NodeGraphState {
     /// 全量重建快照（初始化/切链用）：更新 order + 布局位置 + 节点/连线快照。
     /// 运行期精确更新走 `apply_change`，此处仅限切链/初始化。
     pub fn rebuild<G: GraphEditable>(&mut self, graph: &G) {
-        self.order.retain(|node_id| graph.nodes().contains_key(node_id));
+        self.order
+            .retain(|node_id| graph.nodes().contains_key(node_id));
         for node_id in graph.nodes().keys() {
             if !self.order.contains(node_id) {
                 self.order.push(*node_id);
@@ -413,10 +420,17 @@ impl NodeGraphState {
     /// 应用一次精确变更（投影 op 调用）：按 change 局部更新快照 + notify。
     /// 节点增删走 row_added/row_removed 精确；连线变化重建连线 + 受影响节点行；
     /// 端口值变化单行更新；切链全量重建。
-    pub fn apply_change<G: GraphEditable>(&mut self, graph: &G, change: &crate::depsgraph::NodeGraphChange) {
+    pub fn apply_change<G: GraphEditable>(
+        &mut self,
+        graph: &G,
+        change: &crate::depsgraph::NodeGraphChange,
+    ) {
         use crate::depsgraph::NodeGraphChange;
         match change {
-            NodeGraphChange::NodesInserted { node_ids, positions } => {
+            NodeGraphChange::NodesInserted {
+                node_ids,
+                positions,
+            } => {
                 for &node_id in node_ids {
                     if let Some(&pos) = positions.get(&node_id) {
                         self.positions.insert(node_id, pos);
@@ -449,8 +463,9 @@ impl NodeGraphState {
                 let old: Vec<GraphLink> = (0..self.links.row_count())
                     .map(|i| self.links.row_data(i).unwrap())
                     .collect();
-                let to_remove: Vec<usize> =
-                    (0..old.len()).filter(|&i| !new_links.contains(&old[i])).collect();
+                let to_remove: Vec<usize> = (0..old.len())
+                    .filter(|&i| !new_links.contains(&old[i]))
+                    .collect();
                 for &i in to_remove.iter().rev() {
                     self.links.remove(i);
                 }
@@ -718,7 +733,11 @@ pub trait GraphEditable: Sized {
         value: Option<SocketValue>,
     ) -> Result<(), EvalError>;
     /// 原位改引用节点的引用链（仅改 kind 内嵌 id，不删节点）。
-    fn graph_set_reference(&mut self, node_id: NodeId, new_id: NodeGraphId) -> Result<(), EvalError>;
+    fn graph_set_reference(
+        &mut self,
+        node_id: NodeId,
+        new_id: NodeGraphId,
+    ) -> Result<(), EvalError>;
     /// 节点显示名
     fn title(&self, n: &Self::Node) -> &'static str;
     fn inputs(n: &Self::Node) -> &[SocketId];
@@ -866,7 +885,10 @@ pub fn new_style_chain(name: impl Into<String>) -> NodeGraph {
         .add_node::<NodeId>(NodeKind::GroupOutput, &[], &[])
         .unwrap();
     graph
-        .connect_raw(graph.nodes[&source].outputs[0], graph.nodes[&output].inputs[0])
+        .connect_raw(
+            graph.nodes[&source].outputs[0],
+            graph.nodes[&output].inputs[0],
+        )
         .unwrap();
     graph
 }
@@ -898,7 +920,10 @@ pub fn new_app_chain(
         )
         .unwrap();
     graph
-        .connect_raw(graph.nodes[&context].outputs[0], graph.nodes[&matcher].inputs[0])
+        .connect_raw(
+            graph.nodes[&context].outputs[0],
+            graph.nodes[&matcher].inputs[0],
+        )
         .unwrap();
     // 匹配角色的 pattern（第 1 输入）默认角色（实际连接数据，非硬编码预设）
     if let Some(actor) = default_actor {
@@ -910,7 +935,10 @@ pub fn new_app_chain(
             .unwrap();
     }
     graph
-        .connect_raw(graph.nodes[&matcher].outputs[0], graph.nodes[&apply].inputs[1])
+        .connect_raw(
+            graph.nodes[&matcher].outputs[0],
+            graph.nodes[&apply].inputs[1],
+        )
         .unwrap();
     if let Some(style_id) = style_ref {
         let app_ref = graph
@@ -921,11 +949,17 @@ pub fn new_app_chain(
             )
             .unwrap();
         graph
-            .connect_raw(graph.nodes[&app_ref].outputs[0], graph.nodes[&apply].inputs[0])
+            .connect_raw(
+                graph.nodes[&app_ref].outputs[0],
+                graph.nodes[&apply].inputs[0],
+            )
             .unwrap();
     }
     graph
-        .connect_raw(graph.nodes[&apply].outputs[0], graph.nodes[&output].inputs[0])
+        .connect_raw(
+            graph.nodes[&apply].outputs[0],
+            graph.nodes[&output].inputs[0],
+        )
         .unwrap();
     graph
 }
@@ -948,7 +982,11 @@ pub fn add_node<G: GraphEditable>(
 }
 
 /// 删除节点（自动断开相关连线）。只改权威图，不 sync。
-pub fn delete_node<G: GraphEditable>(graph: &mut G, editor: &mut NodeGraphState, index: usize) -> Option<NodeId> {
+pub fn delete_node<G: GraphEditable>(
+    graph: &mut G,
+    editor: &mut NodeGraphState,
+    index: usize,
+) -> Option<NodeId> {
     let node_id = editor.id_at(index)?;
     graph.graph_delete(node_id);
     editor.positions.remove(&node_id);
@@ -997,7 +1035,8 @@ pub fn find_drop_socket<G: GraphEditable>(
                 continue;
             }
             // 输入列内 row = input_row（输入列从节点顶部独立排）
-            let center_y = node_y + editor.metrics.header
+            let center_y = node_y
+                + editor.metrics.header
                 + input_row as f32 * editor.metrics.row
                 + editor.metrics.row / 2.0;
             let dx = x - node_x;
@@ -1099,7 +1138,9 @@ fn target_socket<G: GraphEditable>(
     }
     let node_id = editor.id_at(hit.node as usize)?;
     // hit.socket 为输入端口组合下标（输入在前，等于 inputs 内下标）
-    G::inputs(graph.node(node_id)).get(hit.socket as usize).copied()
+    G::inputs(graph.node(node_id))
+        .get(hit.socket as usize)
+        .copied()
 }
 
 // ── 类型转换 ──────────────────────────────────────────────────────────────────
@@ -1167,12 +1208,15 @@ impl<'a> GraphEditorAccess<'a> {
     ) -> Option<NodeId> {
         match self {
             Self::Style(g) => {
-                let kind =
-                    crate::actions::node_graph::style_templates().get(template_index).cloned()?;
+                let kind = crate::actions::node_graph::style_templates()
+                    .get(template_index)
+                    .cloned()?;
                 add_node(g, editor, kind, x, y)
             }
             Self::App(g) => {
-                let kind = crate::actions::node_graph::app_templates().get(template_index).cloned()?;
+                let kind = crate::actions::node_graph::app_templates()
+                    .get(template_index)
+                    .cloned()?;
                 add_node(g, editor, kind, x, y)
             }
         }
@@ -1202,9 +1246,7 @@ impl<'a> GraphEditorAccess<'a> {
             Self::Style(g) => {
                 socket_drag_ended(g, editor, node_index, socket_index, is_input, x, y)
             }
-            Self::App(g) => {
-                socket_drag_ended(g, editor, node_index, socket_index, is_input, x, y)
-            }
+            Self::App(g) => socket_drag_ended(g, editor, node_index, socket_index, is_input, x, y),
         }
     }
 
@@ -1327,16 +1369,24 @@ impl AppStore {
     ) -> Option<R> {
         match kind {
             NodeGraphKind::Style => {
-                let AppStore { state, ui_models, .. } = self;
+                let AppStore {
+                    state, ui_models, ..
+                } = self;
                 let editor = &mut ui_models.style_graph;
                 let id = *editor.style_order.get(editor.current_chain)?;
                 let graph = state.project.library.node_graphs.get_mut(&id)?;
                 Some(f(editor, GraphEditorAccess::Style(graph)))
             }
             NodeGraphKind::App => {
-                let AppStore { state, ui_models, .. } = self;
+                let AppStore {
+                    state, ui_models, ..
+                } = self;
                 let editor = &mut ui_models.app_graph;
-                let graph = state.project.style_layer.graphs.get_mut(editor.current_chain)?;
+                let graph = state
+                    .project
+                    .style_layer
+                    .graphs
+                    .get_mut(editor.current_chain)?;
                 Some(f(editor, GraphEditorAccess::App(graph)))
             }
         }
@@ -1350,14 +1400,18 @@ impl AppStore {
     ) -> Option<R> {
         match kind {
             NodeGraphKind::Style => {
-                let AppStore { state, ui_models, .. } = self;
+                let AppStore {
+                    state, ui_models, ..
+                } = self;
                 let editor = &ui_models.style_graph;
                 let id = *editor.style_order.get(editor.current_chain)?;
                 let graph = state.project.library.node_graphs.get(&id)?;
                 Some(f(editor, GraphEditorAccessRo::Style(graph)))
             }
             NodeGraphKind::App => {
-                let AppStore { state, ui_models, .. } = self;
+                let AppStore {
+                    state, ui_models, ..
+                } = self;
                 let editor = &ui_models.app_graph;
                 let graph = state.project.style_layer.graphs.get(editor.current_chain)?;
                 Some(f(editor, GraphEditorAccessRo::App(graph)))
@@ -1367,18 +1421,16 @@ impl AppStore {
 
     /// 端口命中（本地坐标）：C1 修复的 Rust 侧实现，与 find_drop_socket 同源。
     pub fn find_socket_at(&self, kind: NodeGraphKind, node: usize, x: f32, y: f32) -> i32 {
-        self.with_graph_ro(kind, |editor, access| access.find_socket_at(editor, node, x, y))
-            .unwrap_or(-1)
+        self.with_graph_ro(kind, |editor, access| {
+            access.find_socket_at(editor, node, x, y)
+        })
+        .unwrap_or(-1)
     }
 
     pub fn set_node_position(&mut self, kind: NodeGraphKind, index: usize, x: f32, y: f32) {
         match kind {
-            NodeGraphKind::Style => {
-                self.ui_models.style_graph.set_node_position(index, x, y)
-            }
-            NodeGraphKind::App => {
-                self.ui_models.app_graph.set_node_position(index, x, y)
-            }
+            NodeGraphKind::Style => self.ui_models.style_graph.set_node_position(index, x, y),
+            NodeGraphKind::App => self.ui_models.app_graph.set_node_position(index, x, y),
         }
     }
 
@@ -1397,12 +1449,14 @@ impl AppStore {
         dtype: NodeSocketType,
     ) -> SocketHit {
         let want = socket_type_from_slint(dtype);
-        self.with_graph_ro(kind, |editor, access| access.find_drop_socket(editor, x, y, want))
-            .unwrap_or(SocketHit {
-                found: false,
-                node: 0,
-                socket: 0,
-            })
+        self.with_graph_ro(kind, |editor, access| {
+            access.find_drop_socket(editor, x, y, want)
+        })
+        .unwrap_or(SocketHit {
+            found: false,
+            node: 0,
+            socket: 0,
+        })
     }
 
     /// 加载指定链（切换当前编辑图）。
@@ -1426,7 +1480,10 @@ impl AppStore {
     pub fn initialize_node_graph_editors(&mut self, instance: &crate::bridge::types::MainWindow) {
         use slint::ComponentHandle;
 
-        let theme = instance.global::<crate::bridge::types::Theme>().get_data().node_editor;
+        let theme = instance
+            .global::<crate::bridge::types::Theme>()
+            .get_data()
+            .node_editor;
 
         // 编辑器几何量（端口命中/拖拽用）：从主题取，与 Slint 渲染一致。
         // 缺失则 find_socket_at 半径=0，拖端口端点会误判为「选中节点」。
@@ -1475,7 +1532,9 @@ impl AppStore {
 
         // 绑定全局
         let state = instance.global::<crate::bridge::types::NodeGraphState>();
-        state.set_style_chain_items(ModelRc::from(self.ui_models.style_graph.chain_items.clone()));
+        state.set_style_chain_items(ModelRc::from(
+            self.ui_models.style_graph.chain_items.clone(),
+        ));
         state.set_app_chain_items(ModelRc::from(self.ui_models.app_graph.chain_items.clone()));
         state.set_style_current_chain(0);
         state.set_app_current_chain(0);
@@ -1516,7 +1575,9 @@ pub fn delete_node_dispatch(
     node_index: usize,
 ) -> Option<NodeId> {
     store
-        .with_graph(graph_type, |editor, access| access.delete_node(editor, node_index))
+        .with_graph(graph_type, |editor, access| {
+            access.delete_node(editor, node_index)
+        })
         .flatten()
 }
 
@@ -1542,7 +1603,13 @@ pub fn menu_selected_dispatch(
     node_index: usize,
     menu_index: usize,
 ) {
-    let Some(style_id) = store.ui_models.style_graph.style_order.get(menu_index).copied() else {
+    let Some(style_id) = store
+        .ui_models
+        .style_graph
+        .style_order
+        .get(menu_index)
+        .copied()
+    else {
         return;
     };
     store.with_graph(graph_type, |editor, access| {
@@ -1578,8 +1645,8 @@ pub fn create_actor_dispatch(
     if name.is_empty() {
         return;
     }
-    use aweft_model::library::Actor;
     use aweft_model::ids::ActorId;
+    use aweft_model::library::Actor;
     store.state_mut().project.library.insert_actor(Actor {
         id: ActorId::new(),
         name: name.clone(),
@@ -1685,7 +1752,9 @@ impl AppStore {
 
     /// 派生样式链切换菜单（模型侧为 id-keyed map，显示顺序按名字排序，属 UI 数据）。
     pub(crate) fn refresh_style_chain_menu(&mut self) {
-        let AppStore { state, ui_models, .. } = self;
+        let AppStore {
+            state, ui_models, ..
+        } = self;
         let mut pairs: Vec<(NodeGraphId, String)> = state
             .project
             .library
@@ -1716,7 +1785,9 @@ impl AppStore {
 
     /// 派生应用链切换菜单（style_layer.graphs 本身为 Vec，即优先级序）。
     pub(crate) fn refresh_app_chain_menu(&mut self) {
-        let AppStore { state, ui_models, .. } = self;
+        let AppStore {
+            state, ui_models, ..
+        } = self;
         let items: Vec<ContextMenuItem> = state
             .project
             .style_layer
@@ -1810,7 +1881,11 @@ fn menu_dot_color_for(
     theme: &crate::bridge::types::NodeEditorTheme,
     decls: &(Vec<SocketDecl>, Vec<SocketDecl>),
 ) -> Color {
-    let ty = decls.1.first().or_else(|| decls.0.first()).map(|d| d.data_type);
+    let ty = decls
+        .1
+        .first()
+        .or_else(|| decls.0.first())
+        .map(|d| d.data_type);
     match ty {
         Some(SocketType::Float) => theme.socket_float_color,
         Some(SocketType::Text) => theme.socket_text_color,
@@ -1858,7 +1933,10 @@ mod tests {
                 in_idx += 1;
             }
         }
-        (nx, ny + st.metrics.header + row as f32 * st.metrics.row + st.metrics.row / 2.0)
+        (
+            nx,
+            ny + st.metrics.header + row as f32 * st.metrics.row + st.metrics.row / 2.0,
+        )
     }
 
     // 按标题查节点下标（自动布局顺序与插入序无关，用标题定位更稳）
@@ -2088,7 +2166,10 @@ mod tests {
         let cy = st.metrics.header + 4.0 * row_h + row_h / 2.0;
         assert_eq!(st.find_socket_at(&g, 0, 0.0, cy), 4);
         // 节点主体中间（非端口）：未命中
-        assert_eq!(st.find_socket_at(&g, 0, st.metrics.node_width / 2.0, cy), -1);
+        assert_eq!(
+            st.find_socket_at(&g, 0, st.metrics.node_width / 2.0, cy),
+            -1
+        );
         // 越界节点：-1
         assert_eq!(st.find_socket_at(&g, 99, 0.0, 0.0), -1);
     }

@@ -284,9 +284,7 @@ impl SubtitleRenderer {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT, // 只有片元着色器需要
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float {
-                            filterable: true,
-                        },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -404,7 +402,7 @@ impl SubtitleRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R8Unorm, // 存储单通道 Alpha
-            usage: 
+            usage:
                 // 可以作为写入目标
                 wgpu::TextureUsages::COPY_DST
                 // 可以从此纹理读取
@@ -416,16 +414,17 @@ impl SubtitleRenderer {
         // R8Unorm 格式，每个像素 1 字节
         let bytes_per_pixel = 1;
         let unaligned_bytes_per_row = atlas_size.width * bytes_per_pixel;
-        let aligned_bytes_per_row = wgpu::util::align_to(
-            unaligned_bytes_per_row,
-            wgpu::COPY_BYTES_PER_ROW_ALIGNMENT,
-        );
+        let aligned_bytes_per_row =
+            wgpu::util::align_to(unaligned_bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
 
         // 如果初始缓冲区不够大重新创建
-        let required_staging_size = (aligned_bytes_per_row * atlas_size.height) as wgpu::BufferAddress;
+        let required_staging_size =
+            (aligned_bytes_per_row * atlas_size.height) as wgpu::BufferAddress;
         if self.texture_staging_buffer_size < required_staging_size {
-            (self.texture_staging_buffer, self.texture_staging_buffer_size) =
-                Self::create_texture_staging_buffer(device, required_staging_size);
+            (
+                self.texture_staging_buffer,
+                self.texture_staging_buffer_size,
+            ) = Self::create_texture_staging_buffer(device, required_staging_size);
         }
 
         // 在 CPU 端准备一个包含所有图块数据的大型连续缓冲区（带对齐填充）
@@ -462,7 +461,6 @@ impl SubtitleRenderer {
 
         // 将整个 CPU 缓冲区的数据一次性写入 GPU 的暂存缓冲区
         queue.write_buffer(&self.texture_staging_buffer, 0, &atlas_cpu_buffer);
-
 
         // 非屏幕显示的渲染目标纹理
         let render_target_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -568,7 +566,7 @@ impl SubtitleRenderer {
             },
             atlas_size,
         );
-        
+
         // 更新投影矩阵到暂存区，并记录拷贝指令
         let projection_matrix = create_projection_matrix(box_width as f32, box_height as f32);
         queue.write_buffer(
@@ -603,7 +601,6 @@ impl SubtitleRenderer {
 
             render_pass.set_pipeline(&self.render_pipeline);
 
-
             // 设置绑定组和实例缓冲区
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_vertex_buffer(0, instance_buffer.slice(..));
@@ -621,8 +618,6 @@ impl SubtitleRenderer {
             height: box_height,
         })
     }
-
-
 }
 
 /// 创建一个将屏幕坐标 (左上角为 0,0) 映射到 WGPU 裁剪空间 ([-1, 1]) 的正交投影矩阵。

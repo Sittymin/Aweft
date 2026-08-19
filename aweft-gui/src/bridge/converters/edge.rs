@@ -1,14 +1,14 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use slint::{Model, ModelRc, VecModel};
 
 use crate::bridge::slint_area_key_to_key;
 use crate::bridge::types::{
-    key_to_slint_key, ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData, SlintKey,
+    ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData, SlintKey, key_to_slint_key,
 };
 use crate::screen::edge::ScrEdgeKey;
 use crate::screen::vertex::ScrVertKey;
-use crate::store::state::AppState;
 use crate::store::AppStore;
+use crate::store::state::AppState;
 use std::collections::{HashMap, HashSet};
 
 /// 内部边数据结构，包含计算出的所有信息

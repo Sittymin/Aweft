@@ -10,7 +10,11 @@ use crate::depsgraph::Tag;
 
 impl GraphEditorState {
     /// 摄影表点击压缩视图中的一行：把显示行映射回真实通道下标再选中。
-    pub fn dope_channel_pressed(&mut self, view_row: usize, modifier: SlintSelectionModifier) -> Vec<Tag> {
+    pub fn dope_channel_pressed(
+        &mut self,
+        view_row: usize,
+        modifier: SlintSelectionModifier,
+    ) -> Vec<Tag> {
         let real = self
             .dope_filter
             .row_data(view_row)
@@ -21,11 +25,17 @@ impl GraphEditorState {
 
     /// 通道是否可编辑（锁）。
     pub(crate) fn channel_editable(&self, curve: usize) -> bool {
-        self.channels_data.get(curve).map(|c| c.editable).unwrap_or(false)
+        self.channels_data
+            .get(curve)
+            .map(|c| c.editable)
+            .unwrap_or(false)
     }
 
     pub(crate) fn channel_selected(&self, curve: usize) -> bool {
-        self.channels_data.get(curve).map(|c| c.selected).unwrap_or(false)
+        self.channels_data
+            .get(curve)
+            .map(|c| c.selected)
+            .unwrap_or(false)
     }
 
     /// 设置通道选中（数据层；channels 模型行由投影同步）。
@@ -46,20 +56,28 @@ impl GraphEditorState {
 
     /// 通道/曲线按下：none=普通，shift=区间选择，ctrl=切换。
     /// 只改数据层，返回选中变化 tag。
-    pub(crate) fn channel_pressed(&mut self, curve: usize, modifier: SlintSelectionModifier) -> Vec<Tag> {
+    pub(crate) fn channel_pressed(
+        &mut self,
+        curve: usize,
+        modifier: SlintSelectionModifier,
+    ) -> Vec<Tag> {
         if curve >= self.channels_data.len() {
-            warn!("channel_pressed: 通道下标 {} 超出范围 ({})", curve, self.channels_data.len());
+            warn!(
+                "channel_pressed: 通道下标 {} 超出范围 ({})",
+                curve,
+                self.channels_data.len()
+            );
             return Vec::new();
         }
         match modifier {
             // Shift：从锚点（最近一次普通/Shift 点击）到当前通道全选中，其余保留
             SlintSelectionModifier::Shift => {
-                let anchor = if (0..self.channels_data.len() as isize).contains(&self.selection_anchor)
-                {
-                    self.selection_anchor
-                } else {
-                    curve as isize
-                };
+                let anchor =
+                    if (0..self.channels_data.len() as isize).contains(&self.selection_anchor) {
+                        self.selection_anchor
+                    } else {
+                        curve as isize
+                    };
                 let (lo, hi) = if anchor <= curve as isize {
                     (anchor, curve as isize)
                 } else {
