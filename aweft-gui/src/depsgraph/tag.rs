@@ -42,6 +42,36 @@ pub struct SummaryDrag {
     pub delta_time: f32,
 }
 
+/// NLA 片断定位：(权威轨道下标, 片断下标)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NlaStripRef {
+    pub track: usize,
+    pub index: usize,
+}
+
+/// NLA 片断跨轨移动：源轨 → 目标轨（投影按 start 排序插入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NlaStripMove {
+    pub src_track: usize,
+    pub src_index: usize,
+    pub dst_track: usize,
+}
+
+/// NLA 片断同轨重排：水平穿越后按 start 排序（投影 remove 旧下标 + insert 新下标）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NlaStripReorder {
+    pub track: usize,
+    pub old_index: usize,
+    pub new_index: usize,
+}
+
+/// NLA 片断插入：向轨道插入一个新片断（"向下插入"到已有轨道，row_added）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NlaStripInsert {
+    pub track: usize,
+    pub index: usize,
+}
+
 /// 节点图一次变更的精确描述（投影据此精确定位局部更新）。
 #[derive(Debug, Clone)]
 pub enum NodeGraphChange {
@@ -51,9 +81,7 @@ pub enum NodeGraphChange {
         positions: std::collections::HashMap<NodeId, (f32, f32)>,
     },
     /// 删除节点（投影移除行 + row_removed + 连线重映射）。
-    NodesRemoved {
-        node_ids: Vec<NodeId>,
-    },
+    NodesRemoved { node_ids: Vec<NodeId> },
     /// 连线增删/重连（投影更新受影响节点的 connected 标记 + 连线模型）。
     LinksChanged {
         /// connected 标记发生变化的节点（连线的两端点），投影只 row_changed 这些行。
@@ -65,13 +93,9 @@ pub enum NodeGraphChange {
         socket_id: SocketId,
     },
     /// 引用节点换引用链（原位改值，投影重建该节点一行：menu_selected/端口）。
-    ReferenceChanged {
-        node_id: NodeId,
-    },
+    ReferenceChanged { node_id: NodeId },
     /// 新建链后切到它（投影：派生链菜单 + 设当前链 + 全量重建快照）。`target` 为目标链下标。
-    ChainSwitched {
-        target: usize,
-    },
+    ChainSwitched { target: usize },
 }
 
 impl NodeGraphChange {
@@ -243,6 +267,45 @@ pub enum Tag {
     /// 动画编辑器：标量变化（播放头/当前通道/选中数/插值聚合）。
     /// 投影只同步 Slint 全局标量。
     AnimationScalarsChanged,
+    /// NLA 编辑器：需要重建过滤派生视图的变化（装载/搜索）。
+    /// 投影全量重建派生层（tracks/strip_models/过滤视图重新绑定）。
+    NlaStructureChanged,
+    /// NLA 编辑器：片断选中变化（单选/多选/清空）。
+    /// 投影只更新选中态（`set_row_data` 选中列），不重排结构。
+    NlaSelectionChanged {
+        /// 本次选中的片断（选中态翻转/置位）。
+        updated: Vec<NlaStripRef>,
+        /// 是否先清空全部选中（单选模式）。
+        deselect_all: bool,
+    },
+    /// NLA 编辑器：片断位置/拖拽值变化（start/end/dragging）。
+    /// 投影就地 `set_row_data`（保住 grab）。
+    NlaStripPositionChanged {
+        /// 位置发生变化的片断。
+        updated: Vec<NlaStripRef>,
+    },
+    /// NLA 编辑器：片断结构变化（跨轨移动/同轨重排/插入）。
+    /// 投影精确 remove+insert（row_added/removed，存量复用）。
+    NlaStripStructureChanged {
+        /// 跨轨移动（remove 源轨 + 按 start 排序插入目标轨）。
+        moved: Vec<NlaStripMove>,
+        /// 同轨重排（水平穿越后按 start 排序：remove 旧下标 + insert 新下标）。
+        reordered: Vec<NlaStripReorder>,
+        /// 新增片断（向已有轨道插入一个片断，row_added）。
+        inserted: Vec<NlaStripInsert>,
+    },
+    /// NLA 编辑器：轨道行级属性变化（启用/锁定开关）。
+    /// 投影只更新该轨道行 + 过滤视图对应行（`set_row_data`，不重建）。
+    NlaTrackChanged {
+        /// 权威轨道下标。
+        track: usize,
+    },
+    /// NLA 编辑器：新建轨道（"向下插入"放不下时新建）。
+    /// 投影局部插入轨道行（row_added）+ 新片断模型 + 过滤视图对应行（按匹配），不重建存量。
+    NlaTrackAdded {
+        /// 权威轨道下标（追加到末尾，orig_index 不变）。
+        track: usize,
+    },
 
     // ── NodeGraph ─────────────────────────────────────────────────────
     /// 节点图结构/值变化（携带精确操作信息，投影据此局部更新）。
@@ -290,6 +353,18 @@ pub enum TagKind {
     AnimationChannel,
     /// 动画编辑器：标量变化。
     AnimationScalars,
+    /// NLA 编辑器：结构（装载/搜索过滤视图重建）。
+    NlaStructure,
+    /// NLA 编辑器：片断选中变化。
+    NlaSelection,
+    /// NLA 编辑器：片断位置值变化（拖拽）。
+    NlaStripPosition,
+    /// NLA 编辑器：片断结构变化（移动/重排/插入）。
+    NlaStripStructure,
+    /// NLA 编辑器：轨道属性行更新（启用/锁定，set_row_data）。
+    NlaTrackProperties,
+    /// NLA 编辑器：轨道结构新增（row_added）。
+    NlaTrackStructure,
     /// 节点图：结构（节点增删）。
     NodeGraphStructure,
     /// 节点图：连线（增删/重连）。
@@ -340,6 +415,18 @@ pub enum OperationCode {
     AnimationChannel,
     /// 动画编辑器：标量同步到 Slint 全局。
     AnimationScalars,
+    /// NLA 编辑器：结构变化（装载/搜索）。
+    NlaStructure,
+    /// NLA 编辑器：片断选中变化。
+    NlaSelection,
+    /// NLA 编辑器：片断位置值变化（拖拽）。
+    NlaStripPosition,
+    /// NLA 编辑器：片断结构变化（移动/重排/插入）。
+    NlaStripStructure,
+    /// NLA 编辑器：轨道属性行更新（启用/锁定）。
+    NlaTrackProperties,
+    /// NLA 编辑器：轨道结构新增（row_added）。
+    NlaTrackAdded,
 }
 
 impl Tag {
@@ -377,7 +464,13 @@ impl Tag {
             | Tag::AnimationSelectionChanged { .. }
             | Tag::AnimationDragEnded
             | Tag::AnimationChannelChanged { .. }
-            | Tag::AnimationScalarsChanged => DataId::Animation,
+            | Tag::AnimationScalarsChanged
+            | Tag::NlaStructureChanged
+            | Tag::NlaSelectionChanged { .. }
+            | Tag::NlaStripPositionChanged { .. }
+            | Tag::NlaStripStructureChanged { .. }
+            | Tag::NlaTrackChanged { .. }
+            | Tag::NlaTrackAdded { .. } => DataId::Animation,
 
             Tag::NodeGraph { .. } => DataId::NodeGraph,
         }
@@ -425,14 +518,20 @@ impl Tag {
             Tag::AnimationChannelChanged { .. } => TagKind::AnimationChannel,
             Tag::AnimationScalarsChanged => TagKind::AnimationScalars,
 
+            Tag::NlaStructureChanged => TagKind::NlaStructure,
+            Tag::NlaSelectionChanged { .. } => TagKind::NlaSelection,
+            Tag::NlaStripPositionChanged { .. } => TagKind::NlaStripPosition,
+            Tag::NlaStripStructureChanged { .. } => TagKind::NlaStripStructure,
+            Tag::NlaTrackChanged { .. } => TagKind::NlaTrackProperties,
+            Tag::NlaTrackAdded { .. } => TagKind::NlaTrackStructure,
+
             Tag::NodeGraph { change, .. } => match change {
                 NodeGraphChange::NodesInserted { .. } | NodeGraphChange::NodesRemoved { .. } => {
                     TagKind::NodeGraphStructure
                 }
                 NodeGraphChange::LinksChanged { .. } => TagKind::NodeGraphLinks,
-                NodeGraphChange::SocketValueChanged { .. } | NodeGraphChange::ReferenceChanged { .. } => {
-                    TagKind::NodeGraphSocket
-                }
+                NodeGraphChange::SocketValueChanged { .. }
+                | NodeGraphChange::ReferenceChanged { .. } => TagKind::NodeGraphSocket,
                 NodeGraphChange::ChainSwitched { .. } => TagKind::NodeGraphChain,
             },
         }

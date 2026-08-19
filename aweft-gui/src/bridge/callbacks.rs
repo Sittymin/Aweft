@@ -1,5 +1,5 @@
 use crate::actions::line_editor::LineEditorAction;
-use crate::actions::{area::AreaAction, Action};
+use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, LineEditorCallbacks, MainWindow,
     NodeGraphCallbacks,
@@ -36,6 +36,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_line_editor_ungroup_callbacks(instance, Rc::clone(&store));
     setup_node_graph_callbacks(instance, Rc::clone(&store));
     setup_animation_callbacks(instance, Rc::clone(&store));
+    setup_nla_callbacks(instance, Rc::clone(&store));
 }
 
 /// 设置节点图编辑器回调：图操作走 `Action::NodeGraph` → dispatch → tag → 投影。
@@ -53,20 +54,20 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
     };
 
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_socket_at(
-        move |graph_type, node_index, x, y| {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_socket_at(move |graph_type, node_index, x, y| {
             s.borrow()
                 .find_socket_at(graph_type_of(graph_type), node_index as usize, x, y)
-        },
-    );
+        });
 
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_node_dragged(
-        move |graph_type, node_index, x, y| {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_node_dragged(move |graph_type, node_index, x, y| {
             s.borrow_mut()
                 .set_node_position(graph_type_of(graph_type), node_index as usize, x, y);
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
@@ -91,26 +92,26 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_delete_node(
-        move |graph_type, node_index| {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_delete_node(move |graph_type, node_index| {
             let action = Action::NodeGraph(NodeGraphAction::DeleteNode {
                 graph_type: graph_type_of(graph_type),
                 node_index: node_index as usize,
             });
             dispatch_and_render(&s, action, &weak);
-        },
-    );
+        });
 
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_find_link_for_input(
-        move |graph_type, node_index, socket_index| -> i32 {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_find_link_for_input(move |graph_type, node_index, socket_index| -> i32 {
             s.borrow().find_link_for_input(
                 graph_type_of(graph_type),
                 node_index as usize,
                 socket_index as usize,
             )
-        },
-    );
+        });
 
     let s = Rc::clone(&store);
     instance.global::<NodeGraphCallbacks>().on_find_drop_socket(
@@ -122,31 +123,35 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_socket_drag_ended(
-        move |graph_type, node_index, socket_index, is_input, x, y| {
-            let action = Action::NodeGraph(NodeGraphAction::SocketDragEnded {
-                graph_type: graph_type_of(graph_type),
-                node_index: node_index as usize,
-                socket_index: socket_index as usize,
-                is_input,
-                x,
-                y,
-            });
-            dispatch_and_render(&s, action, &weak);
-        },
-    );
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_socket_drag_ended(
+            move |graph_type, node_index, socket_index, is_input, x, y| {
+                let action = Action::NodeGraph(NodeGraphAction::SocketDragEnded {
+                    graph_type: graph_type_of(graph_type),
+                    node_index: node_index as usize,
+                    socket_index: socket_index as usize,
+                    is_input,
+                    x,
+                    y,
+                });
+                dispatch_and_render(&s, action, &weak);
+            },
+        );
 
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_load_chain(
-        move |graph_type, index| {
-            s.borrow_mut().load_chain(graph_type_of(graph_type), index as usize);
-        },
-    );
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_load_chain(move |graph_type, index| {
+            s.borrow_mut()
+                .load_chain(graph_type_of(graph_type), index as usize);
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_new_chain(
-        move |graph_type| -> i32 {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_new_chain(move |graph_type| -> i32 {
             let action = Action::NodeGraph(NodeGraphAction::NewChain {
                 graph_type: graph_type_of(graph_type),
             });
@@ -154,14 +159,11 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
             // 投影已刷新链菜单：新链在菜单末尾
             let store_ref = s.borrow();
             let count = match graph_type {
-                GraphType::StyleGraph => {
-                    store_ref.ui_models().style_graph.chain_items.row_count()
-                }
+                GraphType::StyleGraph => store_ref.ui_models().style_graph.chain_items.row_count(),
                 GraphType::AppGraph => store_ref.ui_models().app_graph.chain_items.row_count(),
             };
             (count as i32) - 1
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
@@ -178,8 +180,9 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_socket_option_selected(
-        move |graph_type, node_index, socket_row, option_index| {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_socket_option_selected(move |graph_type, node_index, socket_row, option_index| {
             let action = Action::NodeGraph(NodeGraphAction::SocketOptionSelected {
                 graph_type: graph_type_of(graph_type),
                 node_index: node_index as usize,
@@ -187,8 +190,7 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
                 option_index: option_index as usize,
             });
             dispatch_and_render(&s, action, &weak);
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
@@ -206,8 +208,9 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<NodeGraphCallbacks>().on_socket_input_changed(
-        move |graph_type, node_index, socket_row, text| {
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_socket_input_changed(move |graph_type, node_index, socket_row, text| {
             let action = Action::NodeGraph(NodeGraphAction::SocketInputChanged {
                 graph_type: graph_type_of(graph_type),
                 node_index: node_index as usize,
@@ -215,8 +218,7 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
                 text: text.to_string(),
             });
             dispatch_and_render(&s, action, &weak);
-        },
-    );
+        });
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式
@@ -639,19 +641,16 @@ fn setup_line_editor_selection_callbacks(instance: &MainWindow, store: Rc<RefCel
     use aweft_model::ids::ItemId;
     let weak_instance = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<LineEditorCallbacks>().on_select_row(
-        move |item_id_str, modifier| {
+    instance
+        .global::<LineEditorCallbacks>()
+        .on_select_row(move |item_id_str, modifier| {
             let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
                 warn!("无效的 item_id: {}", item_id_str);
                 return;
             };
-            let action = Action::LineEditor(LineEditorAction::SelectRow {
-                item_id,
-                modifier,
-            });
+            let action = Action::LineEditor(LineEditorAction::SelectRow { item_id, modifier });
             dispatch_and_render(&s, action, &weak_instance);
-        },
-    );
+        });
 }
 
 fn setup_line_editor_add_line_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -813,8 +812,9 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_keyframe_pressed(
-        move |curve, key, modifier| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_keyframe_pressed(move |curve, key, modifier| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::KeyframePressed {
@@ -824,8 +824,7 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
@@ -847,8 +846,9 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_keyframe_released(
-        move |curve, key, moved| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_keyframe_released(move |curve, key, moved| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::KeyframeReleased {
@@ -858,18 +858,19 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_keyframe_deselect_all(move || {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::DeselectKeyframes),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_keyframe_deselect_all(move || {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DeselectKeyframes),
+                &weak,
+            );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
@@ -909,8 +910,9 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_handle_released(
-        move |curve, key, is_in, moved| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_handle_released(move |curve, key, is_in, moved| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::HandleReleased {
@@ -921,13 +923,13 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_graph_marquee_select(
-        move |x_lo, x_hi, y_lo, y_hi, modifier| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_graph_marquee_select(move |x_lo, x_hi, y_lo, y_hi, modifier| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::GraphMarqueeSelect {
@@ -939,74 +941,84 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_channel_pressed(move |curve, modifier| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ChannelPressed {
-                curve: curve as usize,
-                modifier,
-            }),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_channel_pressed(move |curve, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ChannelPressed {
+                    curve: curve as usize,
+                    modifier,
+                }),
+                &weak,
+            );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_channel_deselect_all(move || {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ChannelDeselectAll),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_channel_deselect_all(move || {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ChannelDeselectAll),
+                &weak,
+            );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_graph_search_changed(move |text| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::GraphSearchChanged {
-                text: text.to_string(),
-            }),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_graph_search_changed(move |text| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::GraphSearchChanged {
+                    text: text.to_string(),
+                }),
+                &weak,
+            );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_search_changed(move |text| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::DopeSearchChanged {
-                text: text.to_string(),
-            }),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_search_changed(move |text| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeSearchChanged {
+                    text: text.to_string(),
+                }),
+                &weak,
+            );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_channel_pressed(move |view_row, modifier| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::DopeChannelPressed {
-                view_row: view_row as usize,
-                modifier,
-            }),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_channel_pressed(move |view_row, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeChannelPressed {
+                    view_row: view_row as usize,
+                    modifier,
+                }),
+                &weak,
+            );
+        });
 
     // —— 摄影表（Dope Sheet）：关键帧（共用曲线编辑器数据/选中，拖拽只调时间） ——
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_keyframe_pressed(
-        move |curve, key, modifier| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_keyframe_pressed(move |curve, key, modifier| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeKeyframePressed {
@@ -1016,13 +1028,13 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_keyframe_dragged(
-        move |curve, key, delta_time| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_keyframe_dragged(move |curve, key, delta_time| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeKeyframeDragged {
@@ -1032,13 +1044,13 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_keyframe_released(
-        move |curve, key, moved| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_keyframe_released(move |curve, key, moved| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeKeyframeReleased {
@@ -1048,23 +1060,25 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_keyframe_deselect_all(move || {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::DopeKeyframeDeselectAll),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_keyframe_deselect_all(move || {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::DopeKeyframeDeselectAll),
+                &weak,
+            );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_marquee_select(
-        move |x_lo, x_hi, row_lo, row_hi, modifier| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_marquee_select(move |x_lo, x_hi, row_lo, row_hi, modifier| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeMarqueeSelect {
@@ -1076,14 +1090,14 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     // —— 摄影表：汇总条带（聚合所有通道同一时刻的关键帧；跨通道同步拖拽） ——
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_summary_pressed(
-        move |index, modifier| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_summary_pressed(move |index, modifier| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeSummaryPressed {
@@ -1092,13 +1106,13 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_summary_dragged(
-        move |index, delta_time| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_summary_dragged(move |index, delta_time| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeSummaryDragged {
@@ -1107,13 +1121,13 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_dope_summary_released(
-        move |index, moved| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_dope_summary_released(move |index, moved| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::DopeSummaryReleased {
@@ -1122,114 +1136,267 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_curve_color_mode_changed(move |curve, mode| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::CurveColorModeChanged {
-                curve: curve as usize,
-                mode,
-            }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_keyframe_interpolation_changed(move |interp| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::KeyframeInterpolationChanged {
-                interpolation: interp,
-            }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_channel_toggle_visible(move |curve| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ChannelToggleVisible {
-                curve: curve as usize,
-            }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_channel_toggle_modifier(move |curve| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ChannelToggleModifier {
-                curve: curve as usize,
-            }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_channel_toggle_active(move |curve| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ChannelToggleActive {
-                curve: curve as usize,
-            }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_channel_toggle_editable(move |curve| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ChannelToggleEditable {
-                curve: curve as usize,
-            }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_set_current_time(move |time| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::SetCurrentTime { time }),
-            &weak,
-        );
-    });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_view_changed(
-        move |zoom_x, zoom_y| {
+    instance
+        .global::<AnimationCallbacks>()
+        .on_curve_color_mode_changed(move |curve, mode| {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::ViewChanged {
-                    zoom_x,
-                    zoom_y,
+                Action::Animation(AnimationAction::CurveColorModeChanged {
+                    curve: curve as usize,
+                    mode,
                 }),
                 &weak,
             );
-        },
-    );
+        });
 
     let weak = instance.as_weak();
     let s = Rc::clone(&store);
-    instance.global::<AnimationCallbacks>().on_action_selected(move |index| {
-        dispatch_and_render(
-            &s,
-            Action::Animation(AnimationAction::ActionSelected { index }),
-            &weak,
-        );
-    });
+    instance
+        .global::<AnimationCallbacks>()
+        .on_keyframe_interpolation_changed(move |interp| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::KeyframeInterpolationChanged {
+                    interpolation: interp,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_channel_toggle_visible(move |curve| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ChannelToggleVisible {
+                    curve: curve as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_channel_toggle_modifier(move |curve| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ChannelToggleModifier {
+                    curve: curve as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_channel_toggle_active(move |curve| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ChannelToggleActive {
+                    curve: curve as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_channel_toggle_editable(move |curve| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ChannelToggleEditable {
+                    curve: curve as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_set_current_time(move |time| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::SetCurrentTime { time }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_view_changed(move |zoom_x, zoom_y| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ViewChanged { zoom_x, zoom_y }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_action_selected(move |index| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::ActionSelected { index }),
+                &weak,
+            );
+        });
+}
+
+/// 设置 NLA 编辑器回调：片断/轨道交互走 `Action::Nla` → dispatch → tag → 投影。
+/// 命中检测（`nla-strip-pick`）为同步查询（拖拽需要立即结果）+ 选中修改：
+/// 数据层就地更新后手动打 tag 并 evaluate（与 dispatch 同管线）。
+fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    use crate::actions::nla::NlaAction;
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_strip_pressed(move |track, strip, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Nla(NlaAction::StripPressed {
+                    track: track as usize,
+                    strip: strip as usize,
+                    modifier,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_strip_dragged(move |track, strip, delta_x, delta_row| {
+            dispatch_and_render(
+                &s,
+                Action::Nla(NlaAction::StripDragged {
+                    track: track as usize,
+                    strip: strip as usize,
+                    delta_x,
+                    delta_row,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_strip_released(move |track, strip| {
+            dispatch_and_render(
+                &s,
+                Action::Nla(NlaAction::StripReleased {
+                    track: track as usize,
+                    strip: strip as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_strip_deselect_all(move || {
+            dispatch_and_render(&s, Action::Nla(NlaAction::StripDeselectAll), &weak);
+        });
+
+    // 命中检测：纯命中（只读，不改数据层）→ 若命中则走标准 dispatch 管线选中并记录拖拽起点。
+    // 返回编码供画布判定拖拽起点（track*10000+strip），未命中 -1。
+    // 命中查询与 dispatch 分作用域，避免 RefCell 借用重叠。
+    let s = Rc::clone(&store);
+    let weak = instance.as_weak();
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_strip_pick(move |x, row, modifier| -> i32 {
+            let hit = {
+                let store_ref = s.borrow();
+                store_ref.ui_models.nla_editor.strip_hit_test(x, row)
+            };
+            if let Some((track, strip)) = hit {
+                dispatch_and_render(
+                    &s,
+                    Action::Nla(NlaAction::StripPressed {
+                        track,
+                        strip,
+                        modifier,
+                    }),
+                    &weak,
+                );
+                (track as i32) * 10000 + (strip as i32)
+            } else {
+                -1
+            }
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_track_toggle_enabled(move |track| {
+            dispatch_and_render(
+                &s,
+                Action::Nla(NlaAction::ToggleTrackEnabled {
+                    track: track as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_track_toggle_locked(move |track| {
+            dispatch_and_render(
+                &s,
+                Action::Nla(NlaAction::ToggleTrackLocked {
+                    track: track as usize,
+                }),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_track_push_down(move || {
+            dispatch_and_render(&s, Action::Nla(NlaAction::PushDown), &weak);
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_search_changed(move |text| {
+            dispatch_and_render(
+                &s,
+                Action::Nla(NlaAction::SearchChanged {
+                    text: text.to_string(),
+                }),
+                &weak,
+            );
+        });
 }

@@ -3,13 +3,14 @@ use slint::{Model, VecModel};
 use std::{collections::HashMap, rc::Rc};
 
 use crate::bridge::types::{
-    slint_area_key_to_key, ScrAreaData, ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData,
+    ScrAreaData, ScrEdgeTouchAreaData, ScrEdgeTouchAreaDisplayData, slint_area_key_to_key,
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
 use crate::store::graph_editor::GraphEditorState;
-use crate::store::node_graph::NodeGraphState;
 use crate::store::line_editor::LineEditorState;
+use crate::store::nla_editor::NlaEditorState;
+use crate::store::node_graph::NodeGraphState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
 pub struct UiModels {
@@ -20,6 +21,8 @@ pub struct UiModels {
     pub app_graph: NodeGraphState,
     /// 图编辑器（动画，Graph Editor）状态（通道/关键帧/段/手柄，自持 VecModels）
     pub graph_editor: GraphEditorState,
+    /// NLA 编辑器状态（轨道/片断，数据层 + 派生层）
+    pub nla_editor: NlaEditorState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -36,6 +39,7 @@ impl UiModels {
             style_graph: NodeGraphState::default(),
             app_graph: NodeGraphState::default(),
             graph_editor: GraphEditorState::default(),
+            nla_editor: NlaEditorState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),
@@ -184,7 +188,7 @@ impl UiModels {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bridge::types::{key_to_slint_key, SlintAreaType};
+    use crate::bridge::types::{SlintAreaType, key_to_slint_key};
 
     fn make_area(key: ScrAreaKey) -> ScrAreaData {
         ScrAreaData {

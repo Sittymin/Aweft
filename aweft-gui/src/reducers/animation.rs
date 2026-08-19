@@ -23,7 +23,11 @@ impl crate::store::AppStore {
         let tags = {
             let ce = &mut self.ui_models.graph_editor;
             match action {
-                KeyframePressed { curve, key, modifier } => ce.keyframe_pressed(curve, key, modifier),
+                KeyframePressed {
+                    curve,
+                    key,
+                    modifier,
+                } => ce.keyframe_pressed(curve, key, modifier),
                 KeyframeDragged {
                     curve,
                     key,
@@ -75,10 +79,20 @@ impl crate::store::AppStore {
                 ChannelDeselectAll => ce.deselect_channel(),
                 GraphSearchChanged { text } => ce.set_graph_search(&text),
                 DopeSearchChanged { text } => ce.set_dope_search(&text),
-                DopeChannelPressed { view_row, modifier } => ce.dope_channel_pressed(view_row, modifier),
+                DopeChannelPressed { view_row, modifier } => {
+                    ce.dope_channel_pressed(view_row, modifier)
+                }
                 // —— 摄影表（Dope Sheet）：与曲线编辑器共用数据/选中，拖拽只调时间 ——
-                DopeKeyframePressed { curve, key, modifier } => ce.keyframe_pressed(curve, key, modifier),
-                DopeKeyframeDragged { curve, key, delta_time } => {
+                DopeKeyframePressed {
+                    curve,
+                    key,
+                    modifier,
+                } => ce.keyframe_pressed(curve, key, modifier),
+                DopeKeyframeDragged {
+                    curve,
+                    key,
+                    delta_time,
+                } => {
                     // 与曲线编辑器同一条拖拽路径，值增量恒为 0（摄影表只有时间轴）
                     ce.keyframe_dragged(curve, key, delta_time, 0.0, SlintKeyframeDragMode::Move)
                 }
@@ -98,8 +112,12 @@ impl crate::store::AppStore {
                     row_hi,
                     modifier,
                 } => ce.dope_marquee_select(x_lo, x_hi, row_lo, row_hi, modifier),
-                DopeSummaryPressed { index, modifier } => ce.summary_keyframe_pressed(index, modifier),
-                DopeSummaryDragged { index, delta_time } => ce.summary_keyframe_dragged(index, delta_time),
+                DopeSummaryPressed { index, modifier } => {
+                    ce.summary_keyframe_pressed(index, modifier)
+                }
+                DopeSummaryDragged { index, delta_time } => {
+                    ce.summary_keyframe_dragged(index, delta_time)
+                }
                 DopeSummaryReleased { index, moved } => {
                     let tags = ce.summary_keyframe_released(index, moved);
                     self.write_view_to_model();
@@ -119,11 +137,13 @@ impl crate::store::AppStore {
                     ce.current_time = time as f64;
                     vec![Tag::AnimationScalarsChanged]
                 }
-                ViewChanged {
-                    zoom_x,
-                    zoom_y,
-                } => ce.set_view(zoom_x, zoom_y),
-                ActionSelected { index } => self.rebuild_view_from_model(index),
+                ViewChanged { zoom_x, zoom_y } => ce.set_view(zoom_x, zoom_y),
+                ActionSelected { index } => {
+                    let mut tags = self.rebuild_view_from_model(index);
+                    // 装载后同步 NLA 全局 Action 轨（名称/是否有数据）→ NlaTrackChanged 走投影局部更新
+                    tags.extend(self.sync_nla_global_action());
+                    tags
+                }
             }
         };
         Ok(tags)
@@ -172,7 +192,9 @@ impl crate::store::AppStore {
         else {
             return Vec::new();
         };
-        self.ui_models.graph_editor.load_action(index as usize, action)
+        self.ui_models
+            .graph_editor
+            .load_action(index as usize, action)
     }
 
     /// 把投影重建的过滤视图重新绑定到 Slint 全局（`op_animation_structure` 调用）。

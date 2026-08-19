@@ -3,6 +3,7 @@ pub mod area;
 pub mod drag;
 pub mod line_editor;
 pub mod media;
+pub mod nla;
 pub mod node_graph;
 pub mod screen;
 
@@ -22,4 +23,6 @@ pub enum Action {
     NodeGraph(node_graph::NodeGraphAction),
     /// 动画编辑器（曲线编辑器等）交互操作
     Animation(animation::AnimationAction),
+    /// NLA 编辑器（非破坏性动画）交互操作
+    Nla(nla::NlaAction),
 }

@@ -335,21 +335,22 @@ export global Tokens {
             ruler-background: #17171b,
             ruler-tick: #5c5c66,
             ruler-text: #a9adb8,
-            lane-even: #26262b,
-            lane-odd: #2b2b31,
+            // NLA 泳道：交替明暗差加大，网格提亮保证刻度可视（原 #26262b/#2b2b31 vs #2e2e34 对比仅 8，网格几乎隐形）
+            lane-even: #23232a,
+            lane-odd: #2e2e36,
             lane-active: #34343c,
             strip-outline: #101014,
             strip-text: #18181c,
-            // NLA 片断空隙/延伸条带：比画布更暗的灰
-            strip-gap: #17171b,
-            // NLA 未激活片断：黑色（仅全局 Action 轨与选中/移动中片断有颜色）
-            strip-inactive: #232329,
-            // NLA 激活色：与全局 Action 轨同绿系，保证激活视觉统一
-            strip-active: #55a06a,
-            // 时间线分组头块：暖金棕色（与激活绿、未激活黑明显区分）
+            // NLA 片断空隙/延伸条带：比泳道更暗，与延伸半透明叠加后仍可见网格
+            strip-gap: #16161c,
+            // NLA 未激活片断：冷灰蓝（与泳道 #23232a/2e2e36 拉开色相，延伸 brighter 后呈灰）
+            strip-inactive: #2f2f3a,
+            // NLA 激活色：提饱和绿，保证在暗底上对比；与全局 Action 同系
+            strip-active: #57b67a,
+            // 时间线分组头块：暖金棕色（与激活绿、未激活冷灰明显区分）
             strip-group: #a17e2a,
-            // NLA 片断拖拽（移动）中的高亮颜色
-            strip-moving: #7fc1ff,
+            // NLA 片断拖拽（移动）中的高亮颜色：提亮蓝
+            strip-moving: #7ac8ff,
             // NLA 全局 Action 轨上的只读关键帧标记（暗，区别于可编辑通道彩色）
             action-keyframe: #3c3c46,
             // NLA 全局 Action 轨亮色：中等绿（亮于空隙，暗于普通片断高亮）
@@ -364,9 +365,10 @@ export global Tokens {
             // 框选矩形：淡蓝填充 + 亮蓝边框
             marquee-fill: rgba(80, 140, 255, 0.18),
             marquee-border: #5a9dff,
-            grid: #2e2e34,
-            // 次要网格线：比画布亮、比主网格线暗
-            grid-minor: #27272d,
+            // 网格提亮：主网格 #3a3a46（比泳道亮 ~14），次网格 #32323c，保证延伸 0.45 透明下仍可见
+            grid: #3a3a46,
+            // 次要网格线：比主网格暗，比泳道亮
+            grid-minor: #32323c,
             // 右侧边栏（Blender N 面板风格）：略深于画布、浅于通道列表
             sidebar-background: #141418,
             sidebar-border: #2e2e34,

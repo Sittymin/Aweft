@@ -17,6 +17,7 @@ pub fn rust_area_type_to_slint(area_type: &crate::screen::area::AreaType) -> Sli
         crate::screen::area::AreaType::AppGraphEditor => SlintAreaType::AppGraphEditor,
         crate::screen::area::AreaType::GraphEditor => SlintAreaType::GraphEditor,
         crate::screen::area::AreaType::DopeSheet => SlintAreaType::DopeSheet,
+        crate::screen::area::AreaType::NlaEditor => SlintAreaType::NlaEditor,
         crate::screen::area::AreaType::Properties => SlintAreaType::LineEditor,
     }
 }
@@ -28,6 +29,7 @@ pub fn slint_area_type_to_rust(area_type: &SlintAreaType) -> crate::screen::area
         SlintAreaType::AppGraphEditor => crate::screen::area::AreaType::AppGraphEditor,
         SlintAreaType::GraphEditor => crate::screen::area::AreaType::GraphEditor,
         SlintAreaType::DopeSheet => crate::screen::area::AreaType::DopeSheet,
+        SlintAreaType::NlaEditor => crate::screen::area::AreaType::NlaEditor,
     }
 }
 

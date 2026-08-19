@@ -41,10 +41,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use aweft_model::{
-    animation::Action as ModelAction,
-    ids::ActionId,
-};
+use aweft_model::{animation::Action as ModelAction, ids::ActionId};
 use slint::{ModelRc, SharedString, VecModel};
 
 use crate::bridge::types::{
@@ -68,7 +65,6 @@ mod rebuild;
 mod summary;
 #[cfg(test)]
 mod tests;
-
 
 /// 时间坐标最小单位为毫秒：把时间对齐到最近的整数毫秒（关键帧位置要求）。
 fn snap_ms(t: f32) -> f32 {
@@ -260,18 +256,31 @@ impl crate::store::AppStore {
         state.set_graph_handles(self.ui_models.graph_editor.graph_handles.clone());
         state.set_segments(ModelRc::from(self.ui_models.graph_editor.segments.clone()));
         state.set_handles(ModelRc::from(self.ui_models.graph_editor.handles.clone()));
-        state.set_dope_connections(ModelRc::from(self.ui_models.graph_editor.dope_connections.clone()));
-        state.set_dope_summary_keyframes(ModelRc::from(self.ui_models.graph_editor.summary_keyframes.clone()));
-        state.set_extrapolations(ModelRc::from(self.ui_models.graph_editor.extrapolations.clone()));
+        state.set_dope_connections(ModelRc::from(
+            self.ui_models.graph_editor.dope_connections.clone(),
+        ));
+        state.set_dope_summary_keyframes(ModelRc::from(
+            self.ui_models.graph_editor.summary_keyframes.clone(),
+        ));
+        state.set_extrapolations(ModelRc::from(
+            self.ui_models.graph_editor.extrapolations.clone(),
+        ));
         state.set_current_time(self.ui_models.graph_editor.current_time as f32);
         state.set_action_name(self.ui_models.graph_editor.action_name.clone());
-        state.set_action_items(ModelRc::from(self.ui_models.graph_editor.action_items.clone()));
+        state.set_action_items(ModelRc::from(
+            self.ui_models.graph_editor.action_items.clone(),
+        ));
         state.set_current_action(self.ui_models.graph_editor.current_action);
         state.set_action_start(self.ui_models.graph_editor.action_start);
         state.set_action_end(self.ui_models.graph_editor.action_end);
         state.set_current_channel(self.ui_models.graph_editor.current_channel as i32);
-        state.set_selected_channels(ModelRc::from(self.ui_models.graph_editor.selected_display.clone()));
-        state.set_preview_handles(ModelRc::from(self.ui_models.graph_editor.preview_handles.clone()));
+        state.set_selected_channels(ModelRc::from(
+            self.ui_models.graph_editor.selected_display.clone(),
+        ));
+        state.set_preview_handles(ModelRc::from(
+            self.ui_models.graph_editor.preview_handles.clone(),
+        ));
+        state.set_nla_tracks(self.ui_models.nla_editor.tracks_filter.clone().into());
     }
 
     /// 新建一个**空的**编辑 Action 并装载（正确初始化路径）。
@@ -303,6 +312,12 @@ impl crate::store::AppStore {
         // 不经 dispatch 的直接调用路径：手动跑投影（结构变化 → 派生层重建 + 过滤视图重绑定）
         self.ui_models.graph_editor.apply_tags(&tags);
         self.rebind_animation_filters();
+        // NLA 全局 Action 轨同步亦走 depsgraph（初始化亦经投影，局部更新）
+        let nla_tags = self.sync_nla_global_action();
+        for tag in nla_tags {
+            self.depsgraph.tag(tag);
+        }
+        self.evaluate_depsgraph();
     }
 
     /// HACK: 填充曲线编辑器测试数据（临时；当前被 `window_manager` 初始化调用）。
@@ -313,8 +328,8 @@ impl crate::store::AppStore {
     /// 编辑器中 K 帧构建——届时应删除本函数与 window_manager 里的调用。
     pub fn create_test_animation_data(&mut self) {
         use aweft_model::animation::{
-            action::ActionCurve, fcurve::FCurve, Action as ModelAction, BezierHandle,
-            Keyframe as Mk, PropertyPath,
+            Action as ModelAction, BezierHandle, Keyframe as Mk, PropertyPath, action::ActionCurve,
+            fcurve::FCurve,
         };
 
         let bez = |time: f64, value: f64, in_to: f64, in_vo: f64, out_to: f64, out_vo: f64| {
@@ -333,7 +348,10 @@ impl crate::store::AppStore {
             action.curves = curves
                 .into_iter()
                 .map(|(property, kfs)| {
-                    let fcurve = FCurve { keyframes: kfs, ..Default::default() };
+                    let fcurve = FCurve {
+                        keyframes: kfs,
+                        ..Default::default()
+                    };
                     ActionCurve::new(property, fcurve)
                 })
                 .collect();
@@ -424,7 +442,11 @@ impl crate::store::AppStore {
             vec![
                 (
                     PropertyPath::PositionY,
-                    vec![lin(0.0, 0.0), bez(1.0, 3.0, -0.2, 0.0, 0.2, 0.0), lin(2.0, 0.0)],
+                    vec![
+                        lin(0.0, 0.0),
+                        bez(1.0, 3.0, -0.2, 0.0, 0.2, 0.0),
+                        lin(2.0, 0.0),
+                    ],
                 ),
                 (
                     PropertyPath::FontRotationZ,
@@ -468,5 +490,6 @@ impl crate::store::AppStore {
         let tags = ce.load_action(0, action);
         self.ui_models.graph_editor.apply_tags(&tags);
         self.rebind_animation_filters();
+        self.create_test_nla_data();
     }
 }

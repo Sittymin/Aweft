@@ -1,0 +1,33 @@
+// NLA 编辑器标题栏：通用 AreaHeader + 右侧操作按钮（占位）。
+// 中区显示当前编辑 Action 名称（与曲线编辑器一致，来自 AnimationState）。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AnimationState } from "../../bridge/state.slint";
+import { AreaHeader } from "../area_header.slint";
+
+export component NlaToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+
+        // 中区内容（@children）：当前编辑的 Action 名称
+        Text {
+            text: AnimationState.action-name;
+            color: #ffffff;
+            vertical-alignment: center;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）
+        right-actions: [
+            { icon: @image-url("../../assets/icons/animation.svg") },
+            { icon: @image-url("../../assets/icons/grid_4x4.svg") },
+            { icon: @image-url("../../assets/icons/keep.svg") },
+        ];
+    }
+}

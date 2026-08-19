@@ -60,6 +60,8 @@ pub enum AreaType {
     GraphEditor,
     // 摄影表 / 动作编辑器（Dope Sheet：每通道一行按时间铺开关键帧）
     DopeSheet,
+    // NLA 编辑器（aweft-model 的 animation::AnimData：非破坏性动画轨道/片断）
+    NlaEditor,
     // StyleManager,
     // FileBrowser,
 

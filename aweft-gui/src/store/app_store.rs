@@ -1,4 +1,3 @@
-
 use crate::actions::Action;
 use crate::clipboard::Clipboard;
 use crate::depsgraph::{Depsgraph, Tag};
@@ -56,6 +55,7 @@ impl AppStore {
             Action::LineEditor(act) => self.dispatch_line_editor(act)?,
             Action::NodeGraph(act) => self.dispatch_node_graph(act)?,
             Action::Animation(act) => self.dispatch_animation(act)?,
+            Action::Nla(act) => self.dispatch_nla(act)?,
         };
         for tag in tags {
             self.depsgraph.tag(tag);

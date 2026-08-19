@@ -138,6 +138,27 @@ export global AnimationCallbacks {
     callback dope-summary-pressed(index: int, modifier: SlintSelectionModifier);
     callback dope-summary-dragged(index: int, delta-time: float);
     callback dope-summary-released(index: int, moved: bool);
+    // —— NLA 编辑器：片断 ——
+    // 按下：none=单选，shift/ctrl=追加切换；同时记录拖拽起点
+    callback nla-strip-pressed(track-index: int, strip-index: int, modifier: SlintSelectionModifier);
+    // 拖拽移动（delta-x 世界时间位移，delta-row 行数；片段中心越过轨道边界即瞬间跳轨）
+    callback nla-strip-dragged(track-index: int, strip-index: int, delta-x: float, delta-row: float);
+    // 松开：拖拽结束（数据层整理 + 写回 model）
+    callback nla-strip-released(track-index: int, strip-index: int);
+    // 画布空白点击：清除全部片断选中
+    callback nla-strip-deselect-all();
+    // 画布级 TouchArea 左键命中检测（世界时间 x + 过滤视图行号）：命中返回编码
+    // （track*10000+strip），并完成选中与拖拽起点记录；未命中返回 -1
+    callback nla-strip-pick(x: float, row: int, modifier: SlintSelectionModifier) -> int;
+    // —— NLA 编辑器：轨道 ——
+    // 轨道启用开关（enabled ↔ model NlaTrack.muted）
+    callback nla-track-toggle-enabled(track-index: int);
+    // 轨道锁定开关（纯 UI 态；锁定轨道不能编辑）
+    callback nla-track-toggle-locked(track-index: int);
+    // 全局 Action 轨：把当前编辑的 Action 作为片断向下插入 NLA（自动找能容纳的轨道）
+    callback nla-track-push-down();
+    // 轨道列表搜索（空 = 全部）
+    callback nla-search-changed(text: string);
     // —— 共享：当前时间（播放头） ——
     callback set-current-time(time: float);
     // —— 摄影表 Header：Action 选择下拉菜单 ——

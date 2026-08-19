@@ -23,4 +23,7 @@ mod graph;
 mod tag;
 
 pub use graph::{Component, ComponentId, Depsgraph, Operation, OperationId};
-pub use tag::{DataId, HandleLoc, NodeGraphChange, NodeGraphKind, OperationCode, SelectionKind, SummaryDrag, Tag, TagKind};
+pub use tag::{
+    DataId, HandleLoc, NlaStripInsert, NlaStripMove, NlaStripRef, NlaStripReorder, NodeGraphChange,
+    NodeGraphKind, OperationCode, SelectionKind, SummaryDrag, Tag, TagKind,
+};

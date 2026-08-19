@@ -1,6 +1,6 @@
 # 动画编辑器
 
-**状态**：✅ 已接入依赖图（数据层/派生层分离，对齐 LineEditor 管线）；曲线编辑器 + 摄影表（Dope Sheet）
+**状态**：✅ 已接入依赖图（数据层/派生层分离，对齐 LineEditor 管线）；曲线编辑器 + 摄影表（Dope Sheet）+ NLA 编辑器
 
 **架构**：
 ```
@@ -65,4 +65,36 @@ AnimationCallbacks → AnimationAction → AppStore::dispatch_animation（reduce
   `AnimationDragEnded`（重排乱序 + 补柄）
 - 拖拽期间只有被拖标记就地移动，各 ms 条目 count/掩码陈旧——由松开时的并集重算收敛
 
-**已知 TODO**：调色盘（channel.rs）/ NLA
+**NLA 编辑器**（`ui/areas/animation/` + `src/store/nla_editor/`）：
+- 布局参照 Blender：左侧 `NlaPanel`（搜索栏 + 轨道列表 + 启用/锁开关）+ 顶部 `TimeRuler`
+  + 主画布（轨道泳道按时间铺开片断）；滚轮仅横向缩放、中键双向平移（同摄影表）
+- 第 0 轨为**虚拟全局 Action 轨**（is-action）：显示当前曲线编辑器编辑的 Action
+  名称/亮色条带（action-start/end，1:1 时间）+ 汇总关键帧（复用摄影表 summary-keyframes），
+  只读；`nla-track-push-down` 把当前 Action 作为片断"向下插入"（自动找能容纳的轨道，
+  没有则新建）。命中检测 `strip_hit_test` 纯只读（数据层 `track_view`/`editing_strips`），
+  选中经 `Action::Nla(StripPressed)` dispatch（`bridge/callbacks.rs:setup_nla_callbacks` 纯命中→dispatch，还原 reducer 唯一入口）
+- 架构：`NlaAction → AppStore::dispatch_nla（reducer 改数据层 + model AnimData.tracks，返回精确 tag）
+  → depsgraph → op_nla_*（投影，更新派生层）`；权威数据在 model（`anim_datas` 的 `AnimData`）。`DataId::Animation` 复用（曲线/Dope/NLA 同域，`TagKind`隔离）
+- 两层状态：**数据层**（reducer 可写）：`track_view`（轨道 UI 态，enabled/locked/is-action）、
+  `editing_strips`（片断编辑数据，含 model 原始 `NlaStrip` 克隆——编辑中保留未编辑字段，
+  提交时只合并时间范围 Absolute{start,end}/名称/muted）；**派生层**（只由投影写）：
+  `tracks`/`tracks_filter`（过滤投影，绑定 Slint nla-tracks）/`strip_models`（逐轨 inner 模型）。`set_global_action`仅改数据层返回`NlaTrackChanged{0}`（初始化用`set_global_action_for_init`直写为显式例外）
+- Tag 细化（`depsgraph/tag.rs`）：
+  - `NlaStructureChanged` — 装载/搜索过滤视图重建（全量重建派生层 + 重绑定）
+  - `NlaSelectionChanged{updated, deselect_all}` — 片断选中（`set_row_data`选中列）
+  - `NlaStripPositionChanged{updated}` — 拖拽位置（`set_row_data`保住 grab）
+  - `NlaStripStructureChanged{moved,reordered,inserted}` — 跨轨/同轨重排/插入（`remove+insert` row_added/removed）
+  - `NlaTrackChanged{track}` — 启用/锁定/全局 Action 名称（`set_row_data`行级）
+  - `NlaTrackAdded{track}` — 下推新建轨道（`push` row_added）
+- 投影（`projections/nla.rs`，6 op 各司一 TagKind，`apply_*`单职责；`NlaTrackProperties/Added`显式依赖`NlaStructure`）：
+  `op_nla_structure`（apply_structure + rebind_nla_tracks）/ `op_nla_selection`（apply_selection）/
+  `op_nla_strip_structure`（apply_moved/apply_reordered/apply_inserted 三子函数）/
+  `op_nla_position`（apply_position）/ `op_nla_track_properties` / `op_nla_track_added`
+- 拖拽语义（对齐曲线编辑器 preview/commit）：拖拽（高频）只改数据层 + `NlaStripPosition/Structure` Tag，
+  投影同步派生层；松开 `strip_released` 整理 dragging + `commit_to_model` 写回 model；
+  跨轨移动在拖动中瞬间完成（数据层 remove+insert，投影同规则同步；`apply_moved→reordered→inserted`拆分保序）
+- 锁定轨/全局 Action 轨只读：`strip_hit_test` 纯命中，`strip_pick`仅测试兼容
+- 测试：`nla_editor/tests.rs` 单测（`project`走`apply_selection/strip_structure/position`单职责；`hit_test`纯只读）+
+  `tests/nla_editor_integration.rs`（dispatch → 投影 → model 写回全链路；`strip_hit_test`+`StripPressed` dispatch）
+
+**已知 TODO**：调色盘（channel.rs）

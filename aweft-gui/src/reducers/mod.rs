@@ -8,5 +8,6 @@ pub mod area;
 pub mod drag;
 pub mod line_editor;
 pub mod media;
+pub mod nla;
 pub mod node_graph;
 pub mod screen;
