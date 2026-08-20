@@ -238,6 +238,7 @@ pub struct ScrArea {
     // pub area_history: Vec<AreaData>,
 
     // Temporarily used while switching area type, otherwise this should be AreaType::Empty.
+    #[allow(dead_code)]
     next_area_type: Option<AreaType>,
 
     // Size - 设为私有

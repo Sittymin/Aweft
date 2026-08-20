@@ -5,6 +5,7 @@ pub mod sequence_rows_model;
 pub mod node_graph;
 pub mod state;
 pub mod ui_models;
+pub mod utils;
 
 pub use app_store::AppStore;
 pub use state::AppState;

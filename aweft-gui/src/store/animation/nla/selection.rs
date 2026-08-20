@@ -1,6 +1,7 @@
-use super::{NlaEditorState, NlaStripData, StripDrag};
+use super::{NlaEditorState, StripDrag};
 use crate::bridge::types::SlintSelectionModifier;
 use crate::depsgraph::{NlaStripRef, Tag};
+use crate::store::utils::selection::{is_replacing, is_toggling};
 use slint::Model;
 
 impl NlaEditorState {
@@ -17,7 +18,10 @@ impl NlaEditorState {
         }]
     }
 
-    /// 片断按下：选中（modifier 非 none = Shift/Ctrl 追加切换）并记录拖拽起点。
+    /// 片断按下：选中并记录拖拽起点。语义对齐曲线编辑器 `keyframe_pressed`：
+    /// - `None` 点已选中 → 保持多选（拖动多选时一起移动）；
+    /// - `None` 点未选中 → 清空后单选；
+    /// - `Shift/Ctrl` → 追加切换（当前 NLA 两者均切换，复用全局 `is_toggling`/`is_replacing`）。
     pub fn strip_pressed(
         &mut self,
         track: usize,
@@ -32,20 +36,56 @@ impl NlaEditorState {
         else {
             return Vec::new();
         };
-        let additive = modifier != SlintSelectionModifier::None;
-        if !additive {
-            for list in &mut self.editing_strips {
-                for e in list.iter_mut() {
-                    e.view.selected = false;
+        let already_selected = self
+            .editing_strips
+            .get(track)
+            .and_then(|l| l.get(strip))
+            .map(|e| e.view.selected)
+            .unwrap_or(false);
+        if is_replacing(modifier) {
+            if already_selected {
+                // 保持多选，不清除（对齐 Graph 多选拖动）
+            } else {
+                for list in &mut self.editing_strips {
+                    for e in list.iter_mut() {
+                        e.view.selected = false;
+                    }
+                }
+                if let Some(e) = self
+                    .editing_strips
+                    .get_mut(track)
+                    .and_then(|l| l.get_mut(strip))
+                {
+                    e.view.selected = true;
+                }
+            }
+        } else {
+            // Shift/Ctrl 追加：切换该片断（NLA 当前两者均切换）
+            if let Some(e) = self
+                .editing_strips
+                .get_mut(track)
+                .and_then(|l| l.get_mut(strip))
+            {
+                // 区分 Shift 加选 vs Ctrl 切换：Shift 仅加选不取消，Ctrl 切换
+                if is_toggling(modifier) {
+                    e.view.selected = !already_selected;
+                } else {
+                    e.view.selected = true;
                 }
             }
         }
-        if let Some(e) = self
-            .editing_strips
-            .get_mut(track)
-            .and_then(|l| l.get_mut(strip))
-        {
-            e.view.selected = if additive { !e.view.selected } else { true };
+        let deselect_all = if is_replacing(modifier) {
+            !already_selected
+        } else {
+            false
+        };
+        let mut snapshot = Vec::new();
+        for (ti, list) in self.editing_strips.iter().enumerate() {
+            for (idx, e) in list.iter().enumerate() {
+                if e.view.selected {
+                    snapshot.push((ti, idx, e.view.start, e.view.end - e.view.start));
+                }
+            }
         }
         self.drag = Some(StripDrag {
             press_track: track,
@@ -54,13 +94,15 @@ impl NlaEditorState {
             strip,
             orig_start: s.start,
             orig_end: s.end,
+            prev_delta_x: 0.0,
+            selected_snapshot: snapshot,
         });
         vec![Tag::NlaSelectionChanged {
             updated: vec![NlaStripRef {
                 track,
                 index: strip,
             }],
-            deselect_all: !additive,
+            deselect_all,
         }]
     }
 

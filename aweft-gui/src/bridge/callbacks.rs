@@ -651,6 +651,30 @@ fn setup_sequence_selection_callbacks(instance: &MainWindow, store: Rc<RefCell<A
             let action = Action::Sequence(SequenceAction::SelectRow { item_id, modifier });
             dispatch_and_render(&s, action, &weak_instance);
         });
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<SequenceCallbacks>()
+        .on_timeline_marquee_select(move |x_lo, x_hi, row_lo, row_hi, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Sequence(SequenceAction::MarqueeSelect {
+                    x_lo,
+                    x_hi,
+                    row_lo,
+                    row_hi,
+                    modifier,
+                }),
+                &weak,
+            );
+        });
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<SequenceCallbacks>()
+        .on_timeline_deselect_all(move || {
+            dispatch_and_render(&s, Action::Sequence(SequenceAction::DeselectAll), &weak);
+        });
 }
 
 fn setup_sequence_add_line_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -1228,6 +1252,18 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::ActionSelected { index })), &weak,
             );
         });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_drag_cancel(move || {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Graph(GraphAction::DragCancel)),
+                &weak,
+            );
+        });
 }
 
 /// 设置 NLA 编辑器回调：片断/轨道交互走 `Action::Nla` → dispatch → tag → 投影。
@@ -1360,6 +1396,36 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 Action::Animation(AnimationAction::Nla(NlaAction::SearchChanged {
                     text: text.to_string(),
                 })), &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_strip_drag_cancel(move || {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::StripDragCancel)),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_marquee_select(move |x_lo, x_hi, row_lo, row_hi, modifier| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::MarqueeSelect {
+                    x_lo,
+                    x_hi,
+                    row_lo,
+                    row_hi,
+                    modifier,
+                })),
+                &weak,
             );
         });
 }

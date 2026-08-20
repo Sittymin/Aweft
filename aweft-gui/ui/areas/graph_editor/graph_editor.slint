@@ -280,6 +280,9 @@ export component GraphEditor inherits Rectangle {
                 // 不在此做"点曲线激活"——选中统一交给框选/点关键帧。
                 root.deselect-all();
             }
+            cancel-pressed => {
+                root.marquee-visible = false;
+            }
              // TODO: view-changed 当前仍走 dispatch → depsgraph；高频导航优化待 Review
              // 完成后单独处理，候选方案是直接更新命中检测缩放或合并到帧末。
              view-changed() => {

@@ -75,11 +75,6 @@ impl AppStore {
         self.depsgraph = depsgraph;
     }
 
-    /// 标记一个数据变更（reducer 内部使用）。
-    pub(crate) fn tag(&mut self, tag: Tag) {
-        self.depsgraph.tag(tag);
-    }
-
     /// 获取当前状态（只读）
     pub fn state(&self) -> &AppState {
         &self.state

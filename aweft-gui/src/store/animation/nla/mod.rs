@@ -28,19 +28,16 @@
 use std::rc::Rc;
 
 use aweft_model::{
-    animation::{
-        AnimData,
-        strip::{NlaStrip, StripPlacement, StripType},
-    },
-    ids::{ActionId, AnimDataId},
+    animation::strip::NlaStrip,
+    ids::AnimDataId,
 };
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::VecModel;
 
-use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack, SlintSelectionModifier, SlintStripType};
-use crate::depsgraph::{NlaStripMove, NlaStripRef, NlaStripReorder, Tag};
+use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
 
 pub mod drag;
 pub mod load;
+pub mod marquee;
 pub mod projection;
 pub mod selection;
 pub mod strip;
@@ -48,7 +45,7 @@ pub mod track;
 
 /// 片断拖拽状态。`track/strip` 为片段**当前**所在轨道/下标（拖动中会因瞬间跨轨变化），
 /// `press_track/press_strip` 为按下时的（供 UI 回传的 released/dragged 匹配）。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct StripDrag {
     press_track: usize,
     press_strip: usize,
@@ -56,6 +53,9 @@ pub(crate) struct StripDrag {
     strip: usize,
     orig_start: f32,
     orig_end: f32,
+    prev_delta_x: f32,
+    /// 轻量快照：仅选中条目的 `(track,index,start,width)`，用于右键取消
+    selected_snapshot: Vec<(usize, usize, f32, f32)>,
 }
 
 /// 一条片断的编辑数据：Slint 视图 + model 原始克隆（编辑中保留未编辑字段）。

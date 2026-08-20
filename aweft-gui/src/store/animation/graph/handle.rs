@@ -5,6 +5,7 @@ use super::GraphEditorState;
 use super::curve_math::{apply_handle_mode, clamp_handle_own_side};
 use crate::bridge::types::{SlintHandleDragMode, SlintSelectionModifier};
 use crate::depsgraph::{HandleLoc, Tag};
+use crate::store::utils::selection::{is_additive, is_replacing};
 
 impl GraphEditorState {
     /// 控制柄按下：none=单选，shift=同通道同侧区间扩展，ctrl=切换。
@@ -22,45 +23,55 @@ impl GraphEditorState {
         let key_in_sel = self
             .selected_handles
             .contains(&HandleLoc { curve, key, is_in });
-        match modifier {
-            SlintSelectionModifier::Shift => {
-                let anchor =
-                    self.handle_selection_anchor
-                        .unwrap_or(HandleLoc { curve, key, is_in });
-                let (lo, hi) = if anchor.curve == curve && anchor.is_in == is_in {
-                    (anchor.key.min(key), anchor.key.max(key))
-                } else {
-                    (key, key)
-                };
-                for index in lo..=hi {
-                    self.selected_handles.insert(HandleLoc {
-                        curve,
-                        key: index,
-                        is_in,
-                    });
-                }
-                self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
+        if is_additive(modifier) {
+            let anchor =
+                self.handle_selection_anchor
+                    .unwrap_or(HandleLoc { curve, key, is_in });
+            let (lo, hi) = if anchor.curve == curve && anchor.is_in == is_in {
+                (anchor.key.min(key), anchor.key.max(key))
+            } else {
+                (key, key)
+            };
+            for index in lo..=hi {
+                self.selected_handles.insert(HandleLoc {
+                    curve,
+                    key: index,
+                    is_in,
+                });
             }
-            SlintSelectionModifier::Ctrl => {
-                if key_in_sel {
-                    self.selected_handles
-                        .remove(&HandleLoc { curve, key, is_in });
-                } else {
-                    self.selected_handles
-                        .insert(HandleLoc { curve, key, is_in });
-                }
+            self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
+        } else if is_replacing(modifier) {
+            self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
+            if !key_in_sel {
+                self.deselect_all();
+                self.selected_handles
+                    .insert(HandleLoc { curve, key, is_in });
             }
-            SlintSelectionModifier::None => {
-                self.handle_selection_anchor = Some(HandleLoc { curve, key, is_in });
-                if !key_in_sel {
-                    self.deselect_all();
-                    self.selected_handles
-                        .insert(HandleLoc { curve, key, is_in });
-                }
+        } else {
+            // Ctrl 切换
+            if key_in_sel {
+                self.selected_handles
+                    .remove(&HandleLoc { curve, key, is_in });
+            } else {
+                self.selected_handles
+                    .insert(HandleLoc { curve, key, is_in });
             }
         }
         // 拖控制柄也聚焦并选中该通道（曲线保持高亮）
         self.channel_pressed(curve, SlintSelectionModifier::None);
+        // 轻量快照：选中关键帧 time/value，用于右键取消
+        let mut snap = std::collections::HashMap::new();
+        for (&c, kfs) in &self.editing_keyframes {
+            for (idx, kf) in kfs.iter().enumerate() {
+                if kf.selected {
+                    snap.insert(
+                        crate::store::animation::graph::KeyframeLoc { curve: c, key: idx },
+                        kf.clone(),
+                    );
+                }
+            }
+        }
+        self.drag_snapshot = Some(snap);
         vec![Tag::GraphSelectionChanged { summary_ms: vec![] }]
     }
 
@@ -211,6 +222,7 @@ impl GraphEditorState {
         // 手柄拖拽结束不打 GraphDragEnded：补柄（ensure_default_handles）只适用于
         // 关键帧拖拽改变边缘性的场景；手柄可能被故意钳到 0 长度，不该被覆盖。
         // preview_handles 由投影在选中变化时清空。
+        self.drag_snapshot = None;
         vec![Tag::GraphSelectionChanged { summary_ms }]
     }
 }

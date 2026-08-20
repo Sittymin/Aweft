@@ -43,6 +43,10 @@ src/
 │   ├── app_store.rs     # AppStore：dispatch 总表 + depsgraph 求值 + 访问器（单一数据源）
 │   ├── state.rs         # AppState（持有 aweft-model Project + UI 态）
 │   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen } 汇总
+│   ├── utils/           # 通用工具（单一文件夹，避免重复造轮子）
+│   │   ├── marquee.rs   # 时间/行归一化与 clamp（曲线/摄影表/时间线/NLA 复用）
+│   │   ├── selection.rs # 修饰键语义 is_replacing/is_additive/is_toggling（点选/框选全局复用）
+│   │   └── drag.rs      # 拖动增量校验 is_valid_delta（字幕行/NLA/曲线共用）
 │   ├── animation/       # 动画域聚合状态（DataId::Animation 单一，因 Area 表现形式不同保留两组派生状态，TagKind 隔离）
 │   │   ├── mod.rs       # AnimationState{ graph: GraphEditorState, nla: NlaEditorState } + 初始化
 │   │   ├── graph/       # 图编辑器（Graph Editor/Dope Sheet）状态：数据层 + 派生层 + 交互/装载/投影实现

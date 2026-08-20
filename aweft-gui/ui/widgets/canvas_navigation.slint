@@ -42,6 +42,8 @@ export component CanvasNavigation inherits TouchArea {
 
     // 画布空白处左键按下（none=普通，shift=区间扩展，ctrl=切换）
     callback background-pressed(modifier: SlintSelectionModifier);
+    // 拖动中右键取消（与字幕行时间拖动取消一致）
+    callback cancel-pressed();
     // 视图缩放变化（滚轮）：编辑器据此重算刻度步长（放大细化坐标轴）
     callback view-changed();
 
@@ -126,6 +128,13 @@ export component CanvasNavigation inherits TouchArea {
                 // 传原始点（起点, 当前）——框选矩形由消费方自行 min/max；
                 // 拖拽位移（NLA 片断）需要带符号的方向，不能给规范化后的坐标
                 root.marquee-dragged(root.marquee-start-x, root.marquee-start-y, mx, my);
+            }
+        } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+            if (root.marquee-pressing) {
+                root.cancel-pressed();
+                root.marquee-pressing = false;
+                root.marquee-active = false;
+                return EventResult.accept;
             }
         } else if (event.kind == PointerEventKind.move && root.panning) {
             // pan-start-world 为拖动开始时的固定世界坐标，更新会导致反馈回路

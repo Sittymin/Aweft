@@ -258,6 +258,9 @@ export component DopeSheet inherits Rectangle {
                     AnimationCallbacks.channel-deselect-all();
                 }
             }
+            cancel-pressed => {
+                root.marquee-visible = false;
+            }
         }
 
         // 汇总条带的关键帧标记（在导航之上，可交互；跨通道同步拖拽同一时刻的关键帧）

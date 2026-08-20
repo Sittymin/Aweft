@@ -6,7 +6,7 @@
 //  - 分组头块 = 组内所有行合并时间范围（min start ~ max end，组内时间范围可重叠）；
 //    折叠分组后其下字幕行从可见模型消失（列表与画布同时收起）。
 //  - 交互：滚轮仅横向缩放时间轴 / 中键双向平移（纵向随内容 clamp）——与摄影表一致；
-//    点击块选中（Slint 侧命中检测，不加 Rust 回调）、空白不操作
+//    点击块选中、空白清除选中；左键拖拽框选（时间 × 行，none=替换/shift=加选/ctrl=切换，对齐摄影表）
 //  - 画布网格：与摄影表一致用 VerticalGrid 刻度网格
 import { SlintSubtitleRow, SlintSubtitleRowType, SlintSelectionState, SlintTimelineSubBlock, SlintSelectionModifier } from "../../core/types.slint";
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
@@ -64,6 +64,24 @@ export component TimelineEditor inherits Rectangle {
     // 复用字幕行选中回调（SlintSelectionModifier）
     function select-item(item-id: string, modifier: SlintSelectionModifier) {
         SequenceCallbacks.select-row(item-id, modifier);
+    }
+
+    // 框选矩形（与摄影表/曲线编辑器一致）
+    private property <bool> marquee-visible: false;
+    private property <float> marquee-x1: 0.0;
+    private property <float> marquee-y1: 0.0;
+    private property <float> marquee-x2: 0.0;
+    private property <float> marquee-y2: 0.0;
+
+    // 空白处框选结束：把选框换算成世界坐标（时间 + 行区间）上报 Rust 选中
+    function marquee-select(x1: float, y1: float, x2: float, y2: float, modifier: SlintSelectionModifier) {
+        root.marquee-visible = false;
+        let x-lo: float = (x1 - root.nav-pan-x) / root.nav-zoom;
+        let x-hi: float = (x2 - root.nav-pan-x) / root.nav-zoom;
+        // 第 0 行固定为根级泳道（不占行号），数据行从第 1 条起
+        let row-lo: int = floor((y1 - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+        let row-hi: int = floor((y2 - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+        SequenceCallbacks.timeline-marquee-select(x-lo, x-hi, row-lo, row-hi, modifier);
     }
 
     // 左侧行列表
@@ -219,9 +237,19 @@ export component TimelineEditor inherits Rectangle {
             clamp-pan-y: true;
             clamp-pan-y-min: -root.max-scroll-y();
             clamp-pan-y-max: 0.0;
-            marquee-enabled: false;
+            marquee-enabled: true;
+            marquee-dragged(x1, y1, x2, y2) => {
+                root.marquee-x1 = min(x1, x2);
+                root.marquee-y1 = min(y1, y2);
+                root.marquee-x2 = max(x1, x2);
+                root.marquee-y2 = max(y1, y2);
+                root.marquee-visible = true;
+            }
+            marquee-done(x1, y1, x2, y2, modifier) => {
+                root.marquee-select(x1, y1, x2, y2, modifier);
+            }
             background-pressed(modifier) => {
-                // 点击：按位置命中块则选中（复用字幕行选中回调），空白不操作。
+                // 点击：按位置命中块则选中（复用字幕行选中回调），空白清除选中。
                 // 折叠组头命中子块（对字幕行做时间编辑）需要 Rust 侧回调，
                 // 当前先按组范围选中组头；子块 item-id 数据已备好供后续拖拽编辑。
                 // 第 0 条为根级泳道（收起时显示全部字幕行片段块，命中选中未实现），
@@ -234,10 +262,25 @@ export component TimelineEditor inherits Rectangle {
                         let t: float = (nav.mouse-x / 1px - root.nav-pan-x) / root.nav-zoom;
                         if r.end-sec > r.start-sec && t >= r.start-sec && t <= r.end-sec {
                             root.select-item(r.item-id, modifier);
+                            return;
                         }
                     }
                 }
+                // 空白处（未命中块/根级泳道/行外）→ 清除选中
+                SequenceCallbacks.timeline-deselect-all();
             }
+        }
+
+        // 框选矩形（与摄影表/曲线编辑器一致，与 dope_sheet 同风格）
+        Rectangle {
+            visible: root.marquee-visible;
+            x: root.marquee-x1 * 1px;
+            y: root.marquee-y1 * 1px;
+            width: (root.marquee-x2 - root.marquee-x1) * 1px;
+            height: (root.marquee-y2 - root.marquee-y1) * 1px;
+            background: Theme.data.animation-editor.marquee-fill;
+            border-width: 1px;
+            border-color: Theme.data.animation-editor.marquee-border;
         }
 
         // 当前时间线（播放头，置顶但不拦截事件）

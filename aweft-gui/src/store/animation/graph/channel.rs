@@ -7,6 +7,7 @@ use slint::{Color, Model};
 use super::GraphEditorState;
 use crate::bridge::types::{SlintColorMode, SlintSelectionModifier};
 use crate::depsgraph::Tag;
+use crate::store::utils::selection::{is_additive, is_replacing};
 
 impl GraphEditorState {
     /// 摄影表点击压缩视图中的一行：把显示行映射回真实通道下标再选中。
@@ -69,42 +70,37 @@ impl GraphEditorState {
             );
             return Vec::new();
         }
-        match modifier {
-            // Shift：从锚点（最近一次普通/Shift 点击）到当前通道全选中，其余保留
-            SlintSelectionModifier::Shift => {
-                let anchor =
-                    if (0..self.channels_data.len() as isize).contains(&self.selection_anchor) {
-                        self.selection_anchor
-                    } else {
-                        curve as isize
-                    };
-                let (lo, hi) = if anchor <= curve as isize {
-                    (anchor, curve as isize)
+        if is_additive(modifier) {
+            let anchor =
+                if (0..self.channels_data.len() as isize).contains(&self.selection_anchor) {
+                    self.selection_anchor
                 } else {
-                    (curve as isize, anchor)
+                    curve as isize
                 };
-                for i in lo..=hi {
-                    self.set_channel_selected(i as usize, true);
-                }
-                self.selection_anchor = curve as isize;
-                self.current_channel = curve as isize;
+            let (lo, hi) = if anchor <= curve as isize {
+                (anchor, curve as isize)
+            } else {
+                (curve as isize, anchor)
+            };
+            for i in lo..=hi {
+                self.set_channel_selected(i as usize, true);
             }
-            // Ctrl：切换该通道选中，其余保留
-            SlintSelectionModifier::Ctrl => {
-                let new_sel = !self.channel_selected(curve);
-                self.set_channel_selected(curve, new_sel);
-                if new_sel {
-                    self.current_channel = curve as isize;
-                }
-                // Ctrl 不更新区间锚点
-            }
-            // 普通：清除全部选中，只选当前通道
-            SlintSelectionModifier::None => {
-                self.clear_channel_selection();
-                self.set_channel_selected(curve, true);
-                self.selection_anchor = curve as isize;
-                self.current_channel = curve as isize;
-            }
+            self.selection_anchor = curve as isize;
+            self.current_channel = curve as isize;
+            return vec![Tag::GraphSelectionChanged { summary_ms: vec![] }];
+        }
+        if is_replacing(modifier) {
+            self.clear_channel_selection();
+            self.set_channel_selected(curve, true);
+            self.selection_anchor = curve as isize;
+            self.current_channel = curve as isize;
+            return vec![Tag::GraphSelectionChanged { summary_ms: vec![] }];
+        }
+        // Ctrl 切换
+        let new_sel = !self.channel_selected(curve);
+        self.set_channel_selected(curve, new_sel);
+        if new_sel {
+            self.current_channel = curve as isize;
         }
         vec![Tag::GraphSelectionChanged { summary_ms: vec![] }]
     }

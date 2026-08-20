@@ -48,6 +48,17 @@ pub enum SequenceAction {
         item_id: ItemId,
         modifier: SlintSelectionModifier,
     },
+    /// 时间线画布框选（时间范围 × 行区间；none=替换，shift=加选，ctrl=切换）。
+    /// row_lo/row_hi 为可见行（FilterModel）下标，x 为世界时间（秒）。
+    MarqueeSelect {
+        x_lo: f32,
+        x_hi: f32,
+        row_lo: i32,
+        row_hi: i32,
+        modifier: SlintSelectionModifier,
+    },
+    /// 时间线画布空白点击：清除选中。
+    DeselectAll,
     AddLine {
         item_id: ItemId,
         end_time: TimeDelta,

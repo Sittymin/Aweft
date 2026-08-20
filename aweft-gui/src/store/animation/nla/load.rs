@@ -1,15 +1,15 @@
 use super::NlaPushDownResult;
-use super::{NlaEditorState, NlaStripData, StripDrag};
-use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
+use super::{NlaEditorState, NlaStripData};
+use crate::bridge::types::SlintNlaTrack;
 use crate::depsgraph::Tag;
 use aweft_model::{
     animation::{
         AnimData,
-        strip::{NlaStrip, StripPlacement},
+        strip::StripPlacement,
     },
     ids::ActionId,
 };
-use slint::{Model, ModelRc, SharedString, VecModel};
+use slint::{ModelRc, SharedString};
 
 impl NlaEditorState {
     /// 从 model AnimData 装载（仅重建数据层，派生层由 `NlaStructureChanged` 投影重建）。
@@ -113,7 +113,7 @@ impl NlaEditorState {
     /// 返回带语义字段的 `NlaPushDownResult`。**不自同步派生层**——
     /// 已有轨道走局部插入（NlaStripsChanged.inserted，投影 row_added 片断）；
     /// 新建轨道走 NlaTrackAdded（投影 row_added 轨道行），由投影执行。
-    pub fn push_down_insert(
+    pub(crate) fn push_down_insert(
         &mut self,
         name: impl Into<String>,
         start: f32,

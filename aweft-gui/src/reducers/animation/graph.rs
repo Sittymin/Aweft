@@ -45,6 +45,7 @@ impl crate::store::AppStore {
                     let ms = ce.deselect_all();
                     vec![Tag::GraphSelectionChanged { summary_ms: ms }]
                 }
+                DragCancel => ce.drag_cancel(),
                 HandlePressed {
                     curve,
                     key,

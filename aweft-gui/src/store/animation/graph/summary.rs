@@ -12,6 +12,7 @@ use slint::{Model, ModelRc};
 use super::{GraphEditorState, KeyframeLoc, ms_of};
 use crate::bridge::types::{SlintSelectionModifier, SlintSummaryKeyframe};
 use crate::depsgraph::{SummaryDrag, Tag};
+use crate::store::utils::selection::{is_replacing, is_toggling};
 
 impl GraphEditorState {
     /// 重建摄影表汇总条带：把全部通道的关键帧按整数毫秒时间聚合，
@@ -180,10 +181,10 @@ impl GraphEditorState {
         });
         self.pressed_was_selected = already_selected;
         let mut summary_ms: std::collections::HashSet<i64> = std::collections::HashSet::new();
-        if modifier != SlintSelectionModifier::None {
+        if !is_replacing(modifier) {
             // 加入：全部选上（不取消），并确保其通道在期望选中集合里
             for &loc in &group {
-                let should_toggle_off = modifier == SlintSelectionModifier::Ctrl
+                let should_toggle_off = is_toggling(modifier)
                     && self
                         .editing_keyframes
                         .get(&loc.curve)
@@ -238,6 +239,18 @@ impl GraphEditorState {
             sk.all_selected = true;
             self.summary_keyframes.set_row_data(index, sk);
         }
+        let mut snap = std::collections::HashMap::new();
+        for (&c, kfs) in &self.editing_keyframes {
+            for (idx, kf) in kfs.iter().enumerate() {
+                if kf.selected {
+                    snap.insert(
+                        crate::store::animation::graph::KeyframeLoc { curve: c, key: idx },
+                        kf.clone(),
+                    );
+                }
+            }
+        }
+        self.drag_snapshot = Some(snap);
         vec![Tag::GraphSelectionChanged {
             summary_ms: summary_ms.into_iter().collect(),
         }]
@@ -316,6 +329,7 @@ impl GraphEditorState {
             summary_ms: ms_set.into_iter().collect(),
         }];
         tags.push(Tag::GraphDragEnded);
+        self.drag_snapshot = None;
         tags
     }
 }

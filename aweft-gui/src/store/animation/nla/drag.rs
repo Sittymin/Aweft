@@ -1,16 +1,11 @@
-use super::{NlaEditorState, NlaStripData, StripDrag};
+use super::{NlaEditorState, StripDrag};
 use crate::depsgraph::{NlaStripMove, NlaStripRef, NlaStripReorder, Tag};
+use crate::store::utils::drag::is_valid_delta_pair;
 
 impl NlaEditorState {
-    /// 片断拖拽。锁定轨道不可编辑。
-    ///
-    /// `delta_x` 为世界时间位移；`delta_row` 为垂直位移（行数，正 = 向下）。
-    /// 垂直：**瞬间跳轨**——片段中心（按下轨道中线 + delta_row）越过轨道边界即把片段
-    /// 立即移到目标轨道（按 start 排序插入），不做平滑跟随；目标无效（越界/全局
-    /// Action 轨/锁定轨）则保持当前轨道。
-    /// 水平：与当前所在轨道其他片断**硬钳制**——重叠时按候选中点相对片断中点停到
-    /// 较近的一侧（可穿越）；若两片断间空隙放不下，则不塞入（保持片段当前位置）。
-    /// 拖动中保持模型按 start 排序（否则穿越后延伸条带/空隙归属错乱）。
+    /// 片断拖拽。支持多选同移：选中集一起以相同 `delta_x` 增量移动，各自独立硬钳制
+    /// （与曲线编辑器多关键帧同移一致）。偏移由 Slint 侧每次传来累计 `delta_x`，
+    /// 增量 = `delta - prev`，无需快照。
     pub fn strip_dragged(
         &mut self,
         track: usize,
@@ -18,10 +13,10 @@ impl NlaEditorState {
         delta_x: f32,
         delta_row: f32,
     ) -> Vec<Tag> {
-        if !delta_x.is_finite() || !delta_row.is_finite() {
+        if !is_valid_delta_pair(delta_x, delta_row) {
             return Vec::new();
         }
-        let Some(mut d) = self.drag else {
+        let Some(mut d) = self.drag.clone() else {
             return Vec::new();
         };
         if d.press_track != track || d.press_strip != strip {
@@ -35,57 +30,77 @@ impl NlaEditorState {
         {
             return Vec::new();
         }
+
+        // 判定多选：选中数 >1 且按下的是已选中
+        let selected_count = self
+            .editing_strips
+            .iter()
+            .flat_map(|l| l.iter())
+            .filter(|e| e.view.selected)
+            .count();
+        let is_multi = selected_count > 1
+            && self
+                .editing_strips
+                .get(d.press_track)
+                .and_then(|l| l.get(d.press_strip))
+                .map(|e| e.view.selected)
+                .unwrap_or(false);
+
+        if is_multi {
+            return self.strip_dragged_multi(&mut d, delta_x);
+        }
+
+        // —— 单选：保留原有垂直跨轨 + 水平钳制 + 重排 ——
         let width = d.orig_end - d.orig_start;
         let mut updated = Vec::new();
         let mut moved = Vec::new();
         let mut reordered = Vec::new();
 
-        // 垂直：目标轨道（基于按下轨道 + 绝对位移）；不同且有效 → 立即跨轨（按 start 插入）
         let target = self.drag_target_row(d.press_track, delta_row);
         if target != d.track && self.can_move_to(target) {
-            // 源下标用 remove 前的 d.strip（拖动中 reinsert 后可能与按下下标不同），
-            // 投影按同一下标 remove 派生层——错用 press 下标会移错片断导致两层错乱
             let src_idx = d.strip;
-            let src_list = &mut self.editing_strips[d.track];
-            if d.strip < src_list.len() {
-                let s = src_list.remove(d.strip);
-                let dst_list = &mut self.editing_strips[target];
-                let start = s.view.start;
-                let idx = dst_list
-                    .iter()
-                    .position(|x| start < x.view.start)
-                    .unwrap_or(dst_list.len());
-                dst_list.insert(idx, s);
-                d.strip = idx;
-                moved.push(NlaStripMove {
-                    src_track: d.track,
-                    src_index: src_idx,
-                    dst_track: target,
-                });
-                d.track = target;
+            // 卫语句：越界
+            if d.strip >= self.editing_strips[d.track].len() {
+                self.drag = Some(d);
+                return Vec::new();
             }
+            let s = self.editing_strips[d.track].remove(d.strip);
+            let dst_list = &mut self.editing_strips[target];
+            let start = s.view.start;
+            let idx = dst_list
+                .iter()
+                .position(|x| start < x.view.start)
+                .unwrap_or(dst_list.len());
+            dst_list.insert(idx, s);
+            d.strip = idx;
+            moved.push(NlaStripMove {
+                src_track: d.track,
+                src_index: src_idx,
+                dst_track: target,
+            });
+            d.track = target;
         }
 
-        // 水平：钳制到当前所在轨道的空隙（fallback = 片段当前实际位置，空隙不够时不塞入）
         let fallback = self
             .editing_strips
             .get(d.track)
             .and_then(|l| l.get(d.strip))
             .map(|e| e.view.start)
-            .unwrap_or(d.orig_start + delta_x);
+            .unwrap_or(d.orig_start);
         let raw_start = d.orig_start + delta_x;
         let start = self.clamp_no_overlap(d.track, d.strip, raw_start, width, fallback);
-        if let Some(e) = self
+        let Some(e) = self
             .editing_strips
             .get_mut(d.track)
             .and_then(|l| l.get_mut(d.strip))
-        {
-            e.view.start = start;
-            e.view.end = start + width;
-            e.view.dragging = true;
-        }
-        // 保持模型按 start 排序（穿越后延伸/空隙按时间顺序计算）。
-        // 数据层重排必须通知投影同步 remove+insert，否则派生层旧位置残留幽灵片断
+        else {
+            self.drag = Some(d);
+            return Vec::new();
+        };
+        e.view.start = start;
+        e.view.end = start + width;
+        e.view.dragging = true;
+
         let old_idx = d.strip;
         d.strip = self.reinsert_sorted(d.track, d.strip);
         if d.strip != old_idx {
@@ -114,6 +129,134 @@ impl NlaEditorState {
         tags
     }
 
+    /// 多选同移：选中集以相同增量水平移动，各自独立钳制（与 Graph 多关键帧一致）。
+    /// Slint 侧 `delta` 为累计，增量 = `delta - prev`。
+    fn strip_dragged_multi(&mut self, drag: &mut StripDrag, delta_x: f32) -> Vec<Tag> {
+        let inc_x = delta_x - drag.prev_delta_x;
+        if inc_x == 0.0 {
+            return Vec::new();
+        }
+        if !inc_x.is_finite() {
+            return Vec::new();
+        }
+        // 收集每轨选中下标（不可变借用，卫语句提前返回）
+        let mut per_track_selected: Vec<std::collections::HashSet<usize>> =
+            vec![std::collections::HashSet::new(); self.editing_strips.len()];
+        for (ti, list) in self.editing_strips.iter().enumerate() {
+            for (idx, e) in list.iter().enumerate() {
+                if !e.view.selected {
+                    continue;
+                }
+                per_track_selected[ti].insert(idx);
+            }
+        }
+        let mut updated = Vec::new();
+        // 逐轨增量移动（先收集未选中区间，再可变更新，避免借用冲突）
+        for ti in 0..self.editing_strips.len() {
+            if self
+                .track_view
+                .get(ti)
+                .map(|t| t.is_action || t.locked)
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            let selected_set = &per_track_selected[ti];
+            if selected_set.is_empty() {
+                continue;
+            }
+            // 收集未选中区间（用于独立钳制）
+            let unselected: Vec<(f32, f32)> = {
+                let list = &self.editing_strips[ti];
+                let mut v = Vec::new();
+                for (idx, e) in list.iter().enumerate() {
+                    if selected_set.contains(&idx) {
+                        continue;
+                    }
+                    v.push((e.view.start, e.view.end));
+                }
+                v
+            };
+            // 收集待更新的选中条目快照
+            let to_update: Vec<(usize, f32, f32)> = {
+                let list = &self.editing_strips[ti];
+                let mut v = Vec::new();
+                for &idx in selected_set {
+                    let Some(e) = list.get(idx) else { continue };
+                    v.push((idx, e.view.start, e.view.end - e.view.start));
+                }
+                v
+            };
+            // 可变更新
+            let list = &mut self.editing_strips[ti];
+            for (idx, cur_start, width) in to_update {
+                let raw = cur_start + inc_x;
+                let clamped = Self::clamp_with_unselected(&unselected, raw, width, cur_start);
+                let Some(e) = list.get_mut(idx) else { continue };
+                e.view.start = clamped;
+                e.view.end = clamped + width;
+                e.view.dragging = true;
+                updated.push(NlaStripRef { track: ti, index: idx });
+            }
+        }
+        drag.prev_delta_x = delta_x;
+        if let Some(d) = self.drag.as_mut() {
+            d.prev_delta_x = delta_x;
+        }
+        if updated.is_empty() {
+            return Vec::new();
+        }
+        vec![Tag::NlaStripPositionChanged { updated }]
+    }
+
+    /// 右键取消当前拖动：轻量回退（仅选中条目，不克隆全量）
+    pub fn strip_drag_cancel(&mut self) -> Vec<Tag> {
+        let Some(d) = self.drag.take() else {
+            return Vec::new();
+        };
+        for list in &mut self.editing_strips {
+            for e in list.iter_mut() {
+                if e.view.selected {
+                    e.view.dragging = false;
+                }
+            }
+        }
+        if d.selected_snapshot.len() == 1 {
+            let width = d.orig_end - d.orig_start;
+            if let Some(list) = self.editing_strips.get_mut(d.track) {
+                if let Some(e) = list.get_mut(d.strip) {
+                    if e.view.selected {
+                        e.view.start = d.orig_start;
+                        e.view.end = d.orig_start + width;
+                    }
+                }
+            }
+        } else {
+            for (track, idx, orig_start, width) in d.selected_snapshot {
+                if let Some(list) = self.editing_strips.get_mut(track) {
+                    if let Some(e) = list.get_mut(idx) {
+                        if e.view.selected {
+                            e.view.start = orig_start;
+                            e.view.end = orig_start + width;
+                        }
+                    }
+                }
+            }
+        }
+        let mut updated = Vec::new();
+        for (ti, list) in self.editing_strips.iter().enumerate() {
+            for (idx, e) in list.iter().enumerate() {
+                if e.view.selected {
+                    updated.push(NlaStripRef { track: ti, index: idx });
+                }
+            }
+        }
+        if updated.is_empty() {
+            return Vec::new();
+        }
+        vec![Tag::NlaStripPositionChanged { updated }]
+    }
+
     /// 垂直位移后片段中心所在的轨道（行号）：中心 = 按下轨道中线 + delta_row，
     /// 片段中心越过轨道边界（|delta_row| > 0.5）即进入相邻轨道；越界钳到两端。
     fn drag_target_row(&self, press_row: usize, delta_row: f32) -> usize {
@@ -122,10 +265,7 @@ impl NlaEditorState {
         target.min(self.track_view.len().saturating_sub(1))
     }
 
-    /// 把候选 [start, start+width] 钳制到 `track` 轨道的空隙内（不与其他片断重叠）。
-    /// 与片断重叠时按**候选中点相对片断中点**停到较近的一侧（可穿越到片断另一侧）；
-    /// 但若两片断之间的空隙放不下候选（迭代钳制后仍与某片断重叠），则**不塞入**，
-    /// 回退到 `fallback`（片段保持当前位置）。
+    /// 单条钳制：把候选 [start, start+width] 钳制到 `track` 轨道的空隙内
     fn clamp_no_overlap(
         &self,
         track: usize,
@@ -161,13 +301,47 @@ impl NlaEditorState {
                 break;
             }
         }
-        // 空隙不够（迭代后仍与片断重叠）→ 不塞入，回退到片段当前位置
         for (j, o) in list.iter().enumerate() {
             if j == ignore_strip {
                 continue;
             }
             let o = &o.view;
             if s < o.end && s + width > o.start {
+                return fallback;
+            }
+        }
+        s
+    }
+
+    /// 多选钳制：仅与未选中区间重叠时钳制（与单条钳制同逻辑，但忽略选中集）
+    fn clamp_with_unselected(
+        unselected: &[(f32, f32)],
+        start: f32,
+        width: f32,
+        fallback: f32,
+    ) -> f32 {
+        let mut s = start;
+        for _ in 0..unselected.len() + 1 {
+            let mut moved = false;
+            for (o_start, o_end) in unselected {
+                if s < *o_end && s + width > *o_start {
+                    let cand_mid = s + width / 2.0;
+                    let o_mid = (o_start + o_end) / 2.0;
+                    if cand_mid < o_mid {
+                        s = o_start - width;
+                    } else {
+                        s = *o_end;
+                    }
+                    moved = true;
+                    break;
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        for (o_start, o_end) in unselected {
+            if s < *o_end && s + width > *o_start {
                 return fallback;
             }
         }
@@ -188,28 +362,36 @@ impl NlaEditorState {
     }
 
     /// 片断松开：跨轨道已在拖动中瞬间完成，这里只退出"移动中"高亮并清空拖拽状态。
-    /// `track/strip` 为按下时回传的编码，按 `press_track/press_strip` 匹配。
-    /// model 同步（commit_to_model）由 reducer 在投影前完成。
     pub fn strip_released(&mut self, track: usize, strip: usize) -> Vec<Tag> {
-        let Some(d) = self.drag else {
+        let Some(d) = self.drag.clone() else {
             return Vec::new();
         };
         if d.press_track != track || d.press_strip != strip {
             return Vec::new();
         }
-        if let Some(e) = self
-            .editing_strips
-            .get_mut(d.track)
-            .and_then(|l| l.get_mut(d.strip))
-        {
-            e.view.dragging = false;
+        // 清理所有选中条的 dragging
+        for list in &mut self.editing_strips {
+            for e in list.iter_mut() {
+                if e.view.selected {
+                    e.view.dragging = false;
+                }
+            }
         }
         self.drag = None;
-        vec![Tag::NlaStripPositionChanged {
-            updated: vec![NlaStripRef {
+        let mut updated = Vec::new();
+        for (ti, list) in self.editing_strips.iter().enumerate() {
+            for (idx, e) in list.iter().enumerate() {
+                if e.view.selected {
+                    updated.push(NlaStripRef { track: ti, index: idx });
+                }
+            }
+        }
+        if updated.is_empty() {
+            updated.push(NlaStripRef {
                 track: d.track,
                 index: d.strip,
-            }],
-        }]
+            });
+        }
+        vec![Tag::NlaStripPositionChanged { updated }]
     }
 }

@@ -1,6 +1,7 @@
 // 摄影表（Dope Sheet）基础元素：单行时间轴上的关键帧菱形。
 // 与曲线编辑器关键帧类似，但只按时间定位（行高由泳道决定），拖拽只调整时间。
 import { SlintSelectionModifier } from "../../core/types.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component DopeKeyframe inherits Rectangle {
@@ -53,6 +54,11 @@ export component DopeKeyframe inherits Rectangle {
                 root.pressed(event.modifiers.control
                     ? SlintSelectionModifier.ctrl
                     : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.dragging) {
+                root.dragging = false;
+                root.moved = false;
+                AnimationCallbacks.drag-cancel();
+                return EventResult.accept;
             } else if (event.kind == PointerEventKind.move && root.dragging) {
                 // 只沿时间轴拖动；增量 = 光标位移 / 缩放（与节点拖拽一致）
                 root.moved = true;
@@ -163,6 +169,11 @@ export component DopeSummaryKeyframe inherits Rectangle {
                 root.pressed(event.modifiers.control
                     ? SlintSelectionModifier.ctrl
                     : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.dragging) {
+                root.dragging = false;
+                root.moved = false;
+                AnimationCallbacks.drag-cancel();
+                return EventResult.accept;
             } else if (event.kind == PointerEventKind.move && root.dragging) {
                 root.moved = true;
                 root.dragged((self.mouse-x / 1px - root.press-mouse-x) / root.view-zoom);

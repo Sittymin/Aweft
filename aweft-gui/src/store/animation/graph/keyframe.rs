@@ -6,6 +6,7 @@ use crate::bridge::types::{
     SlintBezierHandle, SlintInterpolation, SlintKeyframeDragMode, SlintSelectionModifier,
 };
 use crate::depsgraph::Tag;
+use crate::store::utils::selection::{is_additive, is_replacing, is_toggling};
 
 impl GraphEditorState {
     /// 关键帧按下：none=单选，shift=同通道区间扩展，ctrl=切换。锁定通道不可交互。
@@ -50,63 +51,68 @@ impl GraphEditorState {
         self.pressed_was_selected = already_selected || has_other_selected;
         let mut summary_ms = std::collections::HashSet::new();
 
-        match modifier {
-            SlintSelectionModifier::Shift => {
-                let anchor = self
-                    .keyframe_selection_anchor
-                    .unwrap_or(KeyframeLoc { curve, key });
-                let (lo, hi) = if anchor.curve == curve {
-                    (anchor.key.min(key), anchor.key.max(key))
-                } else {
-                    (key, key)
-                };
-                if anchor.curve != curve {
-                    self.keyframe_selection_anchor = Some(KeyframeLoc { curve, key });
-                }
-                for index in lo..=hi {
-                    if let Some(ms) = self.set_keyframe_selected(curve, index, false) {
-                        summary_ms.insert(ms);
-                    }
-                }
-                let mut sel = self.effective_selected_channels();
-                if !sel.contains(&curve) {
-                    sel.push(curve);
-                }
-                self.pending_channel_selection = sel;
+        if is_additive(modifier) {
+            let anchor = self
+                .keyframe_selection_anchor
+                .unwrap_or(KeyframeLoc { curve, key });
+            let (lo, hi) = if anchor.curve == curve {
+                (anchor.key.min(key), anchor.key.max(key))
+            } else {
+                (key, key)
+            };
+            if anchor.curve != curve {
+                self.keyframe_selection_anchor = Some(KeyframeLoc { curve, key });
             }
-            SlintSelectionModifier::Ctrl => {
-                if let Some(ms) = self.set_keyframe_selected(curve, key, already_selected) {
+            for index in lo..=hi {
+                if let Some(ms) = self.set_keyframe_selected(curve, index, false) {
                     summary_ms.insert(ms);
                 }
-                // Ctrl 切换后：从全量选择集重建 pending，移除已无选中关键帧的通道。
-                // 兜底：被按通道若刚被选中但尚未在 effective 集合中，手动加入。
-                let mut pending: Vec<usize> = self
-                    .effective_selected_channels()
-                    .into_iter()
-                    .filter(|&c| self.channel_has_selected_keyframe(c))
-                    .collect();
-                if self.channel_has_selected_keyframe(curve) && !pending.contains(&curve) {
-                    pending.push(curve);
-                }
-                self.pending_channel_selection = pending;
             }
-            SlintSelectionModifier::None => {
-                self.keyframe_selection_anchor = Some(KeyframeLoc { curve, key });
-                if self.pressed_was_selected {
-                    self.pending_channel_selection = self.effective_selected_channels();
-                } else {
-                    self.pending_channel_selection = vec![curve];
-                    self.selection_anchor = curve as isize;
-                    for ms in self.deselect_all() {
-                        summary_ms.insert(ms);
-                    }
-                    if let Some(ms) = self.set_keyframe_selected(curve, key, false) {
-                        summary_ms.insert(ms);
-                    }
+            let mut sel = self.effective_selected_channels();
+            if !sel.contains(&curve) {
+                sel.push(curve);
+            }
+            self.pending_channel_selection = sel;
+        } else if is_toggling(modifier) {
+            if let Some(ms) = self.set_keyframe_selected(curve, key, already_selected) {
+                summary_ms.insert(ms);
+            }
+            // Ctrl 切换后：从全量选择集重建 pending，移除已无选中关键帧的通道。
+            // 兜底：被按通道若刚被选中但尚未在 effective 集合中，手动加入。
+            let mut pending: Vec<usize> = self
+                .effective_selected_channels()
+                .into_iter()
+                .filter(|&c| self.channel_has_selected_keyframe(c))
+                .collect();
+            if self.channel_has_selected_keyframe(curve) && !pending.contains(&curve) {
+                pending.push(curve);
+            }
+            self.pending_channel_selection = pending;
+        } else {
+            self.keyframe_selection_anchor = Some(KeyframeLoc { curve, key });
+            if self.pressed_was_selected {
+                self.pending_channel_selection = self.effective_selected_channels();
+            } else {
+                self.pending_channel_selection = vec![curve];
+                self.selection_anchor = curve as isize;
+                for ms in self.deselect_all() {
+                    summary_ms.insert(ms);
+                }
+                if let Some(ms) = self.set_keyframe_selected(curve, key, false) {
+                    summary_ms.insert(ms);
                 }
             }
         }
         self.current_channel = curve as isize;
+        let mut snap = std::collections::HashMap::new();
+        for (&c, kfs) in &self.editing_keyframes {
+            for (idx, kf) in kfs.iter().enumerate() {
+                if kf.selected {
+                    snap.insert(KeyframeLoc { curve: c, key: idx }, kf.clone());
+                }
+            }
+        }
+        self.drag_snapshot = Some(snap);
         vec![Tag::GraphSelectionChanged {
             summary_ms: summary_ms.into_iter().collect(),
         }]
@@ -205,7 +211,10 @@ impl GraphEditorState {
         if mode == SlintKeyframeDragMode::DragOutHandle {
             return self.drag_out_handle(curve, key, delta_time, delta_value);
         }
-        // 收集被移动的关键帧下标 + 记录旧 ms（汇总增量更新用）
+        if delta_time == 0.0 && delta_value == 0.0 {
+            return Vec::new();
+        }
+        // 收集被移动的关键帧下标 + 记录旧 ms（Slint 侧 delta 已为增量）
         let mut updates: Vec<KeyframeUpdate> = Vec::new();
         let mut moved: Vec<usize> = Vec::new();
         let mut affected_ms: std::collections::HashSet<i64> = std::collections::HashSet::new();
@@ -285,12 +294,39 @@ impl GraphEditorState {
         }]
     }
 
+    /// 右键取消当前拖动：轻量快照回退（仅选中 `SlintKeyframe`，不克隆全量 `editing_keyframes`）
+    pub fn drag_cancel(&mut self) -> Vec<Tag> {
+        let Some(snap) = self.drag_snapshot.take() else {
+            return Vec::new();
+        };
+        let mut affected_ms: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut moved: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for (loc, orig) in snap {
+            if let Some(kfs) = self.editing_keyframes.get_mut(&loc.curve) {
+                if let Some(kf) = kfs.get_mut(loc.key) {
+                    affected_ms.insert(ms_of(kf.time));
+                    affected_ms.insert(ms_of(orig.time));
+                    *kf = orig;
+                    moved.insert(loc.curve);
+                }
+            }
+        }
+        // 走 GraphKeyframesChanged 由 op_graph_keyframes 自动传播至 keyframe_models/segments/handles
+        vec![Tag::GraphKeyframesChanged {
+            curves: moved.into_iter().collect(),
+            summary_ms: affected_ms.into_iter().collect(),
+            dragged_curve: None,
+            dragged_summary: None,
+            handle_preview: None,
+        }]
+    }
+
     /// 关键帧松开。moved=true 表示发生过拖拽（保持多选）；false 为单击 → 折叠为单选。
     /// 先写回按下时记录的通道选中（grab 已结束，此时对外层 channels 模型更新安全），
     /// 再恢复普通手柄。
     pub fn keyframe_released(&mut self, curve: usize, key: usize, moved: bool) -> Vec<Tag> {
         let mut summary_ms: std::collections::HashSet<i64> = std::collections::HashSet::new();
-        if !moved && self.pressed_modifier == SlintSelectionModifier::None {
+        if !moved && is_replacing(self.pressed_modifier) {
             // 无修饰键的单击才做折叠/循环
             if self.pressed_was_selected {
                 let coincident = self.find_coincident_keyframes(curve, key);
@@ -319,6 +355,7 @@ impl GraphEditorState {
         if moved {
             tags.push(Tag::GraphDragEnded);
         }
+        self.drag_snapshot = None;
         tags
     }
 

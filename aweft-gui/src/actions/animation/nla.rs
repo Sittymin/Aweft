@@ -26,8 +26,18 @@ pub enum NlaAction {
     },
     /// 片断松开（提交：数据层整理 + 写回 model）。
     StripReleased { track: usize, strip: usize },
+    /// 拖动中右键取消：丢弃预览，恢复为按下前状态（与字幕行时间拖动取消一致）。
+    StripDragCancel,
     /// 画布空白点击：清除全部片断选中。
     StripDeselectAll,
+    /// 画布空白框选（时间范围 × 轨道区间；none=替换，shift=加选，ctrl=切换）。
+    MarqueeSelect {
+        x_lo: f32,
+        x_hi: f32,
+        row_lo: i32,
+        row_hi: i32,
+        modifier: SlintSelectionModifier,
+    },
 
     // —— 轨道 ——
     /// 轨道启用开关（enabled ↔ model NlaTrack.muted）。

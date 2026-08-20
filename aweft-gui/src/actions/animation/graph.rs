@@ -36,6 +36,8 @@ pub enum GraphAction {
     },
     /// 画布空白点击：清除关键帧选中。
     DeselectKeyframes,
+    /// 拖动中右键取消：增量回退（不克隆快照）
+    DragCancel,
 
     // —— 贝塞尔控制柄 ——
     /// 手柄按下：none=单选，shift=区间扩展，ctrl=切换。

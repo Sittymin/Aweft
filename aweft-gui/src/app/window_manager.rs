@@ -119,7 +119,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
     use aweft_model::sequence::{EventData, ItemLocation};
     use chrono::TimeDelta;
 
-    let mut sequence = project.sequence_mut();
+    let sequence = project.sequence_mut();
 
     // 创建根级别的事件
     let event1 = EventData {

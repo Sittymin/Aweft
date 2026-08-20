@@ -46,6 +46,12 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
   （手柄可能被故意钳到 0 长度，ensure 不该覆盖）
 - 松开/插值变更后 `write_view_to_model` 写回 model Action
 
+**通用工具**（`store/utils/` 单一文件夹）：`marquee::normalize_time/clamp_rows`、`selection::is_*`、`drag::is_valid_delta` 预先查找，避免重复实现
+
+**时间线（Timeline）**（`ui/areas/timeline/`，复用 Sequence 可见行模型，与字幕行同一数据源）：
+- 框选：`SequenceAction::MarqueeSelect`（时间 × 行，求交语义，`store/utils/marquee::clamp_rows`）+ `DeselectAll`（空白清除），`store/sequence.rs:marquee_select` 按可见行与时间求交选中（分组头联动子树），`Shift` 加选/`Ctrl` 切换/`None` 替换
+- 交互：`CanvasNavigation:marquee` 单一 `TouchArea` 复用（框选/中键平移/右键取消），`TimelinePanel` 列表与画布行共享 `pan-y`
+
 **摄影表（Dope Sheet）**（`ui/areas/dope_sheet/`，与曲线编辑器共用数据/选中，拖拽只调时间）：
 - 布局参照 Blender：左侧 `ChannelPanel`（搜索框 + 通道列表 + 汇总标题行）+ 顶部 `TimeRuler`
   + 主画布（每通道一行按时间铺开关键帧）；滚轮仅横向缩放（`CanvasNavigation.lock-y-zoom`）、
@@ -85,8 +91,9 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
   `op_nla_structure`（apply_structure + rebind_nla_tracks）/ `op_nla_selection`（apply_selection）/
   `op_nla_strip_structure`（apply_moved/apply_reordered/apply_inserted 三子函数）/
   `op_nla_position`（apply_position）/ `op_nla_track_properties` / `op_nla_track_added`
-- 拖拽语义（对齐曲线编辑器 preview/commit）：拖拽（高频）只改数据层 + `NlaStripPosition/Structure` Tag，
-  投影同步派生层；松开 `strip_released` 整理 dragging + `commit_to_model` 写回 model；
+- 拖拽语义（对齐曲线编辑器 preview/commit，增量 `delta` 由 Slint 传来，最终提交校验，不克隆快照）：拖拽（高频）只改数据层 + `NlaStripPosition/Structure` Tag，
+  投影 `set_row_data` 同步派生层；松开 `strip_released` 整理 dragging + `commit_to_model` 写回 model；右键 `StripDragCancel` 轻量快照 `selected_snapshot:Vec<(track,idx,start,width)>` 回退并 `NlaStripPositionChanged` 走依赖图自动传播；
+  多选同移选中集以相同增量移动，各自独立 `clamp_with_unselected`（与 Graph 多关键帧一致）
   跨轨移动在拖动中瞬间完成（数据层 remove+insert，投影同规则同步；`apply_moved→reordered→inserted`拆分保序）
 - 锁定轨/全局 Action 轨只读：`strip_hit_test` 纯命中，`strip_pick`仅测试兼容
 - 测试：`nla_editor/tests.rs` 单测（`project`走`apply_selection/strip_structure/position`单职责；`hit_test`纯只读）+

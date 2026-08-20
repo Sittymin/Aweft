@@ -8,6 +8,7 @@ use chrono::TimeDelta;
 use crate::actions::sequence::SequenceAction;
 use crate::clipboard::ItemsClip;
 use crate::depsgraph::Tag;
+use crate::store::utils::selection::{is_additive, is_toggling};
 
 /// Sequence 域 reducer（`impl AppStore`）：只改 Domain（`project.sequence`/选中）
 /// 并返回精确 tag。UI 投影更新交给 depsgraph 投影重算（Sequence 投影依赖
@@ -194,11 +195,7 @@ impl crate::store::AppStore {
                 is_batch,
             } => {
                 log::debug!("DragTimecodePreview delta_x: {}", delta_x);
-
-                if !delta_x.is_finite()
-                    || delta_x >= (i64::MAX as f32)
-                    || delta_x <= (i64::MIN as f32)
-                {
+                if !crate::store::utils::drag::is_valid_delta(delta_x) {
                     return Ok(vec![]);
                 }
 
@@ -259,11 +256,7 @@ impl crate::store::AppStore {
                 is_batch,
             } => {
                 log::debug!("DragTimecodeCommit delta_x: {}", delta_x);
-
-                if !delta_x.is_finite()
-                    || delta_x >= (i64::MAX as f32)
-                    || delta_x <= (i64::MIN as f32)
-                {
+                if !crate::store::utils::drag::is_valid_delta(delta_x) {
                     return Ok(vec![]);
                 }
 
@@ -325,18 +318,31 @@ impl crate::store::AppStore {
                 }
             }
             SequenceAction::SelectRow { item_id, modifier } => {
-                let kind = match modifier {
-                    crate::bridge::types::SlintSelectionModifier::Shift => {
-                        crate::depsgraph::SelectionKind::Range
-                    }
-                    crate::bridge::types::SlintSelectionModifier::Ctrl => {
-                        crate::depsgraph::SelectionKind::Toggle
-                    }
-                    crate::bridge::types::SlintSelectionModifier::None => {
-                        crate::depsgraph::SelectionKind::Single
-                    }
+                let kind = if is_additive(modifier) {
+                    crate::depsgraph::SelectionKind::Range
+                } else if is_toggling(modifier) {
+                    crate::depsgraph::SelectionKind::Toggle
+                } else {
+                    crate::depsgraph::SelectionKind::Single
                 };
                 Ok(vec![self.selection_tag(item_id, kind)])
+            }
+            SequenceAction::MarqueeSelect {
+                x_lo,
+                x_hi,
+                row_lo,
+                row_hi,
+                modifier,
+            } => {
+                // 框选直接改选中态（与 graph/Dope 同步），经 rows_model.notify 实时刷新
+                self.ui_models
+                    .sequence_state
+                    .marquee_select(&self.state.project, x_lo, x_hi, row_lo, row_hi, modifier);
+                Ok(vec![])
+            }
+            SequenceAction::DeselectAll => {
+                self.ui_models.sequence_state.deselect_all(&self.state.project);
+                Ok(vec![])
             }
             SequenceAction::AddLine {
                 item_id,

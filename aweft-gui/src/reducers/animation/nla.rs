@@ -64,6 +64,7 @@ impl crate::store::AppStore {
                 tags
             }
             StripDeselectAll => self.ui_models.animation.nla.deselect_all(),
+            StripDragCancel => self.ui_models.animation.nla.strip_drag_cancel(),
             ToggleTrackEnabled { track } => {
                 let tags = self.ui_models.animation.nla.toggle_track_enabled(track);
                 // model 同步：enabled ↔ muted
@@ -83,6 +84,15 @@ impl crate::store::AppStore {
             ToggleTrackLocked { track } => self.ui_models.animation.nla.toggle_track_locked(track),
             SearchChanged { text } => self.ui_models.animation.nla.filter_tracks(&text),
             PushDown => self.push_down_action(),
+            MarqueeSelect {
+                x_lo,
+                x_hi,
+                row_lo,
+                row_hi,
+                modifier,
+            } => self.ui_models.animation.nla.marquee_select(
+                x_lo, x_hi, row_lo, row_hi, modifier,
+            ),
         };
         Ok(tags)
     }

@@ -1,4 +1,4 @@
-use super::{NlaEditorState, NlaStripData, StripDrag};
+use super::NlaEditorState;
 use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
 use crate::depsgraph::Tag;
 use slint::{Model, ModelRc, VecModel};

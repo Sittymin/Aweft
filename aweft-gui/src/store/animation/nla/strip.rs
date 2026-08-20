@@ -1,4 +1,4 @@
-use super::{NlaEditorState, NlaStripData, StripDrag};
+use super::NlaStripData;
 use crate::bridge::types::{SlintNlaStrip, SlintStripType};
 use aweft_model::{
     animation::strip::{NlaStrip, StripType},

@@ -35,6 +35,10 @@ export global SequenceCallbacks {
     callback timecode-input(item-id: string, is-start-time: bool, text: string, is_batch: bool);
     // 行选择（none=普通单选，shift=区间扩展，ctrl=切换）
     callback select-row(item-id: string, modifier: SlintSelectionModifier);
+    // 时间线画布框选（时间范围 × 行区间；none=替换，shift=加选，ctrl=切换）
+    callback timeline-marquee-select(x-lo: float, x-hi: float, row-lo: int, row-hi: int, modifier: SlintSelectionModifier);
+    // 画布空白点击：清除选中
+    callback timeline-deselect-all();
     // 右键菜单
     // NOTE: 后续在空列表当中的也需要实现（即无法获得开始与结束时间）
     // 参数用于定位新增的行位置
@@ -100,6 +104,8 @@ export global AnimationCallbacks {
     callback keyframe-released(curve-index: int, key-index: int, moved: bool);
     // 画布空白点击：清除关键帧选中
     callback keyframe-deselect-all();
+    // 拖动中右键取消：丢弃预览（与 NLA/字幕行一致）
+    callback drag-cancel();
     // —— 曲线编辑器：贝塞尔控制柄 ——
     // 按下：none=单选，shift=区间扩展，ctrl=切换
     callback handle-pressed(curve-index: int, key-index: int, is-in: bool, modifier: SlintSelectionModifier);
@@ -145,11 +151,15 @@ export global AnimationCallbacks {
     callback nla-strip-dragged(track-index: int, strip-index: int, delta-x: float, delta-row: float);
     // 松开：拖拽结束（数据层整理 + 写回 model）
     callback nla-strip-released(track-index: int, strip-index: int);
+    // 拖动中右键取消：丢弃预览（与字幕行时间拖动取消一致）
+    callback nla-strip-drag-cancel();
     // 画布空白点击：清除全部片断选中
     callback nla-strip-deselect-all();
     // 画布级 TouchArea 左键命中检测（世界时间 x + 过滤视图行号）：命中返回编码
     // （track*10000+strip），并完成选中与拖拽起点记录；未命中返回 -1
     callback nla-strip-pick(x: float, row: int, modifier: SlintSelectionModifier) -> int;
+    // 画布空白框选（时间范围 × 轨道区间；none=替换，shift=加选，ctrl=切换）
+    callback nla-marquee-select(x-lo: float, x-hi: float, row-lo: int, row-hi: int, modifier: SlintSelectionModifier);
     // —— NLA 编辑器：轨道 ——
     // 轨道启用开关（enabled ↔ model NlaTrack.muted）
     callback nla-track-toggle-enabled(track-index: int);

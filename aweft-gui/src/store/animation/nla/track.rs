@@ -1,4 +1,4 @@
-use super::{NlaEditorState, NlaStripData, StripDrag};
+use super::{NlaEditorState, NlaStripData};
 use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
 use crate::depsgraph::Tag;
 use aweft_model::{animation::strip::NlaStrip, ids::ActionId};
@@ -53,7 +53,7 @@ impl NlaEditorState {
     }
 
     /// 把一条片断按 start 升序插入数据层（`track` 轨道），返回插入下标。
-    pub fn insert_strip(&mut self, track: usize, entry: NlaStripData) -> usize {
+    pub(crate) fn insert_strip(&mut self, track: usize, entry: NlaStripData) -> usize {
         let list = &mut self.editing_strips[track];
         let start = entry.view.start;
         let idx = list

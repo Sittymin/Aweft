@@ -7,6 +7,8 @@ use super::curve_math::segment_intersects_rect;
 use super::ms_of;
 use crate::bridge::types::SlintSelectionModifier;
 use crate::depsgraph::{HandleLoc, Tag};
+use crate::store::utils::marquee::{clamp_rows, normalize_time, normalize_value};
+use crate::store::utils::selection::{is_replacing, is_toggling};
 
 impl GraphEditorState {
     // ── 共享框选核心逻辑 ──────────────────────────────────────────────────
@@ -27,8 +29,8 @@ impl GraphEditorState {
         modifier: SlintSelectionModifier,
     ) -> (Vec<usize>, HashSet<i64>) {
         let (t_lo, t_hi) = time_range;
-        let replacing = modifier == SlintSelectionModifier::None;
-        let toggling = modifier == SlintSelectionModifier::Ctrl;
+        let replacing = is_replacing(modifier);
+        let toggling = is_toggling(modifier);
 
         let mut hit_channels: Vec<usize> = Vec::new();
         let mut affected_ms: HashSet<i64> = HashSet::new();
@@ -117,24 +119,28 @@ impl GraphEditorState {
         modifier: SlintSelectionModifier,
     ) -> Vec<Tag> {
         let n = self.channels_data.len() as i32;
-        if n <= 0 {
+        let Some((r_lo, r_hi)) = clamp_rows(row_lo, row_hi, n) else {
+            // 求交为空：竖直未命中任何行，替换模式仍清空（对齐图编辑器空白框选）
+            if is_replacing(modifier) {
+                let (_, affected_ms) = self.marquee_select_keyframes(
+                    std::iter::empty(),
+                    normalize_time(x_lo, x_hi),
+                    None,
+                    modifier,
+                );
+                let ms: Vec<i64> = affected_ms.into_iter().collect();
+                // marquee_select_keyframes 已在 replacing 时清空并收集 deselect 的 ms
+                // 空区间无需再 hit，直接返回该 ms
+                if !ms.is_empty() {
+                    return vec![Tag::GraphSelectionChanged { summary_ms: ms }];
+                }
+                // 若无受影响 ms，仍需触发一次 selection 以清空通道选中（通过空 channels 已处理）
+                // marquee_select_keyframes 对空迭代器仍会执行 replacing 清空逻辑
+                return vec![Tag::GraphSelectionChanged { summary_ms: vec![] }];
+            }
             return Vec::new();
-        }
-        let (r_lo, r_hi) = if row_lo <= row_hi {
-            (row_lo, row_hi)
-        } else {
-            (row_hi, row_lo)
         };
-        let r_lo = r_lo.max(0);
-        let r_hi = r_hi.min(n - 1);
-        let (t_lo, t_hi) = if x_lo <= x_hi {
-            (x_lo, x_hi)
-        } else {
-            (x_hi, x_lo)
-        };
-        if t_hi < t_lo {
-            return Vec::new();
-        }
+        let (t_lo, t_hi) = normalize_time(x_lo, x_hi);
 
         // r_lo > r_hi 时为空区间：竖直范围未命中任何通道（替换模式仍清空选择，
         // 对齐曲线编辑器"空白框选 = 清除"的语义）
@@ -168,18 +174,10 @@ impl GraphEditorState {
         y_hi: f32,
         modifier: SlintSelectionModifier,
     ) -> Vec<Tag> {
-        let (t_lo, t_hi) = if x_lo <= x_hi {
-            (x_lo, x_hi)
-        } else {
-            (x_hi, x_lo)
-        };
-        let (v_lo, v_hi) = if y_lo <= y_hi {
-            (y_lo, y_hi)
-        } else {
-            (y_hi, y_lo)
-        };
+        let (t_lo, t_hi) = normalize_time(x_lo, x_hi);
+        let (v_lo, v_hi) = normalize_value(y_lo, y_hi);
 
-        let toggling = modifier == SlintSelectionModifier::Ctrl;
+        let toggling = is_toggling(modifier);
 
         // 关键帧选中（通过共享逻辑）
         let (mut hit_channels, affected_ms) = self.marquee_select_keyframes(

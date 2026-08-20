@@ -13,8 +13,11 @@ use chrono::TimeDelta;
 use slint::{Model, ModelRc};
 
 use crate::bridge::{SlintSelectionState, SlintSubtitleRow, SlintTimelineSubBlock};
+use crate::bridge::types::SlintSelectionModifier;
+use crate::store::utils::marquee::{clamp_rows, normalize_time};
+use crate::store::utils::selection::{is_additive, is_replacing};
 use crate::store::sequence_rows_model::{SequenceRowsModel, RowData};
-use slint::{SharedString, ToSharedString, VecModel};
+use slint::{ToSharedString, VecModel};
 
 type SubtitleFilterModel = slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>;
 
@@ -414,6 +417,147 @@ impl SequenceState {
         }
         self.rebuild_selected_event_counts();
         self.refresh_group_selected_by_counts(project);
+    }
+
+    /// 清空全部选中（空白点击）。
+    pub fn deselect_all(&mut self, project: &Project) {
+        let ids: Vec<ItemId> = self.all_highlighted_items.drain().collect();
+        for id in ids {
+            self.rows_model
+                .set_selected(id, SlintSelectionState::Unselected);
+        }
+        // 组头 IndirectlySelected 由 rebuild/refresh 收敛
+        self.rebuild_selected_event_counts();
+        self.refresh_group_selected_by_counts(project);
+        self.last_selection_anchor = None;
+    }
+
+    /// 时间线框选：按世界时间范围 [x_lo,x_hi] × 可见行区间 [row_lo,row_hi]
+    /// 选中时间与行同时相交的行（事件/分组头）。可见行指 FilterModel 中
+    /// 未被折叠隐藏的行，row 索引为过滤后的可见索引（Slint rows 下标）。
+    /// modifier：None=替换，Shift=加选，Ctrl=切换。
+    pub fn marquee_select(
+        &mut self,
+        project: &Project,
+        x_lo: f32,
+        x_hi: f32,
+        row_lo: i32,
+        row_hi: i32,
+        modifier: SlintSelectionModifier,
+    ) {
+        let (t_lo, t_hi) = normalize_time(x_lo, x_hi);
+        // 可见行：未被折叠分组隐藏的行（复用摄影表 row 求交语义，与 NLA/Dope 同源）
+        let collapsed = self.collapsed_groups.borrow().clone();
+        let mut visible: Vec<(usize, ItemId, f32, f32)> = Vec::new();
+        for raw_idx in 0..self.rows_model.row_count() {
+            let Some(row) = self.rows_model.row_data(raw_idx) else {
+                continue;
+            };
+            if row.ancestor_ids.iter().any(|id| collapsed.contains(id)) {
+                continue;
+            }
+            visible.push((
+                raw_idx,
+                row.item_id,
+                row.content.start_sec,
+                row.content.end_sec,
+            ));
+        }
+        let n_vis = visible.len() as i32;
+        let Some((r_lo, r_hi)) = clamp_rows(row_lo, row_hi, n_vis) else {
+            if is_replacing(modifier) {
+                self.deselect_all(project);
+            }
+            return;
+        };
+        let mut hits: Vec<ItemId> = Vec::new();
+        for idx in r_lo as usize..=r_hi as usize {
+            if let Some((_, item_id, start_sec, end_sec)) = visible.get(idx) {
+                if *end_sec <= *start_sec {
+                    continue;
+                }
+                if *end_sec < t_lo || *start_sec > t_hi {
+                    continue;
+                }
+                hits.push(*item_id);
+            }
+        }
+        if hits.is_empty() {
+            if is_replacing(modifier) {
+                self.deselect_all(project);
+            }
+            return;
+        }
+        if is_replacing(modifier) {
+            let ids: Vec<ItemId> = self.all_highlighted_items.drain().collect();
+            for id in ids {
+                self.rows_model
+                    .set_selected(id, SlintSelectionState::Unselected);
+            }
+            for &hit in &hits {
+                self.add_select_hit(hit);
+            }
+        } else if is_additive(modifier) {
+            for &hit in &hits {
+                self.add_select_hit(hit);
+            }
+        } else {
+            for &hit in &hits {
+                self.toggle_select_hit(hit);
+            }
+        }
+        self.rebuild_selected_event_counts();
+        self.refresh_group_selected_by_counts(project);
+        if let Some(&first) = hits.first() {
+            if let Some(idx) = self.rows_model.row_index_of(first) {
+                self.last_selection_anchor = Some(idx);
+            }
+        }
+    }
+
+    fn add_select_hit(&mut self, item_id: ItemId) {
+        let Some(idx) = self.rows_model.row_index_of(item_id) else {
+            return;
+        };
+        if self.rows_model.is_group_item(item_id) {
+            let cnt = self.rows_model.group_row_count(item_id);
+            for i in idx..idx + cnt {
+                if let Some(id) = self.rows_model.item_id_at(i) {
+                    self.rows_model
+                        .set_selected(id, SlintSelectionState::DirectlySelected);
+                    self.all_highlighted_items.insert(id);
+                }
+            }
+        } else {
+            self.rows_model
+                .set_selected(item_id, SlintSelectionState::DirectlySelected);
+            self.all_highlighted_items.insert(item_id);
+        }
+    }
+
+    fn toggle_select_hit(&mut self, item_id: ItemId) {
+        let is_selected = self.rows_model.is_selected(item_id);
+        if is_selected {
+            let Some(idx) = self.rows_model.row_index_of(item_id) else {
+                return;
+            };
+            if self.rows_model.is_group_item(item_id) {
+                let cnt = self.rows_model.group_row_count(item_id);
+                for i in idx..idx + cnt {
+                    if let Some(id) = self.rows_model.item_id_at(i) {
+                        self.rows_model
+                            .set_selected(id, SlintSelectionState::Unselected);
+                        self.all_highlighted_items.remove(&id);
+                    }
+                }
+            } else {
+                self.rows_model
+                    .set_selected(item_id, SlintSelectionState::Unselected);
+                self.all_highlighted_items.remove(&item_id);
+            }
+        } else {
+            self.add_select_hit(item_id);
+        }
     }
 
     /// 从 `selected`（三态单一来源）重建各分组"选中事件数"。

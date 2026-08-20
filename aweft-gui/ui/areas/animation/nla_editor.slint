@@ -2,7 +2,7 @@
 //  - 布局参照 Blender：左侧轨道列表 + 顶部时间标尺 + 主画布（轨道泳道 + 片断）
 //  - 数据来自 Rust 侧 AnimationState 全局（轨道 + 片断）
 //  - 交互：滚轮仅横向缩放时间轴 / 中键双向平移（纵向随内容 clamp）——与摄影表一致；
-//    片断点击选中、横向拖拽；轨道启用/锁定开关
+//    片断点击选中、横向拖拽；轨道启用/锁定开关；空白拖拽框选（时间 × 轨道，none=替换/shift=加选/ctrl=切换，对齐摄影表）
 //  - 画布网格：与摄影表一致用 VerticalGrid 刻度网格（固定槽位即时计算，见 ruler.slint）；
 //    行背景、网格、片断分层绘制（行在最下、网格居中、片断最上）
 import {
@@ -67,6 +67,13 @@ export component NlaEditor inherits Rectangle {
     private property <int> press-track: -1;
     private property <int> press-strip: -1;
     private property <bool> strip-dragging: false;
+
+    // 框选矩形（与摄影表/曲线编辑器一致；空白拖拽画框选轨道片断）
+    private property <bool> marquee-visible: false;
+    private property <float> marquee-x1: 0.0;
+    private property <float> marquee-y1: 0.0;
+    private property <float> marquee-x2: 0.0;
+    private property <float> marquee-y2: 0.0;
 
     // 左侧轨道面板（与摄影表共用搜索栏：搜索栏与顶部时间标尺同层对齐，
     // 列表第一行 = 画布第一泳道，条目为启用/锁开关，与画布泳道同步纵向滚动）
@@ -235,6 +242,13 @@ export component NlaEditor inherits Rectangle {
                     AnimationCallbacks.nla-strip-deselect-all();
                 }
             }
+            cancel-pressed => {
+                AnimationCallbacks.nla-strip-drag-cancel();
+                root.strip-dragging = false;
+                root.press-track = -1;
+                root.press-strip = -1;
+                root.marquee-visible = false;
+            }
         }
 
         // 轨道泳道（纯渲染层：片断点击/拖拽由导航的 marquee 机制命中优先处理；
@@ -254,6 +268,18 @@ export component NlaEditor inherits Rectangle {
             view-time-hi: root.view-time-hi;
         }
 
+        // 框选矩形（与摄影表/曲线编辑器一致，与 Graph/Dope 同风格；未命中片断时拖拽画框）
+        Rectangle {
+            visible: root.marquee-visible;
+            x: root.marquee-x1 * 1px;
+            y: root.marquee-y1 * 1px;
+            width: (root.marquee-x2 - root.marquee-x1) * 1px;
+            height: (root.marquee-y2 - root.marquee-y1) * 1px;
+            background: Theme.data.animation-editor.marquee-fill;
+            border-width: 1px;
+            border-color: Theme.data.animation-editor.marquee-border;
+        }
+
         // 当前时间线（播放头，置顶但不拦截事件）
         Rectangle {
             x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
@@ -265,10 +291,10 @@ export component NlaEditor inherits Rectangle {
     }
 
     // marquee 拖动中：首次拖动判定起点是否命中片断——命中则进入片断拖拽
-    // （选中由 strip-pick 内部完成），否则保持空白无操作（NLA 无框选）。
-    // 拖拽起点命中用普通选择（修饰键语义由背景点击路径传递，见 background-pressed）。
+    // （选中由 strip-pick 内部完成），否则进入框选（画矩形，time × 轨道）。
+    // 框选语义对齐摄影表：none=替换，shift=加选，ctrl=切换。
     function nav-marquee-drag(x1: float, y1: float, x2: float, y2: float) {
-        if !root.strip-dragging {
+        if !root.strip-dragging && !root.marquee-visible {
             let t: float = (x1 - root.nav-pan-x) / root.nav-zoom;
             let row: int = floor((y1 - root.nav-pan-y) / (root.row-height / 1px));
             let hit: int = AnimationCallbacks.nla-strip-pick(t, row, SlintSelectionModifier.none);
@@ -276,19 +302,33 @@ export component NlaEditor inherits Rectangle {
                 root.strip-dragging = true;
                 root.press-track = hit / 10000;
                 root.press-strip = Math.mod(hit, 10000);
+            } else {
+                root.marquee-visible = true;
             }
         }
         if root.strip-dragging {
             // delta-row = 像素位移 / 行高；Rust 在片段中心越过轨道边界时瞬间跳轨（模型驱动）
             AnimationCallbacks.nla-strip-dragged(root.press-track, root.press-strip, (x2 - x1) / root.nav-zoom, (y2 - y1) / (root.row-height / 1px));
+        } else if root.marquee-visible {
+            root.marquee-x1 = min(x1, x2);
+            root.marquee-y1 = min(y1, y2);
+            root.marquee-x2 = max(x1, x2);
+            root.marquee-y2 = max(y1, y2);
         }
     }
 
-    // marquee 结束（松开）：片断拖拽收尾
+    // marquee 结束（松开）：片断拖拽收尾或框选选中
     function nav-marquee-end(x1: float, y1: float, x2: float, y2: float, modifier: SlintSelectionModifier) {
         if root.strip-dragging {
             AnimationCallbacks.nla-strip-released(root.press-track, root.press-strip);
             root.strip-dragging = false;
+        } else if root.marquee-visible {
+            root.marquee-visible = false;
+            let x-lo: float = (min(x1, x2) - root.nav-pan-x) / root.nav-zoom;
+            let x-hi: float = (max(x1, x2) - root.nav-pan-x) / root.nav-zoom;
+            let row-lo: int = floor((min(y1, y2) - root.nav-pan-y) / (root.row-height / 1px));
+            let row-hi: int = floor((max(y1, y2) - root.nav-pan-y) / (root.row-height / 1px));
+            AnimationCallbacks.nla-marquee-select(x-lo, x-hi, row-lo, row-hi, modifier);
         }
         root.press-track = -1;
         root.press-strip = -1;

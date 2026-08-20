@@ -185,6 +185,8 @@ pub struct GraphEditorState {
     /// 当前视图缩放（px/单位）：命中检测容差随缩放变化（放大更精确）
     pub time_zoom: f32,
     pub value_zoom: f32,
+    /// 轻量拖动快照：仅选中关键帧的 `SlintKeyframe`，用于右键取消（不克隆全量）
+    pub(crate) drag_snapshot: Option<HashMap<KeyframeLoc, SlintKeyframe>>,
 
     /// 关键帧的 Slint 嵌套模型（投影输出）：通道下标 → 稳定的 inner VecModel，
     /// 由投影从 `editing_keyframes` 同步（拖拽期间 set_row_data 保住 grab）。
@@ -234,6 +236,7 @@ impl Default for GraphEditorState {
             // 与 Slint GraphEditor 的 nav-zoom-x/y 初始值一致（见 graph_editor.slint）
             time_zoom: 30.0,
             value_zoom: 2.0,
+            drag_snapshot: None,
             keyframe_models: HashMap::new(),
             segment_offsets: Vec::new(),
             handle_offsets: Vec::new(),

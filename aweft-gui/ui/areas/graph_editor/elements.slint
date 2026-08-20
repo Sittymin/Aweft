@@ -6,6 +6,7 @@ import {
     SlintHandleDragMode,
 } from "../../core/animation_types.slint";
 import { SlintSelectionModifier } from "../../core/types.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
 import { Theme } from "../../theme/index.slint";
 
 // 一段曲线：相邻两个关键帧之间的三次贝塞尔（线性/保持也退化为贝塞尔）。
@@ -148,6 +149,11 @@ export component KeyframeMarker inherits Rectangle {
                 root.pressed(event.modifiers.control
                     ? SlintSelectionModifier.ctrl
                     : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+            } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.dragging) {
+                root.dragging = false;
+                root.moved = false;
+                AnimationCallbacks.drag-cancel();
+                return EventResult.accept;
             } else if (event.kind == PointerEventKind.move && root.dragging) {
                 // 增量 = 光标相对按下位置的位移 / 缩放（与节点拖拽一致，避免反馈振荡）
                 root.moved = true;
@@ -264,6 +270,11 @@ export component HandleMarker inherits Rectangle {
                     root.pressed(event.modifiers.control
                         ? SlintSelectionModifier.ctrl
                         : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+                } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right && root.dragging) {
+                    root.dragging = false;
+                    root.moved = false;
+                    AnimationCallbacks.drag-cancel();
+                    return EventResult.accept;
                 } else if (event.kind == PointerEventKind.move && root.dragging) {
                     root.moved = true;
                     root.dragged(
