@@ -1,7 +1,7 @@
 //! 走真实 UI 回调链的无头集成测试。
 //!
 //! 与 `depsgraph_integration.rs` 的区别：这里调用 `setup_callbacks` 绑定
-//! 真实 UI 回调，然后通过 `LineEditorCallbacks.invoke_*` 模拟用户在 UI 上的
+//! 真实 UI 回调，然后通过 `SequenceCallbacks.invoke_*` 模拟用户在 UI 上的
 //! 操作。覆盖完整链路：
 //! `UI 回调（invoke）→ 回调层（uuid 解析 / parse_time / is_batch）→
 //! dispatch → reducer 打 tag → evaluate_depsgraph → 投影 → UI 模型`。
@@ -14,16 +14,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use aweft_gui::bridge::callbacks::setup_callbacks;
-use aweft_gui::bridge::types::{LineEditorCallbacks, MainWindow, SlintSelectionModifier};
+use aweft_gui::bridge::types::{SequenceCallbacks, MainWindow, SlintSelectionModifier};
 use aweft_gui::store::AppStore;
-use aweft_model::structure::{EventData, ItemContent, ItemLocation};
+use aweft_model::sequence::{EventData, ItemContent, ItemLocation};
 use slint::{ComponentHandle, Model, ModelRc};
 
 /// 构造未过滤的映射行模型（Rows → Map）。实际代码的过滤链路是
 /// Rows → Filter → Map，此 helper 仅供测试访问全量映射行。
 fn all_rows(store: &AppStore) -> ModelRc<aweft_gui::bridge::types::SlintSubtitleRow> {
-    let rows_model: Rc<aweft_gui::store::line_rows_model::LineRowsModel> =
-        Rc::new(store.ui_models().line_editor_state.rows_model().clone());
+    let rows_model: Rc<aweft_gui::store::sequence_rows_model::SequenceRowsModel> =
+        Rc::new(store.ui_models().sequence_state.rows_model().clone());
     let mapper = rows_model.mapper();
     let mapped = slint::MapModel::new(rows_model, move |data| mapper.map(&data));
     ModelRc::new(mapped)
@@ -53,8 +53,8 @@ fn setup() -> (Rc<RefCell<AppStore>>, MainWindow) {
     // 注入测试字幕数据
     {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(0).unwrap(),
@@ -67,8 +67,8 @@ fn setup() -> (Rc<RefCell<AppStore>>, MainWindow) {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
     }
 
     (store, instance)
@@ -77,8 +77,8 @@ fn setup() -> (Rc<RefCell<AppStore>>, MainWindow) {
 /// 找到测试事件 id。
 fn first_event_id(store: &Rc<RefCell<AppStore>>) -> aweft_model::ids::ItemId {
     let s = store.borrow();
-    let structure = &*s.state().project.structure();
-    structure
+    let sequence = &*s.state().project.sequence();
+    sequence
         .items
         .iter()
         .find(|(_, it)| matches!(it.content, ItemContent::Event(_)))
@@ -95,7 +95,7 @@ fn ui_timecode_input_updates_row_via_callback() {
 
     // 模拟用户在 UI 输入时间码（走真实回调 → dispatch → depsgraph）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_timecode_input(
             event_id.to_string().into(),
             true,
@@ -120,7 +120,7 @@ fn ui_add_line_via_callback_parses_time() {
     let event_id = first_event_id(&store);
 
     // 通过真实回调新增一行（parse_time 在回调层解析）
-    instance.global::<LineEditorCallbacks>().invoke_add_line(
+    instance.global::<SequenceCallbacks>().invoke_add_line(
         event_id.to_string().into(),
         "0:00:02.00".into(),
         "0:00:03.00".into(),
@@ -146,11 +146,11 @@ fn ui_toggle_group_collapsed_via_callback() {
     let anchor = first_event_id(&store);
     let group_id = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let group_id = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
-        structure
+        sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -163,14 +163,14 @@ fn ui_toggle_group_collapsed_via_callback() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         group_id
     };
 
     // 通过真实回调折叠分组
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_toggle_group_collapsed(group_id.to_string().into());
 
     // 分组行的 collapsed 字段被切换
@@ -198,8 +198,8 @@ fn ui_select_toggle_keeps_multi_selection() {
     // 注入第二个事件
     let e2 = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let id = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let id = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(2000).unwrap(),
@@ -212,8 +212,8 @@ fn ui_select_toggle_keeps_multi_selection() {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         id
     };
     // e1 = 第一个根事件（按锚点行序，不用 HashMap 无序的 first_event_id）
@@ -228,7 +228,7 @@ fn ui_select_toggle_keeps_multi_selection() {
 
     // 先单选 e1
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
 
     // 验证单选后 e1 已选中
@@ -247,7 +247,7 @@ fn ui_select_toggle_keeps_multi_selection() {
 
     // 再 toggle e2（不取消 e1）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Ctrl);
 
     let s = store.borrow();
@@ -269,7 +269,7 @@ fn ui_invalid_uuid_callback_is_ignored() {
 
     // 无效 uuid 应被回调层拒绝（不 panic，不 dispatch）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_timecode_input("not-a-uuid".into(), true, "0:00:00.50".into(), false);
 
     let s = store.borrow();
@@ -291,11 +291,11 @@ fn ui_ungroup_via_callback() {
     let anchor = first_event_id(&store);
     let (group_id, child_id) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let group_id = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
-        let child_id = structure
+        let child_id = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -308,8 +308,8 @@ fn ui_ungroup_via_callback() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (group_id, child_id)
     };
 
@@ -320,7 +320,7 @@ fn ui_ungroup_via_callback() {
 
     // 通过真实回调解散分组
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_ungroups(group_id.to_string().into());
 
     let s = store.borrow();
@@ -334,7 +334,7 @@ fn ui_ungroup_via_callback() {
     let s = store.borrow();
     assert!(
         s.ui_models()
-            .line_editor_state
+            .sequence_state
             .rows_model()
             .is_selected(child_id),
         "解散分组后子项应被选中（reducer 声明联动）"
@@ -352,12 +352,12 @@ fn ui_timecode_input_reaggregates_group_header() {
     // 添加分组 + 子事件（初始 500-900ms）
     let (group_id, child_id) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let anchor = structure.root_items[0];
-        let group_id = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let anchor = sequence.root_items[0];
+        let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
-        let child_id = structure
+        let child_id = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -370,8 +370,8 @@ fn ui_timecode_input_reaggregates_group_header() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (group_id, child_id)
     };
 
@@ -392,7 +392,7 @@ fn ui_timecode_input_reaggregates_group_header() {
 
     // 通过真实回调把子事件 start 改为 0:00:00.10
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_timecode_input(
             child_id.to_string().into(),
             true,
@@ -423,11 +423,11 @@ fn ui_collapse_group_hides_children_in_filter_model() {
     let anchor = first_event_id(&store);
     let (group_id, child_id) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let group_id = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
-        let child_id = structure
+        let child_id = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -440,15 +440,15 @@ fn ui_collapse_group_hides_children_in_filter_model() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (group_id, child_id)
     };
 
     // 折叠前：filter 模型应包含子行
     let filter_rows = {
         let mut s = store.borrow_mut();
-        s.rebuild_line_editor_models()
+        s.rebuild_sequence_models()
     };
     let child_in_filter = (0..filter_rows.row_count()).any(|i| {
         filter_rows
@@ -460,13 +460,13 @@ fn ui_collapse_group_hides_children_in_filter_model() {
 
     // 折叠分组
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_toggle_group_collapsed(group_id.to_string().into());
 
     // 折叠后：filter 模型子行消失，但全量映射仍保留（未过滤）
     let filter_rows = {
         let mut s = store.borrow_mut();
-        s.rebuild_line_editor_models()
+        s.rebuild_sequence_models()
     };
     let child_in_filter = (0..filter_rows.row_count()).any(|i| {
         filter_rows
@@ -499,11 +499,11 @@ fn ui_select_events_updates_group_header_selected_state() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let gid = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
-        let id1 = structure
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -516,7 +516,7 @@ fn ui_select_events_updates_group_header_selected_state() {
                 ItemLocation::InGroup(gid, 0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
@@ -529,14 +529,14 @@ fn ui_select_events_updates_group_header_selected_state() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
 
     // 单选 e1：组头未全选 → Unselected
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
@@ -555,7 +555,7 @@ fn ui_select_events_updates_group_header_selected_state() {
     // 全选：先选 e1，再 toggle e2（多选模式）。
     // 组头未被直接点选（子项全选）→ 应 IndirectlySelected（恢复的三态）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Ctrl);
     {
         let s = store.borrow();
@@ -573,7 +573,7 @@ fn ui_select_events_updates_group_header_selected_state() {
 
     // 再直接点选组头 → 组头应变为 DirectlySelected
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(group_id.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
@@ -602,11 +602,11 @@ fn ui_copy_cut_paste_delete_chain() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let gid = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence
             .insert_group_after(anchor, "复制组".into())
             .unwrap();
-        let id1 = structure
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -619,7 +619,7 @@ fn ui_copy_cut_paste_delete_chain() {
                 ItemLocation::InGroup(gid, 0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
@@ -632,8 +632,8 @@ fn ui_copy_cut_paste_delete_chain() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
 
@@ -644,13 +644,13 @@ fn ui_copy_cut_paste_delete_chain() {
 
     // 1. 选中 e1 → CopyItems（剪贴板应写入）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
-    instance.global::<LineEditorCallbacks>().invoke_copy_items();
+    instance.global::<SequenceCallbacks>().invoke_copy_items();
 
     // 2. 粘贴到 e1 后 → PasteItems（行数增加，handle_subtrees_pasted 精确插入）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_paste_items(e1.to_string().into());
     {
         let s = store.borrow();
@@ -671,9 +671,9 @@ fn ui_copy_cut_paste_delete_chain() {
         all_rows(&s).row_count()
     };
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
-    instance.global::<LineEditorCallbacks>().invoke_cut_items();
+    instance.global::<SequenceCallbacks>().invoke_cut_items();
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -693,10 +693,10 @@ fn ui_copy_cut_paste_delete_chain() {
         all_rows(&s).row_count()
     };
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::None);
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_delete_selected_items();
     {
         let s = store.borrow();
@@ -735,7 +735,7 @@ fn ui_add_group_and_batch_timecode() {
         all_rows(&s).row_count()
     };
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_add_group(anchor.to_string().into());
     let group_id = {
         let s = store.borrow();
@@ -757,8 +757,8 @@ fn ui_add_group_and_batch_timecode() {
     // 批量时间码：建两个子事件，is_batch 批量改（在回调层解析）
     let (e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let id1 = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
@@ -771,7 +771,7 @@ fn ui_add_group_and_batch_timecode() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(3000).unwrap(),
@@ -784,22 +784,22 @@ fn ui_add_group_and_batch_timecode() {
                 ItemLocation::InGroup(group_id, 1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (id1, id2)
     };
 
     // 选中 e1 和 e2（toggle 多选），批量改 start_time（is_batch=true）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Ctrl);
     // 批量输入时间码：回调的 is_batch 参数 = true
     // 验证：两个事件 start_time 都变为 0:00:05.00
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_timecode_input(e1.to_string().into(), true, "0:00:05.00".into(), true);
 
     {
@@ -833,16 +833,16 @@ fn ui_add_group_and_batch_timecode() {
 #[test]
 fn ui_drag_timecode_preview_shows_override_then_commit() {
     // 验证：拖动修改时间的实时预览。
-    // - preview：UI 显示覆盖值，structure 不变
-    // - commit：structure 持久化，预览清除
+    // - preview：UI 显示覆盖值，sequence 不变
+    // - commit：sequence 持久化，预览清除
     i_slint_backend_testing::init_no_event_loop();
     let (store, instance) = setup();
 
     let event_id = first_event_id(&store);
 
-    // preview：start 从 0 拖到 +500ms（delta_x 累计，reducer 用 structure 原值 + delta）
+    // preview：start 从 0 拖到 +500ms（delta_x 累计，reducer 用 sequence 原值 + delta）
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_drag_timecode_preview(event_id.to_string().into(), true, 50.0.into(), false);
     {
         let s = store.borrow();
@@ -852,36 +852,36 @@ fn ui_drag_timecode_preview_shows_override_then_commit() {
         assert_eq!(
             row.start_time.to_string(),
             "0:00:00.50",
-            "preview 应显示覆盖值（structure 不变）"
+            "preview 应显示覆盖值（sequence 不变）"
         );
-        // structure 未变：原始 start 还是 0
+        // sequence 未变：原始 start 还是 0
         let s = store.borrow();
-        let structure = s.state().project.structure();
-        let ev = structure.get(event_id).expect("事件应存在");
-        let aweft_model::structure::ItemContent::Event(e) = &ev.content else {
+        let sequence = s.state().project.sequence();
+        let ev = sequence.get(event_id).expect("事件应存在");
+        let aweft_model::sequence::ItemContent::Event(e) = &ev.content else {
             panic!("应为事件");
         };
         assert_eq!(
             e.start_time,
             chrono::TimeDelta::try_milliseconds(0).unwrap(),
-            "preview 不应修改 structure 的 start_time"
+            "preview 不应修改 sequence 的 start_time"
         );
         assert_eq!(
             e.end_time,
             chrono::TimeDelta::try_milliseconds(1000).unwrap(),
-            "preview 不应修改 structure 的 end_time"
+            "preview 不应修改 sequence 的 end_time"
         );
     }
 
-    // commit：同 delta，structure 持久化 + 预览清除
+    // commit：同 delta，sequence 持久化 + 预览清除
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_drag_timecode_commit(event_id.to_string().into(), true, 50.0.into(), false);
     {
         let s = store.borrow();
-        let structure = s.state().project.structure();
-        let ev = structure.get(event_id).expect("事件应存在");
-        let aweft_model::structure::ItemContent::Event(e) = &ev.content else {
+        let sequence = s.state().project.sequence();
+        let ev = sequence.get(event_id).expect("事件应存在");
+        let aweft_model::sequence::ItemContent::Event(e) = &ev.content else {
             panic!("应为事件");
         };
         assert_eq!(
@@ -889,7 +889,7 @@ fn ui_drag_timecode_preview_shows_override_then_commit() {
             chrono::TimeDelta::try_milliseconds(500).unwrap(),
             "commit 应持久化 start_time"
         );
-        // UI 显示同样 500（structure 现在也是 500，预览清除后一致）
+        // UI 显示同样 500（sequence 现在也是 500，预览清除后一致）
         let rows = all_rows(&s);
         let row = rows.row_data(0).unwrap();
         assert_eq!(row.start_time.to_string(), "0:00:00.50");
@@ -907,11 +907,11 @@ fn ui_select_range_marks_group_header_indirectly_selected() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let gid = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence
             .insert_group_after(anchor, "范围组".into())
             .unwrap();
-        let id1 = structure
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -924,7 +924,7 @@ fn ui_select_range_marks_group_header_indirectly_selected() {
                 ItemLocation::InGroup(gid, 0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
@@ -937,17 +937,17 @@ fn ui_select_range_marks_group_header_indirectly_selected() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
 
     // 先单选 e1（设 anchor），再 range 到 e2 → 范围覆盖两个子项，组头未直接点选
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Shift);
 
     let s = store.borrow();
@@ -986,11 +986,11 @@ fn ui_reselect_single_refreshes_group_header_state() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let gid = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence
             .insert_group_after(anchor, "刷新组".into())
             .unwrap();
-        let id1 = structure
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -1003,7 +1003,7 @@ fn ui_reselect_single_refreshes_group_header_state() {
                 ItemLocation::InGroup(gid, 0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
@@ -1016,17 +1016,17 @@ fn ui_reselect_single_refreshes_group_header_state() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
 
     // 范围选中整组 → 组头 Indirectly
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Shift);
     {
         let s = store.borrow();
@@ -1044,7 +1044,7 @@ fn ui_reselect_single_refreshes_group_header_state() {
 
     // 重新单选 e1（只选一个子项）→ 组头应刷新为 Unselected
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();
@@ -1083,9 +1083,9 @@ fn ui_select_outside_group_refreshes_group_header() {
     let outside = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let gid = structure.insert_group_after(outside, "组".into()).unwrap();
-        let id1 = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence.insert_group_after(outside, "组".into()).unwrap();
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(500).unwrap(),
@@ -1098,7 +1098,7 @@ fn ui_select_outside_group_refreshes_group_header() {
                 ItemLocation::InGroup(gid, 0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
@@ -1111,17 +1111,17 @@ fn ui_select_outside_group_refreshes_group_header() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
 
     // 范围选中整组（组内全选）→ 组头 Indirectly
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e1.to_string().into(), SlintSelectionModifier::None);
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(e2.to_string().into(), SlintSelectionModifier::Shift);
     {
         let s = store.borrow();
@@ -1139,7 +1139,7 @@ fn ui_select_outside_group_refreshes_group_header() {
 
     // 选组外事件 → 组头应刷新为 Unselected
     instance
-        .global::<LineEditorCallbacks>()
+        .global::<SequenceCallbacks>()
         .invoke_select_row(outside.to_string().into(), SlintSelectionModifier::None);
     {
         let s = store.borrow();

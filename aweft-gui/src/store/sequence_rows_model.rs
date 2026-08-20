@@ -1,4 +1,4 @@
-//! LineEditor 数据源模型：实现 `slint::Model`，从权威 project 数据实时投影行。
+//! Sequence 数据源模型：实现 `slint::Model`，从权威 project 数据实时投影行。
 //!
 //! 替代旧的 `VecModel<SlintSubtitleRow>` 行副本缓存。关键区别：
 //! - **结构索引**（`anchors`）：扁平化顺序的 item 引用 + 层级上下文，结构变化时重建；
@@ -11,12 +11,15 @@ use std::rc::Rc;
 
 use aweft_model::{
     ids::ItemId,
-    structure::{ItemContent, ProjectStructure},
+    sequence::{ItemContent, Sequence},
 };
 use chrono::TimeDelta;
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, ToSharedString};
 
-use crate::bridge::{SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, format_time};
+use crate::bridge::{
+    SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, SlintTimelineSubBlock,
+    format_time,
+};
 
 /// 一个扁平化行的索引锚点：结构变化时重建，`row_data(i)` 用它 O(1) 定位。
 #[derive(Debug, Clone)]
@@ -26,13 +29,13 @@ struct RowAnchor {
     ancestors: Rc<Vec<SharedString>>,
     /// 祖先分组的 ItemId 链（叶子到根，含根）。供过滤判断用（避免 UUID parse）。
     ancestor_ids: Rc<Vec<ItemId>>,
-    /// 权威数据的静态行内容（投影时构建，含 structure 的 event/group 数据）。
+    /// 权威数据的静态行内容（投影时构建，含 sequence 的 event/group 数据）。
     /// 动态 UI 状态（selected/collapsed/preview）由 map 叠加，不入快照。
     content: SlintSubtitleRow,
 }
 
 /// 轻量行数据：数据源模型产出的纯数据（不含 Slint UI 结构）。
-/// UI 映射（`SlintSubtitleRow` 构造 + 分组聚合）由 `LineRowMapper` 负责。
+/// UI 映射（`SlintSubtitleRow` 构造 + 分组聚合）由 `SequenceRowMapper` 负责。
 #[derive(Debug, Clone)]
 pub struct RowData {
     pub item_id: ItemId,
@@ -67,12 +70,12 @@ struct Flattened {
 
 /// 数据源模型。
 ///
-/// 权威数据在 model（`Project.structure`，纯值语义）；本模型持扁平化索引锚点
+/// 权威数据在 model（`Project.sequence`，纯值语义）；本模型持扁平化索引锚点
 /// （`flattened`），锚点含投影构建的静态行内容快照（`RowAnchor.content`）。
-/// 投影（op_line_*）在 tag 后重建受影响行 content + notify，Slint 精确重算。
+/// 投影（op_sequence_*）在 tag 后重建受影响行 content + notify，Slint 精确重算。
 /// 折叠/选中/预览是运行时 UI 状态（`Rc<RefCell>`），由 map 叠加——不入权威数据。
 #[derive(Clone)]
-pub struct LineRowsModel {
+pub struct SequenceRowsModel {
     /// 扁平化索引 + 聚合缓存（含静态行内容快照）。
     flattened: Rc<RefCell<Flattened>>,
     /// 折叠集合共享引用（供 FilterModel 与 toggle 使用）。
@@ -80,13 +83,13 @@ pub struct LineRowsModel {
     /// 选中状态集合（三态：Unselected/DirectlySelected/IndirectlySelected）。
     selected: Rc<RefCell<std::collections::HashMap<ItemId, SlintSelectionState>>>,
     /// 时间码拖拽预览覆盖（event_id → (start 覆盖, end 覆盖)）。
-    /// 不修改 structure，仅 UI 显示时覆盖。commit/cancel 时清除。
+    /// 不修改 sequence，仅 UI 显示时覆盖。commit/cancel 时清除。
     preview_overrides:
         Rc<RefCell<std::collections::HashMap<ItemId, (Option<TimeDelta>, Option<TimeDelta>)>>>,
     notify: Rc<ModelNotify>,
 }
 
-impl LineRowsModel {
+impl SequenceRowsModel {
     pub fn new() -> Self {
         Self {
             flattened: Rc::new(RefCell::new(Flattened::default())),
@@ -103,8 +106,8 @@ impl LineRowsModel {
 
     /// 创建行映射器（共享引用，供 MapModel 映射 SlintSubtitleRow）。
     /// 只持动态 UI 状态（折叠/选中/预览），不持权威数据（content 已在快照）。
-    pub fn mapper(&self) -> LineRowMapper {
-        LineRowMapper {
+    pub fn mapper(&self) -> SequenceRowMapper {
+        SequenceRowMapper {
             collapsed: self.collapsed.clone(),
             selected: self.selected.clone(),
             preview_overrides: self.preview_overrides.clone(),
@@ -167,7 +170,7 @@ impl LineRowsModel {
             .unwrap_or(false)
     }
 
-    /// 设置事件时间码拖拽预览覆盖（start/end 之一），不修改 structure。
+    /// 设置事件时间码拖拽预览覆盖（start/end 之一），不修改 sequence。
     pub fn set_preview_timecode(&self, event_id: ItemId, is_start_time: bool, time: TimeDelta) {
         let mut overrides = self.preview_overrides.borrow_mut();
         let entry = overrides.entry(event_id).or_insert((None, None));
@@ -191,8 +194,8 @@ impl LineRowsModel {
     /// 更新权威数据引用并重建扁平化索引（结构变化后调用，触发 reset）。
     /// 初始化行快照（从权威数据构建扁平索引 + 静态行内容）。
     /// 权威数据在 model（纯值），一次性借用构建；此后投影按 tag 精确更新受影响行。
-    pub fn set_structure(&self, structure: &ProjectStructure) {
-        let flattened = flatten_project_structure(structure);
+    pub fn set_sequence(&self, sequence: &Sequence) {
+        let flattened = flatten_sequence(sequence);
         *self.flattened.borrow_mut() = flattened;
         self.notify.reset();
     }
@@ -266,14 +269,14 @@ impl LineRowsModel {
     }
 
     /// 重建某行的 content 快照（值变化后，从权威数据读新值）。
-    /// 投影（op_line_*）在权威数据变更后调用，再 `notify_row_changed`。
-    pub fn rebuild_row_content(&self, row: usize, structure: &ProjectStructure) {
+    /// 投影（op_sequence_*）在权威数据变更后调用，再 `notify_row_changed`。
+    pub fn rebuild_row_content(&self, row: usize, sequence: &Sequence) {
         let mut flattened = self.flattened.borrow_mut();
         let Some(anchor) = flattened.anchors.get_mut(row) else {
             return;
         };
         let data = RowData::from_anchor(anchor);
-        if let Some(new_content) = build_row(&data, structure) {
+        if let Some(new_content) = build_row(&data, sequence) {
             anchor.content = new_content;
         }
     }
@@ -282,10 +285,10 @@ impl LineRowsModel {
     ///
     /// 投影 op 对受影响的 item_id 调用此方法——重建 + notify 一体化，
     /// 无需手动记住"先 rebuild 再 notify"，避免遗漏。
-    pub fn refresh_ids(&self, structure: &ProjectStructure, item_ids: &[ItemId]) {
+    pub fn refresh_ids(&self, sequence: &Sequence, item_ids: &[ItemId]) {
         for &id in item_ids {
             if let Some(idx) = self.row_index_of(id) {
-                self.rebuild_row_content(idx, structure);
+                self.rebuild_row_content(idx, sequence);
                 self.notify_row_changed(idx);
             }
         }
@@ -295,17 +298,17 @@ impl LineRowsModel {
     ///
     /// 时间码/行数等变化会传播到祖先分组头（聚合），此方法一并重建 + 通知，
     /// 避免调用方分别处理"行自身"与"祖先"而遗漏。
-    pub fn refresh_row_with_ancestors(&self, structure: &ProjectStructure, item_id: ItemId) {
+    pub fn refresh_row_with_ancestors(&self, sequence: &Sequence, item_id: ItemId) {
         // 自身
         if let Some(idx) = self.row_index_of(item_id) {
-            self.rebuild_row_content(idx, structure);
+            self.rebuild_row_content(idx, sequence);
             self.notify_row_changed(idx);
         }
         // 祖先分组头（锚点 ancestor_ids 叶子到根）
         let ancestors = self.ancestors_of(item_id);
         for anc in ancestors {
             if let Some(idx) = self.row_index_of(anc) {
-                self.rebuild_row_content(idx, structure);
+                self.rebuild_row_content(idx, sequence);
                 self.notify_row_changed(idx);
             }
         }
@@ -366,7 +369,7 @@ impl LineRowsModel {
     /// `notify.row_added`——Slint 只新建该行实例，存量复用。
     pub fn insert_after(
         &self,
-        structure: &ProjectStructure,
+        sequence: &Sequence,
         item_id: ItemId,
         new_item_id: ItemId,
     ) -> usize {
@@ -407,7 +410,7 @@ impl LineRowsModel {
         let mut sub = Flattened::default();
         flatten_items(
             &[new_item_id],
-            structure,
+            sequence,
             depth,
             ancestors,
             ancestor_ids,
@@ -446,7 +449,7 @@ impl LineRowsModel {
     /// 一次 `notify.row_added(at, total_count)`——Slint splice 批量插入，存量复用。
     pub fn insert_subtrees(
         &self,
-        structure: &ProjectStructure,
+        sequence: &Sequence,
         at: usize,
         items: &[ItemId],
     ) -> usize {
@@ -455,7 +458,7 @@ impl LineRowsModel {
         let ancestors = anchor_ancestors(&flattened, at.saturating_sub(1));
         let ancestor_ids = anchor_ancestor_ids(&flattened, at.saturating_sub(1));
         let mut sub = Flattened::default();
-        flatten_items(items, structure, depth, ancestors, ancestor_ids, &mut sub);
+        flatten_items(items, sequence, depth, ancestors, ancestor_ids, &mut sub);
         let count = sub.anchors.len();
         if count == 0 {
             return 0;
@@ -490,7 +493,7 @@ impl LineRowsModel {
     /// 返回 `(分组头行索引, 父分组 id)`（供上层用 row_changed 更新父组头聚合）。
     pub fn ungroup_anchor(
         &self,
-        structure: &ProjectStructure,
+        sequence: &Sequence,
         group_id: ItemId,
     ) -> Option<(usize, Option<ItemId>)> {
         let mut flattened = self.flattened.borrow_mut();
@@ -530,7 +533,7 @@ impl LineRowsModel {
                 a.ancestor_ids = Rc::new(anc);
             }
             let data = RowData::from_anchor(a);
-            if let Some(new_content) = build_row(&data, structure) {
+            if let Some(new_content) = build_row(&data, sequence) {
                 a.content = new_content;
             }
         }
@@ -554,7 +557,7 @@ impl LineRowsModel {
     }
 }
 
-impl Default for LineRowsModel {
+impl Default for SequenceRowsModel {
     fn default() -> Self {
         Self::new()
     }
@@ -565,14 +568,14 @@ impl Default for LineRowsModel {
 /// 只持动态 UI 状态（折叠/选中/预览），供 `MapModel` 的 map_function 使用。
 /// 权威行内容在 `RowData.content` 快照（投影时构建），map 叠加动态状态。
 #[derive(Clone)]
-pub struct LineRowMapper {
+pub struct SequenceRowMapper {
     collapsed: Rc<RefCell<std::collections::HashSet<ItemId>>>,
     selected: Rc<RefCell<std::collections::HashMap<ItemId, SlintSelectionState>>>,
     preview_overrides:
         Rc<RefCell<std::collections::HashMap<ItemId, (Option<TimeDelta>, Option<TimeDelta>)>>>,
 }
 
-impl LineRowMapper {
+impl SequenceRowMapper {
     /// 映射一行数据为 Slint UI 行：content 快照 + 叠加动态状态。
     pub fn map(&self, data: &RowData) -> SlintSubtitleRow {
         let collapsed = self.collapsed.borrow();
@@ -590,9 +593,11 @@ impl LineRowMapper {
         if let Some((p_start, p_end)) = preview.get(&data.item_id) {
             if let Some(start) = p_start {
                 row.start_time = format_time(*start);
+                row.start_sec = start.num_milliseconds() as f32 / 1000.0;
             }
             if let Some(end) = p_end {
                 row.end_time = format_time(*end);
+                row.end_sec = end.num_milliseconds() as f32 / 1000.0;
             }
         }
         row
@@ -612,6 +617,11 @@ fn empty_row(
         ancestor_groups: ModelRc::from(ancestors.as_slice()),
         start_time: SharedString::new(),
         end_time: SharedString::new(),
+        start_sec: 0.0,
+        end_sec: 0.0,
+        child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(Vec::<
+            SlintTimelineSubBlock,
+        >::new()))),
         item_id: item_id.to_string().to_shared_string(),
         selected: SlintSelectionState::Unselected,
         total_row_count: 1,
@@ -623,9 +633,9 @@ fn empty_row(
 }
 
 /// 构造单行静态内容（从权威数据，投影时构建；不含动态 UI 状态）。
-/// 动态状态（selected/collapsed/preview）由 `LineRowMapper::map` 叠加。
-fn build_row(data: &RowData, structure: &ProjectStructure) -> Option<SlintSubtitleRow> {
-    let item = structure.get(data.item_id)?;
+/// 动态状态（selected/collapsed/preview）由 `SequenceRowMapper::map` 叠加。
+fn build_row(data: &RowData, sequence: &Sequence) -> Option<SlintSubtitleRow> {
+    let item = sequence.get(data.item_id)?;
     let item_id_str = data.item_id.to_string().to_shared_string();
 
     match &item.content {
@@ -635,6 +645,11 @@ fn build_row(data: &RowData, structure: &ProjectStructure) -> Option<SlintSubtit
             ancestor_groups: ModelRc::from(data.ancestors.as_slice()),
             start_time: format_time(event.start_time),
             end_time: format_time(event.end_time),
+            start_sec: event.start_time.num_milliseconds() as f32 / 1000.0,
+            end_sec: event.end_time.num_milliseconds() as f32 / 1000.0,
+            child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(Vec::<
+                SlintTimelineSubBlock,
+            >::new()))),
             item_id: item_id_str,
             selected: SlintSelectionState::Unselected,
             text: event.text.to_shared_string(),
@@ -645,20 +660,27 @@ fn build_row(data: &RowData, structure: &ProjectStructure) -> Option<SlintSubtit
         }),
         ItemContent::Group(group) => {
             // 分组头：聚合子树时间与行数（投影时计算）
-            let (bounds, count) = aggregate_group(data.item_id, structure);
-            let (start, end) = match bounds {
+            let (bounds, count) = aggregate_group(data.item_id, sequence);
+            let (start, end, start_sec, end_sec) = match bounds {
                 Some((s, e)) => (
                     format_time(chrono::TimeDelta::milliseconds(s)),
                     format_time(chrono::TimeDelta::milliseconds(e)),
+                    s as f32 / 1000.0,
+                    e as f32 / 1000.0,
                 ),
-                None => (SharedString::new(), SharedString::new()),
+                None => (SharedString::new(), SharedString::new(), 0.0, 0.0),
             };
+            // 收集组内所有字幕行块（递归，时间重叠允许）
+            let child_blocks = collect_child_blocks(&group.children, sequence);
             Some(SlintSubtitleRow {
                 row_type: SlintSubtitleRowType::GroupHeader,
                 depth: data.depth,
                 ancestor_groups: ModelRc::from(data.ancestors.as_slice()),
                 start_time: start,
                 end_time: end,
+                start_sec,
+                end_sec,
+                child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(child_blocks))),
                 item_id: item_id_str,
                 selected: SlintSelectionState::Unselected,
                 text: SharedString::new(),
@@ -672,8 +694,8 @@ fn build_row(data: &RowData, structure: &ProjectStructure) -> Option<SlintSubtit
 }
 
 /// 聚合分组子树的时间范围与行数（含分组头自身）。
-fn aggregate_group(group_id: ItemId, structure: &ProjectStructure) -> (Option<(i64, i64)>, usize) {
-    let Some(group) = structure.get(group_id) else {
+fn aggregate_group(group_id: ItemId, sequence: &Sequence) -> (Option<(i64, i64)>, usize) {
+    let Some(group) = sequence.get(group_id) else {
         return (None, 1);
     };
     let ItemContent::Group(group_data) = &group.content else {
@@ -683,7 +705,7 @@ fn aggregate_group(group_id: ItemId, structure: &ProjectStructure) -> (Option<(i
     let mut max_end: Option<i64> = None;
     let mut count = 1; // 分组头自身
     for child_id in &group_data.children {
-        if let Some(child) = structure.get(*child_id) {
+        if let Some(child) = sequence.get(*child_id) {
             count += 1; // 占位（child 若为分组，会展开更多行）
             match &child.content {
                 ItemContent::Event(e) => {
@@ -693,7 +715,7 @@ fn aggregate_group(group_id: ItemId, structure: &ProjectStructure) -> (Option<(i
                     max_end = Some(max_end.map_or(en, |x| x.max(en)));
                 }
                 ItemContent::Group(_) => {
-                    let (cb, cc) = aggregate_group(*child_id, structure);
+                    let (cb, cc) = aggregate_group(*child_id, sequence);
                     count += cc - 1; // 加上 child 组内的额外行
                     if let Some((s, e)) = cb {
                         min_start = Some(min_start.map_or(s, |x| x.min(s)));
@@ -710,12 +732,44 @@ fn aggregate_group(group_id: ItemId, structure: &ProjectStructure) -> (Option<(i
     (bounds, count)
 }
 
+/// 递归收集分组内所有字幕行的时间块（时间线折叠组头时在组头泳道显示）。
+/// 嵌套分组递归展开；只收集有有效时间范围的字幕行。
+fn collect_child_blocks(
+    children: &[ItemId],
+    sequence: &Sequence,
+) -> Vec<SlintTimelineSubBlock> {
+    let mut out: Vec<SlintTimelineSubBlock> = Vec::new();
+    for id in children {
+        let Some(item) = sequence.get(*id) else {
+            continue;
+        };
+        match &item.content {
+            ItemContent::Event(event) => {
+                let start = event.start_time.num_milliseconds() as f32 / 1000.0;
+                let end = event.end_time.num_milliseconds() as f32 / 1000.0;
+                if end > start {
+                    out.push(SlintTimelineSubBlock {
+                        item_id: id.to_string().to_shared_string(),
+                        name: event.text.to_shared_string(),
+                        start_sec: start,
+                        end_sec: end,
+                    });
+                }
+            }
+            ItemContent::Group(group) => {
+                out.extend(collect_child_blocks(&group.children, sequence));
+            }
+        }
+    }
+    out
+}
+
 /// 扁平化：前序遍历，生成锚点列表 + 聚合缓存。
-fn flatten_project_structure(structure: &ProjectStructure) -> Flattened {
+fn flatten_sequence(sequence: &Sequence) -> Flattened {
     let mut out = Flattened::default();
     flatten_items(
-        &structure.root_items,
-        structure,
+        &sequence.root_items,
+        sequence,
         0,
         Rc::new(Vec::new()),
         Rc::new(Vec::new()),
@@ -726,14 +780,14 @@ fn flatten_project_structure(structure: &ProjectStructure) -> Flattened {
 
 fn flatten_items(
     items: &[ItemId],
-    structure: &ProjectStructure,
+    sequence: &Sequence,
     depth: i32,
     ancestors: Rc<Vec<SharedString>>,
     ancestor_ids: Rc<Vec<ItemId>>,
     out: &mut Flattened,
 ) {
     for item_id in items {
-        let Some(item) = structure.get(*item_id) else {
+        let Some(item) = sequence.get(*item_id) else {
             continue;
         };
         // 轻量行数据（供 build_row 构造静态 content；content 暂为占位）
@@ -744,7 +798,7 @@ fn flatten_items(
             ancestor_ids: ancestor_ids.clone(),
             content: empty_row(&item_id, depth, ancestors.clone(), ancestor_ids.clone()),
         };
-        let content = build_row(&row_data, structure)
+        let content = build_row(&row_data, sequence)
             .unwrap_or_else(|| empty_row(&item_id, depth, ancestors.clone(), ancestor_ids.clone()));
         let mut anchor = RowAnchor {
             item_id: *item_id,
@@ -759,7 +813,7 @@ fn flatten_items(
             }
             ItemContent::Group(_) => {
                 let group_id_str = item_id.to_string().to_shared_string();
-                let (_, count) = aggregate_group(*item_id, structure);
+                let (_, count) = aggregate_group(*item_id, sequence);
                 out.group_row_counts.insert(*item_id, count);
                 // 分组头 content 的 total_row_count 需用聚合 count
                 anchor.content.total_row_count = count as i32;
@@ -775,7 +829,7 @@ fn flatten_items(
                 };
                 flatten_items(
                     &children,
-                    structure,
+                    sequence,
                     depth + 1,
                     Rc::new(new_anc),
                     Rc::new(new_anc_ids),
@@ -826,7 +880,7 @@ fn anchor_ancestor_ids(flattened: &Flattened, at: usize) -> Rc<Vec<ItemId>> {
     }
 }
 
-impl Model for LineRowsModel {
+impl Model for SequenceRowsModel {
     type Data = RowData;
 
     fn row_count(&self) -> usize {
@@ -849,12 +903,12 @@ mod tests {
     use super::*;
     use aweft_model::{
         ids::ItemId,
-        structure::{EventData, GroupData, ItemLocation, ProjectStructure},
+        sequence::{EventData, GroupData, ItemLocation, Sequence},
     };
     use chrono::TimeDelta;
 
-    fn make_structure() -> ProjectStructure {
-        let mut s = ProjectStructure::new();
+    fn make_sequence() -> Sequence {
+        let mut s = Sequence::new();
         // root event
         let e1 = EventData {
             start_time: TimeDelta::try_milliseconds(0).unwrap(),
@@ -887,8 +941,8 @@ mod tests {
 
     #[test]
     fn row_count_matches_flattened() {
-        let model = LineRowsModel::new();
-        model.set_structure(&make_structure());
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&make_sequence());
         assert_eq!(model.row_count(), 3); // event + groupheader + child event
     }
 
@@ -896,7 +950,7 @@ mod tests {
     fn nested_group_total_row_count_matches_flattened() {
         // 验证：分组头的 total_row_count（aggregate_group）与实际锚点行数一致。
         // A 头 + event1 + B 头 + event2 = 4 行
-        let mut s = ProjectStructure::new();
+        let mut s = Sequence::new();
         let e1 = EventData {
             start_time: TimeDelta::try_milliseconds(0).unwrap(),
             end_time: TimeDelta::try_milliseconds(100).unwrap(),
@@ -947,8 +1001,8 @@ mod tests {
         };
         s.create_event(e3, ItemLocation::InGroup(b, 0)).unwrap();
 
-        let model = LineRowsModel::new();
-        model.set_structure(&s);
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&s);
         assert_eq!(model.row_count(), 5, "e1 + A头 + e2 + B头 + e3 = 5 行");
 
         let a_idx = model.row_index_of(a).unwrap();
@@ -967,8 +1021,8 @@ mod tests {
 
     #[test]
     fn row_data_builds_event() {
-        let model = LineRowsModel::new();
-        model.set_structure(&make_structure());
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&make_sequence());
         let data = model.row_data(0).unwrap();
         assert_eq!(data.depth, 0);
         let row = model.mapper().map(&data);
@@ -979,8 +1033,8 @@ mod tests {
 
     #[test]
     fn group_header_aggregates() {
-        let model = LineRowsModel::new();
-        model.set_structure(&make_structure());
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&make_sequence());
         let data = model.row_data(1).unwrap();
         let row = model.mapper().map(&data);
         assert_eq!(row.row_type, SlintSubtitleRowType::GroupHeader);
@@ -994,11 +1048,11 @@ mod tests {
 
     #[test]
     fn row_index_of_locates_item() {
-        let structure = make_structure();
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
-        // 找组内事件的 index（用同一个 structure 的 id）
-        let child_id: ItemId = structure
+        let sequence = make_sequence();
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
+        // 找组内事件的 index（用同一个 sequence 的 id）
+        let child_id: ItemId = sequence
             .items
             .iter()
             .find(|(_, it)| matches!(it.content, ItemContent::Event(_)))
@@ -1010,8 +1064,8 @@ mod tests {
     #[test]
     fn insert_after_adds_anchor_and_notifies() {
         // 构造：根事件后追加一个新事件
-        let mut structure = ProjectStructure::new();
-        let root_event = structure
+        let mut sequence = Sequence::new();
+        let root_event = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(0).unwrap(),
@@ -1024,7 +1078,7 @@ mod tests {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        let new_id = structure
+        let new_id = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(2000).unwrap(),
@@ -1038,11 +1092,11 @@ mod tests {
             )
             .unwrap();
 
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
         let before = model.row_count();
 
-        model.insert_after(&structure, root_event, new_id);
+        model.insert_after(&sequence, root_event, new_id);
         assert_eq!(model.row_count(), before + 1);
 
         let idx = model.row_index_of(new_id).unwrap();
@@ -1053,12 +1107,12 @@ mod tests {
 
     #[test]
     fn remove_anchor_removes_subtree_and_notifies() {
-        let structure = make_structure();
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let sequence = make_sequence();
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
 
         // 找分组（组 + 子事件 = 2 行）
-        let group_id: ItemId = structure
+        let group_id: ItemId = sequence
             .items
             .iter()
             .find(|(_, it)| matches!(it.content, ItemContent::Group(_)))
@@ -1075,8 +1129,8 @@ mod tests {
         // 验证：任意顺序删除多个 item（如 HashSet 迭代顺序），行数仍正确。
         // remove_anchor 用 row_index_of 实时查找，删除后索引平移不应影响
         // 后续删除（每次删都重新定位）。
-        let mut structure = ProjectStructure::new();
-        let e1 = structure
+        let mut sequence = Sequence::new();
+        let e1 = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(0).unwrap(),
@@ -1089,7 +1143,7 @@ mod tests {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        let e2 = structure
+        let e2 = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(200).unwrap(),
@@ -1102,7 +1156,7 @@ mod tests {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        let e3 = structure
+        let e3 = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(400).unwrap(),
@@ -1115,8 +1169,8 @@ mod tests {
                 ItemLocation::Root(2),
             )
             .unwrap();
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
         assert_eq!(model.row_count(), 3);
 
         // 任意顺序删除：先删中间，再删末尾
@@ -1132,8 +1186,8 @@ mod tests {
 
     #[test]
     fn insert_subtrees_batch_adds_multiple_rows() {
-        let mut structure = ProjectStructure::new();
-        let anchor = structure
+        let mut sequence = Sequence::new();
+        let anchor = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(0).unwrap(),
@@ -1146,7 +1200,7 @@ mod tests {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        let e1 = structure
+        let e1 = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(1000).unwrap(),
@@ -1159,7 +1213,7 @@ mod tests {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        let e2 = structure
+        let e2 = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(2000).unwrap(),
@@ -1173,12 +1227,12 @@ mod tests {
             )
             .unwrap();
 
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
         let before = model.row_count();
 
         let at = model.row_index_of(anchor).unwrap() + 1;
-        let added = model.insert_subtrees(&structure, at, &[e1, e2]);
+        let added = model.insert_subtrees(&sequence, at, &[e1, e2]);
         assert_eq!(added, 2);
         assert_eq!(model.row_count(), before + 2);
 
@@ -1189,12 +1243,12 @@ mod tests {
 
     #[test]
     fn ungroup_anchor_removes_header_and_promotes_children() {
-        let structure = make_structure();
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let sequence = make_sequence();
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
 
         // 找分组（组头 + 子事件），记录子事件行数据
-        let group_id: ItemId = structure
+        let group_id: ItemId = sequence
             .items
             .iter()
             .find(|(_, it)| matches!(it.content, ItemContent::Group(_)))
@@ -1203,7 +1257,7 @@ mod tests {
         let child_before = model.row_data(2).unwrap(); // group 子事件原本 index 2
         let before = model.row_count();
 
-        let (group_idx, parent) = model.ungroup_anchor(&structure, group_id).unwrap();
+        let (group_idx, parent) = model.ungroup_anchor(&sequence, group_id).unwrap();
         assert_eq!(parent, None); // 根级分组，无父
         assert_eq!(model.row_count(), before - 1); // 只删分组头
         // 子事件提升为根级（index 移到原来 group 位置）
@@ -1216,9 +1270,9 @@ mod tests {
     /// 后续 insert_after 到参考组末尾仍定位正确（不因陈旧计数错位）。
     #[test]
     fn remove_after_updates_ancestor_group_row_count() {
-        use aweft_model::structure::GroupData;
+        use aweft_model::sequence::GroupData;
         // 根组 P 含：子组 G（含 e1,e2,e3）+ 尾部事件 e_tail
-        let mut s = ProjectStructure::new();
+        let mut s = Sequence::new();
         let p = s
             .create_group(
                 GroupData {
@@ -1271,9 +1325,9 @@ mod tests {
                 ItemLocation::InGroup(p, 1),
             )
             .unwrap();
-        let mut structure = s;
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let mut sequence = s;
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
         // 行序：P头(0), G头(1), e0(2), e1(3), e2(4), e_tail(5) = 6 行
 
         // 删 e2（G 内第三个事件）。祖先组 [P, G] 都应减 1。
@@ -1284,7 +1338,7 @@ mod tests {
         // 插入到 G 末尾：G 实际行数 = 头 + e0 + e1 = 3。
         // 若 group_row_counts[G] 陈旧（仍 4），at = G_idx(1) + 4 = 5，
         // 会插到 e_tail 之后（错）；正确 at = 1 + 3 = 4（e_tail 之前）。
-        let new_id = structure
+        let new_id = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(600).unwrap(),
@@ -1297,7 +1351,7 @@ mod tests {
                 ItemLocation::InGroup(g, 2),
             )
             .unwrap();
-        model.insert_after(&structure, g, new_id);
+        model.insert_after(&sequence, g, new_id);
         // 行序：P头, G头, e0, e1, new, e_tail = 6 行
         assert_eq!(model.row_count(), 6);
         let new_idx = model.row_index_of(new_id).unwrap();
@@ -1312,8 +1366,8 @@ mod tests {
     /// 验证：解散子组后，祖先组 group_row_counts 同步减 1（组头消失）。
     #[test]
     fn ungroup_updates_ancestor_group_row_count() {
-        use aweft_model::structure::GroupData;
-        let mut s = ProjectStructure::new();
+        use aweft_model::sequence::GroupData;
+        let mut s = Sequence::new();
         let p = s
             .create_group(
                 GroupData {
@@ -1349,19 +1403,19 @@ mod tests {
                 ItemLocation::InGroup(g, 0),
             )
             .unwrap();
-        let mut structure = s;
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let mut sequence = s;
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
         // 行序：P头, G头, e2 = 3 行
 
         // 解散 G：删组头 1 行，e2 提升到 P。P 行数应减 1。
-        model.ungroup_anchor(&structure, g);
+        model.ungroup_anchor(&sequence, g);
         // 行序：P头, e2 = 2 行
         assert_eq!(model.row_count(), 2);
         assert_eq!(model.row_index_of(e2), Some(1), "e2 提升到 P 头之后");
 
         // 插入到 P 末尾：P 现在 2 行，新项应插到末尾（index 2）
-        let new_id = structure
+        let new_id = sequence
             .create_event(
                 EventData {
                     start_time: TimeDelta::try_milliseconds(400).unwrap(),
@@ -1374,15 +1428,15 @@ mod tests {
                 ItemLocation::InGroup(p, 1),
             )
             .unwrap();
-        model.insert_after(&structure, p, new_id);
+        model.insert_after(&sequence, p, new_id);
         assert_eq!(model.row_index_of(new_id), Some(2), "new 应插到 P 末尾");
     }
 
     /// 验证：连续插入到同一组，group_row_counts 同步增长，定位始终正确。
     #[test]
     fn insert_after_updates_ancestor_group_row_count() {
-        use aweft_model::structure::GroupData;
-        let mut s = ProjectStructure::new();
+        use aweft_model::sequence::GroupData;
+        let mut s = Sequence::new();
         let p = s
             .create_group(
                 GroupData {
@@ -1394,15 +1448,15 @@ mod tests {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        let mut structure = s;
-        let model = LineRowsModel::new();
-        model.set_structure(&structure);
+        let mut sequence = s;
+        let model = SequenceRowsModel::new();
+        model.set_sequence(&sequence);
         // 行序：P头 = 1 行
 
         // 连续插 3 个事件到 P 末尾
         let mut ids = Vec::new();
         for i in 0..3 {
-            let e = structure
+            let e = sequence
                 .create_event(
                     EventData {
                         start_time: TimeDelta::try_milliseconds(i as i64 * 100).unwrap(),
@@ -1415,7 +1469,7 @@ mod tests {
                     ItemLocation::InGroup(p, i),
                 )
                 .unwrap();
-            model.insert_after(&structure, p, e);
+            model.insert_after(&sequence, p, e);
             ids.push(e);
         }
         // 行序：P头, e0, e1, e2 = 4 行
@@ -1431,7 +1485,7 @@ mod tests {
         }
 
         // 再插一个组 G 到 P 末尾，验证 G 作为分组插入定位正确
-        let g = structure
+        let g = sequence
             .create_group(
                 GroupData {
                     name: "G".into(),
@@ -1442,7 +1496,7 @@ mod tests {
                 ItemLocation::InGroup(p, 3),
             )
             .unwrap();
-        model.insert_after(&structure, p, g);
+        model.insert_after(&sequence, p, g);
         assert_eq!(model.row_index_of(g), Some(4), "G 应插到 P 末尾");
     }
 }

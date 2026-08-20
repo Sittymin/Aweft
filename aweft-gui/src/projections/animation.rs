@@ -14,15 +14,15 @@ use crate::store::AppStore;
 
 /// 动画：结构变化（装载/重置/搜索）→ 派生层全量重建 + 过滤视图重新绑定 Slint。
 pub fn op_animation_structure(store: &mut AppStore, tags: &[Tag]) {
-    let structure: Vec<Tag> = tags
+    let sequence: Vec<Tag> = tags
         .iter()
         .filter(|t| matches!(t, Tag::AnimationStructureChanged))
         .cloned()
         .collect();
-    if structure.is_empty() {
+    if sequence.is_empty() {
         return;
     }
-    store.ui_models.graph_editor.apply_tags(&structure);
+    store.ui_models.graph_editor.apply_tags(&sequence);
     store.rebind_animation_filters();
 }
 

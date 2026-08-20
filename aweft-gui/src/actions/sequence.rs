@@ -1,13 +1,13 @@
 use aweft_model::{
     ids::{ActorId, ItemId},
-    structure::SegmentTiming,
+    sequence::SegmentTiming,
 };
 use chrono::TimeDelta;
 
 use crate::bridge::types::SlintSelectionModifier;
 
 #[derive(Debug, Clone)]
-pub enum LineEditorAction {
+pub enum SequenceAction {
     ToggleGroupCollapsed {
         group_id: ItemId,
     },

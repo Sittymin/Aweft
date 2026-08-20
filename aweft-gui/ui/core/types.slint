@@ -8,6 +8,8 @@ export struct SlintKey {
 export enum SlintAreaType {
     line-editor,
     viewport,
+    // 时间线（Timeline）：像视频轨道一样使用长方形填充占用的时间部分
+    timeline,
     // 样式链（node_graph）
     style-graph-editor,
     // 应用图（application_graph）
@@ -88,6 +90,17 @@ export enum SlintSelectionState {
     IndirectlySelected, // 间接选中 For example: 在没有选中 groupheader 的时候选中所有内部 items
 }
 
+// 分组头折叠时画布上显示的"字幕行子块"：组内每个字幕行（递归）一块，
+// 按各自时间范围定位（组内时间可重叠）。展开时子行各自占泳道，此列表忽略。
+export struct SlintTimelineSubBlock {
+    // 字幕行 ID（折叠时命中子块可选中/改时间范围，复用 line_editor 时间回调）
+    item-id: string,
+    // 字幕行文本
+    name: string,
+    start-sec: float,
+    end-sec: float,
+}
+
 export struct SlintSubtitleRow {
     // === 通用字段 ===
     row_type: SlintSubtitleRowType,
@@ -96,6 +109,12 @@ export struct SlintSubtitleRow {
     ancestor_groups: [string],
     start_time: string,
     end_time: string,
+    // 时间范围（秒，浮点）：与 start_time/end_time 字符串同源，供时间线画布按时间轴定位块。
+    // 分组头 = 组内所有行合并范围（min start ~ max end），空组为 0。
+    start-sec: float,
+    end-sec: float,
+    // 分组头：折叠时画布组头泳道渲染的字幕行子块（组内所有字幕行递归）；非分组忽略
+    child-blocks: [SlintTimelineSubBlock],
     item_id: string,
     // 是否被选中
     selected: SlintSelectionState,

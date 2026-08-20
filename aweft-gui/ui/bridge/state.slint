@@ -1,6 +1,6 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
-import { SlintSubtitleRow } from "../core/types.slint";
+import { SlintSubtitleRow, SlintTimelineSubBlock } from "../core/types.slint";
 import { GraphLink, GraphNode } from "../areas/node_graph/node_frame.slint";
 import { ContextMenuItem } from "../widgets/context_menu.slint";
 import {
@@ -41,6 +41,9 @@ export global EditOverlayState {
 export global SubtitleState {
     in property <image> current-subtitle-frame;
     in property <[SlintSubtitleRow]> rows: [];
+    // 时间线根级收起时显示的"全部字幕行片段块"（Rust 侧全量事件模型；
+    // 与分组收起显示的 child-blocks 共用同一渲染组件）
+    in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];
 }
 
 // 节点图编辑器状态：样式图/应用图各一组模型，由 Rust 侧驱动。

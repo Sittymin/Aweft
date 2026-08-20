@@ -280,7 +280,7 @@ mod tests {
             depends_on: data,
             operations: vec![Operation {
                 id: op_id,
-                code: OperationCode::LineStructure,
+                code: OperationCode::SequenceStructure,
                 handles,
                 depends_on: &[],
                 exec,
@@ -291,8 +291,8 @@ mod tests {
     fn noop(_store: &mut AppStore, _tags: &[Tag]) {}
 
     /// 测试用的跨组件引用常量（&'static 数组）。
-    const DEP_A: &[OperationCode] = &[OperationCode::LineStructure];
-    const DEP_MISSING: &[OperationCode] = &[OperationCode::LineCollapse];
+    const DEP_A: &[OperationCode] = &[OperationCode::SequenceStructure];
+    const DEP_MISSING: &[OperationCode] = &[OperationCode::SequenceCollapse];
 
     /// 提取组件内第一个操作的 id。
     fn op_id(comp: &Component) -> OperationId {
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn tag_routes_to_dependent_operations() {
         let mut g = Depsgraph::new();
-        let a = make_component(&[DataId::ProjectStructure], &[TagKind::LineTimecode], noop);
+        let a = make_component(&[DataId::Sequence], &[TagKind::SequenceTimecode], noop);
         let b = make_component(&[DataId::Selection], &[TagKind::Selection], noop);
         let id_a = op_id(&a);
         let id_b = op_id(&b);
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn operation_deduplicated_across_multiple_tags() {
         let mut g = Depsgraph::new();
-        let a = make_component(&[DataId::ProjectStructure], &[TagKind::LineStructure], noop);
+        let a = make_component(&[DataId::Sequence], &[TagKind::SequenceStructure], noop);
         let id_a = op_id(&a);
         g.register(a);
 
@@ -339,7 +339,7 @@ mod tests {
     #[test]
     fn unrelated_data_does_not_trigger() {
         let mut g = Depsgraph::new();
-        let a = make_component(&[DataId::ProjectStructure], &[TagKind::LineStructure], noop);
+        let a = make_component(&[DataId::Sequence], &[TagKind::SequenceStructure], noop);
         g.register(a);
 
         g.tag(Tag::ScreenInitialized);
@@ -355,19 +355,19 @@ mod tests {
         let b_op = OperationId::new();
         let comp = Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![
                 Operation {
                     id: a_op,
-                    code: OperationCode::LineStructure,
-                    handles: &[TagKind::LineStructure],
+                    code: OperationCode::SequenceStructure,
+                    handles: &[TagKind::SequenceStructure],
                     depends_on: &[],
                     exec: noop,
                 },
                 Operation {
                     id: b_op,
-                    code: OperationCode::LineTimecode,
-                    handles: &[TagKind::LineTimecode],
+                    code: OperationCode::SequenceTimecode,
+                    handles: &[TagKind::SequenceTimecode],
                     depends_on: &[],
                     exec: noop,
                 },
@@ -393,18 +393,18 @@ mod tests {
         let b_op = OperationId::new();
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![
                 Operation {
                     id: a_op,
-                    code: OperationCode::LineStructure,
-                    handles: &[TagKind::LineStructure],
+                    code: OperationCode::SequenceStructure,
+                    handles: &[TagKind::SequenceStructure],
                     depends_on: &[],
                     exec: noop,
                 },
                 Operation {
                     id: b_op,
-                    code: OperationCode::LineCollapse,
+                    code: OperationCode::SequenceCollapse,
                     handles: &[],
                     depends_on: DEP_A,
                     exec: noop,
@@ -429,22 +429,22 @@ mod tests {
         let b_op = OperationId::new();
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: a_op,
-                code: OperationCode::LineStructure,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceStructure,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: &[],
                 exec: noop,
             }],
         });
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: b_op,
-                code: OperationCode::LineCollapse,
-                // 不 handles LineStructure：op_b 只应通过依赖边被传播到
+                code: OperationCode::SequenceCollapse,
+                // 不 handles SequenceStructure：op_b 只应通过依赖边被传播到
                 handles: &[],
                 // 显式依赖 A 的操作（跨组件边）
                 depends_on: DEP_A,
@@ -453,7 +453,7 @@ mod tests {
         });
         g.resolve_relations();
 
-        // tag 命中 LineStructure → 入口为 op_a；跨组件边应把 op_b 拉入闭包
+        // tag 命中 SequenceStructure → 入口为 op_a；跨组件边应把 op_b 拉入闭包
         g.tag(Tag::StructureChanged);
         let affected = g.flush_affected(&g.pending_tags);
         assert!(affected.contains(&a_op));
@@ -473,30 +473,30 @@ mod tests {
         let c_op = OperationId::new();
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: a_op,
-                code: OperationCode::LineStructure,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceStructure,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: &[],
                 exec: noop,
             }],
         });
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![
                 Operation {
                     id: b_op,
-                    code: OperationCode::LineCollapse,
-                    // 不 handles LineStructure：只应通过依赖边被传播到
+                    code: OperationCode::SequenceCollapse,
+                    // 不 handles SequenceStructure：只应通过依赖边被传播到
                     handles: &[],
                     depends_on: DEP_A,
                     exec: noop,
                 },
                 Operation {
                     id: c_op,
-                    code: OperationCode::LineTimecode,
+                    code: OperationCode::SequenceTimecode,
                     // 不 handles、无 depends_on：不应被调度
                     handles: &[],
                     depends_on: &[],
@@ -523,11 +523,11 @@ mod tests {
         let a_op = OperationId::new();
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: a_op,
-                code: OperationCode::LineStructure,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceStructure,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: DEP_MISSING,
                 exec: noop,
             }],
@@ -547,22 +547,22 @@ mod tests {
         let b_op = OperationId::new();
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: a_op,
-                code: OperationCode::LineStructure,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceStructure,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: &[],
                 exec: noop,
             }],
         });
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: b_op,
-                code: OperationCode::LineCollapse,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceCollapse,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: DEP_A,
                 exec: noop,
             }],
@@ -598,22 +598,22 @@ mod tests {
         let b_op = OperationId::new();
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: a_op,
-                code: OperationCode::LineStructure,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceStructure,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: &[],
                 exec: exec_a,
             }],
         });
         g.register(Component {
             id: ComponentId::new(),
-            depends_on: &[DataId::ProjectStructure],
+            depends_on: &[DataId::Sequence],
             operations: vec![Operation {
                 id: b_op,
-                code: OperationCode::LineCollapse,
-                handles: &[TagKind::LineStructure],
+                code: OperationCode::SequenceCollapse,
+                handles: &[TagKind::SequenceStructure],
                 depends_on: DEP_A,
                 exec: exec_b,
             }],
@@ -642,8 +642,8 @@ mod tests {
         // 数据依赖边：两个组件依赖同一数据域，一次 tag 同时驱动两者。
         // （Blender 中多组件依赖同一 IDNode 的语义）
         let mut g = Depsgraph::new();
-        let a = make_component(&[DataId::ProjectStructure], &[TagKind::LineStructure], noop);
-        let b = make_component(&[DataId::ProjectStructure], &[TagKind::LineStructure], noop);
+        let a = make_component(&[DataId::Sequence], &[TagKind::SequenceStructure], noop);
+        let b = make_component(&[DataId::Sequence], &[TagKind::SequenceStructure], noop);
         let id_a = op_id(&a);
         let id_b = op_id(&b);
         g.register(a);
@@ -660,8 +660,8 @@ mod tests {
         // 组件 depends_on 不含 tag.data_id 时，即使 kind 匹配也不调度。
         // （数据依赖边是调度的必要条件）
         let mut g = Depsgraph::new();
-        // 组件只依赖 Selection，但 tag 是 ProjectStructure 数据域
-        let a = make_component(&[DataId::Selection], &[TagKind::LineStructure], noop);
+        // 组件只依赖 Selection，但 tag 是 Sequence 数据域
+        let a = make_component(&[DataId::Selection], &[TagKind::SequenceStructure], noop);
         let id_a = op_id(&a);
         g.register(a);
 
@@ -669,7 +669,7 @@ mod tests {
         let affected = g.flush_affected(&g.pending_tags);
         assert!(
             affected.is_empty(),
-            "不依赖 ProjectStructure 的组件不应被 LineStructure tag 调度"
+            "不依赖 Sequence 的组件不应被 SequenceStructure tag 调度"
         );
         assert!(!affected.contains(&id_a));
     }

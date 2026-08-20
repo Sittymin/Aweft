@@ -12,7 +12,7 @@ pub fn rust_area_type_to_slint(area_type: &crate::screen::area::AreaType) -> Sli
         crate::screen::area::AreaType::Empty => SlintAreaType::LineEditor,
         crate::screen::area::AreaType::LineEditor => SlintAreaType::LineEditor,
         crate::screen::area::AreaType::Viewport => SlintAreaType::Viewport,
-        crate::screen::area::AreaType::Timeline => SlintAreaType::LineEditor,
+        crate::screen::area::AreaType::Timeline => SlintAreaType::Timeline,
         crate::screen::area::AreaType::StyleGraphEditor => SlintAreaType::StyleGraphEditor,
         crate::screen::area::AreaType::AppGraphEditor => SlintAreaType::AppGraphEditor,
         crate::screen::area::AreaType::GraphEditor => SlintAreaType::GraphEditor,
@@ -25,6 +25,7 @@ pub fn slint_area_type_to_rust(area_type: &SlintAreaType) -> crate::screen::area
     match area_type {
         SlintAreaType::LineEditor => crate::screen::area::AreaType::LineEditor,
         SlintAreaType::Viewport => crate::screen::area::AreaType::Viewport,
+        SlintAreaType::Timeline => crate::screen::area::AreaType::Timeline,
         SlintAreaType::StyleGraphEditor => crate::screen::area::AreaType::StyleGraphEditor,
         SlintAreaType::AppGraphEditor => crate::screen::area::AreaType::AppGraphEditor,
         SlintAreaType::GraphEditor => crate::screen::area::AreaType::GraphEditor,

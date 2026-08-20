@@ -8,13 +8,13 @@ use crate::bridge::types::{
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
 use crate::store::graph_editor::GraphEditorState;
-use crate::store::line_editor::LineEditorState;
+use crate::store::sequence::SequenceState;
 use crate::store::nla_editor::NlaEditorState;
 use crate::store::node_graph::NodeGraphState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
 pub struct UiModels {
-    pub line_editor_state: LineEditorState,
+    pub sequence_state: SequenceState,
     /// 样式图编辑器状态（节点/连线/链/角色）
     pub style_graph: NodeGraphState,
     /// 应用图编辑器状态
@@ -35,7 +35,7 @@ pub struct UiModels {
 impl UiModels {
     pub fn new() -> Self {
         Self {
-            line_editor_state: LineEditorState::new(),
+            sequence_state: SequenceState::new(),
             style_graph: NodeGraphState::default(),
             app_graph: NodeGraphState::default(),
             graph_editor: GraphEditorState::default(),

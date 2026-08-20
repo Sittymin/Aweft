@@ -1,7 +1,7 @@
 pub mod app_store;
 pub mod graph_editor;
-pub mod line_editor;
-pub mod line_rows_model;
+pub mod sequence;
+pub mod sequence_rows_model;
 pub mod nla_editor;
 pub mod node_graph;
 pub mod state;

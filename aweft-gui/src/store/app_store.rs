@@ -52,7 +52,7 @@ impl AppStore {
                 // TODO: 实现媒体相关的 reducer
                 vec![]
             }
-            Action::LineEditor(act) => self.dispatch_line_editor(act)?,
+            Action::Sequence(act) => self.dispatch_sequence(act)?,
             Action::NodeGraph(act) => self.dispatch_node_graph(act)?,
             Action::Animation(act) => self.dispatch_animation(act)?,
             Action::Nla(act) => self.dispatch_nla(act)?,
@@ -103,18 +103,18 @@ impl AppStore {
 
     /// 同时获取只读 `state` 与可变 `ui_models`。
     ///
-    /// 用于需要“读取 Domain、写入 UI Projection”的场景（典型是投影重算应用 LineEditor 更新）。
+    /// 用于需要“读取 Domain、写入 UI Projection”的场景（典型是投影重算应用 Sequence 更新）。
     pub fn split_mut(&mut self) -> (&AppState, &mut UiModels) {
         (&self.state, &mut self.ui_models)
     }
 
-    /// 初始化 LineEditor 的行数据与过滤模型，返回过滤后的 ModelRc。
-    pub fn rebuild_line_editor_models(
+    /// 初始化 Sequence 的行数据与过滤模型，返回过滤后的 ModelRc。
+    pub fn rebuild_sequence_models(
         &mut self,
     ) -> slint::ModelRc<crate::bridge::types::SlintSubtitleRow> {
         self.ui_models
-            .line_editor_state
+            .sequence_state
             .initialize_rows(&self.state.project);
-        self.ui_models.line_editor_state.init_filter_model()
+        self.ui_models.sequence_state.init_filter_model()
     }
 }

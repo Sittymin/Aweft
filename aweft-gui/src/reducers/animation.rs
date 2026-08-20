@@ -11,7 +11,7 @@ impl crate::store::AppStore {
     ///
     /// 权威数据在 model（`Project.library.animation_library.actions`）：
     ///  - **拖拽（高频）**：`KeyframeDragged`/`HandleDragged` 只改编辑数据（preview，对齐
-    ///    LineEditor 的 preview 语义），保住 Slint 拖拽抓取；
+    ///    Sequence 的 preview 语义），保住 Slint 拖拽抓取；
     ///  - **视图写回**：松开/插值变更后 `write_view_to_model` 把编辑数据写回 model Action；
     ///  - **装载**：`ActionSelected` 读 model Action 重建编辑数据。
     ///

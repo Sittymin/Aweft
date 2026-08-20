@@ -1,0 +1,258 @@
+// 时间线编辑器左侧面板：复用字幕行编辑器的行表现与数据——
+// 每行只需"折叠展开 + 内容"（无字幕行的时间码/角色等列）。
+// 缩进与字幕行编辑器一致：**折叠列与内容列各自按 depth 缩进**
+//（折叠列每层 16px 缩进竖线、内容列每层 8px 缩进占位，嵌套分组逐层加深）。
+// 行样式与字幕行编辑器一致：分组头黄色加粗 + 文件夹图标 + 折叠箭头；
+// 字幕行白色。点击行空白选中、点击折叠按钮/文件夹切换折叠——
+// 全部复用字幕行编辑器的回调（SequenceCallbacks）与可见行模型（SubtitleState.rows）。
+import { SlintSubtitleRow, SlintSubtitleRowType, SlintSelectionState, SlintSelectionModifier } from "../../core/types.slint";
+import { Theme } from "../../theme/index.slint";
+import { SequenceCallbacks } from "../../bridge/callbacks.slint";
+
+// 时间线行列表（可见行；绝对定位并支持 pan-y 纵向滚动）。
+// 第 0 行固定为"根级"控制栏（整条时间线的收起展开，非分组头样式），
+// 其余可见行自第 1 行起排布并整体多缩进一级（嵌套在根级之下）；
+// 根级收起时其余行隐藏。
+export component TimelineList inherits Rectangle {
+    in property <[SlintSubtitleRow]> rows;
+    in property <float> pan-y: 0.0;
+    in property <length> row-height;
+    // 根级收起展开：收起时列表只剩根级栏，右侧条带显示全部字幕行片段块
+    in property <bool> root-collapsed: false;
+    // 根级栏计数（显示 "全部字幕 (N)"）
+    in property <int> root-count: 0;
+    callback scrolled(delta: float);
+    callback toggle-root-collapsed();
+
+    clip: true;
+    background: Theme.data.animation-editor.channel-list-background;
+
+    // 背景滚轮事件（置于行之下；行级 TouchArea 只处理点击不处理 scroll，事件上浮到此处）
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        scroll-event(event) => {
+            root.scrolled(event.delta-y / 1px);
+            return EventResult.accept;
+        }
+    }
+
+    // 根级控制栏（最顶层；独立分隔条背景 + 折叠箭头 + 计数标签，无文件夹/黄色加粗）
+    Rectangle {
+        y: root.pan-y * 1px;
+        x: 0px;
+        width: 100%;
+        height: root.row-height;
+        background: Theme.data.animation-editor.panel-header-background;
+
+        // 点击栏任意处切换根级收起/展开
+        TouchArea {
+            clicked => {
+                root.toggle-root-collapsed();
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            padding-left: 8px;
+            padding-right: 6px;
+
+            // 折叠箭头
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                y: (parent.height - self.height) / 2;
+                Image {
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    transform-rotation: root.root-collapsed ? -90deg : 0deg;
+                    source: @image-url("../../assets/icons/arrow_drop_down.svg");
+                }
+            }
+
+            // 标签
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 100%;
+                clip: true;
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 0px;
+                    Text {
+                        text: "全部字幕 (" + root.root-count + ")";
+                        vertical-alignment: center;
+                        color: white;
+                        font-weight: 500;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // 底部分隔线（与行区分）
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: #333;
+        }
+    }
+
+    // 其余行（根级展开时显示；收起时隐藏；整体比根级栏多缩进一级）
+    for r[i] in root.rows: Rectangle {
+        visible: !root.root-collapsed;
+        y: (i + 1) * root.row-height + root.pan-y * 1px;
+        x: 0px;
+        width: 100%;
+        height: root.row-height;
+        background: r.selected != SlintSelectionState.Unselected
+            ? Theme.data.animation-editor.channel-row-selected
+            : transparent;
+
+        // 点击行空白部分选中（SlintSelectionModifier）
+        TouchArea {
+            pointer-event(event) => {
+                if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                    SequenceCallbacks.select-row(r.item-id, event.modifiers.control
+                        ? SlintSelectionModifier.ctrl
+                        : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none));
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 4px;
+            padding-left: 4px;
+            padding-right: 6px;
+
+            // 折叠列：宽度随 depth 变化（文本紧贴组缩进），每层 16px 缩进竖线。
+            // 整体比字幕行编辑器的 depth 多缩进一级（嵌套在根级栏之下），
+            // group/event 同 depth 时折叠列宽相同、文本起点一致 → 左对齐；
+            // 不同 depth 时文本随层级右移（紧贴组缩进）。
+            Rectangle {
+                width: ((r.depth + 1) * 16px) + 24px;
+                height: 100%;
+                clip: true;
+
+                // 缩进占位 + 竖线（每层 16px）
+                for d in (r.depth + 1): Rectangle {
+                    width: 16px;
+                    height: parent.height;
+                    x: d * 16px;
+                    Rectangle {
+                        width: 1px;
+                        height: parent.height;
+                        background: #444;
+                        x: parent.width / 2;
+                    }
+                }
+
+                // 分组头折叠箭头（紧贴 depth 缩进竖线末尾）
+                if r.row-type == SlintSubtitleRowType.GroupHeader: Rectangle {
+                    width: 16px;
+                    height: 16px;
+                    x: (r.depth + 1) * 16px;
+                    y: (parent.height - self.height) / 2;
+                    Image {
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        transform-rotation: r.collapsed ? -90deg : 0deg;
+                        source: @image-url("../../assets/icons/arrow_drop_down.svg");
+                    }
+                    TouchArea {
+                        clicked => {
+                            SequenceCallbacks.toggle-group-collapsed(r.item-id);
+                        }
+                    }
+                }
+            }
+
+            // 图标列：分组头文件夹（点击也可折叠/展开）；字幕行留空
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                y: (parent.height - self.height) / 2;
+
+                if r.row-type == SlintSubtitleRowType.GroupHeader: Image {
+                    width: 100%;
+                    height: 100%;
+                    source: r.collapsed
+                        ? @image-url("../../assets/icons/folder.svg")
+                        : @image-url("../../assets/icons/folder_open.svg");
+                }
+                if r.row-type == SlintSubtitleRowType.GroupHeader: TouchArea {
+                    clicked => {
+                        SequenceCallbacks.toggle-group-collapsed(r.item-id);
+                    }
+                }
+            }
+
+            // 内容列：文本（缩进已由折叠列的 depth 竖线体现，无需再独立缩进）
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 100%;
+                clip: true;
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 0px;
+
+                    Text {
+                        text: r.row-type == SlintSubtitleRowType.GroupHeader
+                            ? r.group-name + " (" + r.total-row-count + ")"
+                            : r.text;
+                        vertical-alignment: center;
+                        color: r.row-type == SlintSubtitleRowType.GroupHeader ? #ffff00 : white;
+                        font-weight: r.row-type == SlintSubtitleRowType.GroupHeader ? 700 : 400;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // 行分割线
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: #333;
+        }
+    }
+}
+
+// 时间线左侧面板：顶部标尺高度占位（与画布泳道对齐）+ 列表
+export component TimelinePanel inherits Rectangle {
+    in property <[SlintSubtitleRow]> rows;
+    in property <float> pan-y: 0.0;
+    in property <length> row-height;
+    // 顶部占位高度（与画布时间标尺等高，保证列表第一行与画布第一泳道对齐）
+    in property <length> top-offset: 0px;
+    // 根级收起展开（透传给列表；收起时列表只显示根级行）
+    in property <bool> root-collapsed: false;
+    in property <int> root-count: 0;
+    callback scrolled(delta: float);
+    callback toggle-root-collapsed();
+
+    clip: true;
+
+    TimelineList {
+        x: 0;
+        y: root.top-offset;
+        width: 100%;
+        height: root.height - root.top-offset;
+        rows: root.rows;
+        pan-y: root.pan-y;
+        row-height: root.row-height;
+        root-collapsed: root.root-collapsed;
+        root-count: root.root-count;
+        scrolled(delta) => {
+            root.scrolled(delta);
+        }
+        toggle-root-collapsed() => {
+            root.toggle-root-collapsed();
+        }
+    }
+}

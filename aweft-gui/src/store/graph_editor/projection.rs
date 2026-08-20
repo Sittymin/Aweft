@@ -2,7 +2,7 @@
 //! 派生层（Slint 绑定模型 + 标量）。由 depsgraph 的 `op_animation_*` 调用。
 //!
 //! 投影不修改数据层，只读数据算派生状态，并与当前 UI 模型 diff 后增量更新
-//! （`set_row_data` / `insert` / `remove`），对齐 LineEditor 投影规范。
+//! （`set_row_data` / `insert` / `remove`），对齐 Sequence 投影规范。
 //!
 //! 每个 apply_* 只做"对应 tag 语义"的更新，内部按职责拆成单一目的的私有方法。
 

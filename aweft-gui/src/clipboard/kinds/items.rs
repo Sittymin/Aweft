@@ -5,7 +5,7 @@
 //! - `text/plain;charset=utf-8`：每行一段字幕文本（兜底，便于跨应用粘贴）
 //!
 //! `from_selection` 从用户选中集合构造（自动过滤"祖先已选中"的项）。
-//! `instantiate` 把 clip 实例化进 `ProjectStructure`，会**为所有项重新分配
+//! `instantiate` 把 clip 实例化进 `Sequence`，会**为所有项重新分配
 //! `ItemId`**（避免与现有项冲突），并修复 parent/children 引用。
 
 use std::collections::{HashMap, HashSet};
@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use aweft_model::{
     ids::ItemId,
-    structure::{ItemContent, ItemLocation, ProjectStructure, StructureItem},
+    sequence::{ItemContent, ItemLocation, Sequence, StructureItem},
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,22 +26,22 @@ pub struct ItemsClip {
 }
 
 impl ItemsClip {
-    /// 从 ProjectStructure 与用户选中集合构造 clip。
+    /// 从 Sequence 与用户选中集合构造 clip。
     ///
     /// 过滤掉"祖先也被选中"的项（避免重复打包整棵子树）；剩余的"顶层选中"
     /// 按文档顺序成为 `roots`，每个 root 的子树整体被克隆进 `items`。
-    pub fn from_selection(structure: &ProjectStructure, selected: &HashSet<ItemId>) -> Self {
+    pub fn from_selection(sequence: &Sequence, selected: &HashSet<ItemId>) -> Self {
         let top_level: HashSet<ItemId> = selected
             .iter()
             .copied()
-            .filter(|id| !structure.has_ancestor_in_set(id, selected))
+            .filter(|id| !sequence.has_ancestor_in_set(id, selected))
             .collect();
 
         let mut roots = Vec::new();
         let mut items = HashMap::new();
         walk_collect(
-            structure,
-            &structure.root_items,
+            sequence,
+            &sequence.root_items,
             &top_level,
             &mut roots,
             &mut items,
@@ -50,7 +50,7 @@ impl ItemsClip {
         Self { roots, items }
     }
 
-    /// 将 clip 实例化进 structure，**所有 root 作为 `anchor` 的兄弟/子项**
+    /// 将 clip 实例化进 sequence，**所有 root 作为 `anchor` 的兄弟/子项**
     /// （取决于 anchor 自身类型，由 `find_insert_location` 决定基准位置），
     /// 并按 `self.roots` 顺序连续排列。
     ///
@@ -61,14 +61,14 @@ impl ItemsClip {
     /// 返回新分配的 root ItemId 列表（按 `self.roots` 的顺序）。
     pub fn instantiate(
         &self,
-        structure: &mut ProjectStructure,
+        sequence: &mut Sequence,
         anchor: ItemId,
     ) -> Result<(Vec<ItemId>, ItemLocation)> {
         // 1. 旧 → 新 ItemId 映射
         let id_map: HashMap<ItemId, ItemId> =
             self.items.keys().map(|&old| (old, ItemId::new())).collect();
 
-        // 2. 克隆子树并 remap，批量装载到 structure.items（暂未链接到树）
+        // 2. 克隆子树并 remap，批量装载到 sequence.items（暂未链接到树）
         for (&old_id, item) in &self.items {
             let new_id = id_map[&old_id];
             let mut cloned = item.clone();
@@ -82,11 +82,11 @@ impl ItemsClip {
                     .filter_map(|c| id_map.get(c).copied())
                     .collect();
             }
-            structure.items.insert(new_id, cloned);
+            sequence.items.insert(new_id, cloned);
         }
 
         // 3. 计算基准位置
-        let base_location = structure.find_insert_location(anchor)?;
+        let base_location = sequence.find_insert_location(anchor)?;
 
         let mut new_root_ids = Vec::with_capacity(self.roots.len());
 
@@ -97,7 +97,7 @@ impl ItemsClip {
                 ItemLocation::Root(k) => ItemLocation::Root(k + i),
                 ItemLocation::InGroup(pid, k) => ItemLocation::InGroup(pid, k + i),
             };
-            structure.attach_item(new_root, location)?;
+            sequence.attach_item(new_root, location)?;
             new_root_ids.push(new_root);
         }
 
@@ -121,7 +121,7 @@ impl ItemsClip {
 /// 按文档顺序遍历，把 `top_level` 中的项作为 root 收集，并克隆其子树。
 /// 从根开始扩散收集位置与 ID，并且扁平化
 fn walk_collect(
-    structure: &ProjectStructure,
+    sequence: &Sequence,
     ids: &[ItemId],
     top_level: &HashSet<ItemId>,
     roots: &mut Vec<ItemId>,
@@ -130,26 +130,26 @@ fn walk_collect(
     for &id in ids {
         if top_level.contains(&id) {
             roots.push(id);
-            collect_subtree(structure, id, items);
-        } else if let Some(item) = structure.get(id) {
+            collect_subtree(sequence, id, items);
+        } else if let Some(item) = sequence.get(id) {
             // 进入未被选中的分组继续向下找（而不是跳过）
             if let ItemContent::Group(g) = &item.content {
-                walk_collect(structure, &g.children, top_level, roots, items);
+                walk_collect(sequence, &g.children, top_level, roots, items);
             }
         }
     }
 }
 
 fn collect_subtree(
-    structure: &ProjectStructure,
+    sequence: &Sequence,
     id: ItemId,
     items: &mut HashMap<ItemId, StructureItem>,
 ) {
-    if let Some(item) = structure.get(id) {
+    if let Some(item) = sequence.get(id) {
         items.insert(id, item.clone());
         if let ItemContent::Group(g) = &item.content {
             for &c in &g.children {
-                collect_subtree(structure, c, items);
+                collect_subtree(sequence, c, items);
             }
         }
     }

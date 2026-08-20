@@ -12,21 +12,21 @@ use std::rc::Rc;
 
 use aweft_gui::actions::Action;
 use aweft_gui::actions::area::AreaAction;
-use aweft_gui::actions::line_editor::LineEditorAction;
+use aweft_gui::actions::sequence::SequenceAction;
 use aweft_gui::actions::screen::ScreenAction;
 use aweft_gui::bridge::slint_area_key_to_key;
 use aweft_gui::bridge::types::{MainWindow, SplitPreviewOverlayData};
 use aweft_gui::screen::area::ScrAreaKey;
 use aweft_gui::screen::primitives::Rcti;
 use aweft_gui::store::AppStore;
-use aweft_model::structure::{EventData, ItemLocation};
+use aweft_model::sequence::{EventData, ItemLocation};
 use slint::{ComponentHandle, Model, ModelRc};
 
 /// 构造未过滤的映射行模型（Rows → Map，等价于实际代码的 all_rows_model，
 /// 但只在测试中使用——实际代码的过滤链路是 Rows → Filter → Map）。
 fn all_rows(store: &AppStore) -> ModelRc<aweft_gui::bridge::types::SlintSubtitleRow> {
-    let rows_model: Rc<aweft_gui::store::line_rows_model::LineRowsModel> =
-        Rc::new(store.ui_models().line_editor_state.rows_model().clone());
+    let rows_model: Rc<aweft_gui::store::sequence_rows_model::SequenceRowsModel> =
+        Rc::new(store.ui_models().sequence_state.rows_model().clone());
     let mapper = rows_model.mapper();
     let mapped = slint::MapModel::new(rows_model, move |data| mapper.map(&data));
     ModelRc::new(mapped)
@@ -285,8 +285,8 @@ fn single_op_updates_only_affected_row() {
     }
     let (id1, id2) = {
         let mut store_mut = store.borrow_mut();
-        let mut structure = store_mut.state_mut().project.structure_mut();
-        let id1 = structure
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let id1 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(0).unwrap(),
@@ -299,7 +299,7 @@ fn single_op_updates_only_affected_row() {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        let id2 = structure
+        let id2 = sequence
             .create_event(
                 EventData {
                     start_time: chrono::TimeDelta::try_milliseconds(2000).unwrap(),
@@ -312,8 +312,8 @@ fn single_op_updates_only_affected_row() {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        drop(structure);
-        store_mut.rebuild_line_editor_models();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
         (id1, id2)
     };
 
@@ -321,7 +321,7 @@ fn single_op_updates_only_affected_row() {
     {
         let mut store_mut = store.borrow_mut();
         store_mut
-            .dispatch(Action::LineEditor(LineEditorAction::InputTimecode {
+            .dispatch(Action::Sequence(SequenceAction::InputTimecode {
                 event_id: id1,
                 text: "0:00:00.50".into(),
                 is_start_time: true,
@@ -672,8 +672,6 @@ fn screen_layout_handles_multiple_tags_same_round() {
     }
 
     // 两个意图都应生效：split → area +1；SwitchType → 类型改变。
-    // 注意：Timeline 在 Slint 层被折叠为 LineEditor（rust_area_type_to_slint
-    // 的 HACK，Slint 尚无 Timeline 变体），数据层存真实 Timeline。
     let s = store.borrow();
     let ui = s.ui_models();
     assert_eq!(
@@ -681,12 +679,12 @@ fn screen_layout_handles_multiple_tags_same_round() {
         count_before + 1,
         "同轮 split+SwitchType：split 应生效（area +1）"
     );
-    // UI 层：类型从 Viewport → LineEditor（Timeline 折叠）
+    // UI 层：类型从 Viewport → Timeline（已接入真实 Timeline 变体）
     let first = ui.scrareas().row_data(0).unwrap();
     assert_eq!(
         first.area_type,
-        aweft_gui::bridge::types::SlintAreaType::LineEditor,
-        "同轮 split+SwitchType：SwitchType 应生效（UI 层折叠为 LineEditor，原 {:?}）",
+        aweft_gui::bridge::types::SlintAreaType::Timeline,
+        "同轮 split+SwitchType：SwitchType 应生效（UI 层为 Timeline，原 {:?}）",
         orig_type
     );
     // 数据层：area 真实类型应为 Timeline（不被 UI 折叠掩盖）
@@ -899,7 +897,7 @@ fn animation_hack_test_data_populates_model_and_view() {
 }
 
 /// 动画投影全链路：dispatch(AnimationAction) → tag → evaluate → 投影更新 UI 模型。
-/// 验证 reducer 只改数据层、派生层由 depsgraph 投影驱动（对齐 LineEditor 管线）。
+/// 验证 reducer 只改数据层、派生层由 depsgraph 投影驱动（对齐 Sequence 管线）。
 #[test]
 fn animation_dispatch_projects_derived_models() {
     i_slint_backend_testing::init_no_event_loop();

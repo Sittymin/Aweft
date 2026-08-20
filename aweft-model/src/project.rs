@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::application_graph::ApplicationLayer;
 use crate::library::ProjectLibrary;
 use crate::metadata::ProjectMetadata;
-use crate::structure::ProjectStructure;
+use crate::sequence::Sequence;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -12,9 +12,9 @@ pub struct Project {
 
     pub meta: ProjectMetadata,
     pub library: ProjectLibrary,
-    /// 字幕结构：纯值语义（model 库不持有共享可变状态）。
-    /// UI 侧需要共享读时，用 Repository trait 在 GUI 层做投影（对齐 todo-mvc 模式）。
-    pub structure: ProjectStructure,
+    /// 序列：带时序的层级内容树，纯值语义。
+    /// UI 侧字幕行编辑器/时间线均为此序列的不同视图。
+    pub sequence: Sequence,
     /// 样式应用层：按优先级排列的应用图列表
     pub style_layer: ApplicationLayer,
 }
@@ -25,18 +25,18 @@ impl Project {
             version: 0,
             meta: ProjectMetadata::default(),
             library: ProjectLibrary::default(),
-            structure: ProjectStructure::new(),
+            sequence: Sequence::new(),
             style_layer: ApplicationLayer::new(),
         }
     }
 
-    /// 只读访问字幕结构。
-    pub fn structure(&self) -> &ProjectStructure {
-        &self.structure
+    /// 只读访问序列。
+    pub fn sequence(&self) -> &Sequence {
+        &self.sequence
     }
 
-    /// 可变访问字幕结构。
-    pub fn structure_mut(&mut self) -> &mut ProjectStructure {
-        &mut self.structure
+    /// 可变访问序列。
+    pub fn sequence_mut(&mut self) -> &mut Sequence {
+        &mut self.sequence
     }
 }

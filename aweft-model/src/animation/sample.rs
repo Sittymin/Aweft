@@ -17,7 +17,7 @@ pub struct EvaluatedStrip {
 
 /// An action provider: given an ActionId, return the Action's F-Curves
 /// for sampling. This is a function (or trait) to avoid tying the evaluation
-/// engine to a specific storage structure.
+/// engine to a specific storage sequence.
 pub trait ActionProvider {
     /// Return Some(iter of (property, FCurve)) or None if action not found.
     /// The returned box exists to allow dynamic dispatch.

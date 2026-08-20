@@ -12,7 +12,8 @@ import { DopeSheet } from "../areas/dope_sheet/dope_sheet.slint";
 import { DopeSheetToolbar } from "../areas/dope_sheet/toolbar.slint";
 import { NlaEditor } from "../areas/animation/nla_editor.slint";
 import { NlaToolbar } from "../areas/animation/toolbar.slint";
-import { VideoState } from "../bridge/state.slint";
+import { TimelineEditor } from "../areas/timeline/timeline_editor.slint";
+import { VideoState, SubtitleState } from "../bridge/state.slint";
 import { NodeGraphState, AnimationState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -46,6 +47,10 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
+        if area-type == SlintAreaType.timeline: AreaHeader {
+            area-key: area-key;
+            area-type: area-type;
+        }
         if area-type == SlintAreaType.style-graph-editor: StyleGraphToolbar {
             area-key: area-key;
             area-type: area-type;
@@ -72,6 +77,11 @@ export component SlintScrArea inherits Rectangle {
         if area-type == SlintAreaType.line-editor: LineEditor { }
         if area-type == SlintAreaType.viewport: VideoPlayer {
             video-frame: VideoState.current-video-frame;
+        }
+        if area-type == SlintAreaType.timeline: TimelineEditor {
+            rows: SubtitleState.rows;
+            timeline-root-blocks: SubtitleState.timeline-root-blocks;
+            current-time: AnimationState.current-time;
         }
         if area-type == SlintAreaType.style-graph-editor: style-editor := NodeGraphEditor {
             graph-type: GraphType.style-graph;

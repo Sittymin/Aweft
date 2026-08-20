@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 // === 数据结构定义 ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectStructure {
+pub struct Sequence {
     // 根节点列表：定义了最顶层的顺序
     pub root_items: Vec<ItemId>,
 
@@ -99,7 +99,7 @@ pub enum ItemLocation {
 
 // === 业务逻辑实现 ===
 
-impl ProjectStructure {
+impl Sequence {
     pub fn new() -> Self {
         Self {
             root_items: Vec::new(),
@@ -273,7 +273,7 @@ impl ProjectStructure {
             content: ItemContent::Event(data),
         };
 
-        self.insert_item_to_structure(item, location)?;
+        self.insert_item_to_sequence(item, location)?;
         Ok(id)
     }
 
@@ -293,7 +293,7 @@ impl ProjectStructure {
             content: ItemContent::Group(data),
         };
 
-        self.insert_item_to_structure(item, location)?;
+        self.insert_item_to_sequence(item, location)?;
         Ok(id)
     }
 
@@ -380,7 +380,7 @@ impl ProjectStructure {
     }
 
     // 内部 helper：将 item 放入 map 并链接到 children 列表
-    fn insert_item_to_structure(
+    fn insert_item_to_sequence(
         &mut self,
         item: StructureItem,
         location: ItemLocation,

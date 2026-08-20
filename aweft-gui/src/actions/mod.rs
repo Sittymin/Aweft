@@ -1,7 +1,7 @@
 pub mod animation;
 pub mod area;
 pub mod drag;
-pub mod line_editor;
+pub mod sequence;
 pub mod media;
 pub mod nla;
 pub mod node_graph;
@@ -18,7 +18,7 @@ pub enum Action {
     Area(area::AreaAction),
     /// 媒体相关操作
     Media(media::MediaAction),
-    LineEditor(line_editor::LineEditorAction),
+    Sequence(sequence::SequenceAction),
     /// 节点图（样式图/应用图）结构/值操作
     NodeGraph(node_graph::NodeGraphAction),
     /// 动画编辑器（曲线编辑器等）交互操作

@@ -46,7 +46,8 @@ bitflags! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AreaType {
     Empty,
-    // 和 Aegisub 一样差不多的所有字幕行预览，不过如果开始编辑当行将会放大并显示一些当行细节（即聚焦于当行，上下仅有几行简要预览）
+    // 序列的表格视图（行编辑器）：与时间线同源（DataId::Sequence），
+    // 按层级扁平展示 Group/Event，支持折叠/时序/文本编辑
     LineEditor,
     // 实际渲染并可以使用交互式工具的地方(也是视频播放的地方)
     Viewport,

@@ -20,7 +20,7 @@
 //! 数据流：
 //!  - **装载**：`dispatch_animation(ActionSelected)` 读 model Action → `load_action`（全量重建视图）
 //!  - **拖拽（高频）**：`KeyframeDragged`/`HandleDragged` 只改视图（局部 `set_row_data`，
-//!    保住 Slint 拖拽抓取）；对齐 main 的 preview/commit 模式（同 LineEditor 拖拽）
+//!    保住 Slint 拖拽抓取）；对齐 main 的 preview/commit 模式（同 Sequence 拖拽）
 //!  - **提交**：`KeyframeReleased`/`HandleReleased`/插值变更后 `commit_to_model` 把视图
 //!    关键帧写回 model Action（按时间排序，丢 UI 选中态）
 //!  - UI 态（选中/搜索/视图缩放/通道可见性/颜色）留在本 store，不入 model
@@ -35,7 +35,7 @@
 //!    `selected_display`/`preview_handles`/`action_start`/`action_end` 与 Slint 标量
 //!
 //! 交互方法（reducer）只改数据层并返回 `Vec<Tag>`；`dispatch_animation` 打 tag 后由
-//! depsgraph 投影（`op_animation_*`）把数据层同步到派生层——对齐 LineEditor 的
+//! depsgraph 投影（`op_animation_*`）把数据层同步到派生层——对齐 Sequence 的
 //! `Action → tag → 投影` 标准管线。
 
 use std::collections::{HashMap, HashSet};

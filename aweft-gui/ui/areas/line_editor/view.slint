@@ -8,7 +8,7 @@ import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { SlintKey, SlintSelectionModifier } from "../../core/types.slint";
-import { LineEditorCallbacks } from "../../bridge/callbacks.slint";
+import { SequenceCallbacks } from "../../bridge/callbacks.slint";
 import {
     SlintSubtitleRow,
     SlintSubtitleRowType,
@@ -116,7 +116,7 @@ export component LineEditor inherits Rectangle {
                 if focused-index + 1 < SubtitleState.rows.length {
                     focused-index += 1;
                     bring-into-view(focused-index);
-                    LineEditorCallbacks.select-row(
+                    SequenceCallbacks.select-row(
                         SubtitleState.rows[focused-index].item-id, SlintSelectionModifier.none);
                 }
                 return accept;
@@ -125,7 +125,7 @@ export component LineEditor inherits Rectangle {
                 if focused-index > 0 {
                     focused-index -= 1;
                     bring-into-view(focused-index);
-                    LineEditorCallbacks.select-row(
+                    SequenceCallbacks.select-row(
                         SubtitleState.rows[focused-index].item-id, SlintSelectionModifier.none);
                 }
                 return accept;
@@ -159,7 +159,7 @@ export component LineEditor inherits Rectangle {
                             focused-index = idx;
                             bring-into-view(idx);
 
-                            LineEditorCallbacks.select-row(row.item-id, event.modifiers.control
+                            SequenceCallbacks.select-row(row.item-id, event.modifiers.control
                                 ? SlintSelectionModifier.ctrl
                                 : (event.modifiers.shift ? SlintSelectionModifier.shift : SlintSelectionModifier.none))
                         }
@@ -170,7 +170,7 @@ export component LineEditor inherits Rectangle {
 
                             // 如果右键的不是已选择的项目，那么就单选右键的行
                             if row.selected != SlintSelectionState.DirectlySelected {
-                                LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                             }
 
                             // 记录被右键的行并换算菜单坐标（行内坐标 → LineEditor 根坐标）
@@ -230,7 +230,7 @@ export component LineEditor inherits Rectangle {
 
                                 TouchArea {
                                     clicked => {
-                                        LineEditorCallbacks.toggle-group-collapsed(row.item_id);
+                                        SequenceCallbacks.toggle-group-collapsed(row.item_id);
                                     }
                                 }
                             }
@@ -276,47 +276,47 @@ export component LineEditor inherits Rectangle {
                             width: 100%;
                             TimecodeEditor {
                                 increment-timecode(is_batch) => {
-                                    LineEditorCallbacks.increment-timecode(row.item-id, true, is_batch);
+                                    SequenceCallbacks.increment-timecode(row.item-id, true, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     } else {
                                         if row.selected != SlintSelectionState.DirectlySelected {
-                                            LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.ctrl);
+                                            SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.ctrl);
                                         }
                                     }
                                 }
                                 decrement-timecode(is_batch) => {
-                                    LineEditorCallbacks.decrement-timecode(row.item-id, true, is_batch);
+                                    SequenceCallbacks.decrement-timecode(row.item-id, true, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     } else {
                                         if row.selected != SlintSelectionState.DirectlySelected {
-                                            LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.ctrl);
+                                            SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.ctrl);
                                         }
                                     }
                                 }
                                 drag-timecode-start => {
                                     if row.selected != SlintSelectionState.DirectlySelected {
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch);
+                                    SequenceCallbacks.drag-timecode-preview(row.item-id, true, delta-x, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
                                 }
                                 drag-timecode-commit(delta-x, is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, true, delta-x, is_batch)
+                                    SequenceCallbacks.drag-timecode-commit(row.item-id, true, delta-x, is_batch)
                                 }
                                 drag-timecode-cancel(is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, true, is_batch)
+                                    SequenceCallbacks.drag-timecode-cancel(row.item-id, true, is_batch)
                                 }
                                 timecode-input(text) => {
-                                    LineEditorCallbacks.timecode-input(row.item-id, true, text, root.is-batch-editing);
+                                    SequenceCallbacks.timecode-input(row.item-id, true, text, root.is-batch-editing);
                                     root.exit-batch-edit();
                                 }
                                 edit-activated(is_batch) => {
@@ -329,7 +329,7 @@ export component LineEditor inherits Rectangle {
                                     } else if row.selected != SlintSelectionState.DirectlySelected {
                                         focused-index = idx;
                                         bring-into-view(idx);
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none)
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none)
                                     }
                                 }
                                 editing-text-changed(text) => {
@@ -354,40 +354,40 @@ export component LineEditor inherits Rectangle {
 
                             TimecodeEditor {
                                 increment-timecode(is_batch) => {
-                                    LineEditorCallbacks.increment-timecode(row.item-id, false, is_batch);
+                                    SequenceCallbacks.increment-timecode(row.item-id, false, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 decrement-timecode(is_batch) => {
-                                    LineEditorCallbacks.decrement-timecode(row.item-id, false, is_batch);
+                                    SequenceCallbacks.decrement-timecode(row.item-id, false, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
                                     if !is_batch {
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 drag-timecode-start => {
                                     if row.selected != SlintSelectionState.DirectlySelected {
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none);
                                     }
                                 }
                                 drag-timecode-preview(delta-x, is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch);
+                                    SequenceCallbacks.drag-timecode-preview(row.item-id, false, delta-x, is_batch);
                                     focused-index = idx;
                                     bring-into-view(idx);
                                 }
 
                                 drag-timecode-commit(delta-x, is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-commit(row.item-id, false, delta-x, is_batch)
+                                    SequenceCallbacks.drag-timecode-commit(row.item-id, false, delta-x, is_batch)
                                 }
                                 drag-timecode-cancel(is_batch) => {
-                                    LineEditorCallbacks.drag-timecode-cancel(row.item-id, false, is_batch)
+                                    SequenceCallbacks.drag-timecode-cancel(row.item-id, false, is_batch)
                                 }
                                 timecode-input(text) => {
-                                    LineEditorCallbacks.timecode-input(row.item-id, false, text, root.is-batch-editing);
+                                    SequenceCallbacks.timecode-input(row.item-id, false, text, root.is-batch-editing);
                                     root.exit-batch-edit();
                                 }
                                 edit-activated(is_batch) => {
@@ -400,7 +400,7 @@ export component LineEditor inherits Rectangle {
                                     } else if row.selected != SlintSelectionState.DirectlySelected {
                                         focused-index = idx;
                                         bring-into-view(idx);
-                                        LineEditorCallbacks.select-row(row.item-id, SlintSelectionModifier.none)
+                                        SequenceCallbacks.select-row(row.item-id, SlintSelectionModifier.none)
                                     }
                                 }
                                 editing-text-changed(text) => {
@@ -473,7 +473,7 @@ export component LineEditor inherits Rectangle {
 
                                 TouchArea {
                                     clicked => {
-                                        LineEditorCallbacks.toggle-group-collapsed(row.item_id);
+                                        SequenceCallbacks.toggle-group-collapsed(row.item_id);
                                     }
                                 }
                             }
@@ -523,7 +523,7 @@ export component LineEditor inherits Rectangle {
             activated => {
                 let row = root.context-menu-row;
                 if row >= 0 && row < SubtitleState.rows.length {
-                    LineEditorCallbacks.add-line(SubtitleState.rows[row].item-id, SubtitleState.rows[row].start-time, SubtitleState.rows[row].end-time, SubtitleState.rows[row].text);
+                    SequenceCallbacks.add-line(SubtitleState.rows[row].item-id, SubtitleState.rows[row].start-time, SubtitleState.rows[row].end-time, SubtitleState.rows[row].text);
                 }
             }
         }
@@ -533,19 +533,19 @@ export component LineEditor inherits Rectangle {
             activated => {
                 let row = root.context-menu-row;
                 if row >= 0 && row < SubtitleState.rows.length {
-                    LineEditorCallbacks.add-group(SubtitleState.rows[row].item-id);
+                    SequenceCallbacks.add-group(SubtitleState.rows[row].item-id);
                 }
             }
         }
         MenuItem {
             text: "剪切";
             menu-open <=> root.context-menu-open;
-            activated => { LineEditorCallbacks.cut-items(); }
+            activated => { SequenceCallbacks.cut-items(); }
         }
         MenuItem {
             text: "复制";
             menu-open <=> root.context-menu-open;
-            activated => { LineEditorCallbacks.copy-items(); }
+            activated => { SequenceCallbacks.copy-items(); }
         }
         MenuItem {
             text: "粘贴";
@@ -553,14 +553,14 @@ export component LineEditor inherits Rectangle {
             activated => {
                 let row = root.context-menu-row;
                 if row >= 0 && row < SubtitleState.rows.length {
-                    LineEditorCallbacks.paste-items(SubtitleState.rows[row].item-id);
+                    SequenceCallbacks.paste-items(SubtitleState.rows[row].item-id);
                 }
             }
         }
         MenuItem {
             text: "删除";
             menu-open <=> root.context-menu-open;
-            activated => { LineEditorCallbacks.delete-selected-items(); }
+            activated => { SequenceCallbacks.delete-selected-items(); }
         }
         MenuItem {
             text: "上移（TODO）";
@@ -584,7 +584,7 @@ export component LineEditor inherits Rectangle {
             activated => {
                 let row = root.context-menu-row;
                 if row >= 0 && row < SubtitleState.rows.length {
-                    LineEditorCallbacks.ungroups(SubtitleState.rows[row].item-id);
+                    SequenceCallbacks.ungroups(SubtitleState.rows[row].item-id);
                 }
             }
         }

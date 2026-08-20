@@ -7,24 +7,29 @@ use anyhow::Result;
 use aweft_model::{
     ids::ItemId,
     project::Project,
-    structure::{ItemContent, ItemLocation},
+    sequence::{ItemContent, ItemLocation},
 };
 use chrono::TimeDelta;
 use slint::{Model, ModelRc};
 
-use crate::bridge::{SlintSelectionState, SlintSubtitleRow};
-use crate::store::line_rows_model::{LineRowsModel, RowData};
+use crate::bridge::{SlintSelectionState, SlintSubtitleRow, SlintTimelineSubBlock};
+use crate::store::sequence_rows_model::{SequenceRowsModel, RowData};
+use slint::{SharedString, ToSharedString, VecModel};
 
-type SubtitleFilterModel = slint::FilterModel<Rc<LineRowsModel>, Box<dyn Fn(&RowData) -> bool>>;
+type SubtitleFilterModel = slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>;
 
-pub struct LineEditorState {
+pub struct SequenceState {
     // 数据源模型（Slint Model，实时从权威 project 投影行）
-    rows_model: LineRowsModel,
+    rows_model: SequenceRowsModel,
     filter_model: Option<Rc<SubtitleFilterModel>>,
     // 运行时折叠状态集合（共享引用，供 FilterModel 的闭包使用。索引到实际数据）
     collapsed_groups: Rc<std::cell::RefCell<HashSet<ItemId>>>,
 
-    // 选中的行（group 和 event 都包含）。直接选中态由 LineRowsModel.selected
+    // 时间线根级收起时显示的"全部字幕行片段块"（派生自全量 Event 行，
+    // 与分组收起显示的 child-blocks 共用同一渲染组件）
+    timeline_root_blocks: Rc<VecModel<SlintTimelineSubBlock>>,
+
+    // 选中的行（group 和 event 都包含）。直接选中态由 SequenceRowsModel.selected
     // （三态 HashMap）派生，此处不存（单一来源）。
     // 显示追踪（重置状态用：记录所有 selection_state != Unselected 的行）
     all_highlighted_items: HashSet<ItemId>,
@@ -37,13 +42,14 @@ pub struct LineEditorState {
     last_selection_anchor: Option<usize>,
 }
 
-impl LineEditorState {
+impl SequenceState {
     pub fn new() -> Self {
-        let rows_model = LineRowsModel::new();
+        let rows_model = SequenceRowsModel::new();
         Self {
             collapsed_groups: rows_model.collapsed_groups(),
             rows_model,
             filter_model: None,
+            timeline_root_blocks: Rc::new(VecModel::default()),
             all_highlighted_items: HashSet::new(),
             selected_event_counts: HashMap::new(),
             event_count_cache: HashMap::new(),
@@ -51,14 +57,115 @@ impl LineEditorState {
         }
     }
 
+    /// 暴露时间线根级块模型（派生自全量 Event 行）。
+    pub fn timeline_root_blocks_model(&self) -> Rc<VecModel<SlintTimelineSubBlock>> {
+        self.timeline_root_blocks.clone()
+    }
+
+    /// 从全量行（经 SequenceRowsModel + 权威 sequence）派生根级收起要显示的全部字幕行片段块。
+    /// 所有会改变 Event 行集合或时间的入口都应调用，保持与权威数据同步。
+    pub fn refresh_timeline_root_blocks(&self, project: &Project) {
+        let blocks: Vec<SlintTimelineSubBlock> = (0..self.rows_model.row_count())
+            .filter_map(|i| {
+                let data = self.rows_model.row_data(i)?;
+                if data.content.row_type != crate::bridge::SlintSubtitleRowType::Event {
+                    return None;
+                }
+                // 仅有有效时间范围的块才渲染（与 Slint 侧 if 守卫一致）
+                if data.content.end_sec <= data.content.start_sec {
+                    return None;
+                }
+                // 从权威 sequence 取最新时间与文本（防止 content 快照滞后）
+                // 但 content 已是投影构建时的快照，通常一致；此处直接用 content.
+                Some(SlintTimelineSubBlock {
+                    item_id: data.content.item_id.clone(),
+                    name: data.content.text.clone(),
+                    start_sec: data.content.start_sec,
+                    end_sec: data.content.end_sec,
+                })
+            })
+            .collect();
+        // Fallback：若 rows_model 尚未填充（如 initialize_rows 前），从 sequence 直接派生
+        let blocks = if blocks.is_empty() && self.rows_model.row_count() == 0 {
+            // 直接遍历 sequence 的所有 Event
+            let mut v = Vec::new();
+            for (id, item) in project.sequence().items.iter() {
+                if let ItemContent::Event(ev) = &item.content {
+                    let s = ev.start_time.num_milliseconds() as f32 / 1000.0;
+                    let e = ev.end_time.num_milliseconds() as f32 / 1000.0;
+                    if e > s {
+                        v.push(SlintTimelineSubBlock {
+                            item_id: id.to_string().to_shared_string(),
+                            name: ev.text.to_shared_string(),
+                            start_sec: s,
+                            end_sec: e,
+                        });
+                    }
+                }
+            }
+            v
+        } else {
+            blocks
+        };
+        self.timeline_root_blocks.set_vec(blocks);
+    }
+
+    /// 按 item_id 局部更新 timeline_root_blocks 中的一条（set_row_data，保住 grab）。
+    /// 若该 id 不在模型中或时间无效则不操作。
+    pub fn update_timeline_root_block(&self, project: &Project, item_id: ItemId) {
+        let Some(item) = project.sequence().get(item_id) else {
+            return;
+        };
+        let ItemContent::Event(ev) = &item.content else {
+            return;
+        };
+        let s = ev.start_time.num_milliseconds() as f32 / 1000.0;
+        let e = ev.end_time.num_milliseconds() as f32 / 1000.0;
+        let id_str = item_id.to_string();
+        // 找到对应行
+        let mut idx_opt = None;
+        for i in 0..self.timeline_root_blocks.row_count() {
+            if let Some(b) = self.timeline_root_blocks.row_data(i) {
+                if b.item_id.as_str() == id_str {
+                    idx_opt = Some(i);
+                    break;
+                }
+            }
+        }
+        if let Some(idx) = idx_opt {
+            if e > s {
+                let block = SlintTimelineSubBlock {
+                    item_id: id_str.to_shared_string(),
+                    name: ev.text.to_shared_string(),
+                    start_sec: s,
+                    end_sec: e,
+                };
+                self.timeline_root_blocks.set_row_data(idx, block);
+            } else {
+                // 时间无效→移除该块（Slint 侧不渲染但模型仍占位会导致空白；直接移除）
+                self.timeline_root_blocks.remove(idx);
+            }
+        } else if e > s {
+            // 新 Event 且时间有效→追加（按扁平顺序插入更精确，此处简化追加）
+            // 结构变化时已全量 refresh，此分支仅用于时间码从无效变有效
+            let block = SlintTimelineSubBlock {
+                item_id: id_str.to_shared_string(),
+                name: ev.text.to_shared_string(),
+                start_sec: s,
+                end_sec: e,
+            };
+            self.timeline_root_blocks.push(block);
+        }
+    }
+
     /// 暴露数据源模型（实现 slint::Model）。
-    pub fn rows_model(&self) -> &LineRowsModel {
+    pub fn rows_model(&self) -> &SequenceRowsModel {
         &self.rows_model
     }
 
     /// 创建过滤模型
     ///
-    /// 顺序：`LineRowsModel(RowData) → FilterModel → MapModel(SlintSubtitleRow)`。
+    /// 顺序：`SequenceRowsModel(RowData) → FilterModel → MapModel(SlintSubtitleRow)`。
     /// 过滤在轻量 `RowData` 层做（`ancestor_ids` 是 ItemId，零 UUID parse），
     /// 被过滤掉的行完全不构造 `SlintSubtitleRow`。
     /// 过滤规则：
@@ -66,7 +173,7 @@ impl LineEditorState {
     /// - 有祖先的行（包括子分组头和事件）只有在所有祖先都未折叠时才可见
     pub fn init_filter_model(&mut self) -> ModelRc<SlintSubtitleRow> {
         // 1. 数据源模型：产出轻量 RowData
-        let rows_model: Rc<LineRowsModel> = Rc::new(self.rows_model.clone());
+        let rows_model: Rc<SequenceRowsModel> = Rc::new(self.rows_model.clone());
         let mapper = rows_model.mapper();
 
         // 2. 过滤（RowData 层，用 ItemId 判断折叠祖先，零 parse）
@@ -80,7 +187,7 @@ impl LineEditorState {
             let collapsed = collapsed_groups.borrow();
             !row.ancestor_ids.iter().any(|id| collapsed.contains(id))
         });
-        let filter_model: Rc<slint::FilterModel<Rc<LineRowsModel>, Box<dyn Fn(&RowData) -> bool>>> =
+        let filter_model: Rc<slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>> =
             Rc::new(slint::FilterModel::new(rows_model, filter_predicate));
 
         // 3. 映射为 SlintSubtitleRow（MapModel 透传 row_changed）
@@ -97,7 +204,7 @@ impl LineEditorState {
             .iter()
             .filter_map(|&id| {
                 // 检查是否是事件项
-                if let Some(item) = project.structure().get(id) {
+                if let Some(item) = project.sequence().get(id) {
                     if matches!(item.content, ItemContent::Event(_)) {
                         Some(id)
                     } else {
@@ -113,7 +220,7 @@ impl LineEditorState {
     /// 当前直接选中的项（包含 group 与 event）。
     ///
     /// 主要供 reducer 在处理 `DeleteItems` 等需要"作用于当前选中集合"的 Action 时读取。
-    /// 从 LineRowsModel.selected（三态单一来源）派生。
+    /// 从 SequenceRowsModel.selected（三态单一来源）派生。
     pub fn directly_selected_items(&self) -> std::collections::HashSet<ItemId> {
         self.rows_model.directly_selected_items()
     }
@@ -122,8 +229,9 @@ impl LineEditorState {
     ///
     /// 仅在初始化时调用。结构变化用精确锚点操作，不得走全量重建。
     pub fn initialize_rows(&mut self, project: &Project) {
-        self.rows_model.set_structure(&project.structure);
+        self.rows_model.set_sequence(&project.sequence);
         self.invalidate_event_counts();
+        self.refresh_timeline_root_blocks(project);
     }
 
     // === 时间码更新 ===
@@ -138,7 +246,9 @@ impl LineEditorState {
         _time: TimeDelta,
     ) {
         self.rows_model
-            .refresh_row_with_ancestors(&project.structure, event_id);
+            .refresh_row_with_ancestors(&project.sequence, event_id);
+        // 同步时间线的根级块（局部 set_row_data，保住 grab）
+        self.update_timeline_root_block(project, event_id);
     }
 
     /// 批量更新多个事件行的时间码，并统一重建受影响行 + 所有祖先分组头。
@@ -155,9 +265,12 @@ impl LineEditorState {
             dirty.extend(self.rows_model.ancestors_of(id));
         }
         self.rows_model.refresh_ids(
-            &project.structure,
+            &project.sequence,
             &dirty.iter().copied().collect::<Vec<_>>(),
         );
+        for &id in event_ids {
+            self.update_timeline_root_block(project, id);
+        }
     }
 
     /// 计算某个 item 的祖先分组链（叶子到根，不含自身）。
@@ -199,7 +312,7 @@ impl LineEditorState {
         self.last_selection_anchor = Some(idx);
 
         let is_group = {
-            let Some(item) = project.structure().get(item_id) else {
+            let Some(item) = project.sequence().get(item_id) else {
                 return;
             };
             matches!(item.content, ItemContent::Group(_))
@@ -328,8 +441,8 @@ impl LineEditorState {
         if let Some(v) = self.event_count_cache.get(item_id) {
             return *v;
         }
-        let structure = &*project.structure();
-        let count = match structure.get(*item_id) {
+        let sequence = &*project.sequence();
+        let count = match sequence.get(*item_id) {
             Some(item) => match &item.content {
                 ItemContent::Event(_) => 1,
                 ItemContent::Group(g) => {
@@ -346,7 +459,7 @@ impl LineEditorState {
         count
     }
 
-    /// 结构变化后失效事件数缓存（投影 op_line_structure 入口调用）。
+    /// 结构变化后失效事件数缓存（投影 op_sequence_structure 入口调用）。
     /// 下次 select 懒重建。
     pub fn invalidate_event_counts(&mut self) {
         self.event_count_cache.clear();
@@ -396,19 +509,21 @@ impl LineEditorState {
     ) -> Result<()> {
         // 精确插入锚点 + 构建新行内容快照（权威数据已由 reducer 更新）。
         self.rows_model
-            .insert_after(&project.structure, item_id, new_item_id);
+            .insert_after(&project.sequence, item_id, new_item_id);
+        self.refresh_timeline_root_blocks(project);
         Ok(())
     }
 
-    /// 处理已从 `project.structure` 移除的项的 UI 投影更新（精确：移除锚点 + row_removed）。
-    pub fn handle_items_removed(&mut self, _project: &Project, item_ids: &[ItemId]) {
-        // 事件数缓存失效由投影 op_line_structure 入口统一处理。
+    /// 处理已从 `project.sequence` 移除的项的 UI 投影更新（精确：移除锚点 + row_removed）。
+    pub fn handle_items_removed(&mut self, project: &Project, item_ids: &[ItemId]) {
+        // 事件数缓存失效由投影 op_sequence_structure 入口统一处理。
         for &id in item_ids {
             self.rows_model.remove_anchor(id);
             // 清除该行的拖拽预览覆盖（防止残留显示错误值）
             self.rows_model.clear_preview_timecode(id);
         }
         self.cleanup_selection();
+        self.refresh_timeline_root_blocks(project);
     }
 
     /// 清理已不存在的选中项（基于模型当前锚点）。
@@ -428,19 +543,20 @@ impl LineEditorState {
     ) -> Result<()> {
         // 解散不改事件归属（事件数不变），但父组头需 notify_row_changed
         // 强制重算 total_row_count（含组头行数，aggregate_group 实时递归）。
-        // 事件数缓存失效由投影 op_line_structure 入口统一处理。
-        if let Some((idx, parent)) = self.rows_model.ungroup_anchor(&project.structure, group_id) {
-            // 更新父组头聚合（若有父组）。父组在 structure 中仍在，可查。
+        // 事件数缓存失效由投影 op_sequence_structure 入口统一处理。
+        if let Some((idx, parent)) = self.rows_model.ungroup_anchor(&project.sequence, group_id) {
+            // 更新父组头聚合（若有父组）。父组在 sequence 中仍在，可查。
             if let Some(parent) = parent {
                 if let Some(pidx) = self.rows_model.row_index_of(parent) {
                     self.rows_model
-                        .rebuild_row_content(pidx, &project.structure);
+                        .rebuild_row_content(pidx, &project.sequence);
                     self.rows_model.notify_row_changed(pidx);
                 }
             }
             let _ = idx;
         }
         self.cleanup_selection();
+        self.refresh_timeline_root_blocks(project);
         Ok(())
     }
 
@@ -453,22 +569,23 @@ impl LineEditorState {
     ) -> Result<()> {
         let at = self.compute_insert_at(project, &base_location)?;
         self.rows_model
-            .insert_subtrees(&project.structure, at, new_root_ids);
-        // 事件数缓存失效由投影 op_line_structure 入口统一处理。
+            .insert_subtrees(&project.sequence, at, new_root_ids);
+        // 事件数缓存失效由投影 op_sequence_structure 入口统一处理。
         if let Some(&first) = new_root_ids.first() {
             self.select_single(project, first);
         }
+        self.refresh_timeline_root_blocks(project);
         Ok(())
     }
 
     /// 从 ItemLocation 计算扁平化插入索引（粘贴锚点）。
     fn compute_insert_at(&self, project: &Project, location: &ItemLocation) -> Result<usize> {
-        use aweft_model::structure::ItemContent as IC;
-        let structure = &*project.structure();
+        use aweft_model::sequence::ItemContent as IC;
+        let sequence = &*project.sequence();
         match location {
             ItemLocation::Root(k) => {
                 // 第 k 个 root item 之后；若 k 超出 root_items 则插末尾
-                if let Some(&prev) = structure.root_items.get(*k) {
+                if let Some(&prev) = sequence.root_items.get(*k) {
                     if let Some(idx) = self.rows_model.row_index_of(prev) {
                         let cnt = self.rows_model.group_row_count(prev);
                         return Ok(idx + cnt);
@@ -477,7 +594,7 @@ impl LineEditorState {
                 // 没有 prev（插在开头或空）——找第 k 个 root 的位置
                 // 简化：若 k=0 插最前；否则找前一个 root
                 if *k > 0 {
-                    if let Some(&prev) = structure.root_items.get(k - 1) {
+                    if let Some(&prev) = sequence.root_items.get(k - 1) {
                         if let Some(idx) = self.rows_model.row_index_of(prev) {
                             let cnt = self.rows_model.group_row_count(prev);
                             return Ok(idx + cnt);
@@ -488,7 +605,7 @@ impl LineEditorState {
             }
             ItemLocation::InGroup(pid, k) => {
                 // pid 组内第 k 个子项之后（组内）
-                let Some(group) = structure.get(*pid) else {
+                let Some(group) = sequence.get(*pid) else {
                     return Ok(self.rows_model.row_count());
                 };
                 let IC::Group(g) = &group.content else {

@@ -1,0 +1,252 @@
+// 时间线（Timeline）编辑器：
+//  - 布局参照 NLA 编辑器：左侧行列表 + 顶部时间标尺 + 主画布（泳道 + 时间块）
+//  - 数据完全复用字幕行编辑器：行 = SubtitleState.rows（可见行模型，折叠分组的子行
+//    不在模型中），折叠/选中全部走 SequenceCallbacks——时间线只是字幕行编辑器的
+//    另一种表示形式（左侧列表同一批行，右侧按时间范围定位为块）。
+//  - 分组头块 = 组内所有行合并时间范围（min start ~ max end，组内时间范围可重叠）；
+//    折叠分组后其下字幕行从可见模型消失（列表与画布同时收起）。
+//  - 交互：滚轮仅横向缩放时间轴 / 中键双向平移（纵向随内容 clamp）——与摄影表一致；
+//    点击块选中（Slint 侧命中检测，不加 Rust 回调）、空白不操作
+//  - 画布网格：与摄影表一致用 VerticalGrid 刻度网格
+import { SlintSubtitleRow, SlintSubtitleRowType, SlintSelectionState, SlintTimelineSubBlock, SlintSelectionModifier } from "../../core/types.slint";
+import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { TimeRuler, VerticalGrid } from "../graph_editor/ruler.slint";
+import { TimelineBlock, TimelineSubBlocks } from "elements.slint";
+import { TimelinePanel } from "timeline_panel.slint";
+import { SequenceCallbacks, AnimationCallbacks } from "../../bridge/callbacks.slint";
+import { AnimationState } from "../../bridge/state.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component TimelineEditor inherits Rectangle {
+    // 可见行（与字幕行编辑器同一模型：左侧列表一行 = 画布一条泳道；
+    // 折叠分组的子行不在模型中）
+    in property <[SlintSubtitleRow]> rows;
+    // 全部字幕行片段块（Rust 侧全量事件模型）：根级收起时根级泳道据此显示
+    in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];
+    // 当前时间（播放头，共享 AnimationState.current-time）
+    in property <float> current-time;
+
+    // 根级收起展开（本地状态，独立于分组与字幕行编辑器）：
+    // 收起后整条时间线折叠为第 0 条根级泳道，显示全部字幕行片段块
+    in-out property <bool> root-collapsed: false;
+    // 根级栏计数（= 全部字幕行片段块数）
+    private property <int> root-count: root.timeline-root-blocks.length;
+
+    // 行列表 / 标尺尺寸（复用 NLA 编辑器主题）
+    private property <length> track-list-width: Theme.data.animation-editor.track-list-width;
+    private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+    private property <length> row-height: Theme.data.animation-editor.track-row-height;
+
+    // 导航状态（画布、行列表与标尺共享；仅时间轴缩放 + 双向平移）
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-pan-y: 0.0;
+    private property <float> nav-zoom: 30.0;
+
+    // 可见时间范围（世界坐标）：标尺刻度槽位与画布块视口裁剪共用
+    private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    private property <float> view-time-hi: ((root.width - root.track-list-width) - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+
+    // 纵向滚动范围：只能滚到 [-(内容高-视口高), 0]，内容不足空间时不动（与摄影表一致）。
+    // 第 0 行固定为根级行；展开时为根级行 + 全部可见行，收起时仅根级行。
+    function content-height-px() -> float {
+        return (root.root-collapsed ? 1 : root.rows.length + 1) * (root.row-height / 1px);
+    }
+    function view-height-px() -> float {
+        return canvas.height / 1px;
+    }
+    function max-scroll-y() -> float {
+        return max(0.0, root.content-height-px() - root.view-height-px());
+    }
+    function scroll-list(delta: float) -> float {
+        return min(0.0, max(-root.max-scroll-y(), root.nav-pan-y + delta));
+    }
+
+    // 复用字幕行选中回调（SlintSelectionModifier）
+    function select-item(item-id: string, modifier: SlintSelectionModifier) {
+        SequenceCallbacks.select-row(item-id, modifier);
+    }
+
+    // 左侧行列表
+    panel := TimelinePanel {
+        x: 0;
+        y: 0;
+        width: root.track-list-width;
+        height: root.height;
+        rows: root.rows;
+        pan-y: root.nav-pan-y;
+        row-height: root.row-height;
+        // 顶部占位 = 标尺高度，列表第一行与画布第一泳道对齐
+        top-offset: root.ruler-height;
+        root-collapsed: root.root-collapsed;
+        root-count: root.root-count;
+        scrolled(delta) => {
+            root.nav-pan-y = root.scroll-list(delta);
+        }
+        toggle-root-collapsed() => {
+            root.root-collapsed = !root.root-collapsed;
+        }
+    }
+
+    // 顶部时间标尺（位于画布上方、行列表右侧）
+    TimeRuler {
+        x: root.track-list-width;
+        y: 0;
+        width: root.width - root.track-list-width;
+        height: root.ruler-height;
+        view-lo: root.view-time-lo;
+        view-hi: root.view-time-hi;
+        zoom-x: root.nav-zoom;
+        pan-x: root.nav-pan-x;
+        current-time: root.current-time;
+        time-picked(time) => {
+            AnimationCallbacks.set-current-time(time);
+        }
+    }
+
+    // 主画布
+    canvas := Rectangle {
+        x: root.track-list-width;
+        y: root.ruler-height;
+        width: root.width - root.track-list-width;
+        height: root.height - root.ruler-height;
+        clip: true;
+        background: Theme.data.animation-editor.canvas-background;
+
+        // 根级泳道背景（第 0 条；与其余泳道交替明暗）
+        Rectangle {
+            y: root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            background: Theme.data.animation-editor.lane-even;
+        }
+
+        // 行泳道背景（交替明暗；网格画在其上，与摄影表通道行同构；
+        // 第 1 条起对应根级以下的可见行，根级收起时隐藏）
+        for r[i] in root.rows: Rectangle {
+            visible: !root.root-collapsed;
+            y: (i + 1) * root.row-height + root.nav-pan-y * 1px;
+            x: 0px;
+            width: 100%;
+            height: root.row-height;
+            background: Math.mod(i + 1, 2) == 0
+                ? Theme.data.animation-editor.lane-even
+                : Theme.data.animation-editor.lane-odd;
+        }
+
+        // 垂直时间线（与标尺刻度对齐；固定槽位即时计算，同摄影表/曲线编辑器）
+        VerticalGrid {
+            width: 100%;
+            height: 100%;
+            view-lo: root.view-time-lo;
+            view-hi: root.view-time-hi;
+            zoom-x: root.nav-zoom;
+            pan-x: root.nav-pan-x;
+            line-color: Theme.data.animation-editor.grid-color;
+            minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        // 根级泳道（第 0 条）：
+        //   - 展开：空条带（仅对齐根级栏；其余行各自显示自己的块）
+        //   - 收起：用全部字幕行片段块（与分组收起共用 TimelineSubBlocks 渲染）
+        Rectangle {
+            x: 0px;
+            y: root.nav-pan-y * 1px;
+            width: 100%;
+            height: root.row-height;
+
+            if root.root-collapsed: TimelineSubBlocks {
+                blocks: root.timeline-root-blocks;
+                view-lo: root.view-time-lo;
+                view-hi: root.view-time-hi;
+                view-zoom: root.nav-zoom;
+                pan-x: root.nav-pan-x;
+                lane-height: root.row-height;
+            }
+        }
+
+        // 时间块（根级以下每条泳道一个）：
+        //   - 展开组头 / 字幕行：单个块（组头块 = 组内所有行合并范围）
+        //   - 折叠组头：渲染组内所有字幕行的子块（各自时间范围，可重叠）——
+        //     原本各自独立行的部分统一到组头一行
+        for r[i] in root.rows: Rectangle {
+            visible: !root.root-collapsed;
+            x: 0px;
+            y: (i + 1) * root.row-height + root.nav-pan-y * 1px;
+            width: 100%;
+            height: root.row-height;
+
+            if r.row-type == SlintSubtitleRowType.GroupHeader && r.collapsed: TimelineSubBlocks {
+                blocks: r.child-blocks;
+                view-lo: root.view-time-lo;
+                view-hi: root.view-time-hi;
+                view-zoom: root.nav-zoom;
+                pan-x: root.nav-pan-x;
+                lane-height: root.row-height;
+            }
+            if !(r.row-type == SlintSubtitleRowType.GroupHeader && r.collapsed): Rectangle {
+                width: 100%;
+                height: 100%;
+                if r.end-sec > r.start-sec
+                    && r.end-sec >= root.view-time-lo && r.start-sec <= root.view-time-hi: TimelineBlock {
+                    name: r.row-type == SlintSubtitleRowType.GroupHeader
+                        ? r.group-name + " (" + r.total-row-count + ")"
+                        : r.text;
+                    row-type: r.row-type == SlintSubtitleRowType.GroupHeader
+                        ? SlintSubtitleRowType.GroupHeader
+                        : SlintSubtitleRowType.Event;
+                    start: r.start-sec;
+                    end: r.end-sec;
+                    selected: r.selected != SlintSelectionState.Unselected;
+                    view-zoom: root.nav-zoom;
+                    pan-x: root.nav-pan-x;
+                    lane-height: root.row-height;
+                }
+            }
+        }
+
+        // 导航（背景交互，位于泳道之下；与摄影表一致：滚轮仅横向缩放 /
+        // 中键双向平移但纵向随内容 clamp）。块点击由画布级 TouchArea 处理：
+        // 块自身不带 TouchArea（Slint TouchArea 会吞任意按钮按下、含中键），
+        // 因此中键平移在块上方同样可用。命中检测在 Slint 侧完成（不加 Rust 回调）。
+        nav := CanvasNavigation {
+            pan-x <=> root.nav-pan-x;
+            pan-y <=> root.nav-pan-y;
+            zoom-x <=> root.nav-zoom;
+            lock-y-zoom: true;
+            max-zoom: 12000.0;
+            zoom-step: 1.5;
+            clamp-pan-y: true;
+            clamp-pan-y-min: -root.max-scroll-y();
+            clamp-pan-y-max: 0.0;
+            marquee-enabled: false;
+            background-pressed(modifier) => {
+                // 点击：按位置命中块则选中（复用字幕行选中回调），空白不操作。
+                // 折叠组头命中子块（对字幕行做时间编辑）需要 Rust 侧回调，
+                // 当前先按组范围选中组头；子块 item-id 数据已备好供后续拖拽编辑。
+                // 第 0 条为根级泳道（收起时显示全部字幕行片段块，命中选中未实现），
+                // 其余可见行自第 1 条起映射回 rows 下标。
+                let lane: int = floor((nav.mouse-y / 1px - root.nav-pan-y) / (root.row-height / 1px));
+                if !root.root-collapsed && lane >= 1 {
+                    let row: int = lane - 1;
+                    if row >= 0 && row < root.rows.length {
+                        let r: SlintSubtitleRow = root.rows[row];
+                        let t: float = (nav.mouse-x / 1px - root.nav-pan-x) / root.nav-zoom;
+                        if r.end-sec > r.start-sec && t >= r.start-sec && t <= r.end-sec {
+                            root.select-item(r.item-id, modifier);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 当前时间线（播放头，置顶但不拦截事件）
+        Rectangle {
+            x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+            y: 0px;
+            width: 1px;
+            height: 100%;
+            background: Theme.data.animation-editor.playhead;
+        }
+    }
+}

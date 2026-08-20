@@ -2,7 +2,7 @@ use crate::bridge::SubtitleState;
 use crate::bridge::types::MainWindow;
 use crate::store::AppStore;
 use anyhow::{Context, Result};
-use aweft_model::structure::GroupData;
+use aweft_model::sequence::GroupData;
 use slint::ComponentHandle;
 use slint::wgpu_29::{WGPUConfiguration, WGPUSettings};
 use std::{cell::RefCell, rc::Rc};
@@ -60,21 +60,29 @@ impl AppWindowManager {
 
         // ===================================
         // 初始化字幕数据和过滤模型
-        let filter_model = {
+        let (filter_model, timeline_root_blocks) = {
             let mut store_mut = store.borrow_mut();
             {
                 // 先创建数据
                 let state = store_mut.state_mut();
                 create_test_subtitle_data(&mut state.project);
             }
-            // 然后初始化 LineEditorState（使用 UiModels 持有的模型）
-            store_mut.rebuild_line_editor_models()
+            // 然后初始化 SequenceState（使用 UiModels 持有的模型）
+            let filter = store_mut.rebuild_sequence_models();
+            let timeline = slint::ModelRc::from(
+                store_mut
+                    .ui_models
+                    .sequence_state
+                    .timeline_root_blocks_model(),
+            );
+            (filter, timeline)
         };
 
         let subtitle_state = instance.global::<SubtitleState>();
         // NOTE: 之后 UI 数据需要在 filtered_model 修改
         // 不应当再使用 set_rows 修改数据
         subtitle_state.set_rows(filter_model);
+        subtitle_state.set_timeline_root_blocks(timeline_root_blocks);
 
         // 初始化模型并绑定给 Slint（占位空数组，后续通过依赖图投影刷新）
         {
@@ -108,10 +116,10 @@ impl AppWindowManager {
 
 /// 创建测试字幕数据
 fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
-    use aweft_model::structure::{EventData, ItemLocation};
+    use aweft_model::sequence::{EventData, ItemLocation};
     use chrono::TimeDelta;
 
-    let mut structure = project.structure_mut();
+    let mut sequence = project.sequence_mut();
 
     // 创建根级别的事件
     let event1 = EventData {
@@ -122,7 +130,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(event1, ItemLocation::Root(0))
         .unwrap();
 
@@ -133,7 +141,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         color: None,
         children: Vec::new(),
     };
-    let group_id = structure
+    let group_id = sequence
         .create_group(group, ItemLocation::Root(1))
         .unwrap();
 
@@ -146,7 +154,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(event2, ItemLocation::InGroup(group_id, 0))
         .unwrap();
 
@@ -160,11 +168,11 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(l1_pre, ItemLocation::InGroup(group_id, 1))
         .unwrap();
     // L1 分组
-    let nested_group_lvl1 = structure
+    let nested_group_lvl1 = sequence
         .create_group(
             GroupData {
                 name: "循环测试 L1".to_string(),
@@ -184,7 +192,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(l1_post, ItemLocation::InGroup(group_id, 3))
         .unwrap();
 
@@ -197,11 +205,11 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(l2_pre, ItemLocation::InGroup(nested_group_lvl1, 0))
         .unwrap();
     // L2 分组
-    let nested_group_lvl2 = structure
+    let nested_group_lvl2 = sequence
         .create_group(
             GroupData {
                 name: "循环测试 L2".to_string(),
@@ -221,7 +229,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(l2_post, ItemLocation::InGroup(nested_group_lvl1, 2))
         .unwrap();
 
@@ -234,11 +242,11 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(l3_pre, ItemLocation::InGroup(nested_group_lvl2, 0))
         .unwrap();
     // L3 分组
-    let nested_group_lvl3 = structure
+    let nested_group_lvl3 = sequence
         .create_group(
             GroupData {
                 name: "循环测试 L3".to_string(),
@@ -258,7 +266,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(l3_post, ItemLocation::InGroup(nested_group_lvl2, 2))
         .unwrap();
 
@@ -274,7 +282,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
             segment_timing: None,
             style: "Default".to_string(),
         };
-        structure
+        sequence
             .create_event(event, ItemLocation::InGroup(nested_group_lvl3, i as usize))
             .unwrap();
     }
@@ -287,7 +295,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(event3, ItemLocation::InGroup(group_id, 2))
         .unwrap();
 
@@ -300,7 +308,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         segment_timing: None,
         style: "Default".to_string(),
     };
-    structure
+    sequence
         .create_event(event4, ItemLocation::Root(2))
         .unwrap();
 }

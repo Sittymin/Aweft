@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::screen::area::{AreaType, ScrAreaKey};
 use crate::screen::edge::ScrEdgeKey;
 use aweft_model::ids::{ItemId, NodeId, SocketId};
-use aweft_model::structure::ItemLocation;
+use aweft_model::sequence::ItemLocation;
 use chrono::TimeDelta;
 
 /// 数据域：可被标记变更的权威数据。
@@ -11,8 +11,8 @@ use chrono::TimeDelta;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataId {
     /// 项目字幕结构（行/分组/时间码/文本/层级）。
-    ProjectStructure,
-    /// 选中状态（LineEditor 选中集等）。
+    Sequence,
+    /// 选中状态（Sequence 选中集等）。
     Selection,
     /// 屏幕布局（areas/edges/verts 几何与类型）。
     ScreenLayout,
@@ -122,11 +122,11 @@ pub enum SelectionKind {
 /// 依赖图据此精确路由到"更新该行"与"更新所有祖先分组聚合"。
 #[derive(Debug, Clone)]
 pub enum Tag {
-    // ── ProjectStructure ──────────────────────────────────────────────
+    // ── Sequence ──────────────────────────────────────────────
     /// 行/分组结构变化（增删、层级调整）——需要重建行列表索引。
     StructureChanged,
     /// 分组折叠状态切换（局部：只影响过滤结果）。
-    GroupCollapsedToggled {
+    SequenceCollapsedToggled {
         group_id: ItemId,
         /// 祖先分组链（自身不折叠影响，仅用于可能的聚合）。
         ancestors: Vec<ItemId>,
@@ -139,7 +139,7 @@ pub enum Tag {
         /// 祖先分组链（叶子到根）。
         ancestors: Vec<ItemId>,
     },
-    /// 事件时间码拖拽预览（不修改 structure，仅 UI 显示预览值）。
+    /// 事件时间码拖拽预览（不修改 sequence，仅 UI 显示预览值）。
     TimecodePreviewChanged {
         event_id: ItemId,
         is_start_time: bool,
@@ -163,7 +163,7 @@ pub enum Tag {
         item_id: ItemId,
         new_item_id: ItemId,
     },
-    /// 移除多项（已从 project.structure 移除）。
+    /// 移除多项（已从 project.sequence 移除）。
     ItemsRemoved {
         item_ids: Vec<ItemId>,
     },
@@ -322,13 +322,13 @@ pub enum Tag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TagKind {
     /// 行/分组结构增删、层级调整（需重建或精确 insert/remove）。
-    LineStructure,
+    SequenceStructure,
     /// 行时间码值变化（含批量/预览/取消）。
-    LineTimecode,
+    SequenceTimecode,
     /// 行文本元素变化。
-    LineText,
+    SequenceText,
     /// 分组折叠切换。
-    GroupCollapse,
+    SequenceCollapse,
     /// 选中状态变化。
     Selection,
     /// 屏幕布局结构变化（初始/缩放/分割/合并）。
@@ -378,19 +378,19 @@ pub enum TagKind {
 /// 操作唯一标识（编译期检查的枚举，可无限扩展加变体）。
 ///
 /// 用于跨组件 `depends_on` 引用（Blender 的 OperationCode）。变体**全局唯一**，
-/// 前缀隐含组件维度（`Line*` 属 LineEditor，`Screen*` 属 Screen）——投影组件
+/// 前缀隐含组件维度（`Line*` 属 Sequence，`Screen*` 属 Screen）——投影组件
 /// 是核心库随版本更新的内容，无运行时动态注册需求，故不需组件名字符串。
 /// 拼写错误在编译期暴露，而非运行时 panic。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OperationCode {
-    /// LineEditor 行结构操作。
-    LineStructure,
-    /// LineEditor 时间码操作。
-    LineTimecode,
-    /// LineEditor 折叠操作。
-    LineCollapse,
-    /// LineEditor 选中操作。
-    LineSelection,
+    /// Sequence 行结构操作。
+    SequenceStructure,
+    /// Sequence 时间码操作。
+    SequenceTimecode,
+    /// Sequence 折叠操作。
+    SequenceCollapse,
+    /// Sequence 选中操作。
+    SequenceSelection,
     /// Screen 覆盖层操作。
     ScreenOverlays,
     /// Screen 布局操作。
@@ -434,7 +434,7 @@ impl Tag {
     pub fn data_id(&self) -> DataId {
         match self {
             Tag::StructureChanged
-            | Tag::GroupCollapsedToggled { .. }
+            | Tag::SequenceCollapsedToggled { .. }
             | Tag::EventTimecodeChanged { .. }
             | Tag::TimecodePreviewChanged { .. }
             | Tag::EventsTimecodeChanged { .. }
@@ -442,7 +442,7 @@ impl Tag {
             | Tag::ItemsInserted { .. }
             | Tag::ItemsRemoved { .. }
             | Tag::ItemsPasted { .. }
-            | Tag::GroupsUngrouped { .. } => DataId::ProjectStructure,
+            | Tag::GroupsUngrouped { .. } => DataId::Sequence,
 
             Tag::SelectionChanged { .. } => DataId::Selection,
 
@@ -483,15 +483,15 @@ impl Tag {
             | Tag::ItemsInserted { .. }
             | Tag::ItemsRemoved { .. }
             | Tag::ItemsPasted { .. }
-            | Tag::GroupsUngrouped { .. } => TagKind::LineStructure,
+            | Tag::GroupsUngrouped { .. } => TagKind::SequenceStructure,
 
             Tag::EventTimecodeChanged { .. }
             | Tag::TimecodePreviewChanged { .. }
-            | Tag::EventsTimecodeChanged { .. } => TagKind::LineTimecode,
+            | Tag::EventsTimecodeChanged { .. } => TagKind::SequenceTimecode,
 
-            Tag::EventTextChanged { .. } => TagKind::LineText,
+            Tag::EventTextChanged { .. } => TagKind::SequenceText,
 
-            Tag::GroupCollapsedToggled { .. } => TagKind::GroupCollapse,
+            Tag::SequenceCollapsedToggled { .. } => TagKind::SequenceCollapse,
 
             Tag::SelectionChanged { .. } => TagKind::Selection,
 
