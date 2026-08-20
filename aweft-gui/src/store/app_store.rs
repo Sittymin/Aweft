@@ -55,7 +55,6 @@ impl AppStore {
             Action::Sequence(act) => self.dispatch_sequence(act)?,
             Action::NodeGraph(act) => self.dispatch_node_graph(act)?,
             Action::Animation(act) => self.dispatch_animation(act)?,
-            Action::Nla(act) => self.dispatch_nla(act)?,
         };
         for tag in tags {
             self.depsgraph.tag(tag);

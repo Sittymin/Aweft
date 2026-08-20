@@ -3,7 +3,6 @@ pub mod area;
 pub mod drag;
 pub mod sequence;
 pub mod media;
-pub mod nla;
 pub mod node_graph;
 pub mod screen;
 
@@ -21,8 +20,6 @@ pub enum Action {
     Sequence(sequence::SequenceAction),
     /// 节点图（样式图/应用图）结构/值操作
     NodeGraph(node_graph::NodeGraphAction),
-    /// 动画编辑器（曲线编辑器等）交互操作
+    /// 动画域（统一曲线编辑器/摄影表/NLA，共享 DataId::Animation）
     Animation(animation::AnimationAction),
-    /// NLA 编辑器（非破坏性动画）交互操作
-    Nla(nla::NlaAction),
 }

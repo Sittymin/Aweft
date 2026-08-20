@@ -11,19 +11,15 @@ use crate::depsgraph::{
 
 mod animation;
 mod sequence;
-mod nla;
 mod node_graph;
 mod screen;
 
 pub use animation::{
-    op_animation_channel, op_animation_drag_ended, op_animation_keyframes, op_animation_scalars,
-    op_animation_selection, op_animation_structure,
+    op_graph_channel, op_graph_drag_ended, op_graph_keyframes, op_graph_scalars,
+    op_graph_selection, op_graph_structure, op_nla_position, op_nla_selection,
+    op_nla_strip_structure, op_nla_structure, op_nla_track_added, op_nla_track_properties,
 };
 pub use sequence::{op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode};
-pub use nla::{
-    op_nla_position, op_nla_selection, op_nla_strip_structure, op_nla_structure,
-    op_nla_track_added, op_nla_track_properties,
-};
 pub use node_graph::{
     op_node_graph_chain, op_node_graph_links, op_node_graph_socket, op_node_graph_structure,
 };
@@ -105,67 +101,65 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
         ],
     });
 
+    // 动画域统一 Component：曲线/摄影表（Graph/Dope）与 NLA 共享 DataId::Animation，
+    // TagKind 隔离，曲线操作依赖 GraphStructure，NLA 操作依赖 NlaStructure，
+    // 单组件即可表达同域不同编辑器的拓扑依赖（原拆为两 Component 现合并）。
     depsgraph.register(Component {
         id: ComponentId::new(),
         depends_on: &[DataId::Animation],
         operations: vec![
+            // —— 曲线/摄影表（Graph/Dope）——
             Operation {
                 id: OperationId::new(),
-                code: OperationCode::AnimationStructure,
-                handles: &[TagKind::AnimationStructure],
+                code: OperationCode::GraphStructure,
+                handles: &[TagKind::GraphStructure],
                 depends_on: &[],
-                exec: op_animation_structure,
+                exec: op_graph_structure,
             },
             Operation {
                 id: OperationId::new(),
-                code: OperationCode::AnimationCurve,
-                handles: &[TagKind::AnimationKeyframes],
+                code: OperationCode::GraphKeyframes,
+                handles: &[TagKind::GraphKeyframes],
                 // 依赖结构操作：keyframe_models/过滤视图由 apply_structure 重建
-                depends_on: &[OperationCode::AnimationStructure],
-                exec: op_animation_keyframes,
+                depends_on: &[OperationCode::GraphStructure],
+                exec: op_graph_keyframes,
             },
             Operation {
                 id: OperationId::new(),
-                code: OperationCode::AnimationSelection,
-                handles: &[TagKind::AnimationSelection],
-                depends_on: &[OperationCode::AnimationStructure],
-                exec: op_animation_selection,
+                code: OperationCode::GraphSelection,
+                handles: &[TagKind::GraphSelection],
+                depends_on: &[OperationCode::GraphStructure],
+                exec: op_graph_selection,
             },
             Operation {
                 id: OperationId::new(),
-                code: OperationCode::AnimationDragEnded,
-                handles: &[TagKind::AnimationDragEnded],
-                depends_on: &[OperationCode::AnimationStructure],
-                exec: op_animation_drag_ended,
+                code: OperationCode::GraphDragEnded,
+                handles: &[TagKind::GraphDragEnded],
+                depends_on: &[OperationCode::GraphStructure],
+                exec: op_graph_drag_ended,
             },
             Operation {
                 id: OperationId::new(),
-                code: OperationCode::AnimationChannel,
-                handles: &[TagKind::AnimationChannel],
-                depends_on: &[OperationCode::AnimationStructure],
-                exec: op_animation_channel,
+                code: OperationCode::GraphChannel,
+                handles: &[TagKind::GraphChannel],
+                depends_on: &[OperationCode::GraphStructure],
+                exec: op_graph_channel,
             },
             Operation {
                 id: OperationId::new(),
-                code: OperationCode::AnimationScalars,
+                code: OperationCode::GraphScalars,
                 handles: &[
-                    TagKind::AnimationStructure,
-                    TagKind::AnimationKeyframes,
-                    TagKind::AnimationSelection,
-                    TagKind::AnimationDragEnded,
-                    TagKind::AnimationChannel,
-                    TagKind::AnimationScalars,
+                    TagKind::GraphStructure,
+                    TagKind::GraphKeyframes,
+                    TagKind::GraphSelection,
+                    TagKind::GraphDragEnded,
+                    TagKind::GraphChannel,
+                    TagKind::GraphScalars,
                 ],
                 depends_on: &[],
-                exec: op_animation_scalars,
+                exec: op_graph_scalars,
             },
-        ],
-    });
-
-    depsgraph.register(Component {
-        id: ComponentId::new(),
-        depends_on: &[DataId::Animation],
-        operations: vec![
+            // —— NLA ——
             Operation {
                 id: OperationId::new(),
                 code: OperationCode::NlaStructure,

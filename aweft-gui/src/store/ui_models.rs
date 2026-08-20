@@ -7,9 +7,8 @@ use crate::bridge::types::{
 };
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
-use crate::store::graph_editor::GraphEditorState;
+use crate::store::animation::{AnimationState, GraphEditorState, NlaEditorState};
 use crate::store::sequence::SequenceState;
-use crate::store::nla_editor::NlaEditorState;
 use crate::store::node_graph::NodeGraphState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
@@ -19,10 +18,9 @@ pub struct UiModels {
     pub style_graph: NodeGraphState,
     /// 应用图编辑器状态
     pub app_graph: NodeGraphState,
-    /// 图编辑器（动画，Graph Editor）状态（通道/关键帧/段/手柄，自持 VecModels）
-    pub graph_editor: GraphEditorState,
-    /// NLA 编辑器状态（轨道/片断，数据层 + 派生层）
-    pub nla_editor: NlaEditorState,
+    /// 动画域聚合状态：曲线/摄影表（graph）+ NLA（nla）共享 DataId::Animation，
+    /// 因 Area 表现形式不同保留两组派生状态，TagKind 隔离。
+    pub animation: AnimationState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -38,8 +36,7 @@ impl UiModels {
             sequence_state: SequenceState::new(),
             style_graph: NodeGraphState::default(),
             app_graph: NodeGraphState::default(),
-            graph_editor: GraphEditorState::default(),
-            nla_editor: NlaEditorState::default(),
+            animation: AnimationState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),

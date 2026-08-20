@@ -4,7 +4,7 @@
 //!
 //! 交互统一走 main 标准管线：`AnimationCallbacks` → `AppStore::dispatch(AnimationAction)`
 //! → `dispatch_animation`（reducer，只改数据层并返回精确 tag）→ depsgraph 单轮求值
-//! → 投影 `op_animation_*`（把数据层同步到派生层 Slint 模型 + 标量）。
+//! → 投影 `op_graph_*`（把数据层同步到派生层 Slint 模型 + 标量）。
 //!
 //! # 权威数据在 model（已接线）
 //!
@@ -35,7 +35,7 @@
 //!    `selected_display`/`preview_handles`/`action_start`/`action_end` 与 Slint 标量
 //!
 //! 交互方法（reducer）只改数据层并返回 `Vec<Tag>`；`dispatch_animation` 打 tag 后由
-//! depsgraph 投影（`op_animation_*`）把数据层同步到派生层——对齐 Sequence 的
+//! depsgraph 投影（`op_graph_*`）把数据层同步到派生层——对齐 Sequence 的
 //! `Action → tag → 投影` 标准管线。
 
 use std::collections::{HashMap, HashSet};
@@ -249,38 +249,38 @@ impl crate::store::AppStore {
         use slint::ComponentHandle;
 
         let state = instance.global::<crate::bridge::types::AnimationState>();
-        state.set_channels(ModelRc::from(self.ui_models.graph_editor.channels.clone()));
-        state.set_graph_channels(self.ui_models.graph_editor.graph_filter.clone());
-        state.set_dope_channels(self.ui_models.graph_editor.dope_filter.clone());
-        state.set_graph_segments(self.ui_models.graph_editor.graph_segments.clone());
-        state.set_graph_handles(self.ui_models.graph_editor.graph_handles.clone());
-        state.set_segments(ModelRc::from(self.ui_models.graph_editor.segments.clone()));
-        state.set_handles(ModelRc::from(self.ui_models.graph_editor.handles.clone()));
+        state.set_channels(ModelRc::from(self.ui_models.animation.graph.channels.clone()));
+        state.set_graph_channels(self.ui_models.animation.graph.graph_filter.clone());
+        state.set_dope_channels(self.ui_models.animation.graph.dope_filter.clone());
+        state.set_graph_segments(self.ui_models.animation.graph.graph_segments.clone());
+        state.set_graph_handles(self.ui_models.animation.graph.graph_handles.clone());
+        state.set_segments(ModelRc::from(self.ui_models.animation.graph.segments.clone()));
+        state.set_handles(ModelRc::from(self.ui_models.animation.graph.handles.clone()));
         state.set_dope_connections(ModelRc::from(
-            self.ui_models.graph_editor.dope_connections.clone(),
+            self.ui_models.animation.graph.dope_connections.clone(),
         ));
         state.set_dope_summary_keyframes(ModelRc::from(
-            self.ui_models.graph_editor.summary_keyframes.clone(),
+            self.ui_models.animation.graph.summary_keyframes.clone(),
         ));
         state.set_extrapolations(ModelRc::from(
-            self.ui_models.graph_editor.extrapolations.clone(),
+            self.ui_models.animation.graph.extrapolations.clone(),
         ));
-        state.set_current_time(self.ui_models.graph_editor.current_time as f32);
-        state.set_action_name(self.ui_models.graph_editor.action_name.clone());
+        state.set_current_time(self.ui_models.animation.graph.current_time as f32);
+        state.set_action_name(self.ui_models.animation.graph.action_name.clone());
         state.set_action_items(ModelRc::from(
-            self.ui_models.graph_editor.action_items.clone(),
+            self.ui_models.animation.graph.action_items.clone(),
         ));
-        state.set_current_action(self.ui_models.graph_editor.current_action);
-        state.set_action_start(self.ui_models.graph_editor.action_start);
-        state.set_action_end(self.ui_models.graph_editor.action_end);
-        state.set_current_channel(self.ui_models.graph_editor.current_channel as i32);
+        state.set_current_action(self.ui_models.animation.graph.current_action);
+        state.set_action_start(self.ui_models.animation.graph.action_start);
+        state.set_action_end(self.ui_models.animation.graph.action_end);
+        state.set_current_channel(self.ui_models.animation.graph.current_channel as i32);
         state.set_selected_channels(ModelRc::from(
-            self.ui_models.graph_editor.selected_display.clone(),
+            self.ui_models.animation.graph.selected_display.clone(),
         ));
         state.set_preview_handles(ModelRc::from(
-            self.ui_models.graph_editor.preview_handles.clone(),
+            self.ui_models.animation.graph.preview_handles.clone(),
         ));
-        state.set_nla_tracks(self.ui_models.nla_editor.tracks_filter.clone().into());
+        state.set_nla_tracks(self.ui_models.animation.nla.tracks_filter.clone().into());
     }
 
     /// 新建一个**空的**编辑 Action 并装载（正确初始化路径）。
@@ -295,7 +295,7 @@ impl crate::store::AppStore {
             .library
             .animation_library
             .insert_action(action);
-        let ce = &mut self.ui_models.graph_editor;
+        let ce = &mut self.ui_models.animation.graph;
         ce.actions.push(ActionData {
             name: name.into(),
             id,
@@ -310,7 +310,7 @@ impl crate::store::AppStore {
             .expect("刚插入的 Action 应存在");
         let tags = ce.load_action(ce.current_action as usize, action);
         // 不经 dispatch 的直接调用路径：手动跑投影（结构变化 → 派生层重建 + 过滤视图重绑定）
-        self.ui_models.graph_editor.apply_tags(&tags);
+        self.ui_models.animation.graph.apply_tags(&tags);
         self.rebind_animation_filters();
         // NLA 全局 Action 轨同步亦走 depsgraph（初始化亦经投影，局部更新）
         let nla_tags = self.sync_nla_global_action();
@@ -460,7 +460,7 @@ impl crate::store::AppStore {
         let run_id = lib.insert_action(run);
         let jump_id = lib.insert_action(jump);
 
-        let ce = &mut self.ui_models.graph_editor;
+        let ce = &mut self.ui_models.animation.graph;
         ce.actions = vec![
             ActionData {
                 name: "主 Action".into(),
@@ -488,7 +488,7 @@ impl crate::store::AppStore {
             .get_action(first_id)
             .expect("ActionId 应存在");
         let tags = ce.load_action(0, action);
-        self.ui_models.graph_editor.apply_tags(&tags);
+        self.ui_models.animation.graph.apply_tags(&tags);
         self.rebind_animation_filters();
         self.create_test_nla_data();
     }

@@ -1,5 +1,5 @@
 //! 投影：把数据层（`channels_data`/`editing_keyframes`/选中集/搜索/标量）同步到
-//! 派生层（Slint 绑定模型 + 标量）。由 depsgraph 的 `op_animation_*` 调用。
+//! 派生层（Slint 绑定模型 + 标量）。由 depsgraph 的 `op_graph_*` 调用。
 //!
 //! 投影不修改数据层，只读数据算派生状态，并与当前 UI 模型 diff 后增量更新
 //! （`set_row_data` / `insert` / `remove`），对齐 Sequence 投影规范。
@@ -20,12 +20,12 @@ use slint::SharedString;
 
 impl GraphEditorState {
     /// 投影入口：按 tag 语义分派到对应的派生层更新。
-    /// 每个 op（`op_animation_*`）先过滤出自己处理的 tag 再调用这里。
+    /// 每个 op（`op_graph_*`）先过滤出自己处理的 tag 再调用这里。
     pub(crate) fn apply_tags(&mut self, tags: &[Tag]) {
         for tag in tags {
             match tag {
-                Tag::AnimationStructureChanged => self.apply_structure(),
-                Tag::AnimationKeyframesChanged {
+                Tag::GraphStructureChanged => self.apply_structure(),
+                Tag::GraphKeyframesChanged {
                     curves,
                     summary_ms,
                     dragged_curve,
@@ -38,10 +38,10 @@ impl GraphEditorState {
                     *dragged_summary,
                     handle_preview,
                 ),
-                Tag::AnimationSelectionChanged { summary_ms } => self.apply_selection(summary_ms),
-                Tag::AnimationDragEnded => self.apply_drag_ended(),
-                Tag::AnimationChannelChanged { curve } => self.apply_channel(*curve),
-                Tag::AnimationScalarsChanged => {}
+                Tag::GraphSelectionChanged { summary_ms } => self.apply_selection(summary_ms),
+                Tag::GraphDragEnded => self.apply_drag_ended(),
+                Tag::GraphChannelChanged { curve } => self.apply_channel(*curve),
+                Tag::GraphScalarsChanged => {}
                 _ => {}
             }
         }

@@ -55,13 +55,13 @@ impl GraphEditorState {
     /// 只改数据层，过滤视图重建由投影（Structure tag）完成。
     pub fn set_graph_search(&mut self, text: &str) -> Vec<Tag> {
         self.graph_search = text.to_string();
-        vec![Tag::AnimationStructureChanged]
+        vec![Tag::GraphStructureChanged]
     }
 
     /// 摄影表搜索：仅影响摄影表自己的过滤视图。
     /// 连接线增量更新：只重建"进入/离开匹配集合"的通道的连接，其余不动。
     pub fn set_dope_search(&mut self, text: &str) -> Vec<Tag> {
         self.dope_search = text.to_string();
-        vec![Tag::AnimationStructureChanged]
+        vec![Tag::GraphStructureChanged]
     }
 }

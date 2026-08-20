@@ -92,7 +92,7 @@ impl NlaEditorState {
 
     /// 画布级 TouchArea 左键命中检测：命中则选中并记录拖拽起点（经 reducer 路径）。
     /// 返回编码 auth_track*10000+strip（命中）或 -1（未命中），并返回需要投影的 tag。
-    /// 新代码优先使用 `strip_hit_test` + `Action::Nla(StripPressed)` dispatch；
+    /// 新代码优先使用 `strip_hit_test` + `Action::Animation(AnimationAction::Nla(NlaAction::StripPressed))` dispatch；
     /// 本方法仅保留给单测兼容（同样走 strip_pressed → 数据层改动）。
     pub fn strip_pick(
         &mut self,

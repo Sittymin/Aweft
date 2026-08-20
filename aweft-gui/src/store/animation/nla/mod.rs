@@ -1,10 +1,10 @@
-//! NLA 编辑器 Rust 侧：持有 NLA 轨道视图模型与全部编辑操作。
+//! NLA 编辑器 Rust 侧：持有 NLA 轨道视图模型与全部编辑操作（动画域 NLA 子集）。
 //!
 //! # main 架构接线（依赖图结构）
 //!
-//! 交互统一走 main 标准管线：`AnimationCallbacks` → `AppStore::dispatch(NlaAction)`
-//! → `dispatch_nla`（reducer，只改数据层并返回精确 tag）→ depsgraph 单轮求值
-//! → 投影 `op_nla_*`（把数据层同步到派生层 Slint 模型）。
+//! 交互统一走 main 标准管线：`AnimationCallbacks` → `AppStore::dispatch(AnimationAction::Nla(NlaAction))`
+//! → `dispatch_animation` 子路由 Nla（reducer，只改数据层并返回精确 tag）→ depsgraph 单轮求值
+//! → 投影 `projections/animation/nla.rs:op_nla_*`（把数据层同步到派生层 Slint 模型）。
 //!
 //! # 权威数据在 model（已接线）
 //!

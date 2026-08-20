@@ -854,7 +854,7 @@ fn animation_init_creates_empty_editing_action() {
     store.new_editing_action("主 Action");
 
     let (list_len, current, channels, action_name) = {
-        let ce = &store.ui_models().graph_editor;
+        let ce = &store.ui_models().animation.graph;
         (
             ce.actions.len(),
             ce.current_action,
@@ -884,7 +884,7 @@ fn animation_hack_test_data_populates_model_and_view() {
     store.create_test_animation_data();
 
     let (list_len, current, channel_count) = {
-        let ce = &store.ui_models().graph_editor;
+        let ce = &store.ui_models().animation.graph;
         (ce.actions.len(), ce.current_action, ce.channels.row_count())
     };
     assert_eq!(list_len, 3, "测试数据应有 3 个 Action");
@@ -904,21 +904,21 @@ fn animation_dispatch_projects_derived_models() {
     let instance = MainWindow::new().unwrap();
     let mut store = AppStore::new(&instance);
     store.create_test_animation_data();
-    let ce = &mut store.ui_models_mut().graph_editor;
+    let ce = &mut store.ui_models_mut().animation.graph;
 
-    use aweft_gui::actions::animation::AnimationAction;
+    use aweft_gui::actions::animation::{AnimationAction, graph::GraphAction};
     use aweft_gui::bridge::types::{SlintKeyframeDragMode, SlintSelectionModifier};
 
     // 按下关键帧 (通道 0, 关键帧 1)：reducer 改数据 → Selection tag → 投影同步选中
     store
-        .dispatch(Action::Animation(AnimationAction::KeyframePressed {
+        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::KeyframePressed {
             curve: 0,
             key: 1,
             modifier: SlintSelectionModifier::None,
-        }))
+        })))
         .unwrap();
     store.evaluate_depsgraph();
-    let ce = &store.ui_models().graph_editor;
+    let ce = &store.ui_models().animation.graph;
     assert_eq!(
         ce.selected_display.row_data(0),
         Some(true),
@@ -928,16 +928,16 @@ fn animation_dispatch_projects_derived_models() {
 
     // 拖拽关键帧：Keyframes tag → 投影重建段/手柄/汇总
     store
-        .dispatch(Action::Animation(AnimationAction::KeyframeDragged {
+        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::KeyframeDragged {
             curve: 0,
             key: 1,
             delta_time: 1.0,
             delta_value: -5.0,
             mode: SlintKeyframeDragMode::Move,
-        }))
+        })))
         .unwrap();
     store.evaluate_depsgraph();
-    let ce = &store.ui_models().graph_editor;
+    let ce = &store.ui_models().animation.graph;
     // 段 0 终点跟随关键帧新位置（投影重建）
     let seg0 = ce.segments.row_data(0).unwrap();
     assert_eq!(seg0.x1, 4.0);
@@ -945,14 +945,14 @@ fn animation_dispatch_projects_derived_models() {
 
     // 松开：写回 model（reducer）+ 折叠选中 → 投影同步
     store
-        .dispatch(Action::Animation(AnimationAction::KeyframeReleased {
+        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::KeyframeReleased {
             curve: 0,
             key: 1,
             moved: true,
-        }))
+        })))
         .unwrap();
     store.evaluate_depsgraph();
-    let id = store.ui_models().graph_editor.current_action_id().unwrap();
+    let id = store.ui_models().animation.graph.current_action_id().unwrap();
     let action = store
         .state()
         .project
@@ -979,16 +979,16 @@ fn graph_search_filters_channels_and_canvas() {
     let mut store = AppStore::new(&instance);
     store.create_test_animation_data();
 
-    use aweft_gui::actions::animation::AnimationAction;
+    use aweft_gui::actions::animation::{AnimationAction, graph::GraphAction};
 
     store
-        .dispatch(Action::Animation(AnimationAction::GraphSearchChanged {
+        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::GraphSearchChanged {
             text: "font".to_string(),
-        }))
+        })))
         .unwrap();
     store.evaluate_depsgraph();
 
-    let ce = &store.ui_models().graph_editor;
+    let ce = &store.ui_models().animation.graph;
     assert_eq!(
         ce.graph_filter.row_count(),
         2,
@@ -1001,11 +1001,11 @@ fn graph_search_filters_channels_and_canvas() {
 
     // 空串恢复全部
     store
-        .dispatch(Action::Animation(AnimationAction::GraphSearchChanged {
+        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::GraphSearchChanged {
             text: String::new(),
-        }))
+        })))
         .unwrap();
     store.evaluate_depsgraph();
-    let ce = &store.ui_models().graph_editor;
+    let ce = &store.ui_models().animation.graph;
     assert_eq!(ce.graph_filter.row_count(), 4, "空串应恢复全部通道");
 }

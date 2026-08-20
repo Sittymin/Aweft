@@ -52,7 +52,7 @@ impl GraphEditorState {
             selected: false,
             keyframes: ModelRc::default(),
         });
-        vec![Tag::AnimationStructureChanged]
+        vec![Tag::GraphStructureChanged]
     }
 
     /// 装载 model 的第 `index` 个 Action（数据层）：清空旧通道/关键帧数据，
@@ -70,7 +70,7 @@ impl GraphEditorState {
         }
         self.action_name = action.name.clone().into();
         self.current_action = index as i32;
-        vec![Tag::AnimationStructureChanged]
+        vec![Tag::GraphStructureChanged]
     }
 
     /// 当前编辑的 ActionId（`current_action` 下标 → `actions` 清单；-1/越界返回 None）。
@@ -108,6 +108,6 @@ impl GraphEditorState {
         self.editing_keyframes.clear();
         self.action_name = SharedString::default();
         self.current_action = -1;
-        vec![Tag::AnimationStructureChanged]
+        vec![Tag::GraphStructureChanged]
     }
 }

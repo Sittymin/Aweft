@@ -132,7 +132,7 @@ fn action_range_derived_from_keyframe_times() {
 
 #[test]
 fn action_selection_switches_curves() {
-    use crate::store::graph_editor::ActionData;
+    use crate::store::animation::graph::ActionData;
     use aweft_model::animation::{
         Action as ModelAction, Keyframe as Mk, action::ActionCurve, fcurve::FCurve,
     };
@@ -148,7 +148,7 @@ fn action_selection_switches_curves() {
     let mut st = GraphEditorState::default();
     // 默认：无 Action
     assert_eq!(st.current_action, -1);
-    st.apply_tags(&[Tag::AnimationStructureChanged]);
+    st.apply_tags(&[Tag::GraphStructureChanged]);
     assert_eq!(st.action_items.row_count(), 0);
 
     let act_a = action_with(
@@ -174,7 +174,7 @@ fn action_selection_switches_curves() {
             id: id_b,
         },
     ];
-    st.apply_tags(&[Tag::AnimationStructureChanged]);
+    st.apply_tags(&[Tag::GraphStructureChanged]);
     assert_eq!(st.action_items.row_count(), 2);
 
     let tags = st.load_action(0, &act_a);
@@ -1095,7 +1095,7 @@ fn dope_marquee_select_ignores_invisible_channels() {
     st.rebuild_all();
     // 关掉 b 的眼睛（数据层 + 投影）
     st.channels_data[1].visible = false;
-    let tags = vec![Tag::AnimationChannelChanged { curve: 1 }];
+    let tags = vec![Tag::GraphChannelChanged { curve: 1 }];
     project(&mut st, tags);
 
     let tags = st.dope_marquee_select(-1.0, 10.0, 0, 1, SlintSelectionModifier::None);
@@ -1800,7 +1800,7 @@ fn dope_connections_skip_bezier_and_follow_visibility() {
 
     // 关掉眼睛 → 连接 visible=false（数据层 + 投影）
     st.channels_data[0].visible = false;
-    let tags = vec![Tag::AnimationChannelChanged { curve: 0 }];
+    let tags = vec![Tag::GraphChannelChanged { curve: 0 }];
     project(&mut st, tags);
     let tags = st.toggle_channel_visible(0); // 先恢复（false→true）
     project(&mut st, tags);

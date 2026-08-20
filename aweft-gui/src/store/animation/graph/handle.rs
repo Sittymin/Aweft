@@ -61,7 +61,7 @@ impl GraphEditorState {
         }
         // 拖控制柄也聚焦并选中该通道（曲线保持高亮）
         self.channel_pressed(curve, SlintSelectionModifier::None);
-        vec![Tag::AnimationSelectionChanged { summary_ms: vec![] }]
+        vec![Tag::GraphSelectionChanged { summary_ms: vec![] }]
     }
 
     /// 控制柄拖拽：把增量累加到被拖控制柄，并按约束模式处理。
@@ -182,7 +182,7 @@ impl GraphEditorState {
                 }
             }
         }
-        vec![Tag::AnimationKeyframesChanged {
+        vec![Tag::GraphKeyframesChanged {
             curves,
             summary_ms: vec![],
             dragged_curve: None,
@@ -208,9 +208,9 @@ impl GraphEditorState {
             self.selected_handles
                 .insert(HandleLoc { curve, key, is_in });
         }
-        // 手柄拖拽结束不打 AnimationDragEnded：补柄（ensure_default_handles）只适用于
+        // 手柄拖拽结束不打 GraphDragEnded：补柄（ensure_default_handles）只适用于
         // 关键帧拖拽改变边缘性的场景；手柄可能被故意钳到 0 长度，不该被覆盖。
         // preview_handles 由投影在选中变化时清空。
-        vec![Tag::AnimationSelectionChanged { summary_ms }]
+        vec![Tag::GraphSelectionChanged { summary_ms }]
     }
 }

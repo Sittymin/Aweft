@@ -88,7 +88,7 @@ impl GraphEditorState {
         if !changed {
             return Vec::new();
         }
-        vec![Tag::AnimationKeyframesChanged {
+        vec![Tag::GraphKeyframesChanged {
             curves,
             summary_ms: vec![],
             dragged_curve: None,

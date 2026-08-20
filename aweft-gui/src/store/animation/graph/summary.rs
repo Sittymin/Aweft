@@ -238,7 +238,7 @@ impl GraphEditorState {
             sk.all_selected = true;
             self.summary_keyframes.set_row_data(index, sk);
         }
-        vec![Tag::AnimationSelectionChanged {
+        vec![Tag::GraphSelectionChanged {
             summary_ms: summary_ms.into_iter().collect(),
         }]
     }
@@ -281,7 +281,7 @@ impl GraphEditorState {
             return Vec::new();
         }
         // 曲线段/手柄/连接线随关键帧移动由投影重建；被拖汇总标记就地更新时间（保住 grab）
-        vec![Tag::AnimationKeyframesChanged {
+        vec![Tag::GraphKeyframesChanged {
             curves: moved,
             summary_ms: vec![],
             dragged_curve: None,
@@ -312,10 +312,10 @@ impl GraphEditorState {
                 ms_set.insert(ms_of(kf.time));
             }
         }
-        let mut tags = vec![Tag::AnimationSelectionChanged {
+        let mut tags = vec![Tag::GraphSelectionChanged {
             summary_ms: ms_set.into_iter().collect(),
         }];
-        tags.push(Tag::AnimationDragEnded);
+        tags.push(Tag::GraphDragEnded);
         tags
     }
 }

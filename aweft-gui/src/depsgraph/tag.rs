@@ -232,10 +232,10 @@ pub enum Tag {
 
     // ── Animation ─────────────────────────────────────────────────────
     /// 动画编辑器：装载/重置/新建 Action / 搜索变化（过滤视图重建 + 全量派生重建）。
-    AnimationStructureChanged,
+    GraphStructureChanged,
     /// 动画编辑器：关键帧数据值变化（拖拽/插值/手柄调整）。
     /// 投影重建受影响通道的曲线段/手柄/连接线，并重算汇总条带中受影响的 ms 条目。
-    AnimationKeyframesChanged {
+    GraphKeyframesChanged {
         /// 数据变化的通道。
         curves: Vec<usize>,
         /// 汇总条带需要重算的 ms（拖拽移动时含旧位置 + 新位置）。
@@ -251,22 +251,22 @@ pub enum Tag {
     },
     /// 动画编辑器：关键帧/通道选中变化。
     /// 投影同步 selected_display、汇总条目选中掩码、手柄 selected 视觉。
-    AnimationSelectionChanged {
+    GraphSelectionChanged {
         /// 汇总条带需要重算选中掩码的 ms。
         summary_ms: Vec<i64>,
     },
     /// 动画编辑器：通道属性变化（可见/激活/可编辑/颜色模式）。
     /// 投影更新连接线（visible/颜色）与汇总条目（可见性影响聚合）。
-    AnimationChannelChanged {
+    GraphChannelChanged {
         curve: usize,
     },
     /// 动画编辑器：拖拽结束后的数据整理（恢复编辑不变量）。
     /// 投影清理拖拽残留（handles preview 替换换回普通）、重排乱序关键帧。
     /// 与选中变化分离：其他组件（如 NLA）可单独依赖本整理。
-    AnimationDragEnded,
+    GraphDragEnded,
     /// 动画编辑器：标量变化（播放头/当前通道/选中数/插值聚合）。
     /// 投影只同步 Slint 全局标量。
-    AnimationScalarsChanged,
+    GraphScalarsChanged,
     /// NLA 编辑器：需要重建过滤派生视图的变化（装载/搜索）。
     /// 投影全量重建派生层（tracks/strip_models/过滤视图重新绑定）。
     NlaStructureChanged,
@@ -342,17 +342,17 @@ pub enum TagKind {
     /// 拖拽结束（全量重建）。
     DragEnded,
     /// 动画编辑器：结构（装载/重置/搜索）。
-    AnimationStructure,
+    GraphStructure,
     /// 动画编辑器：关键帧数据值变化。
-    AnimationKeyframes,
+    GraphKeyframes,
     /// 动画编辑器：选中变化。
-    AnimationSelection,
+    GraphSelection,
     /// 动画编辑器：拖拽结束后的数据整理。
-    AnimationDragEnded,
+    GraphDragEnded,
     /// 动画编辑器：通道属性变化。
-    AnimationChannel,
+    GraphChannel,
     /// 动画编辑器：标量变化。
-    AnimationScalars,
+    GraphScalars,
     /// NLA 编辑器：结构（装载/搜索过滤视图重建）。
     NlaStructure,
     /// NLA 编辑器：片断选中变化。
@@ -404,17 +404,17 @@ pub enum OperationCode {
     /// 节点图：新建链操作（全量重建）。
     NodeGraphChain,
     /// 动画编辑器：结构变化（装载/重置/搜索）。
-    AnimationStructure,
+    GraphStructure,
     /// 动画编辑器：关键帧值变化（段/手柄/连接线/汇总增量重建）。
-    AnimationCurve,
+    GraphKeyframes,
     /// 动画编辑器：选中变化（显示掩码/汇总掩码/手柄选中）。
-    AnimationSelection,
+    GraphSelection,
     /// 动画编辑器：拖拽结束整理（预览恢复/重排/补柄）。
-    AnimationDragEnded,
+    GraphDragEnded,
     /// 动画编辑器：通道属性变化（连接线/汇总）。
-    AnimationChannel,
+    GraphChannel,
     /// 动画编辑器：标量同步到 Slint 全局。
-    AnimationScalars,
+    GraphScalars,
     /// NLA 编辑器：结构变化（装载/搜索）。
     NlaStructure,
     /// NLA 编辑器：片断选中变化。
@@ -459,12 +459,12 @@ impl Tag {
             | Tag::EdgeUpdated { .. }
             | Tag::DragEnded { .. } => DataId::DragState,
 
-            Tag::AnimationStructureChanged
-            | Tag::AnimationKeyframesChanged { .. }
-            | Tag::AnimationSelectionChanged { .. }
-            | Tag::AnimationDragEnded
-            | Tag::AnimationChannelChanged { .. }
-            | Tag::AnimationScalarsChanged
+            Tag::GraphStructureChanged
+            | Tag::GraphKeyframesChanged { .. }
+            | Tag::GraphSelectionChanged { .. }
+            | Tag::GraphDragEnded
+            | Tag::GraphChannelChanged { .. }
+            | Tag::GraphScalarsChanged
             | Tag::NlaStructureChanged
             | Tag::NlaSelectionChanged { .. }
             | Tag::NlaStripPositionChanged { .. }
@@ -511,12 +511,12 @@ impl Tag {
 
             Tag::DragEnded { .. } => TagKind::DragEnded,
 
-            Tag::AnimationStructureChanged => TagKind::AnimationStructure,
-            Tag::AnimationKeyframesChanged { .. } => TagKind::AnimationKeyframes,
-            Tag::AnimationSelectionChanged { .. } => TagKind::AnimationSelection,
-            Tag::AnimationDragEnded => TagKind::AnimationDragEnded,
-            Tag::AnimationChannelChanged { .. } => TagKind::AnimationChannel,
-            Tag::AnimationScalarsChanged => TagKind::AnimationScalars,
+            Tag::GraphStructureChanged => TagKind::GraphStructure,
+            Tag::GraphKeyframesChanged { .. } => TagKind::GraphKeyframes,
+            Tag::GraphSelectionChanged { .. } => TagKind::GraphSelection,
+            Tag::GraphDragEnded => TagKind::GraphDragEnded,
+            Tag::GraphChannelChanged { .. } => TagKind::GraphChannel,
+            Tag::GraphScalarsChanged => TagKind::GraphScalars,
 
             Tag::NlaStructureChanged => TagKind::NlaStructure,
             Tag::NlaSelectionChanged { .. } => TagKind::NlaSelection,

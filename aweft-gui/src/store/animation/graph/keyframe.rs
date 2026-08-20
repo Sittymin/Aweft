@@ -107,7 +107,7 @@ impl GraphEditorState {
             }
         }
         self.current_channel = curve as isize;
-        vec![Tag::AnimationSelectionChanged {
+        vec![Tag::GraphSelectionChanged {
             summary_ms: summary_ms.into_iter().collect(),
         }]
     }
@@ -245,7 +245,7 @@ impl GraphEditorState {
         }
         // 被拖通道的手柄软钳制预览（投影据此替换 handles 区间）
         let dragged_curve = moved.iter().any(|&c| c == curve).then_some(curve);
-        vec![Tag::AnimationKeyframesChanged {
+        vec![Tag::GraphKeyframesChanged {
             curves: moved,
             summary_ms: affected_ms.into_iter().collect(),
             dragged_curve,
@@ -276,7 +276,7 @@ impl GraphEditorState {
             time_offset: -dt,
             value_offset: -dv,
         };
-        vec![Tag::AnimationKeyframesChanged {
+        vec![Tag::GraphKeyframesChanged {
             curves: vec![curve],
             summary_ms: vec![],
             dragged_curve: Some(curve),
@@ -311,13 +311,13 @@ impl GraphEditorState {
             }
         }
         let mut tags = self.apply_pending_channel_selection();
-        if let Tag::AnimationSelectionChanged { summary_ms: ms } = tags.first_mut().unwrap() {
+        if let Tag::GraphSelectionChanged { summary_ms: ms } = tags.first_mut().unwrap() {
             ms.extend(summary_ms);
         }
         // 拖拽过：结束后的数据整理（预览残留清理/重排）走独立 tag——与选中变化分离，
         // 未来其他组件（如 NLA）可单独依赖整理
         if moved {
-            tags.push(Tag::AnimationDragEnded);
+            tags.push(Tag::GraphDragEnded);
         }
         tags
     }

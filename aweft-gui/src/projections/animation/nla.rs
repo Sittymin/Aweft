@@ -16,7 +16,7 @@ pub fn op_nla_structure(store: &mut AppStore, tags: &[Tag]) {
     if !tags.iter().any(|t| matches!(t, Tag::NlaStructureChanged)) {
         return;
     }
-    store.ui_models.nla_editor.apply_structure();
+    store.ui_models.animation.nla.apply_structure();
     store.rebind_nla_tracks();
 }
 
@@ -30,7 +30,7 @@ pub fn op_nla_selection(store: &mut AppStore, tags: &[Tag]) {
     if sel.is_empty() {
         return;
     }
-    store.ui_models.nla_editor.apply_selection(&sel);
+    store.ui_models.animation.nla.apply_selection(&sel);
 }
 
 /// NLA：片断位置值变化（拖拽）→就地 set_row_data（保住 grab）。
@@ -43,7 +43,7 @@ pub fn op_nla_position(store: &mut AppStore, tags: &[Tag]) {
     if pos.is_empty() {
         return;
     }
-    store.ui_models.nla_editor.apply_position(&pos);
+    store.ui_models.animation.nla.apply_position(&pos);
 }
 
 /// NLA：片断结构变化（跨轨移动/同轨重排/插入）→精确 remove+insert（row_added/removed，存量复用）。
@@ -56,7 +56,7 @@ pub fn op_nla_strip_structure(store: &mut AppStore, tags: &[Tag]) {
     if strukt.is_empty() {
         return;
     }
-    store.ui_models.nla_editor.apply_strip_structure(&strukt);
+    store.ui_models.animation.nla.apply_strip_structure(&strukt);
 }
 
 /// NLA：轨道属性行更新（启用/锁定）→ 就地 set_row_data。
@@ -69,7 +69,7 @@ pub fn op_nla_track_properties(store: &mut AppStore, tags: &[Tag]) {
     if tracks.is_empty() {
         return;
     }
-    store.ui_models.nla_editor.apply_track_properties(&tracks);
+    store.ui_models.animation.nla.apply_track_properties(&tracks);
 }
 
 /// NLA：轨道结构新增→就地 row_added（追加轨道行与片断 inner，不重建存量）。
@@ -82,5 +82,5 @@ pub fn op_nla_track_added(store: &mut AppStore, tags: &[Tag]) {
     if tracks.is_empty() {
         return;
     }
-    store.ui_models.nla_editor.apply_track_added(&tracks);
+    store.ui_models.animation.nla.apply_track_added(&tracks);
 }

@@ -14,6 +14,6 @@ UI 事件 → callbacks → Action → AppStore::dispatch
 - `aweft-gui`：GUI（actions / bridge / depsgraph / store / reducers / projections / screen / render / ui）
 - `aweft-libass`：ASS 渲染绑定
 
-**区域类型**：LineEditor ✅ | Viewport 占位 | StyleGraphEditor ✅ | AppGraphEditor ✅ | GraphEditor（曲线编辑器）✅ | DopeSheet（摄影表）✅ | NLAEditor ✅
+**区域类型**：LineEditor(Sequence 表格) ✅ | Timeline(Sequence 泳道) ✅ | Viewport 占位 | StyleGraphEditor ✅ | AppGraphEditor ✅ | GraphEditor（曲线编辑器，Action 曲线）✅ | DopeSheet（摄影表）✅ | NLAEditor（AnimData 轨道）✅ — 动画域 Graph/Dope/NLA 共享 DataId::Animation（`store/animation/{graph,nla}`）
 
 **原则**：model 是唯一真相；`set_row_data` 局部更新；拖拽期间不更新嵌套 repeater 外层模型

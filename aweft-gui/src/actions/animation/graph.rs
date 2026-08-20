@@ -2,17 +2,17 @@
 //!
 //! 走 main 标准管线 `Action → dispatch → tag → 投影`（对齐 node_graph）：
 //!  - reducer（`AppStore::dispatch_animation`）只改数据层（channels_data/editing_keyframes/UI 态）
-//!    并返回精确 tag（AnimationStructure/Keyframes/Selection/Channel/Scalars）
-//!  - 投影（`op_animation_*`）把数据层同步到派生层（Slint 绑定模型 + 标量）
+//!    并返回精确 tag（GraphStructure/Keyframes/Selection/Channel/Scalars）
+//!  - 投影（`op_graph_*`）把数据层同步到派生层（Slint 绑定模型 + 标量）
 
 use crate::bridge::types::{
     SlintColorMode, SlintHandleDragMode, SlintInterpolation, SlintKeyframeDragMode,
     SlintSelectionModifier,
 };
 
-/// 曲线编辑器（Graph Editor）交互操作。
+/// 曲线编辑器（Graph Editor）交互操作（动画域子集）。
 #[derive(Debug, Clone)]
-pub enum AnimationAction {
+pub enum GraphAction {
     // —— 关键帧 ——
     /// 关键帧按下：none=单选，shift=区间扩展，ctrl=切换。
     KeyframePressed {

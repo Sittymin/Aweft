@@ -7,9 +7,7 @@
 //!  - **提交**：`StripReleased` 后 `commit_to_model` 把编辑数据写回 model AnimData；
 //!  - **装载**：`load_nla_from_model` 读 model AnimData 重建编辑数据（初始化路径）。
 
-use anyhow::Result;
-
-use crate::actions::nla::NlaAction;
+use crate::actions::animation::nla::NlaAction;
 use crate::depsgraph::{NlaStripInsert, Tag};
 use aweft_model::animation::AnimData;
 use aweft_model::animation::strip::NlaTrack;
@@ -17,7 +15,7 @@ use aweft_model::animation::strip::NlaTrack;
 impl crate::store::AppStore {
     /// 当前 NLA 编辑的 AnimData（model 权威数据）。
     pub(crate) fn current_anim_data(&self) -> Option<&AnimData> {
-        let id = self.ui_models.nla_editor.anim_data_id?;
+        let id = self.ui_models.animation.nla.anim_data_id?;
         self.state
             .project
             .library
@@ -28,7 +26,7 @@ impl crate::store::AppStore {
 
     /// 当前 NLA 编辑的 AnimData（可变）。
     pub(crate) fn current_anim_data_mut(&mut self) -> Option<&mut AnimData> {
-        let id = self.ui_models.nla_editor.anim_data_id?;
+        let id = self.ui_models.animation.nla.anim_data_id?;
         self.state
             .project
             .library
@@ -37,8 +35,8 @@ impl crate::store::AppStore {
             .get_mut(&id)
     }
 
-    /// 分发 NLA 编辑器交互操作：reducer 只改数据层 + model 并返回精确 tag。
-    pub(crate) fn dispatch_nla(&mut self, action: NlaAction) -> Result<Vec<Tag>> {
+    /// 分发 NLA 子 Action：reducer 只改数据层 + model 并返回精确 tag。
+    pub(crate) fn dispatch_nla_action(&mut self, action: NlaAction) -> anyhow::Result<Vec<Tag>> {
         use NlaAction::*;
 
         // 每分支独立作用域：先改数据层（借用 ui_models），再同步 model（借用 state），
@@ -49,8 +47,7 @@ impl crate::store::AppStore {
                 strip,
                 modifier,
             } => self
-                .ui_models
-                .nla_editor
+                .ui_models.animation.nla
                 .strip_pressed(track, strip, modifier),
             StripDragged {
                 track,
@@ -58,22 +55,20 @@ impl crate::store::AppStore {
                 delta_x,
                 delta_row,
             } => self
-                .ui_models
-                .nla_editor
+                .ui_models.animation.nla
                 .strip_dragged(track, strip, delta_x, delta_row),
             StripReleased { track, strip } => {
-                let tags = self.ui_models.nla_editor.strip_released(track, strip);
+                let tags = self.ui_models.animation.nla.strip_released(track, strip);
                 // 拖拽结束提交：数据层写回 model（model 是唯一真相）
                 self.write_nla_view_to_model();
                 tags
             }
-            StripDeselectAll => self.ui_models.nla_editor.deselect_all(),
+            StripDeselectAll => self.ui_models.animation.nla.deselect_all(),
             ToggleTrackEnabled { track } => {
-                let tags = self.ui_models.nla_editor.toggle_track_enabled(track);
+                let tags = self.ui_models.animation.nla.toggle_track_enabled(track);
                 // model 同步：enabled ↔ muted
                 let enabled = self
-                    .ui_models
-                    .nla_editor
+                    .ui_models.animation.nla
                     .track_view
                     .get(track)
                     .map(|t| t.enabled)
@@ -85,8 +80,8 @@ impl crate::store::AppStore {
                 }
                 tags
             }
-            ToggleTrackLocked { track } => self.ui_models.nla_editor.toggle_track_locked(track),
-            SearchChanged { text } => self.ui_models.nla_editor.filter_tracks(&text),
+            ToggleTrackLocked { track } => self.ui_models.animation.nla.toggle_track_locked(track),
+            SearchChanged { text } => self.ui_models.animation.nla.filter_tracks(&text),
             PushDown => self.push_down_action(),
         };
         Ok(tags)
@@ -94,7 +89,7 @@ impl crate::store::AppStore {
 
     /// 视图片断写回 model AnimData（model 是唯一真相，store 视图是派生状态）。
     pub(crate) fn write_nla_view_to_model(&mut self) {
-        let Some(id) = self.ui_models.nla_editor.anim_data_id else {
+        let Some(id) = self.ui_models.animation.nla.anim_data_id else {
             return;
         };
         let Some(anim_data) = self
@@ -107,7 +102,7 @@ impl crate::store::AppStore {
         else {
             return;
         };
-        self.ui_models.nla_editor.commit_to_model(anim_data);
+        self.ui_models.animation.nla.commit_to_model(anim_data);
     }
 
     /// 同步全局 Action 轨（第 0 轨）：名称 = 当前编辑的 Action 名，
@@ -115,8 +110,7 @@ impl crate::store::AppStore {
     /// 仅改数据层，返回 `NlaTrackChanged{0}` 由 depsgraph 投影局部更新（初始化亦同）。
     pub(crate) fn sync_nla_global_action(&mut self) -> Vec<Tag> {
         let (name, has_data) = self
-            .ui_models
-            .graph_editor
+            .ui_models.animation.graph
             .current_action_id()
             .map(|id| {
                 let has_data = self
@@ -128,10 +122,10 @@ impl crate::store::AppStore {
                     .get(&id)
                     .map(|a| !a.curves.is_empty())
                     .unwrap_or(false);
-                (self.ui_models.graph_editor.action_name.clone(), has_data)
+                (self.ui_models.animation.graph.action_name.clone(), has_data)
             })
             .unwrap_or_else(|| ("".into(), false));
-        self.ui_models.nla_editor.set_global_action(name, has_data)
+        self.ui_models.animation.nla.set_global_action(name, has_data)
     }
 
     /// "向下插入"（reducer 步骤）：把当前曲线编辑器编辑的 Action 作为片断加入 NLA，
@@ -139,15 +133,14 @@ impl crate::store::AppStore {
     /// 已有轨道能容纳 → 片断级局部插入（NlaStripsChanged.inserted，row_added）；
     /// 没有可容纳轨道 → 新建轨道（NlaTrackAdded，轨道行 row_added）。
     fn push_down_action(&mut self) -> Vec<Tag> {
-        let Some(action_id) = self.ui_models.graph_editor.current_action_id() else {
+        let Some(action_id) = self.ui_models.animation.graph.current_action_id() else {
             return Vec::new();
         };
-        let name = self.ui_models.graph_editor.action_name.to_string();
-        let start = self.ui_models.graph_editor.action_start;
-        let end = self.ui_models.graph_editor.action_end;
+        let name = self.ui_models.animation.graph.action_name.to_string();
+        let start = self.ui_models.animation.graph.action_start;
+        let end = self.ui_models.animation.graph.action_end;
         let Some(result) = self
-            .ui_models
-            .nla_editor
+            .ui_models.animation.nla
             .push_down_insert(name, start, end, action_id)
         else {
             return Vec::new();
@@ -182,9 +175,8 @@ impl crate::store::AppStore {
         let Some(anim_data) = self.current_anim_data().cloned() else {
             return;
         };
-        let target_duration = self.ui_models.graph_editor.action_end;
-        self.ui_models
-            .nla_editor
+        let target_duration = self.ui_models.animation.graph.action_end;
+        self.ui_models.animation.nla
             .load_from_model(&anim_data, target_duration);
         let mut tags = vec![Tag::NlaStructureChanged];
         tags.extend(self.sync_nla_global_action());
@@ -203,6 +195,6 @@ impl crate::store::AppStore {
         let Some(state) = weak.upgrade() else {
             return;
         };
-        state.set_nla_tracks(self.ui_models.nla_editor.tracks_filter.clone().into());
+        state.set_nla_tracks(self.ui_models.animation.nla.tracks_filter.clone().into());
     }
 }

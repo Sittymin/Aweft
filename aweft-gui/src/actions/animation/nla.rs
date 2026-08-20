@@ -1,9 +1,9 @@
-//! NLA 编辑器操作 Action：交互入口。
+//! NLA 编辑器操作 Action（动画域 NLA 子集）：交互入口。
 //!
-//! 走 main 标准管线 `Action → dispatch → tag → 投影`（对齐动画编辑器）：
-//!  - reducer（`AppStore::dispatch_nla`）只改数据层 + model（`AnimData.tracks`）
+//! 走 main 标准管线 `Action::Animation(AnimationAction::Nla(...)) → dispatch_animation → tag → 投影`（统一动画域）：
+//!  - reducer（`AppStore::dispatch_animation` 子路由 Nla）只改数据层 + model（`AnimData.tracks`）
 //!    并返回精确 tag（NlaStructure/NlaStrips/NlaTrackProperties/NlaTrackAdded）
-//!  - 投影（`op_nla_*`）把数据层同步到派生层（Slint 绑定模型）
+//!  - 投影（`projections/animation/nla.rs:op_nla_*`）把数据层同步到派生层（Slint 绑定模型）
 
 use crate::bridge::types::SlintSelectionModifier;
 

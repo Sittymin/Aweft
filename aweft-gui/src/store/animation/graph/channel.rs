@@ -106,7 +106,7 @@ impl GraphEditorState {
                 self.current_channel = curve as isize;
             }
         }
-        vec![Tag::AnimationSelectionChanged { summary_ms: vec![] }]
+        vec![Tag::GraphSelectionChanged { summary_ms: vec![] }]
     }
 
     /// 已选中通道数量。
@@ -120,7 +120,7 @@ impl GraphEditorState {
         self.selection_anchor = -1;
         self.pending_channel_selection.clear();
         self.clear_channel_selection();
-        vec![Tag::AnimationSelectionChanged { summary_ms: vec![] }]
+        vec![Tag::GraphSelectionChanged { summary_ms: vec![] }]
     }
 
     /// 把按下关键帧时记录的期望通道选中写回数据层。
@@ -132,7 +132,7 @@ impl GraphEditorState {
         for &i in &pending {
             self.set_channel_selected(i, true);
         }
-        vec![Tag::AnimationSelectionChanged { summary_ms: vec![] }]
+        vec![Tag::GraphSelectionChanged { summary_ms: vec![] }]
     }
 
     /// 当前"生效"的选中通道集合 = 已写回数据层的选中 ∪ 尚未应用的 pending 选中。
@@ -203,7 +203,7 @@ impl GraphEditorState {
         } else {
             ch.user_color
         };
-        vec![Tag::AnimationChannelChanged { curve }]
+        vec![Tag::GraphChannelChanged { curve }]
     }
 
     /// 切换通道可见性（眼睛）。数据层翻转；连接线/汇总由投影增量重建。
@@ -212,7 +212,7 @@ impl GraphEditorState {
             return Vec::new();
         };
         ch.visible = !ch.visible;
-        vec![Tag::AnimationChannelChanged { curve }]
+        vec![Tag::GraphChannelChanged { curve }]
     }
 
     pub fn toggle_channel_modifier(&mut self, curve: usize) -> Vec<Tag> {
@@ -220,7 +220,7 @@ impl GraphEditorState {
             return Vec::new();
         };
         ch.modifier_enabled = !ch.modifier_enabled;
-        vec![Tag::AnimationChannelChanged { curve }]
+        vec![Tag::GraphChannelChanged { curve }]
     }
 
     pub fn toggle_channel_active(&mut self, curve: usize) -> Vec<Tag> {
@@ -228,7 +228,7 @@ impl GraphEditorState {
             return Vec::new();
         };
         ch.active = !ch.active;
-        vec![Tag::AnimationChannelChanged { curve }]
+        vec![Tag::GraphChannelChanged { curve }]
     }
 
     pub fn toggle_channel_editable(&mut self, curve: usize) -> Vec<Tag> {
@@ -236,7 +236,7 @@ impl GraphEditorState {
             return Vec::new();
         };
         ch.editable = !ch.editable;
-        vec![Tag::AnimationChannelChanged { curve }]
+        vec![Tag::GraphChannelChanged { curve }]
     }
 
     /// 视图缩放变化：更新命中检测容差（缩放越大，像素容差越小，判定越精确）。

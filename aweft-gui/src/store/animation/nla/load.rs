@@ -14,7 +14,7 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 impl NlaEditorState {
     /// 从 model AnimData 装载（仅重建数据层，派生层由 `NlaStructureChanged` 投影重建）。
     /// 旧实现曾直接 `apply_structure`（初始化例外），现统一走 depsgraph：调用方需
-    /// `tag(NlaStructureChanged)` + `evaluate`（`reducers/nla.rs:load_nla_from_model` 已接入）。
+    /// `tag(NlaStructureChanged)` + `evaluate`（`reducers/animation/nla.rs:load_nla_from_model` 已接入）。
     /// 单测直接测数据层/派生层时可手动 `apply_structure`。
     pub(crate) fn load_from_model(&mut self, anim_data: &AnimData, target_duration: f32) {
         let mut tv = vec![SlintNlaTrack {
@@ -159,14 +159,14 @@ impl crate::store::AppStore {
     /// 创建 `AnimData`（存 `animation_library.anim_datas`）并装载到 NLA 编辑器，
     /// 轨道引用上面创建的 Action（主 Action/奔跑/跳跃）。正确路径（未来）：
     /// 用户通过"向下插入"把编辑中的 Action 加入 NLA。
-    /// 归属 NLA 域（`store/nla_editor`），由 `graph_editor::create_test_animation_data` 调用。
+    /// 归属动画域 NLA 子集（`store/animation/nla`），由 `store/animation/graph::create_test_animation_data` 调用。
     pub(crate) fn create_test_nla_data(&mut self) {
         use aweft_model::animation::AnimData;
         use aweft_model::animation::strip::{NlaStrip, NlaTrack, StripPlacement, StripType};
 
-        let main_id = self.ui_models.graph_editor.actions[0].id;
-        let run_id = self.ui_models.graph_editor.actions[1].id;
-        let jump_id = self.ui_models.graph_editor.actions[2].id;
+        let main_id = self.ui_models.animation.graph.actions[0].id;
+        let run_id = self.ui_models.animation.graph.actions[1].id;
+        let jump_id = self.ui_models.animation.graph.actions[2].id;
 
         let mut anim_data = AnimData::new("主 NLA");
         anim_data.set_base_action(main_id);
@@ -214,7 +214,7 @@ impl crate::store::AppStore {
             .library
             .animation_library
             .insert_anim_data(anim_data);
-        self.ui_models.nla_editor.anim_data_id = Some(anim_data_id);
+        self.ui_models.animation.nla.anim_data_id = Some(anim_data_id);
         self.load_nla_from_model();
     }
 }

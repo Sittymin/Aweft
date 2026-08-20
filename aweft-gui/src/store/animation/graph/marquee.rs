@@ -149,7 +149,7 @@ impl GraphEditorState {
         if let Some(&first) = hit_channels.first() {
             self.current_channel = first as isize;
         }
-        vec![Tag::AnimationSelectionChanged {
+        vec![Tag::GraphSelectionChanged {
             summary_ms: affected_ms.into_iter().collect(),
         }]
     }
@@ -277,7 +277,7 @@ impl GraphEditorState {
         if let Some(&c) = hit_channels.first() {
             self.current_channel = c as isize;
         }
-        vec![Tag::AnimationSelectionChanged {
+        vec![Tag::GraphSelectionChanged {
             summary_ms: affected_ms.into_iter().collect(),
         }]
     }
