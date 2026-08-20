@@ -176,5 +176,21 @@ pub fn op_sequence_selection(store: &mut AppStore, tags: &[Tag]) {
                 }
             }
         }
+        if let Tag::SelectionMarquee {
+            x_lo,
+            x_hi,
+            row_lo,
+            row_hi,
+            modifier,
+        } = tag
+        {
+            let (state, ui) = store.split_mut();
+            ui.sequence_state
+                .marquee_select(&state.project, *x_lo, *x_hi, *row_lo, *row_hi, *modifier);
+        }
+        if let Tag::SelectionDeselectedAll = tag {
+            let (state, ui) = store.split_mut();
+            ui.sequence_state.deselect_all(&state.project);
+        }
     }
 }

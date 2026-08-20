@@ -188,6 +188,17 @@ pub enum Tag {
         /// 该行 + 所有祖先分组头（需要刷新 selected 状态的行）。
         affected: Vec<ItemId>,
     },
+    /// 框选（时间 × 行，求交语义，`store/utils/marquee::clamp_rows`）。
+    /// 由 `SequenceAction::MarqueeSelect` 产生，经 `Selection` 数据域走依赖图。
+    SelectionMarquee {
+        x_lo: f32,
+        x_hi: f32,
+        row_lo: i32,
+        row_hi: i32,
+        modifier: crate::bridge::types::SlintSelectionModifier,
+    },
+    /// 清空选中（空白点击）。
+    SelectionDeselectedAll,
 
     // ── ScreenLayout ──────────────────────────────────────────────────
     ScreenInitialized,
@@ -444,7 +455,9 @@ impl Tag {
             | Tag::ItemsPasted { .. }
             | Tag::GroupsUngrouped { .. } => DataId::Sequence,
 
-            Tag::SelectionChanged { .. } => DataId::Selection,
+            Tag::SelectionChanged { .. }
+            | Tag::SelectionMarquee { .. }
+            | Tag::SelectionDeselectedAll => DataId::Selection,
 
             Tag::ScreenInitialized
             | Tag::ScreenResized { .. }
@@ -493,7 +506,9 @@ impl Tag {
 
             Tag::SequenceCollapsedToggled { .. } => TagKind::SequenceCollapse,
 
-            Tag::SelectionChanged { .. } => TagKind::Selection,
+            Tag::SelectionChanged { .. }
+            | Tag::SelectionMarquee { .. }
+            | Tag::SelectionDeselectedAll => TagKind::Selection,
 
             Tag::ScreenInitialized
             | Tag::ScreenResized { .. }

@@ -1,6 +1,6 @@
 use crate::actions::Action;
 use crate::clipboard::Clipboard;
-use crate::depsgraph::{Depsgraph, Tag};
+use crate::depsgraph::Depsgraph;
 use crate::store::state::AppState;
 use crate::store::ui_models::UiModels;
 use anyhow::Result;

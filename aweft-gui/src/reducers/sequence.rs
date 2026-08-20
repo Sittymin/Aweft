@@ -333,17 +333,14 @@ impl crate::store::AppStore {
                 row_lo,
                 row_hi,
                 modifier,
-            } => {
-                // 框选直接改选中态（与 graph/Dope 同步），经 rows_model.notify 实时刷新
-                self.ui_models
-                    .sequence_state
-                    .marquee_select(&self.state.project, x_lo, x_hi, row_lo, row_hi, modifier);
-                Ok(vec![])
-            }
-            SequenceAction::DeselectAll => {
-                self.ui_models.sequence_state.deselect_all(&self.state.project);
-                Ok(vec![])
-            }
+            } => Ok(vec![Tag::SelectionMarquee {
+                x_lo,
+                x_hi,
+                row_lo,
+                row_hi,
+                modifier,
+            }]),
+            SequenceAction::DeselectAll => Ok(vec![Tag::SelectionDeselectedAll]),
             SequenceAction::AddLine {
                 item_id,
                 end_time,
