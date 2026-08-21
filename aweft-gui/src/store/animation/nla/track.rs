@@ -5,7 +5,9 @@ use aweft_model::{animation::strip::NlaStrip, ids::ActionId};
 use slint::{ModelRc, SharedString};
 
 impl NlaEditorState {
-    /// 追加一个轨道（含片断）。装载/初始化用：改数据层并同步派生层（结构变化全量重建）。
+    /// 测试夹具：追加一个轨道（含片断）并初始化派生模型。
+    /// 生产路径必须通过 reducer + Tag + depsgraph 投影完成结构同步。
+    #[cfg(test)]
     pub fn push_track(
         &mut self,
         name: impl Into<SharedString>,
@@ -22,15 +24,18 @@ impl NlaEditorState {
             has_data: false,
             orig_index: idx as i32,
         });
-        self.editing_strips.push(
-            strips
-                .into_iter()
-                .map(|view| {
-                    let model = NlaStrip::new_action(view.name.to_string(), ActionId::default());
-                    NlaStripData { view, model }
-                })
-                .collect(),
-        );
+        let entries = strips
+            .into_iter()
+            .map(|view| {
+                let model = NlaStrip::new_action(view.name.to_string(), ActionId::default());
+                NlaStripData {
+                    id: self.allocate_strip_id(),
+                    view,
+                    model,
+                }
+            })
+            .collect();
+        self.editing_strips.push(entries);
         self.apply_structure();
     }
 

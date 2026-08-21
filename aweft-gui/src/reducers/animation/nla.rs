@@ -47,18 +47,17 @@ impl crate::store::AppStore {
                 strip,
                 modifier,
             } => self
-                .ui_models.animation.nla
+                .ui_models
+                .animation
+                .nla
                 .strip_pressed(track, strip, modifier),
-            StripDragged {
-                track,
-                strip,
-                delta_x,
-                delta_row,
-            } => self
-                .ui_models.animation.nla
-                .strip_dragged(track, strip, delta_x, delta_row),
-            StripReleased { track, strip } => {
-                let tags = self.ui_models.animation.nla.strip_released(track, strip);
+            StripDragged { delta_x, delta_row } => self
+                .ui_models
+                .animation
+                .nla
+                .strip_dragged(delta_x, delta_row),
+            StripReleased => {
+                let tags = self.ui_models.animation.nla.strip_released();
                 // 拖拽结束提交：数据层写回 model（model 是唯一真相）
                 self.write_nla_view_to_model();
                 tags
@@ -69,7 +68,9 @@ impl crate::store::AppStore {
                 let tags = self.ui_models.animation.nla.toggle_track_enabled(track);
                 // model 同步：enabled ↔ muted
                 let enabled = self
-                    .ui_models.animation.nla
+                    .ui_models
+                    .animation
+                    .nla
                     .track_view
                     .get(track)
                     .map(|t| t.enabled)
@@ -90,9 +91,11 @@ impl crate::store::AppStore {
                 row_lo,
                 row_hi,
                 modifier,
-            } => self.ui_models.animation.nla.marquee_select(
-                x_lo, x_hi, row_lo, row_hi, modifier,
-            ),
+            } => self
+                .ui_models
+                .animation
+                .nla
+                .marquee_select(x_lo, x_hi, row_lo, row_hi, modifier),
         };
         Ok(tags)
     }
@@ -120,7 +123,9 @@ impl crate::store::AppStore {
     /// 仅改数据层，返回 `NlaTrackChanged{0}` 由 depsgraph 投影局部更新（初始化亦同）。
     pub(crate) fn sync_nla_global_action(&mut self) -> Vec<Tag> {
         let (name, has_data) = self
-            .ui_models.animation.graph
+            .ui_models
+            .animation
+            .graph
             .current_action_id()
             .map(|id| {
                 let has_data = self
@@ -135,7 +140,10 @@ impl crate::store::AppStore {
                 (self.ui_models.animation.graph.action_name.clone(), has_data)
             })
             .unwrap_or_else(|| ("".into(), false));
-        self.ui_models.animation.nla.set_global_action(name, has_data)
+        self.ui_models
+            .animation
+            .nla
+            .set_global_action(name, has_data)
     }
 
     /// "向下插入"（reducer 步骤）：把当前曲线编辑器编辑的 Action 作为片断加入 NLA，
@@ -150,7 +158,9 @@ impl crate::store::AppStore {
         let start = self.ui_models.animation.graph.action_start;
         let end = self.ui_models.animation.graph.action_end;
         let Some(result) = self
-            .ui_models.animation.nla
+            .ui_models
+            .animation
+            .nla
             .push_down_insert(name, start, end, action_id)
         else {
             return Vec::new();
@@ -186,7 +196,9 @@ impl crate::store::AppStore {
             return;
         };
         let target_duration = self.ui_models.animation.graph.action_end;
-        self.ui_models.animation.nla
+        self.ui_models
+            .animation
+            .nla
             .load_from_model(&anim_data, target_duration);
         let mut tags = vec![Tag::NlaStructureChanged];
         tags.extend(self.sync_nla_global_action());

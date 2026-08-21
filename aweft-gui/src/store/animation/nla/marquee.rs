@@ -55,6 +55,7 @@ impl NlaEditorState {
                     continue;
                 }
                 hits.push(NlaStripRef {
+                    id: e.id,
                     track: auth,
                     index: j,
                 });

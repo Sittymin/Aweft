@@ -18,14 +18,10 @@ pub enum NlaAction {
         modifier: SlintSelectionModifier,
     },
     /// 片断拖拽（delta 相对按下起点：delta-x 世界时间，delta-row 行数）。
-    StripDragged {
-        track: usize,
-        strip: usize,
-        delta_x: f32,
-        delta_row: f32,
-    },
+    /// 拖拽锚点由此前的 `StripPressed` 会话持有。
+    StripDragged { delta_x: f32, delta_row: f32 },
     /// 片断松开（提交：数据层整理 + 写回 model）。
-    StripReleased { track: usize, strip: usize },
+    StripReleased,
     /// 拖动中右键取消：丢弃预览，恢复为按下前状态（与字幕行时间拖动取消一致）。
     StripDragCancel,
     /// 画布空白点击：清除全部片断选中。

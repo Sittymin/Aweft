@@ -54,19 +54,12 @@ impl NlaEditorState {
                 }
             }
             for update in updated {
-                let t = update.track;
-                let i = update.index;
-                let Some(view) = self
-                    .editing_strips
-                    .get(t)
-                    .and_then(|l| l.get(i))
-                    .map(|e| e.view.clone())
-                else {
+                let Some((track, index, view)) = self.strip_projection_data(update.id) else {
                     continue;
                 };
-                if let Some(model) = self.strip_models.get(t) {
-                    if i < model.row_count() {
-                        model.set_row_data(i, view);
+                if let Some(model) = self.strip_models.get(track) {
+                    if index < model.row_count() {
+                        model.set_row_data(index, view);
                     }
                 }
             }
@@ -80,19 +73,12 @@ impl NlaEditorState {
                 continue;
             };
             for update in updated {
-                let t = update.track;
-                let i = update.index;
-                let Some(view) = self
-                    .editing_strips
-                    .get(t)
-                    .and_then(|l| l.get(i))
-                    .map(|e| e.view.clone())
-                else {
+                let Some((track, index, view)) = self.strip_projection_data(update.id) else {
                     continue;
                 };
-                if let Some(model) = self.strip_models.get(t) {
-                    if i < model.row_count() {
-                        model.set_row_data(i, view);
+                if let Some(model) = self.strip_models.get(track) {
+                    if index < model.row_count() {
+                        model.set_row_data(index, view);
                     }
                 }
             }
@@ -117,18 +103,42 @@ impl NlaEditorState {
         }
     }
 
+    fn strip_projection_data(&self, id: u64) -> Option<(usize, usize, SlintNlaStrip)> {
+        let (track, index) = self.find_strip_location(id)?;
+        let view = self.editing_strips.get(track)?.get(index)?.view.clone();
+        Some((track, index, view))
+    }
+
     fn apply_moved(&mut self, moved: &[crate::depsgraph::NlaStripMove]) {
-        for move_info in moved {
-            let src = move_info.src_track;
-            let idx = move_info.src_index;
-            let dst = move_info.dst_track;
-            if let Some(sm) = self.strip_models.get(src) {
-                if idx < sm.row_count() {
-                    let s = sm.remove(idx);
-                    if let Some(dm) = self.strip_models.get(dst) {
-                        Self::insert_sorted(&dm, s);
-                    }
-                }
+        // 多片段跨轨可能形成链式移动（t0→t1、t1→t2）。必须先按源下标降序
+        // 批量 remove，再统一 insert；边移边插会改变后续源下标并误移片段。
+        let mut remove_order: Vec<_> = moved.iter().enumerate().collect();
+        remove_order.sort_by_key(|(_, move_info)| {
+            (move_info.src_track, std::cmp::Reverse(move_info.src_index))
+        });
+        let mut removed = Vec::with_capacity(moved.len());
+        for (move_index, move_info) in remove_order {
+            let Some(model) = self.strip_models.get(move_info.src_track) else {
+                continue;
+            };
+            if move_info.src_index >= model.row_count() {
+                continue;
+            }
+            let strip = model.remove(move_info.src_index);
+            // 数据层已经完成跨轨/钳制，必须用稳定 ID 取得新位置和新尺寸；
+            // 不能再用拖动前的 start 排序，否则后续 index 更新会命中障碍片段。
+            let strip = self
+                .strip_projection_data(move_info.id)
+                .map(|(_, _, view)| view)
+                .unwrap_or(strip);
+            removed.push((move_index, move_info.dst_track, strip));
+        }
+        // 保持同一批次中 tag 的确定性顺序；每个目标轨仍按时间排序插入。
+        removed.sort_by_key(|(move_index, _, _)| *move_index);
+        for (move_index, dst, strip) in removed {
+            let _ = move_index;
+            if let Some(model) = self.strip_models.get(dst) {
+                Self::insert_sorted(model, strip);
             }
         }
     }

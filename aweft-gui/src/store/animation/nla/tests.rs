@@ -1,6 +1,6 @@
-use super::{NlaEditorState, NlaStripData, StripDrag};
+use super::NlaEditorState;
 use crate::bridge::types::{SlintNlaStrip, SlintSelectionModifier, SlintStripType};
-use crate::depsgraph::{NlaStripInsert, NlaStripMove, NlaStripRef, NlaStripReorder, Tag};
+use crate::depsgraph::{NlaStripInsert, Tag};
 use aweft_model::{
     animation::{
         AnimData,
@@ -60,7 +60,7 @@ fn strip_drag_moves_whole_strip() {
     st.tracks.row_data(0).unwrap();
 
     let mut tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
-    tags.extend(st.strip_dragged(0, 0, 2.0, 0.0));
+    tags.extend(st.strip_dragged(2.0, 0.0));
     project(&mut st, tags);
 
     let s = st.strip_models[0].row_data(0).unwrap();
@@ -69,7 +69,7 @@ fn strip_drag_moves_whole_strip() {
     assert!(s.selected);
     assert!(s.dragging);
 
-    let tags = st.strip_released(0, 0);
+    let tags = st.strip_released();
     project(&mut st, tags);
     assert!(st.drag.is_none());
     assert!(!st.strip_models[0].row_data(0).unwrap().dragging);
@@ -87,7 +87,7 @@ fn strip_pick_selects_and_records_drag() {
     assert!(s.selected);
     assert!(!st.strip_models[0].row_data(1).unwrap().selected);
 
-    let tags = st.strip_dragged(0, 0, 1.5, 0.0);
+    let tags = st.strip_dragged(1.5, 0.0);
     project(&mut st, tags);
     let s = st.strip_models[0].row_data(0).unwrap();
     assert_eq!(s.start, 2.5);
@@ -326,7 +326,7 @@ fn locked_track_is_not_editable() {
     // 直接拖拽也被忽略
     let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(0, 0, 2.0, 0.0);
+    let tags = st.strip_dragged(2.0, 0.0);
     project(&mut st, tags);
     let s = st.strip_models[0].row_data(0).unwrap();
     assert_eq!(s.start, 1.0);
@@ -342,7 +342,7 @@ fn vertical_drag_moves_strip_to_other_track() {
     // 垂直位移 0.6 行：片段中心越过轨道边界 → 拖动中瞬间跳到轨道 1
     let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(0, 0, 0.0, 0.6);
+    let tags = st.strip_dragged(0.0, 0.6);
     assert_eq!(st.editing_strips[0].len(), 0, "数据层已跨轨");
     project(&mut st, tags);
     assert_eq!(st.strip_models[0].row_count(), 0, "拖动中即应瞬间跨轨");
@@ -352,7 +352,7 @@ fn vertical_drag_moves_strip_to_other_track() {
     assert_eq!(s.start, 1.0);
     assert!(s.dragging);
 
-    let tags = st.strip_released(0, 0);
+    let tags = st.strip_released();
     project(&mut st, tags);
     assert_eq!(st.strip_models[1].row_count(), 1);
     assert!(!st.strip_models[1].row_data(0).unwrap().dragging);
@@ -366,9 +366,9 @@ fn vertical_drag_within_half_row_keeps_track() {
 
     let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(0, 0, 0.0, 0.4);
+    let tags = st.strip_dragged(0.0, 0.4);
     project(&mut st, tags); // 中心未越过边界 → 保持轨道 0
-    let tags = st.strip_released(0, 0);
+    let tags = st.strip_released();
     project(&mut st, tags);
 
     assert_eq!(st.strip_models[0].row_count(), 1);
@@ -383,13 +383,13 @@ fn horizontal_drag_clamped_to_avoid_overlap() {
     // B 向左拖 3 秒：候选 [2,6] 与 A[1,4] 重叠，候选中点(4)在 A 中点(2.5)右侧 → 停 A 右缘 start=4
     let tags = st.strip_pressed(0, 1, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(0, 1, -3.0, 0.0);
+    let tags = st.strip_dragged(-3.0, 0.0);
     project(&mut st, tags);
     let s = st.strip_models[0].row_data(1).unwrap();
     assert_eq!(s.start, 4.0);
     assert_eq!(s.end, 8.0);
 
-    let tags = st.strip_released(0, 1);
+    let tags = st.strip_released();
     project(&mut st, tags);
     assert_eq!(st.strip_models[0].row_data(1).unwrap().start, 4.0);
 }
@@ -401,7 +401,7 @@ fn horizontal_drag_keeps_order_on_right_side() {
 
     // B 原在 A 左侧，向右拖：候选 [4,6] 与 A[4,7] 重叠，候选中点(5)在 A 中点(5.5)左侧 → 停 A 左缘 start=2
     st.strip_pressed(0, 1, SlintSelectionModifier::None);
-    let tags = st.strip_dragged(0, 1, 4.0, 0.0);
+    let tags = st.strip_dragged(4.0, 0.0);
     project(&mut st, tags);
     // reorder 后 B(start=2) 在 A(start=4) 前 → index 0
     let b = st.strip_models[0].row_data(0).unwrap();
@@ -426,7 +426,7 @@ fn narrow_gap_is_not_filled() {
     // B 宽 5，A-C 之间空隙 (3,6) 宽 3 < 5。B 向左拖进入该空隙 → 放不下，不塞入，
     // 保持片段当前 start=9
     st.strip_pressed(0, 2, SlintSelectionModifier::None);
-    st.strip_dragged(0, 2, -5.0, 0.0); // 候选 [4,9] 在 A-C 之间
+    st.strip_dragged(-5.0, 0.0); // 候选 [4,9] 在 A-C 之间
     let b = (0..st.strip_models[0].row_count())
         .find_map(|i| st.strip_models[0].row_data(i).filter(|s| s.name == "B"))
         .unwrap();
@@ -446,7 +446,7 @@ fn clamp_uses_candidate_side_not_original() {
     // B 原在 A 左侧，但拖到 A 右侧附近（候选 [11,13]，中点 12 > A 中点 11.5）
     // → 停到 A **右缘** start=13（按候选当前位置判断，而非按下时的左侧）
     st.strip_pressed(0, 1, SlintSelectionModifier::None);
-    let tags = st.strip_dragged(0, 1, 11.0, 0.0);
+    let tags = st.strip_dragged(11.0, 0.0);
     project(&mut st, tags);
     let s = st.strip_models[0].row_data(1).unwrap();
     assert_eq!(s.start, 13.0);
@@ -464,9 +464,9 @@ fn vertical_drag_cannot_move_into_action_or_locked_track() {
     // 从轨道1 向上拖 → 目标轨道0（全局 Action，只读）→ 不移动
     let tags = st.strip_pressed(1, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(1, 0, 0.0, -0.6);
+    let tags = st.strip_dragged(0.0, -0.6);
     project(&mut st, tags);
-    let tags = st.strip_released(1, 0);
+    let tags = st.strip_released();
     project(&mut st, tags);
     assert_eq!(st.strip_models[1].row_count(), 1);
     assert_eq!(st.strip_models[0].row_count(), 1, "只读轨不能接收片断");
@@ -474,9 +474,9 @@ fn vertical_drag_cannot_move_into_action_or_locked_track() {
     // 从轨道1 向下拖 → 目标轨道2（锁定）→ 不移动
     let tags = st.strip_pressed(1, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(1, 0, 0.0, 0.6);
+    let tags = st.strip_dragged(0.0, 0.6);
     project(&mut st, tags);
-    let tags = st.strip_released(1, 0);
+    let tags = st.strip_released();
     project(&mut st, tags);
     assert_eq!(st.strip_models[1].row_count(), 1);
     assert_eq!(st.strip_models[2].row_count(), 0, "锁定轨不能接收片断");
@@ -492,19 +492,19 @@ fn cross_track_move_horizontal_clamped_by_target_gaps() {
     //（候选中点 2.5 > C 中点 1.5）→ 停 C 右缘 start=3
     let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(0, 0, 0.0, 0.6);
+    let tags = st.strip_dragged(0.0, 0.6);
     project(&mut st, tags);
     assert_eq!(st.strip_models[0].row_count(), 0, "拖动中已瞬间跨轨");
     let a = (0..st.strip_models[1].row_count())
         .find_map(|i| st.strip_models[1].row_data(i).filter(|s| s.name == "A"))
         .expect("A 应已移到轨道1");
     assert_eq!(a.start, 3.0);
-    st.strip_released(0, 0);
+    st.strip_released();
     assert_eq!(st.strip_models[0].row_count(), 0);
 }
 
-/// 回归：水平穿越重排（d.strip 变化）后再跨轨——投影 remove 必须用拖动中的
-/// 当前下标（非按下下标），否则移错片断导致两层错乱（误激活/拖不动/取消不了选中）。
+/// 回归：水平穿越重排后再跨轨——投影 remove 必须使用拖动中的
+/// 当前下标，而不是依赖 UI 回传的按下坐标，否则会移错片断导致两层错乱。
 #[test]
 fn cross_track_after_horizontal_reorder_moves_correct_strip() {
     let mut st = NlaEditorState::default();
@@ -520,12 +520,12 @@ fn cross_track_after_horizontal_reorder_moves_correct_strip() {
     project(&mut st, tags);
 
     // 水平穿越：A 拖到 [11,14]，reinsert 后 A 在 B 之后（当前下标 1）
-    let tags = st.strip_dragged(0, 0, 10.0, 0.0);
+    let tags = st.strip_dragged(10.0, 0.0);
     project(&mut st, tags);
     assert_eq!(st.editing_strips[0][1].view.name, "A", "A 已重排到下标 1");
 
     // 跨轨：按下下标(0) ≠ 当前下标(1)，投影 remove 必须用当前下标
-    let tags = st.strip_dragged(0, 0, 10.0, 0.6);
+    let tags = st.strip_dragged(10.0, 0.6);
     project(&mut st, tags);
 
     // 数据层与派生层一致：t0 只剩 B，t1 = [C, A]
@@ -556,8 +556,8 @@ fn cross_track_after_horizontal_reorder_moves_correct_strip() {
         "B 不受影响"
     );
 
-    // 继续拖动（跨轨后按下下标仍回传 0，匹配 press 继续工作）
-    let tags = st.strip_dragged(0, 0, 11.0, 0.6);
+    // 继续拖动（跨轨和重排后仍由稳定锚点继续工作）
+    let tags = st.strip_dragged(11.0, 0.6);
     project(&mut st, tags);
     let a = (0..st.strip_models[1].row_count())
         .find_map(|i| st.strip_models[1].row_data(i).filter(|s| s.name == "A"))
@@ -565,13 +565,189 @@ fn cross_track_after_horizontal_reorder_moves_correct_strip() {
     assert_eq!(a.start, 12.0, "跨轨后仍可继续水平拖动");
 
     // 松开：清拖动标记，派生层同步
-    let tags = st.strip_released(0, 0);
+    let tags = st.strip_released();
     project(&mut st, tags);
     let a = (0..st.strip_models[1].row_count())
         .find_map(|i| st.strip_models[1].row_data(i).filter(|s| s.name == "A"))
         .unwrap();
     assert!(!a.dragging, "松开后退出移动色");
     assert_eq!(st.editing_strips[1].len(), 2, "数据层与派生层保持一致");
+}
+
+#[test]
+fn multi_drag_uses_one_clamped_offset_for_all_selected_strips() {
+    let mut st = NlaEditorState::default();
+    st.push_track(
+        "t",
+        vec![
+            strip("A", 0.0, 2.0),
+            strip("B", 4.0, 7.0),
+            strip("C", 8.0, 10.0),
+        ],
+        false,
+    );
+
+    let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.strip_pressed(0, 1, SlintSelectionModifier::Ctrl);
+    project(&mut st, tags);
+
+    // A 的可行右边界是 6，B 的可行右边界是 1；整体必须取交集右边界 1。
+    let tags = st.strip_dragged(5.0, 0.0);
+    project(&mut st, tags);
+    let a = (0..st.strip_models[0].row_count())
+        .find_map(|i| st.strip_models[0].row_data(i).filter(|s| s.name == "A"))
+        .unwrap();
+    let b = (0..st.strip_models[0].row_count())
+        .find_map(|i| st.strip_models[0].row_data(i).filter(|s| s.name == "B"))
+        .unwrap();
+    assert_eq!(a.start, 1.0);
+    assert_eq!(a.end, 3.0);
+    assert_eq!(b.start, 5.0);
+    assert_eq!(b.end, 8.0);
+    assert_eq!(a.start - 0.0, b.start - 4.0, "多选片段必须共享同一个偏移");
+
+    // delta 是相对按下起点的累计值，回到 0 时也必须回到原位置。
+    let tags = st.strip_dragged(0.0, 0.0);
+    project(&mut st, tags);
+    let a = (0..st.strip_models[0].row_count())
+        .find_map(|i| st.strip_models[0].row_data(i).filter(|s| s.name == "A"))
+        .unwrap();
+    let b = (0..st.strip_models[0].row_count())
+        .find_map(|i| st.strip_models[0].row_data(i).filter(|s| s.name == "B"))
+        .unwrap();
+    assert_eq!(a.start, 0.0);
+    assert_eq!(b.start, 4.0);
+}
+
+#[test]
+fn single_drag_projection_uses_current_order_after_cross_track_clamp() {
+    let mut st = NlaEditorState::default();
+    st.push_track("t0", vec![strip("A", 0.0, 2.0)], false);
+    st.push_track("t1", vec![strip("C", 0.5, 2.5)], false);
+
+    let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.strip_dragged(1.0, 0.6);
+    project(&mut st, tags);
+
+    assert_eq!(st.editing_strips[1][0].view.name, "C");
+    assert_eq!(st.editing_strips[1][1].view.name, "A");
+    assert_eq!(st.editing_strips[1][1].view.start, 2.5);
+    assert_eq!(st.editing_strips[1][1].view.end, 4.5);
+
+    let c = st.strip_models[1].row_data(0).unwrap();
+    let a = st.strip_models[1].row_data(1).unwrap();
+    assert_eq!(c.name, "C");
+    assert!(!c.selected);
+    assert!(!c.dragging);
+    assert_eq!(c.start, 0.5);
+    assert_eq!(c.end, 2.5);
+    assert_eq!(a.name, "A");
+    assert!(a.selected);
+    assert!(a.dragging);
+    assert_eq!(a.start, 2.5);
+    assert_eq!(a.end, 4.5);
+}
+
+#[test]
+fn multi_drag_projection_uses_current_order_after_cross_track_clamp() {
+    let mut st = NlaEditorState::default();
+    st.push_track("t0", vec![strip("A", 0.0, 2.0)], false);
+    st.push_track(
+        "t1",
+        vec![strip("C", 0.5, 2.5), strip("B", 5.0, 7.0)],
+        false,
+    );
+    st.push_track("t2", vec![], false);
+
+    let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.strip_pressed(1, 1, SlintSelectionModifier::Ctrl);
+    project(&mut st, tags);
+
+    // A 跨到 t1 后，目标轨已有 C；请求位置与 C 重叠，钳制到 C 右侧。
+    // 旧投影按拖拽前的 A.start 排序，会把 A 插在 C 前面，随后 position index 把 C 改写成 A。
+    let tags = st.strip_dragged(1.0, 1.2);
+    project(&mut st, tags);
+
+    assert_eq!(st.editing_strips[1][0].view.name, "C");
+    assert_eq!(st.editing_strips[1][1].view.name, "A");
+    assert_eq!(st.editing_strips[1][0].view.start, 0.5);
+    assert_eq!(st.editing_strips[1][0].view.end, 2.5);
+    assert_eq!(st.editing_strips[1][1].view.start, 2.5);
+    assert_eq!(st.editing_strips[1][1].view.end, 4.5);
+
+    let c = st.strip_models[1].row_data(0).unwrap();
+    let a = st.strip_models[1].row_data(1).unwrap();
+    assert_eq!(c.name, "C");
+    assert!(!c.selected);
+    assert!(!c.dragging);
+    assert_eq!(c.start, 0.5);
+    assert_eq!(c.end, 2.5);
+    assert_eq!(a.name, "A");
+    assert!(a.selected);
+    assert!(a.dragging);
+    assert_eq!(a.start, 2.5);
+    assert_eq!(a.end, 4.5);
+}
+
+#[test]
+fn multi_drag_moves_selected_strips_across_tracks_as_one_group() {
+    let mut st = NlaEditorState::default();
+    st.push_track("t0", vec![strip("A", 1.0, 3.0)], false);
+    st.push_track("t1", vec![strip("B", 5.0, 8.0)], false);
+    st.push_track("t2", vec![], false);
+
+    let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.strip_pressed(1, 0, SlintSelectionModifier::Ctrl);
+    project(&mut st, tags);
+
+    // 以 t1 为锚点向下跨一轨；A→t1、B→t2，水平偏移相同为 2。
+    let tags = st.strip_dragged(2.0, 1.2);
+    project(&mut st, tags);
+    assert_eq!(st.editing_strips[0].len(), 0);
+    assert_eq!(st.editing_strips[1].len(), 1);
+    assert_eq!(st.editing_strips[2].len(), 1);
+    assert_eq!(st.editing_strips[1][0].view.name, "A");
+    assert_eq!(st.editing_strips[2][0].view.name, "B");
+    assert_eq!(st.editing_strips[1][0].view.start, 3.0);
+    assert_eq!(st.editing_strips[2][0].view.start, 7.0);
+    assert_eq!(st.strip_models[0].row_count(), 0);
+    assert_eq!(st.strip_models[1].row_data(0).unwrap().name, "A");
+    assert_eq!(st.strip_models[2].row_data(0).unwrap().name, "B");
+
+    let tags = st.strip_released();
+    project(&mut st, tags);
+    assert!(!st.strip_models[1].row_data(0).unwrap().dragging);
+    assert!(!st.strip_models[2].row_data(0).unwrap().dragging);
+}
+
+#[test]
+fn multi_drag_cancel_restores_tracks_after_crossing() {
+    let mut st = NlaEditorState::default();
+    st.push_track("t0", vec![strip("A", 1.0, 3.0)], false);
+    st.push_track("t1", vec![strip("B", 5.0, 8.0)], false);
+    st.push_track("t2", vec![], false);
+
+    let tags = st.strip_pressed(0, 0, SlintSelectionModifier::None);
+    project(&mut st, tags);
+    let tags = st.strip_pressed(1, 0, SlintSelectionModifier::Ctrl);
+    project(&mut st, tags);
+    let tags = st.strip_dragged(2.0, 1.2);
+    project(&mut st, tags);
+
+    let tags = st.strip_drag_cancel();
+    project(&mut st, tags);
+    assert_eq!(st.editing_strips[0][0].view.name, "A");
+    assert_eq!(st.editing_strips[1][0].view.name, "B");
+    assert_eq!(st.editing_strips[0][0].view.start, 1.0);
+    assert_eq!(st.editing_strips[1][0].view.start, 5.0);
+    assert_eq!(st.strip_models[0].row_data(0).unwrap().name, "A");
+    assert_eq!(st.strip_models[1].row_data(0).unwrap().name, "B");
+    assert!(!st.strip_models[0].row_data(0).unwrap().dragging);
+    assert!(!st.strip_models[1].row_data(0).unwrap().dragging);
 }
 
 // —— model 接线 ——
@@ -635,7 +811,7 @@ fn commit_to_model_updates_placement_and_muted() {
     // 编辑：移动片断 + 翻转启用
     let tags = st.strip_pressed(1, 0, SlintSelectionModifier::None);
     project(&mut st, tags);
-    let tags = st.strip_dragged(1, 0, 2.0, 0.0);
+    let tags = st.strip_dragged(2.0, 0.0);
     project(&mut st, tags);
     let tags = st.toggle_track_enabled(1);
     project(&mut st, tags);
@@ -681,7 +857,7 @@ fn commit_to_model_preserves_unedited_track() {
 #[test]
 fn strip_pick_maps_filter_row_to_authoritative() {
     let mut st = NlaEditorState::default();
-    let mut anim_data = test_anim_data();
+    let anim_data = test_anim_data();
     st.load_from_model(&anim_data, 10.0);
 
     // 过滤后只剩 Idle 轨（过滤视图行 0 → 权威轨 1）

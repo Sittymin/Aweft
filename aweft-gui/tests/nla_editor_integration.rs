@@ -63,11 +63,13 @@ fn nla_strip_drag_commits_to_model() {
 
     // 按下（轨道 2"动作"的奔跑片断，权威下标 2 过滤视图行 2）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripPressed {
-            track: 2,
-            strip: 0,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripPressed {
+                track: 2,
+                strip: 0,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -79,12 +81,12 @@ fn nla_strip_drag_commits_to_model() {
 
     // 拖拽 dt=1.0：奔跑 [2,6] → [3,7]（与跳跃 [8,12] 不重叠）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripDragged {
-            track: 2,
-            strip: 0,
-            delta_x: 1.0,
-            delta_row: 0.0,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripDragged {
+                delta_x: 1.0,
+                delta_row: 0.0,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -97,7 +99,9 @@ fn nla_strip_drag_commits_to_model() {
 
     // 松开：写回 model（placement = Absolute{3,7}）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripReleased { track: 2, strip: 0 })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripReleased,
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let nla = &store.ui_models().animation.nla;
@@ -135,22 +139,24 @@ fn nla_strip_drag_moves_across_tracks_and_commits() {
 
     // 按下轨道 1（Idle）的片断
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripPressed {
-            track: 1,
-            strip: 0,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripPressed {
+                track: 1,
+                strip: 0,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
 
     // 向下拖 1.2 行（从轨道 1 到轨道 2）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripDragged {
-            track: 1,
-            strip: 0,
-            delta_x: 0.0,
-            delta_row: 1.2,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripDragged {
+                delta_x: 0.0,
+                delta_row: 1.2,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -165,7 +171,9 @@ fn nla_strip_drag_moves_across_tracks_and_commits() {
 
     // 松开 → 写回 model
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripReleased { track: 1, strip: 0 })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripReleased,
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let nla = &store.ui_models().animation.nla;
@@ -199,7 +207,9 @@ fn nla_track_ops_and_push_down() {
 
     // 轨道启用开关：model muted 同步
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::ToggleTrackEnabled { track: 2 })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::ToggleTrackEnabled { track: 2 },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -221,9 +231,11 @@ fn nla_track_ops_and_push_down() {
 
     // 搜索：只显示匹配轨道
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::SearchChanged {
-            text: "Idle".into(),
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::SearchChanged {
+                text: "Idle".into(),
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -234,10 +246,14 @@ fn nla_track_ops_and_push_down() {
 
     // 向下插入：把当前 Action 作为片断加入能容纳的轨道（Idle 已满 0-15 → 自动新建）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::SearchChanged { text: "".into() })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::SearchChanged { text: "".into() },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
-    store.dispatch(Action::Animation(AnimationAction::Nla(NlaAction::PushDown))).unwrap();
+    store
+        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::PushDown)))
+        .unwrap();
     store.evaluate_depsgraph();
     let nla = &store.ui_models().animation.nla;
     assert_eq!(nla.tracks_filter.row_count(), 5, "新建一条 NLA 片段轨道");
@@ -266,14 +282,18 @@ fn nla_strip_pick_maps_filtered_row() {
 
     // 搜索过滤后只剩"动作"轨道（过滤行 0 = 权威轨 2）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::SearchChanged {
-            text: "动作".into(),
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::SearchChanged {
+                text: "动作".into(),
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let (hit, _tags) =
         store
-            .ui_models_mut().animation.nla
+            .ui_models_mut()
+            .animation
+            .nla
             .strip_pick(3.0, 0, SlintSelectionModifier::None);
     assert_eq!(hit, 2 * 10000 + 0, "过滤行 → 权威轨道映射");
 }
@@ -308,8 +328,6 @@ fn nla_cross_track_after_reorder_keeps_layers_in_sync() {
     dispatch(
         &mut store,
         NlaAction::StripDragged {
-            track: 2,
-            strip: 0,
             delta_x: 11.0,
             delta_row: 0.0,
         },
@@ -327,8 +345,6 @@ fn nla_cross_track_after_reorder_keeps_layers_in_sync() {
     dispatch(
         &mut store,
         NlaAction::StripDragged {
-            track: 2,
-            strip: 0,
             delta_x: 11.0,
             delta_row: 1.2,
         },
@@ -354,7 +370,7 @@ fn nla_cross_track_after_reorder_keeps_layers_in_sync() {
     }
 
     // 松开：写回 model，拖动标记清除
-    dispatch(&mut store, NlaAction::StripReleased { track: 2, strip: 0 });
+    dispatch(&mut store, NlaAction::StripReleased);
     let nla = &store.ui_models().animation.nla;
     assert!(
         !nla.strip_models[3].row_data(1).unwrap().dragging,
@@ -387,11 +403,13 @@ fn nla_blank_click_deselects_all() {
 
     // 选中奔跑片断
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripPressed {
-            track: 2,
-            strip: 0,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripPressed {
+                track: 2,
+                strip: 0,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     assert!(
@@ -403,7 +421,9 @@ fn nla_blank_click_deselects_all() {
 
     // 空白点击（dispatch 层 = deselect-all）
     store
-        .dispatch(Action::Animation(AnimationAction::Nla(NlaAction::StripDeselectAll)))
+        .dispatch(Action::Animation(AnimationAction::Nla(
+            NlaAction::StripDeselectAll,
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let nla = &store.ui_models().animation.nla;

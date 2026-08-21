@@ -27,10 +27,7 @@
 
 use std::rc::Rc;
 
-use aweft_model::{
-    animation::strip::NlaStrip,
-    ids::AnimDataId,
-};
+use aweft_model::{animation::strip::NlaStrip, ids::AnimDataId};
 use slint::VecModel;
 
 use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
@@ -43,24 +40,37 @@ pub mod selection;
 pub mod strip;
 pub mod track;
 
-/// 片断拖拽状态。`track/strip` 为片段**当前**所在轨道/下标（拖动中会因瞬间跨轨变化），
-/// `press_track/press_strip` 为按下时的（供 UI 回传的 released/dragged 匹配）。
-#[derive(Debug, Clone)]
-pub(crate) struct StripDrag {
-    press_track: usize,
-    press_strip: usize,
-    track: usize,
-    strip: usize,
-    orig_start: f32,
-    orig_end: f32,
-    prev_delta_x: f32,
-    /// 轻量快照：仅选中条目的 `(track,index,start,width)`，用于右键取消
-    selected_snapshot: Vec<(usize, usize, f32, f32)>,
+pub(crate) type StripId = u64;
+
+/// 拖拽开始时固定的片段快照。
+///
+/// `track/index` 只是按下时的位置；拖拽过程中片段可能排序或跨轨，后续定位必须使用
+/// `id`，不能再依赖下标。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DragStripSnapshot {
+    pub id: StripId,
+    pub origin_track: usize,
+    pub origin_index: usize,
+    pub origin_start: f32,
+    pub width: f32,
 }
 
-/// 一条片断的编辑数据：Slint 视图 + model 原始克隆（编辑中保留未编辑字段）。
+/// 片断拖拽状态。锚点片段与按下时位置统一通过稳定 ID 和快照查询；
+/// UI 后续只需传递累计 delta，不需要重复传回片段坐标。
+#[derive(Debug, Clone)]
+pub(crate) struct StripDrag {
+    anchor_id: StripId,
+    /// 按下时所有选中片段的稳定快照，用于多选整体规划与取消恢复。
+    selected_snapshot: Vec<DragStripSnapshot>,
+    /// 多选拖拽最后一次成功应用的整体偏移与轨道偏移。
+    last_offset: f32,
+    last_row_shift: isize,
+}
+
+/// 一条片断的编辑数据：稳定的编辑器 ID、Slint 视图 + model 原始克隆。
 #[derive(Debug, Clone)]
 pub(crate) struct NlaStripData {
+    pub id: StripId,
     pub view: SlintNlaStrip,
     /// model 中的原始 NlaStrip 克隆（提交时合并回 model，placement 更新为 Absolute）。
     pub model: NlaStrip,
@@ -85,6 +95,8 @@ pub struct NlaEditorState {
     pub(crate) track_view: Vec<SlintNlaTrack>,
     /// 片断编辑数据（轨道下标 → 片断列表，与 model tracks 同序、按 start 排序）。
     pub(crate) editing_strips: Vec<Vec<NlaStripData>>,
+    /// 下一个编辑器内部片段 ID；model 没有稳定的 NLA 片段 ID，因此由 store 管理。
+    pub(crate) next_strip_id: StripId,
     /// 搜索关键字（空 = 全部轨道）。
     search: String,
     /// 当前时间（播放头，与曲线编辑器共享）。
@@ -109,6 +121,7 @@ impl Default for NlaEditorState {
             anim_data_id: None,
             track_view: Vec::new(),
             editing_strips: Vec::new(),
+            next_strip_id: 1,
             search: String::new(),
             current_time: 0.0,
             tracks: Rc::new(VecModel::default()),
@@ -116,6 +129,25 @@ impl Default for NlaEditorState {
             strip_models: Vec::new(),
             drag: None,
         }
+    }
+}
+
+impl NlaEditorState {
+    pub(crate) fn allocate_strip_id(&mut self) -> StripId {
+        let id = self.next_strip_id;
+        self.next_strip_id = self.next_strip_id.saturating_add(1).max(1);
+        id
+    }
+
+    pub(crate) fn find_strip_location(&self, id: StripId) -> Option<(usize, usize)> {
+        self.editing_strips
+            .iter()
+            .enumerate()
+            .find_map(|(track, list)| {
+                list.iter()
+                    .position(|entry| entry.id == id)
+                    .map(|index| (track, index))
+            })
     }
 }
 

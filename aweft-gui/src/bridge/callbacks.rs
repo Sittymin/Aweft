@@ -1,8 +1,8 @@
 use crate::actions::sequence::SequenceAction;
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{
-    AnimationCallbacks, AreaCallbacks, DragCallbacks, SequenceCallbacks, MainWindow,
-    NodeGraphCallbacks,
+    AnimationCallbacks, AreaCallbacks, DragCallbacks, MainWindow, NodeGraphCallbacks,
+    SequenceCallbacks,
 };
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::reducers::media::connect_video_to_wgpu;
@@ -526,10 +526,7 @@ fn setup_sequence_timecode_step_callbacks(instance: &MainWindow, store: Rc<RefCe
     };
 
     register(
-        |inst, cb| {
-            inst.global::<SequenceCallbacks>()
-                .on_increment_timecode(cb)
-        },
+        |inst, cb| inst.global::<SequenceCallbacks>().on_increment_timecode(cb),
         |event_id, is_start_time, is_batch| {
             crate::actions::sequence::SequenceAction::IncrementTimecode {
                 event_id,
@@ -540,10 +537,7 @@ fn setup_sequence_timecode_step_callbacks(instance: &MainWindow, store: Rc<RefCe
     );
 
     register(
-        |inst, cb| {
-            inst.global::<SequenceCallbacks>()
-                .on_decrement_timecode(cb)
-        },
+        |inst, cb| inst.global::<SequenceCallbacks>().on_decrement_timecode(cb),
         |event_id, is_start_time, is_batch| {
             crate::actions::sequence::SequenceAction::DecrementTimecode {
                 event_id,
@@ -694,18 +688,17 @@ fn setup_sequence_add_line_callback(instance: &MainWindow, store: Rc<RefCell<App
                 return;
             };
 
-            let action =
-                Action::Sequence(crate::actions::sequence::SequenceAction::AddLine {
-                    item_id,
-                    end_time,
-                    actor: None,
-                    // 新行不要延续参考行文本
-                    // TODO: 如果为明显序列 （1,2,3）可以尝试按规则延续
-                    // text: text.into(),
-                    text: String::new(),
-                    segment_timing: None,
-                    style: None,
-                });
+            let action = Action::Sequence(crate::actions::sequence::SequenceAction::AddLine {
+                item_id,
+                end_time,
+                actor: None,
+                // 新行不要延续参考行文本
+                // TODO: 如果为明显序列 （1,2,3）可以尝试按规则延续
+                // text: text.into(),
+                text: String::new(),
+                segment_timing: None,
+                style: None,
+            });
 
             dispatch_and_render(&store, action, &weak_instance);
         },
@@ -724,9 +717,7 @@ fn setup_sequence_add_group_callback(instance: &MainWindow, store: Rc<RefCell<Ap
             };
 
             let action =
-                Action::Sequence(crate::actions::sequence::SequenceAction::AddGroup {
-                    item_id,
-                });
+                Action::Sequence(crate::actions::sequence::SequenceAction::AddGroup { item_id });
 
             dispatch_and_render(&store, action, &weak_instance);
         });
@@ -740,8 +731,7 @@ fn setup_sequence_delete_selected_items_callback(
     instance
         .global::<SequenceCallbacks>()
         .on_delete_selected_items(move || {
-            let action =
-                Action::Sequence(crate::actions::sequence::SequenceAction::DeleteItems);
+            let action = Action::Sequence(crate::actions::sequence::SequenceAction::DeleteItems);
 
             dispatch_and_render(&store, action, &weak_instance);
         });
@@ -801,10 +791,9 @@ fn setup_sequence_ungroup_callbacks(instance: &MainWindow, store: Rc<RefCell<App
                 return;
             };
 
-            let action =
-                Action::Sequence(crate::actions::sequence::SequenceAction::UnGroup {
-                    group_item_id,
-                });
+            let action = Action::Sequence(crate::actions::sequence::SequenceAction::UnGroup {
+                group_item_id,
+            });
 
             dispatch_and_render(&store, action, &weak_instance);
         });
@@ -845,7 +834,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     curve: curve as usize,
                     key: key as usize,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -861,7 +851,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     delta_time,
                     delta_value,
                     mode,
-                })), &weak,
+                })),
+                &weak,
             );
         },
     );
@@ -877,7 +868,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     curve: curve as usize,
                     key: key as usize,
                     moved,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -888,7 +880,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_keyframe_deselect_all(move || {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::DeselectKeyframes)), &weak,
+                Action::Animation(AnimationAction::Graph(GraphAction::DeselectKeyframes)),
+                &weak,
             );
         });
 
@@ -903,7 +896,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     key: key as usize,
                     is_in,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         },
     );
@@ -921,7 +915,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     delta_time,
                     delta_value,
                     mode,
-                })), &weak,
+                })),
+                &weak,
             );
         },
     );
@@ -938,7 +933,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     key: key as usize,
                     is_in,
                     moved,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -955,7 +951,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     y_lo,
                     y_hi,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -969,7 +966,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::ChannelPressed {
                     curve: curve as usize,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -980,7 +978,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_channel_deselect_all(move || {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::ChannelDeselectAll)), &weak,
+                Action::Animation(AnimationAction::Graph(GraphAction::ChannelDeselectAll)),
+                &weak,
             );
         });
 
@@ -993,7 +992,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::GraphSearchChanged {
                     text: text.to_string(),
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1006,7 +1006,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::DopeSearchChanged {
                     text: text.to_string(),
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1020,7 +1021,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::DopeChannelPressed {
                     view_row: view_row as usize,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1036,7 +1038,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     curve: curve as usize,
                     key: key as usize,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1051,7 +1054,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     curve: curve as usize,
                     key: key as usize,
                     delta_time,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1066,7 +1070,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     curve: curve as usize,
                     key: key as usize,
                     moved,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1077,7 +1082,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_dope_keyframe_deselect_all(move || {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::DopeKeyframeDeselectAll)), &weak,
+                Action::Animation(AnimationAction::Graph(GraphAction::DopeKeyframeDeselectAll)),
+                &weak,
             );
         });
 
@@ -1094,7 +1100,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                     row_lo,
                     row_hi,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1109,7 +1116,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::DopeSummaryPressed {
                     index: index as usize,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1123,7 +1131,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::DopeSummaryDragged {
                     index: index as usize,
                     delta_time,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1137,7 +1146,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::DopeSummaryReleased {
                     index: index as usize,
                     moved,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1151,7 +1161,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 Action::Animation(AnimationAction::Graph(GraphAction::CurveColorModeChanged {
                     curve: curve as usize,
                     mode,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1162,9 +1173,12 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_keyframe_interpolation_changed(move |interp| {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::KeyframeInterpolationChanged {
-                    interpolation: interp,
-                })), &weak,
+                Action::Animation(AnimationAction::Graph(
+                    GraphAction::KeyframeInterpolationChanged {
+                        interpolation: interp,
+                    },
+                )),
+                &weak,
             );
         });
 
@@ -1177,7 +1191,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::ChannelToggleVisible {
                     curve: curve as usize,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1190,7 +1205,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::ChannelToggleModifier {
                     curve: curve as usize,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1203,7 +1219,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::ChannelToggleActive {
                     curve: curve as usize,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1216,7 +1233,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::ChannelToggleEditable {
                     curve: curve as usize,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1227,7 +1245,8 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_set_current_time(move |time| {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::SetCurrentTime { time })), &weak,
+                Action::Animation(AnimationAction::Graph(GraphAction::SetCurrentTime { time })),
+                &weak,
             );
         });
 
@@ -1238,7 +1257,11 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_view_changed(move |zoom_x, zoom_y| {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::ViewChanged { zoom_x, zoom_y })), &weak,
+                Action::Animation(AnimationAction::Graph(GraphAction::ViewChanged {
+                    zoom_x,
+                    zoom_y,
+                })),
+                &weak,
             );
         });
 
@@ -1249,7 +1272,10 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
         .on_action_selected(move |index| {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Graph(GraphAction::ActionSelected { index })), &weak,
+                Action::Animation(AnimationAction::Graph(GraphAction::ActionSelected {
+                    index,
+                })),
+                &weak,
             );
         });
 
@@ -1283,7 +1309,8 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                     track: track as usize,
                     strip: strip as usize,
                     modifier,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1291,15 +1318,14 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let s = Rc::clone(&store);
     instance
         .global::<AnimationCallbacks>()
-        .on_nla_strip_dragged(move |track, strip, delta_x, delta_row| {
+        .on_nla_strip_dragged(move |delta_x, delta_row| {
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::Nla(NlaAction::StripDragged {
-                    track: track as usize,
-                    strip: strip as usize,
                     delta_x,
                     delta_row,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1307,13 +1333,11 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let s = Rc::clone(&store);
     instance
         .global::<AnimationCallbacks>()
-        .on_nla_strip_released(move |track, strip| {
+        .on_nla_strip_released(move || {
             dispatch_and_render(
                 &s,
-                Action::Animation(AnimationAction::Nla(NlaAction::StripReleased {
-                    track: track as usize,
-                    strip: strip as usize,
-                })), &weak,
+                Action::Animation(AnimationAction::Nla(NlaAction::StripReleased)),
+                &weak,
             );
         });
 
@@ -1322,7 +1346,11 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     instance
         .global::<AnimationCallbacks>()
         .on_nla_strip_deselect_all(move || {
-            dispatch_and_render(&s, Action::Animation(AnimationAction::Nla(NlaAction::StripDeselectAll)), &weak);
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::StripDeselectAll)),
+                &weak,
+            );
         });
 
     // 命中检测：纯命中（只读，不改数据层）→ 若命中则走标准 dispatch 管线选中并记录拖拽起点。
@@ -1344,7 +1372,8 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                         track,
                         strip,
                         modifier,
-                    })), &weak,
+                    })),
+                    &weak,
                 );
                 (track as i32) * 10000 + (strip as i32)
             } else {
@@ -1361,7 +1390,8 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 &s,
                 Action::Animation(AnimationAction::Nla(NlaAction::ToggleTrackEnabled {
                     track: track as usize,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1374,7 +1404,8 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 &s,
                 Action::Animation(AnimationAction::Nla(NlaAction::ToggleTrackLocked {
                     track: track as usize,
-                })), &weak,
+                })),
+                &weak,
             );
         });
 
@@ -1383,7 +1414,11 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     instance
         .global::<AnimationCallbacks>()
         .on_nla_track_push_down(move || {
-            dispatch_and_render(&s, Action::Animation(AnimationAction::Nla(NlaAction::PushDown)), &weak);
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::PushDown)),
+                &weak,
+            );
         });
 
     let weak = instance.as_weak();
@@ -1395,7 +1430,8 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 &s,
                 Action::Animation(AnimationAction::Nla(NlaAction::SearchChanged {
                     text: text.to_string(),
-                })), &weak,
+                })),
+                &weak,
             );
         });
 

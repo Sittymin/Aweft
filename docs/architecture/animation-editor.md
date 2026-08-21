@@ -82,9 +82,9 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
   `nla.tracks`/`tracks_filter`/`strip_models`。`set_global_action`仅改数据层返回`NlaTrackChanged{0}`
 - Tag 细化（`depsgraph/tag.rs`，DataId::Animation 单一）：
   - `NlaStructureChanged` — 装载/搜索过滤视图重建（全量重建派生层 + 重绑定）
-  - `NlaSelectionChanged{updated, deselect_all}` — 片断选中（`set_row_data`选中列）
-  - `NlaStripPositionChanged{updated}` — 拖拽位置（`set_row_data`保住 grab）
-  - `NlaStripStructureChanged{moved,reordered,inserted}` — 跨轨/同轨重排/插入（`remove+insert` row_added/removed）
+  - `NlaSelectionChanged{updated, deselect_all}` — 片断选中（updated 同时携带稳定 ID 与当前下标，`set_row_data`选中列）
+  - `NlaStripPositionChanged{updated}` — 拖拽位置（按稳定 ID 找回当前下标后 `set_row_data`，保住 grab）
+  - `NlaStripStructureChanged{moved,reordered,inserted}` — 跨轨/同轨重排/插入（移动 Tag 携带稳定 ID，`remove+insert` row_added/removed）
   - `NlaTrackChanged{track}` — 启用/锁定/全局 Action 名称（`set_row_data`行级）
   - `NlaTrackAdded{track}` — 下推新建轨道（`push` row_added）
 - 投影（`projections/animation/nla.rs`，6 ops 归入动画单 Component；`NlaTrackProperties/Added`显式依赖`NlaStructure`）：
@@ -92,9 +92,9 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
   `op_nla_strip_structure`（apply_moved/apply_reordered/apply_inserted 三子函数）/
   `op_nla_position`（apply_position）/ `op_nla_track_properties` / `op_nla_track_added`
 - 拖拽语义（对齐曲线编辑器 preview/commit，增量 `delta` 由 Slint 传来，最终提交校验，不克隆快照）：拖拽（高频）只改数据层 + `NlaStripPosition/Structure` Tag，
-  投影 `set_row_data` 同步派生层；松开 `strip_released` 整理 dragging + `commit_to_model` 写回 model；右键 `StripDragCancel` 轻量快照 `selected_snapshot:Vec<(track,idx,start,width)>` 回退并 `NlaStripPositionChanged` 走依赖图自动传播；
-  多选同移选中集以相同增量移动，各自独立 `clamp_with_unselected`（与 Graph 多关键帧一致）
-  跨轨移动在拖动中瞬间完成（数据层 remove+insert，投影同规则同步；`apply_moved→reordered→inserted`拆分保序）
+  投影 `set_row_data` 同步派生层；松开 `strip_released` 整理 dragging + `commit_to_model` 写回 model；右键 `StripDragCancel` 按编辑器内部稳定 ID 快照恢复轨道/顺序/时间，并通过精确结构 + 位置 Tag 走依赖图自动传播；
+  多选整体同移：从按下快照计算统一 `offset`/`row_shift`；每个片段独立计算目标轨道约束后求交集，任一片段钳制会让整个选中集使用同一钳制结果；跨轨先批量移除再批量插入
+  跨轨移动在拖动中瞬间完成（数据层 remove+insert，投影按稳定 ID 同步最新 start/end/选中态；`apply_moved→reordered→inserted`拆分保序）
 - 锁定轨/全局 Action 轨只读：`strip_hit_test` 纯命中，`strip_pick`仅测试兼容
 - 测试：`nla_editor/tests.rs` 单测（`project`走`apply_selection/strip_structure/position`单职责；`hit_test`纯只读）+
   `tests/nla_editor_integration.rs`（dispatch → 投影 → model 写回全链路；`strip_hit_test`+`StripPressed` dispatch）

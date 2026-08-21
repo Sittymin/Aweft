@@ -3,10 +3,7 @@ use super::{NlaEditorState, NlaStripData};
 use crate::bridge::types::SlintNlaTrack;
 use crate::depsgraph::Tag;
 use aweft_model::{
-    animation::{
-        AnimData,
-        strip::StripPlacement,
-    },
+    animation::{AnimData, strip::StripPlacement},
     ids::ActionId,
 };
 use slint::{ModelRc, SharedString};
@@ -17,6 +14,8 @@ impl NlaEditorState {
     /// `tag(NlaStructureChanged)` + `evaluate`（`reducers/animation/nla.rs:load_nla_from_model` 已接入）。
     /// 单测直接测数据层/派生层时可手动 `apply_structure`。
     pub(crate) fn load_from_model(&mut self, anim_data: &AnimData, target_duration: f32) {
+        self.next_strip_id = 1;
+        self.drag = None;
         let mut tv = vec![SlintNlaTrack {
             name: "<无动作>".into(),
             enabled: true,
@@ -40,7 +39,10 @@ impl NlaEditorState {
             strips.push(
                 t.strips
                     .iter()
-                    .map(|s| NlaStripData::from_model(s, target_duration))
+                    .map(|s| {
+                        let id = self.allocate_strip_id();
+                        NlaStripData::from_model(id, s, target_duration)
+                    })
                     .collect(),
             );
         }
@@ -124,8 +126,11 @@ impl NlaEditorState {
             return None;
         }
         if let Some(track) = self.find_fit_track(start, end) {
-            let idx =
-                self.insert_strip(track, NlaStripData::new_action(name, action_id, start, end));
+            let id = self.allocate_strip_id();
+            let idx = self.insert_strip(
+                track,
+                NlaStripData::new_action(id, name, action_id, start, end),
+            );
             return Some(NlaPushDownResult {
                 track,
                 strip: idx,
@@ -143,8 +148,10 @@ impl NlaEditorState {
             has_data: false,
             orig_index: idx as i32,
         });
-        self.editing_strips
-            .push(vec![NlaStripData::new_action(name, action_id, start, end)]);
+        let id = self.allocate_strip_id();
+        self.editing_strips.push(vec![NlaStripData::new_action(
+            id, name, action_id, start, end,
+        )]);
         Some(NlaPushDownResult {
             track: idx,
             strip: 0,

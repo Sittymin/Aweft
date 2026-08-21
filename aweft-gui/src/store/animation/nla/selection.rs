@@ -1,4 +1,4 @@
-use super::{NlaEditorState, StripDrag};
+use super::{DragStripSnapshot, NlaEditorState, StripDrag};
 use crate::bridge::types::SlintSelectionModifier;
 use crate::depsgraph::{NlaStripRef, Tag};
 use crate::store::utils::selection::{is_replacing, is_toggling};
@@ -28,11 +28,11 @@ impl NlaEditorState {
         strip: usize,
         modifier: SlintSelectionModifier,
     ) -> Vec<Tag> {
-        let Some(s) = self
+        let Some(strip_id) = self
             .editing_strips
             .get(track)
             .and_then(|l| l.get(strip))
-            .map(|e| e.view.clone())
+            .map(|e| e.id)
         else {
             return Vec::new();
         };
@@ -83,22 +83,31 @@ impl NlaEditorState {
         for (ti, list) in self.editing_strips.iter().enumerate() {
             for (idx, e) in list.iter().enumerate() {
                 if e.view.selected {
-                    snapshot.push((ti, idx, e.view.start, e.view.end - e.view.start));
+                    snapshot.push(DragStripSnapshot {
+                        id: e.id,
+                        origin_track: ti,
+                        origin_index: idx,
+                        origin_start: e.view.start,
+                        width: e.view.end - e.view.start,
+                    });
                 }
             }
         }
+        let anchor_id = self
+            .editing_strips
+            .get(track)
+            .and_then(|list| list.get(strip))
+            .map(|entry| entry.id)
+            .unwrap_or_default();
         self.drag = Some(StripDrag {
-            press_track: track,
-            press_strip: strip,
-            track,
-            strip,
-            orig_start: s.start,
-            orig_end: s.end,
-            prev_delta_x: 0.0,
+            anchor_id,
             selected_snapshot: snapshot,
+            last_offset: 0.0,
+            last_row_shift: 0,
         });
         vec![Tag::NlaSelectionChanged {
             updated: vec![NlaStripRef {
+                id: strip_id,
                 track,
                 index: strip,
             }],

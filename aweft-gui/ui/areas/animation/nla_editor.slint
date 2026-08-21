@@ -63,9 +63,7 @@ export component NlaEditor inherits Rectangle {
         return min(0.0, max(-root.max-scroll-y(), root.nav-pan-y + delta));
     }
 
-    // 画布级 TouchArea 处理左键（marquee 机制）：当前拖拽的片断（-1 = 未命中）
-    private property <int> press-track: -1;
-    private property <int> press-strip: -1;
+    // 画布级 TouchArea 处理左键（marquee 机制）：当前是否在拖拽片断
     private property <bool> strip-dragging: false;
 
     // 框选矩形（与摄影表/曲线编辑器一致；空白拖拽画框选轨道片断）
@@ -245,8 +243,6 @@ export component NlaEditor inherits Rectangle {
             cancel-pressed => {
                 AnimationCallbacks.nla-strip-drag-cancel();
                 root.strip-dragging = false;
-                root.press-track = -1;
-                root.press-strip = -1;
                 root.marquee-visible = false;
             }
         }
@@ -300,15 +296,13 @@ export component NlaEditor inherits Rectangle {
             let hit: int = AnimationCallbacks.nla-strip-pick(t, row, SlintSelectionModifier.none);
             if hit >= 0 {
                 root.strip-dragging = true;
-                root.press-track = hit / 10000;
-                root.press-strip = Math.mod(hit, 10000);
             } else {
                 root.marquee-visible = true;
             }
         }
         if root.strip-dragging {
             // delta-row = 像素位移 / 行高；Rust 在片段中心越过轨道边界时瞬间跳轨（模型驱动）
-            AnimationCallbacks.nla-strip-dragged(root.press-track, root.press-strip, (x2 - x1) / root.nav-zoom, (y2 - y1) / (root.row-height / 1px));
+            AnimationCallbacks.nla-strip-dragged((x2 - x1) / root.nav-zoom, (y2 - y1) / (root.row-height / 1px));
         } else if root.marquee-visible {
             root.marquee-x1 = min(x1, x2);
             root.marquee-y1 = min(y1, y2);
@@ -320,7 +314,7 @@ export component NlaEditor inherits Rectangle {
     // marquee 结束（松开）：片断拖拽收尾或框选选中
     function nav-marquee-end(x1: float, y1: float, x2: float, y2: float, modifier: SlintSelectionModifier) {
         if root.strip-dragging {
-            AnimationCallbacks.nla-strip-released(root.press-track, root.press-strip);
+            AnimationCallbacks.nla-strip-released();
             root.strip-dragging = false;
         } else if root.marquee-visible {
             root.marquee-visible = false;
@@ -330,7 +324,5 @@ export component NlaEditor inherits Rectangle {
             let row-hi: int = floor((max(y1, y2) - root.nav-pan-y) / (root.row-height / 1px));
             AnimationCallbacks.nla-marquee-select(x-lo, x-hi, row-lo, row-hi, modifier);
         }
-        root.press-track = -1;
-        root.press-strip = -1;
     }
 }

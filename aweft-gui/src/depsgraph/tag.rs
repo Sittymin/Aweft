@@ -42,16 +42,21 @@ pub struct SummaryDrag {
     pub delta_time: f32,
 }
 
-/// NLA 片断定位：(权威轨道下标, 片断下标)。
+/// NLA 片断定位：稳定 ID + 当前权威轨道/片断下标。
+///
+/// 下标用于派生模型的局部更新，ID 用于结构变化后避免更新到错误片段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NlaStripRef {
+    pub id: u64,
     pub track: usize,
     pub index: usize,
 }
 
-/// NLA 片断跨轨移动：源轨 → 目标轨（投影按 start 排序插入）。
+/// NLA 片断移动：稳定 ID + 源轨/下标 → 目标轨。
+/// 多选整体拖拽也用它表达同轨重排，投影会先批量移除再批量插入。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NlaStripMove {
+    pub id: u64,
     pub src_track: usize,
     pub src_index: usize,
     pub dst_track: usize,
@@ -298,7 +303,7 @@ pub enum Tag {
     /// NLA 编辑器：片断结构变化（跨轨移动/同轨重排/插入）。
     /// 投影精确 remove+insert（row_added/removed，存量复用）。
     NlaStripStructureChanged {
-        /// 跨轨移动（remove 源轨 + 按 start 排序插入目标轨）。
+        /// 移动片断（跨轨或多选整体同轨重排；remove 源轨 + 按 start 排序插入目标轨）。
         moved: Vec<NlaStripMove>,
         /// 同轨重排（水平穿越后按 start 排序：remove 旧下标 + insert 新下标）。
         reordered: Vec<NlaStripReorder>,
