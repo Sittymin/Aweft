@@ -252,15 +252,10 @@ impl SequenceRowsModel {
         end - start
     }
 
-    /// 某 item 是否为分组（从快照 content 的 row_type 判断，无权威数据访问）。
+    /// 某 item 是否为分组。`group_row_counts` 的键恰为全部组头 id
+    /// （flatten 时仅为 Group 插入），O(1) 查询。
     pub fn is_group_item(&self, item_id: ItemId) -> bool {
-        self.flattened
-            .borrow()
-            .anchors
-            .iter()
-            .find(|a| a.item_id == item_id)
-            .map(|a| a.content.row_type == SlintSubtitleRowType::GroupHeader)
-            .unwrap_or(false)
+        self.flattened.borrow().group_row_counts.contains_key(&item_id)
     }
 
     /// 通知某行值变化（时间码/折叠/选中），Slint 精确重算该行。

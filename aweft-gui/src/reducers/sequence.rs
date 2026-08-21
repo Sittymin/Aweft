@@ -4,6 +4,7 @@ use anyhow::Result;
 use aweft_model::ids::ItemId;
 use aweft_model::sequence::ItemContent;
 use chrono::TimeDelta;
+use slint::Model;
 
 use crate::actions::sequence::SequenceAction;
 use crate::clipboard::ItemsClip;
@@ -60,6 +61,91 @@ impl crate::store::AppStore {
         }
     }
 
+    /// 构造单个时间码拖拽预览的 tag（带祖先链聚合传播）。
+    fn timecode_preview_tag(&self, event_id: ItemId, is_start_time: bool, time: TimeDelta) -> Tag {
+        Tag::TimecodePreviewChanged {
+            event_id,
+            is_start_time,
+            time,
+            ancestors: self.ancestor_chain(event_id),
+        }
+    }
+
+    /// 直接选中事件集 ∪ 当前事件。字幕行编辑器 Shift 批量调整与时间线
+    /// 多选整体移动共用的目标收集：对 `event_id` 的操作按选中集扩散。
+    fn selected_events_with(&self, event_id: ItemId) -> HashSet<ItemId> {
+        let mut event_ids = self
+            .ui_models
+            .sequence_state
+            .get_selected_events(&self.state.project);
+        // 确保当前 event_id 也在列表中（同时也避免重复）
+        event_ids.insert(event_id);
+        event_ids
+    }
+
+    /// 时间线片段整体拖拽的目标集：按住项在直接选中集内（事件或组头）时，
+    /// 移动全部直接选中事件——若选中集含组头，「组头直接选中蕴含子树全选」
+    /// （select_single 展开 + 计数派生维持），其子树事件已天然在内，整体一同移动；
+    /// 按住未选中项时只动它自己。
+    fn block_drag_targets(&self, item_id: ItemId) -> Vec<ItemId> {
+        if !self
+            .ui_models
+            .sequence_state
+            .rows_model()
+            .directly_selected_items()
+            .contains(&item_id)
+        {
+            return vec![item_id];
+        }
+        let mut ids: Vec<ItemId> = self
+            .ui_models
+            .sequence_state
+            .get_selected_events(&self.state.project)
+            .into_iter()
+            .collect();
+        ids.sort_by_key(|id| id.0);
+        ids
+    }
+
+    /// 组头行当前聚合显示界 `(start, end)`。来自锚点快照——组块位置本就是
+    /// 构建时烘焙的聚合值，拖拽跟随只需对其整体加 delta（内部偏移全部一致），
+    /// 无需重新聚合。
+    fn group_display_bounds(&self, gid: ItemId) -> Option<(TimeDelta, TimeDelta)> {
+        let rows = self.ui_models.sequence_state.rows_model();
+        let data = rows.row_data(rows.row_index_of(gid)?)?;
+        let to_td = |sec: f32| TimeDelta::milliseconds((sec * 1000.0).round() as i64);
+        Some((to_td(data.content.start_sec), to_td(data.content.end_sec)))
+    }
+
+    /// 时间线片段整体平移的目标时间（只读预览）：start/end 同加 delta，时长保持不变，
+    /// 不做钳制（开始时间允许为负）。非事件项返回 None。
+    fn preview_block_move(
+        &self,
+        event_id: ItemId,
+        delta: TimeDelta,
+    ) -> Option<(TimeDelta, TimeDelta)> {
+        let item = self.state.project.sequence().get(event_id)?;
+        let ItemContent::Event(e) = &item.content else {
+            return None;
+        };
+        Some((e.start_time + delta, e.end_time + delta))
+    }
+
+    /// 提交整体平移（写 Domain）：语义同 [`Self::preview_block_move`]。
+    fn apply_block_move(
+        &mut self,
+        event_id: ItemId,
+        delta: TimeDelta,
+    ) -> Option<(TimeDelta, TimeDelta)> {
+        let item = self.sequence_mut().get_mut(event_id)?;
+        let ItemContent::Event(e) = &mut item.content else {
+            return None;
+        };
+        e.start_time += delta;
+        e.end_time += delta;
+        Some((e.start_time, e.end_time))
+    }
+
     /// 构造选中变化的 tag（affected = 祖先链 + 自身）。
     fn selection_tag(&self, item_id: ItemId, kind: crate::depsgraph::SelectionKind) -> Tag {
         let mut affected = self.ancestor_chain(item_id);
@@ -84,14 +170,7 @@ impl crate::store::AppStore {
     where
         F: FnMut(&mut Self, ItemId) -> Option<TimeDelta>,
     {
-        let mut event_ids: HashSet<ItemId> = self
-            .ui_models
-            .sequence_state
-            .get_selected_events(&self.state.project)
-            .into_iter()
-            .collect();
-        // 确保当前 event_id 也在列表中（同时也避免重复）
-        event_ids.insert(event_id);
+        let event_ids: HashSet<ItemId> = self.selected_events_with(event_id);
 
         let mut updated_ids: Vec<ItemId> = Vec::new();
         let mut updated_times: Vec<TimeDelta> = Vec::new();
@@ -203,13 +282,7 @@ impl crate::store::AppStore {
 
                 if is_batch {
                     // 批量预览：不写 sequence，构造批量 preview tag
-                    let mut event_ids: HashSet<ItemId> = self
-                        .ui_models
-                        .sequence_state
-                        .get_selected_events(&self.state.project)
-                        .into_iter()
-                        .collect();
-                    event_ids.insert(event_id);
+                    let event_ids = self.selected_events_with(event_id);
 
                     let mut tags = Vec::new();
                     let mut ancestors: Vec<ItemId> = Vec::new();
@@ -316,6 +389,122 @@ impl crate::store::AppStore {
                         Err(_) => Ok(vec![]),
                     }
                 }
+            }
+            SequenceAction::TimelineBlockDragPreview {
+                item_id,
+                delta_x,
+            } => {
+                if !crate::store::utils::drag::is_valid_delta(delta_x) {
+                    return Ok(vec![]);
+                }
+                let delta = TimeDelta::milliseconds((delta_x * 1000.0).round() as i64);
+                // 整体移动预览：不写 sequence，每个目标 start/end 各打一条 preview tag。
+                // 行映射器把覆盖同时应用到时间码文本与 start_sec/end_sec，
+                // 字幕行编辑器与时间线块由同一条 Tag 一并驱动。
+                let mut tags = Vec::new();
+                for id in self.block_drag_targets(item_id) {
+                    match self.preview_block_move(id, delta) {
+                        Some((start, end)) => {
+                            tags.push(self.timecode_preview_tag(id, true, start));
+                            tags.push(self.timecode_preview_tag(id, false, end));
+                        }
+                        None => log::warn!("时间线片段预览跳过非事件项 id={id:?}"),
+                    }
+                }
+                // 选中集内的组头（直接选中蕴含子树全选）：打聚合界覆盖，
+                // 组块随子项实时平移（内部偏移全部一致）
+                let rows = self.ui_models.sequence_state.rows_model();
+                for h in rows.directly_selected_items() {
+                    if !rows.is_group_item(h) {
+                        continue;
+                    }
+                    if let Some((start, end)) = self.group_display_bounds(h) {
+                        tags.push(self.timecode_preview_tag(h, true, start + delta));
+                        tags.push(self.timecode_preview_tag(h, false, end + delta));
+                    }
+                }
+                Ok(tags)
+            }
+            SequenceAction::TimelineBlockDragCommit {
+                item_id,
+                delta_x,
+            } => {
+                if !crate::store::utils::drag::is_valid_delta(delta_x) {
+                    return Ok(vec![]);
+                }
+                let delta = TimeDelta::milliseconds((delta_x * 1000.0).round() as i64);
+                // 选中集内的组头（直接选中蕴含子树全选）：需清预览覆盖并刷新聚合
+                let headers: Vec<ItemId> = self
+                    .ui_models
+                    .sequence_state
+                    .rows_model()
+                    .directly_selected_items()
+                    .into_iter()
+                    .filter(|id| {
+                        self.ui_models.sequence_state.rows_model().is_group_item(*id)
+                    })
+                    .collect();
+                let targets = self.block_drag_targets(item_id);
+                let mut updates = Vec::new();
+                let mut ancestors: Vec<ItemId> = Vec::new();
+                for id in targets {
+                    match self.apply_block_move(id, delta) {
+                        Some((start, end)) => {
+                            updates.push((id, true, start));
+                            updates.push((id, false, end));
+                            ancestors.extend(self.ancestor_chain(id));
+                        }
+                        None => log::warn!("时间线片段提交跳过非事件项 id={id:?}"),
+                    }
+                }
+                // 组头条目：清各自预览覆盖 + 触发聚合行刷新
+                //（新界由投影从 Domain 重算，此处快照值仅作记录）
+                for h in &headers {
+                    if let Some((start, end)) = self.group_display_bounds(*h) {
+                        updates.push((*h, true, start));
+                        updates.push((*h, false, end));
+                        ancestors.extend(self.ancestor_chain(*h));
+                    }
+                }
+                if updates.is_empty() {
+                    return Ok(vec![]);
+                }
+                ancestors.sort_by_key(|id| id.0);
+                ancestors.dedup();
+                Ok(vec![Tag::EventsTimecodeChanged { updates, ancestors }])
+            }
+            SequenceAction::TimelineBlockDragCancel { item_id } => {
+                // 恢复显示 Domain 当前值（投影清预览覆盖 + 刷新行 + 同步根级块）
+                let targets = self.block_drag_targets(item_id);
+                let seq = self.state.project.sequence();
+                let mut updates = Vec::new();
+                let mut ancestors: Vec<ItemId> = Vec::new();
+                for id in targets {
+                    if let (Ok(start), Ok(end)) =
+                        (seq.event_time(id, true), seq.event_time(id, false))
+                    {
+                        updates.push((id, true, start));
+                        updates.push((id, false, end));
+                        ancestors.extend(self.ancestor_chain(id));
+                    }
+                }
+                // 选中集内组头条目：清各自预览覆盖 + 刷新聚合行（Domain 未变，快照即当前值）
+                for h in self.ui_models.sequence_state.rows_model().directly_selected_items() {
+                    if !self.ui_models.sequence_state.rows_model().is_group_item(h) {
+                        continue;
+                    }
+                    if let Some((start, end)) = self.group_display_bounds(h) {
+                        updates.push((h, true, start));
+                        updates.push((h, false, end));
+                        ancestors.extend(self.ancestor_chain(h));
+                    }
+                }
+                if updates.is_empty() {
+                    return Ok(vec![]);
+                }
+                ancestors.sort_by_key(|id| id.0);
+                ancestors.dedup();
+                Ok(vec![Tag::EventsTimecodeChanged { updates, ancestors }])
             }
             SequenceAction::SelectRow { item_id, modifier } => {
                 let kind = if is_additive(modifier) {

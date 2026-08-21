@@ -39,6 +39,11 @@ export global SequenceCallbacks {
     callback timeline-marquee-select(x-lo: float, x-hi: float, row-lo: int, row-hi: int, modifier: SlintSelectionModifier);
     // 画布空白点击：清除选中
     callback timeline-deselect-all();
+    // 时间线片段整体拖动（delta-x 世界时间秒）：预览不写数据（行编辑器与时间线
+    // 块由同一预览 Tag 一并驱动），松开提交，右键取消恢复
+    callback timeline-block-dragged(item-id: string, delta-x: float);
+    callback timeline-block-drag-commit(item-id: string, delta-x: float);
+    callback timeline-block-drag-cancel(item-id: string);
     // 右键菜单
     // NOTE: 后续在空列表当中的也需要实现（即无法获得开始与结束时间）
     // 参数用于定位新增的行位置

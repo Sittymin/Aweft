@@ -118,6 +118,8 @@ export struct AnimationEditorPalette {
     strip-group: color,
     // NLA 片断拖拽（移动）中的高亮颜色
     strip-moving: color,
+    // 间接选中描边（时间线框选组头派生等）：蓝色，对齐行编辑器「间接=蓝」
+    strip-indirect: color,
     // NLA 全局 Action 轨上的只读关键帧标记（暗，区别于可编辑通道彩色）
     action-keyframe: color,
     // NLA 全局 Action 轨亮色：中等绿（亮于空隙，暗于普通片断高亮）
@@ -351,6 +353,8 @@ export global Tokens {
             strip-group: #a17e2a,
             // NLA 片断拖拽（移动）中的高亮颜色：提亮蓝
             strip-moving: #7ac8ff,
+            // 间接选中：中饱和蓝（区别于拖拽高亮 #7ac8ff 与激活绿）
+            strip-indirect: #5a9bd8,
             // NLA 全局 Action 轨上的只读关键帧标记（暗，区别于可编辑通道彩色）
             action-keyframe: #3c3c46,
             // NLA 全局 Action 轨亮色：中等绿（亮于空隙，暗于普通片断高亮）

@@ -43,6 +43,21 @@ pub enum SequenceAction {
         is_start_time: bool,
         is_batch: bool,
     },
+    /// 时间线片段整体拖动预览（start/end 同加 delta，不写 sequence，仅 UI 覆盖显示）。
+    /// 按住项可为事件或组头（组头=子树整体平移）；`delta_x` 为世界时间秒。
+    TimelineBlockDragPreview {
+        item_id: ItemId,
+        delta_x: f32,
+    },
+    /// 时间线片段整体拖动提交（写 sequence）。按住项可为事件或组头。
+    TimelineBlockDragCommit {
+        item_id: ItemId,
+        delta_x: f32,
+    },
+    /// 时间线片段拖动取消（清除预览覆盖，恢复显示 Domain 当前值）。
+    TimelineBlockDragCancel {
+        item_id: ItemId,
+    },
     /// 行选择：none=普通单选，shift=区间扩展，ctrl=切换。
     SelectRow {
         item_id: ItemId,

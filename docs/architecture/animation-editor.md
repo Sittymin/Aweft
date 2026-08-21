@@ -49,7 +49,8 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
 **通用工具**（`store/utils/` 单一文件夹）：`marquee::normalize_time/clamp_rows`、`selection::is_*`、`drag::is_valid_delta` 预先查找，避免重复实现
 
 **时间线（Timeline）**（`ui/areas/timeline/`，复用 Sequence 可见行模型，与字幕行同一数据源）：
-- 框选：`SequenceAction::MarqueeSelect`（时间 × 行，求交语义，`store/utils/marquee::clamp_rows`）+ `DeselectAll`（空白清除），`store/sequence.rs:marquee_select` 按可见行与时间求交选中（分组头联动子树），`Shift` 加选/`Ctrl` 切换/`None` 替换
+- 框选：`SequenceAction::MarqueeSelect`（时间 × 行，求交语义，`store/utils/marquee::clamp_rows`）+ `DeselectAll`（空白清除），`store/sequence.rs:marquee_select` 仅命中**事件行**——组头不直接选中，子项全选时经计数派生为间接选中（与行编辑器 Shift 范围选择同语义），`Shift` 加选/`Ctrl` 切换/`None` 替换
+- 片段拖拽：`TimelineBlockDragPreview/Commit/Cancel`（无状态预览/提交/取消，同字幕行 `DragTimecodePreview/Commit` 增量模式，delta 为世界时间秒）。预览不写 sequence，行映射器把覆盖同时应用到时间码文本与 `start_sec/end_sec`——一条 Tag 同时驱动行编辑器与时间线块；按住项在直接选中集内（事件或组头）= 整个选中集一同移动（组头直接选中蕴含子树全选，选中集内组头打聚合界覆盖实时跟随）；按住未选中块=单动；右键取消恢复
 - 交互：`CanvasNavigation:marquee` 单一 `TouchArea` 复用（框选/中键平移/右键取消），`TimelinePanel` 列表与画布行共享 `pan-y`
 
 **摄影表（Dope Sheet）**（`ui/areas/dope_sheet/`，与曲线编辑器共用数据/选中，拖拽只调时间）：

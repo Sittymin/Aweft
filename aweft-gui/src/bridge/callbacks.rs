@@ -669,6 +669,59 @@ fn setup_sequence_selection_callbacks(instance: &MainWindow, store: Rc<RefCell<A
         .on_timeline_deselect_all(move || {
             dispatch_and_render(&s, Action::Sequence(SequenceAction::DeselectAll), &weak);
         });
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<SequenceCallbacks>()
+        .on_timeline_block_dragged(move |item_id_str, delta_x| {
+            let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 item_id: {}", item_id_str);
+                return;
+            };
+            dispatch_and_render(
+                &s,
+                Action::Sequence(SequenceAction::TimelineBlockDragPreview {
+                    item_id,
+                    delta_x,
+                }),
+                &weak,
+            );
+        });
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<SequenceCallbacks>()
+        .on_timeline_block_drag_commit(move |item_id_str, delta_x| {
+            let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 item_id: {}", item_id_str);
+                return;
+            };
+            dispatch_and_render(
+                &s,
+                Action::Sequence(SequenceAction::TimelineBlockDragCommit {
+                    item_id,
+                    delta_x,
+                }),
+                &weak,
+            );
+        });
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<SequenceCallbacks>()
+        .on_timeline_block_drag_cancel(move |item_id_str| {
+            let Ok(item_id) = uuid::Uuid::parse_str(item_id_str.as_str()).map(ItemId) else {
+                warn!("无效的 item_id: {}", item_id_str);
+                return;
+            };
+            dispatch_and_render(
+                &s,
+                Action::Sequence(SequenceAction::TimelineBlockDragCancel {
+                    item_id,
+                }),
+                &weak,
+            );
+        });
 }
 
 fn setup_sequence_add_line_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {

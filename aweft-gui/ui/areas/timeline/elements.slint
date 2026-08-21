@@ -4,7 +4,7 @@
 //   - 分组头块（group）：绿色系（action-strip，覆盖组内所有行的时间范围），选中更亮
 // 交互（点击/拖拽）由画布级 TouchArea 统一处理——块自身不带 TouchArea，
 // 否则会吞掉中键平移（Slint TouchArea 抢走任意按钮的按下）。此处纯渲染。
-import { SlintSubtitleRowType, SlintTimelineSubBlock } from "../../core/types.slint";
+import { SlintSelectionState, SlintSubtitleRowType, SlintTimelineSubBlock } from "../../core/types.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component TimelineBlock inherits Rectangle {
@@ -12,10 +12,16 @@ export component TimelineBlock inherits Rectangle {
     in property <SlintSubtitleRowType> row-type;
     in property <float> start: 0.0;
     in property <float> end: 1.0;
-    in property <bool> selected: false;
+    // 三态选中：直接=绿底白边；间接=原底色 + 蓝色细描边（对齐行编辑器
+    // 「间接=蓝」语义，零额外元素）；未选中=灰底细边。
+    in property <SlintSelectionState> selection-state: SlintSelectionState.Unselected;
     in property <float> view-zoom: 1.0;
     in property <float> pan-x: 0.0;
     in property <length> lane-height: 28px;
+
+    // 选中与否：直接/间接互斥，「任一选中」只此一处派生；
+    // 直接/间接的区分在具体属性里直接对枚举判断。
+    private property <bool> is-selected: root.selection-state != SlintSelectionState.Unselected;
 
     x: root.start * root.view-zoom * 1px + root.pan-x * 1px;
     y: 1px;
@@ -23,14 +29,19 @@ export component TimelineBlock inherits Rectangle {
     height: root.lane-height - 2px;
     border-radius: 3px;
     background: root.row-type == SlintSubtitleRowType.GroupHeader
-        ? (root.selected
+        ? (root.is-selected
             ? Theme.data.animation-editor.strip-group.brighter(0.3)
             : Theme.data.animation-editor.strip-group)
-        : (root.selected
+        : (root.selection-state == SlintSelectionState.DirectlySelected
             ? Theme.data.animation-editor.strip-active
             : Theme.data.animation-editor.strip-inactive);
-    border-width: root.selected ? 2px : 1px;
-    border-color: root.selected ? #ffffff : Theme.data.animation-editor.strip-outline;
+    // 描边粗细：选中（直接/间接）2px，未选中 1px；颜色区分选中类型
+    border-width: root.is-selected ? 2px : 1px;
+    border-color: root.selection-state == SlintSelectionState.DirectlySelected
+        ? #ffffff
+        : (root.selection-state == SlintSelectionState.IndirectlySelected
+            ? Theme.data.animation-editor.strip-indirect
+            : Theme.data.animation-editor.strip-outline);
 
     HorizontalLayout {
         padding-left: 6px;
@@ -40,7 +51,7 @@ export component TimelineBlock inherits Rectangle {
             text: root.name;
             horizontal-stretch: 1;
             vertical-alignment: center;
-            color: root.selected
+            color: root.selection-state == SlintSelectionState.DirectlySelected
                 ? Theme.data.animation-editor.strip-text
                 : #9a9aa4;
             font-size: 11px;
@@ -69,7 +80,7 @@ export component TimelineSubBlocks inherits Rectangle {
             row-type: SlintSubtitleRowType.Event;
             start: b.start-sec;
             end: b.end-sec;
-            selected: false;
+            selection-state: SlintSelectionState.Unselected;
             view-zoom: root.view-zoom;
             pan-x: root.pan-x;
             lane-height: root.lane-height;
