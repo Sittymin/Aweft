@@ -32,6 +32,8 @@ export component CanvasNavigation inherits TouchArea {
     // 拖动超过阈值才进入框选（marquee-dragged/done），否则松开时按点击处理
     // （background-pressed，保持行激活/清除选中语义）。
     in property <bool> marquee-enabled: false;
+    // 两个回调均传原始点（起点, 当前）：带符号位移供片段拖拽用；
+    // 框选矩形由消费方自行 min/max 规范化。
     callback marquee-dragged(x1: float, y1: float, x2: float, y2: float);
     callback marquee-done(x1: float, y1: float, x2: float, y2: float, modifier: SlintSelectionModifier);
     private property <bool> marquee-pressing: false;
@@ -125,8 +127,7 @@ export component CanvasNavigation inherits TouchArea {
                 }
             }
             if root.marquee-active {
-                // 传原始点（起点, 当前）——框选矩形由消费方自行 min/max；
-                // 拖拽位移（NLA 片断）需要带符号的方向，不能给规范化后的坐标
+                // 原始点（起点, 当前），与 marquee-done 同语义
                 root.marquee-dragged(root.marquee-start-x, root.marquee-start-y, mx, my);
             }
         } else if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
@@ -149,11 +150,13 @@ export component CanvasNavigation inherits TouchArea {
                 let mx: float = self.mouse-x / 1px;
                 let my: float = self.mouse-y / 1px;
                 if root.marquee-active {
+                    // 与 marquee-dragged 同语义：原始点（起点, 当前），
+                    // 框选矩形由消费方自行 min/max 规范化
                     root.marquee-done(
-                        min(root.marquee-start-x, mx),
-                        min(root.marquee-start-y, my),
-                        max(root.marquee-start-x, mx),
-                        max(root.marquee-start-y, my),
+                        root.marquee-start-x,
+                        root.marquee-start-y,
+                        mx,
+                        my,
                         root.press-modifier,
                     );
                 } else {

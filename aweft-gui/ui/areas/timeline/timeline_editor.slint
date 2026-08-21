@@ -76,11 +76,12 @@ export component TimelineEditor inherits Rectangle {
     // 空白处框选结束：把选框换算成世界坐标（时间 + 行区间）上报 Rust 选中
     function marquee-select(x1: float, y1: float, x2: float, y2: float, modifier: SlintSelectionModifier) {
         root.marquee-visible = false;
-        let x-lo: float = (x1 - root.nav-pan-x) / root.nav-zoom;
-        let x-hi: float = (x2 - root.nav-pan-x) / root.nav-zoom;
+        // 回调传原始点（起点, 当前），先规范化为矩形再转世界坐标
+        let x-lo: float = (min(x1, x2) - root.nav-pan-x) / root.nav-zoom;
+        let x-hi: float = (max(x1, x2) - root.nav-pan-x) / root.nav-zoom;
         // 第 0 行固定为根级泳道（不占行号），数据行从第 1 条起
-        let row-lo: int = floor((y1 - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
-        let row-hi: int = floor((y2 - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+        let row-lo: int = floor((min(y1, y2) - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
+        let row-hi: int = floor((max(y1, y2) - root.nav-pan-y - (root.row-height / 1px)) / (root.row-height / 1px));
         SequenceCallbacks.timeline-marquee-select(x-lo, x-hi, row-lo, row-hi, modifier);
     }
 
