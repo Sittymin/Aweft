@@ -1009,3 +1009,272 @@ fn graph_search_filters_channels_and_canvas() {
     let ce = &store.ui_models().animation.graph;
     assert_eq!(ce.graph_filter.row_count(), 4, "空串应恢复全部通道");
 }
+
+/// 时间线框选不直接选中分组头：命中仅事件行；组内事件全选时组头派生为
+/// 间接选中，未全选时为 Unselected（与字幕行编辑器 Shift 范围选择同语义）。
+#[test]
+fn marquee_select_skips_group_header() {
+    use aweft_gui::bridge::types::SlintSelectionModifier;
+    use aweft_model::sequence::GroupData;
+
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = MainWindow::new().unwrap();
+    let store = Rc::new(RefCell::new(AppStore::new(&instance)));
+
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Screen(ScreenAction::InitializeLayout {
+                width: 800,
+                height: 600,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    let (gid, e1, e2) = {
+        let mut store_mut = store.borrow_mut();
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence
+            .create_group(
+                GroupData {
+                    name: "G".into(),
+                    collapsed: false,
+                    color: None,
+                    children: Vec::new(),
+                },
+                ItemLocation::Root(0),
+            )
+            .unwrap();
+        let e1 = sequence
+            .create_event(
+                EventData {
+                    start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
+                    end_time: chrono::TimeDelta::try_milliseconds(2000).unwrap(),
+                    actor: None,
+                    text: "e1".into(),
+                    segment_timing: None,
+                    style: "Default".into(),
+                },
+                ItemLocation::InGroup(gid, 0),
+            )
+            .unwrap();
+        let e2 = sequence
+            .create_event(
+                EventData {
+                    start_time: chrono::TimeDelta::try_milliseconds(5000).unwrap(),
+                    end_time: chrono::TimeDelta::try_milliseconds(6000).unwrap(),
+                    actor: None,
+                    text: "e2".into(),
+                    segment_timing: None,
+                    style: "Default".into(),
+                },
+                ItemLocation::InGroup(gid, 1),
+            )
+            .unwrap();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
+        (gid, e1, e2)
+    };
+
+    // 全范围框选（可见行 [G,e1,e2] 全部 × 时间覆盖一切）：
+    // e1/e2 直接选中；G 不直接选中，因子项全选派生为间接选中
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Sequence(SequenceAction::MarqueeSelect {
+                x_lo: -100.0,
+                x_hi: 100.0,
+                row_lo: 0,
+                row_hi: 2,
+                modifier: SlintSelectionModifier::None,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    {
+        let s = store.borrow();
+        let rows = s.ui_models().sequence_state.rows_model();
+        assert!(rows.is_directly_selected(e1), "e1 直接选中");
+        assert!(rows.is_directly_selected(e2), "e2 直接选中");
+        assert!(!rows.is_directly_selected(gid), "组头不被框选直接选中");
+        assert!(rows.is_selected(gid), "子项全选 → 组头间接选中");
+    }
+
+    // 部分框选（只覆盖 e1 所在行与时间段）：替换语义下仅 e1 选中，
+    // 组头因未全选回落 Unselected
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Sequence(SequenceAction::MarqueeSelect {
+                x_lo: -100.0,
+                x_hi: 3.0,
+                row_lo: 1,
+                row_hi: 1,
+                modifier: SlintSelectionModifier::None,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    {
+        let s = store.borrow();
+        let rows = s.ui_models().sequence_state.rows_model();
+        assert!(rows.is_directly_selected(e1));
+        assert!(!rows.is_selected(e2), "范围外事件不选中");
+        assert!(!rows.is_selected(gid), "子项未全选 → 组头 Unselected");
+    }
+}
+
+/// 时间线组头拖动 = 子树整体平移：偏移直接应用到子树全部事件（时长各自保持）；
+/// 子树内所有组头（含嵌套）打聚合界覆盖使组块随子项实时平移，提交时清覆盖并刷新聚合。
+#[test]
+fn timeline_group_header_drag_moves_subtree() {
+    use aweft_gui::bridge::types::{SlintSelectionModifier, SlintSubtitleRow};
+    use aweft_model::ids::ItemId;
+    use aweft_model::sequence::GroupData;
+
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = MainWindow::new().unwrap();
+    let store = Rc::new(RefCell::new(AppStore::new(&instance)));
+
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Screen(ScreenAction::InitializeLayout {
+                width: 800,
+                height: 600,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    // 结构：G { G1 { e1 }, e2 }
+    let (gid, g1id, e1, e2) = {
+        let mut store_mut = store.borrow_mut();
+        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let gid = sequence
+            .create_group(
+                GroupData {
+                    name: "G".into(),
+                    collapsed: false,
+                    color: None,
+                    children: Vec::new(),
+                },
+                ItemLocation::Root(0),
+            )
+            .unwrap();
+        let g1id = sequence
+            .create_group(
+                GroupData {
+                    name: "G1".into(),
+                    collapsed: false,
+                    color: None,
+                    children: Vec::new(),
+                },
+                ItemLocation::InGroup(gid, 0),
+            )
+            .unwrap();
+        let e1 = sequence
+            .create_event(
+                EventData {
+                    start_time: chrono::TimeDelta::try_milliseconds(1000).unwrap(),
+                    end_time: chrono::TimeDelta::try_milliseconds(2000).unwrap(),
+                    actor: None,
+                    text: "e1".into(),
+                    segment_timing: None,
+                    style: "Default".into(),
+                },
+                ItemLocation::InGroup(g1id, 0),
+            )
+            .unwrap();
+        let e2 = sequence
+            .create_event(
+                EventData {
+                    start_time: chrono::TimeDelta::try_milliseconds(5000).unwrap(),
+                    end_time: chrono::TimeDelta::try_milliseconds(6000).unwrap(),
+                    actor: None,
+                    text: "e2".into(),
+                    segment_timing: None,
+                    style: "Default".into(),
+                },
+                ItemLocation::InGroup(gid, 1),
+            )
+            .unwrap();
+        drop(sequence);
+        store_mut.rebuild_sequence_models();
+        (gid, g1id, e1, e2)
+    };
+    fn row_of(rows: &ModelRc<SlintSubtitleRow>, id: ItemId) -> usize {
+        (0..rows.row_count())
+            .find(|&i| rows.row_data(i).map(|r| r.item_id.to_string()) == Some(id.to_string()))
+            .unwrap()
+    }
+
+    // 先点击父组 G：select_single 展开子树为直接选中（组头拖动的前提）
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Sequence(SequenceAction::SelectRow {
+                item_id: gid,
+                modifier: SlintSelectionModifier::None,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+
+    // 预览按住嵌套组头 G1 +1.0s：按住项在选中集内 → 整个选中集一同移动，
+    // Domain 不变；两级组头都实时跟随
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Sequence(SequenceAction::TimelineBlockDragPreview {
+                item_id: g1id,
+                delta_x: 1.0,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    {
+        let s = store.borrow();
+        let seq = s.state().project.sequence();
+        assert_eq!(seq.event_time(e1, true).unwrap().num_milliseconds(), 1000);
+        assert_eq!(seq.event_time(e2, true).unwrap().num_milliseconds(), 5000);
+        let rows = all_rows(&s);
+        let g = rows.row_data(row_of(&rows, gid)).unwrap();
+        assert_eq!(g.start_sec, 2.0, "顶层组头预览随子项实时平移");
+        assert_eq!(g.end_sec, 7.0);
+        let g1 = rows.row_data(row_of(&rows, g1id)).unwrap();
+        assert_eq!(g1.start_sec, 2.0, "嵌套组头同步平移");
+        assert_eq!(g1.end_sec, 3.0);
+        let r1 = rows.row_data(row_of(&rows, e1)).unwrap();
+        assert_eq!(r1.start_sec, 2.0);
+        let r2 = rows.row_data(row_of(&rows, e2)).unwrap();
+        assert_eq!(r2.start_sec, 6.0);
+    }
+
+    // 提交 +1.0s：全部子事件写回，各聚合行刷新、覆盖清除
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Sequence(SequenceAction::TimelineBlockDragCommit {
+                item_id: g1id,
+                delta_x: 1.0,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    {
+        let s = store.borrow();
+        let seq = s.state().project.sequence();
+        assert_eq!(seq.event_time(e1, true).unwrap().num_milliseconds(), 2000);
+        assert_eq!(seq.event_time(e1, false).unwrap().num_milliseconds(), 3000);
+        assert_eq!(seq.event_time(e2, true).unwrap().num_milliseconds(), 6000);
+        assert_eq!(seq.event_time(e2, false).unwrap().num_milliseconds(), 7000);
+        let rows = all_rows(&s);
+        let g = rows.row_data(row_of(&rows, gid)).unwrap();
+        assert_eq!(g.start_sec, 2.0, "G 聚合来自已平移的子项");
+        assert_eq!(g.end_sec, 7.0);
+        let g1 = rows.row_data(row_of(&rows, g1id)).unwrap();
+        assert_eq!(g1.start_sec, 2.0, "G1 聚合同步刷新");
+        assert_eq!(g1.end_sec, 3.0);
+    }
+}
+

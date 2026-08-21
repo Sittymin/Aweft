@@ -433,9 +433,10 @@ impl SequenceState {
     }
 
     /// 时间线框选：按世界时间范围 [x_lo,x_hi] × 可见行区间 [row_lo,row_hi]
-    /// 选中时间与行同时相交的行（事件/分组头）。可见行指 FilterModel 中
-    /// 未被折叠隐藏的行，row 索引为过滤后的可见索引（Slint rows 下标）。
-    /// modifier：None=替换，Shift=加选，Ctrl=切换。
+    /// 选中时间与行同时相交的**事件行**。组头不直接选中——子项全选时由
+    /// rebuild/refresh 计数派生为间接选中（与字幕行编辑器 Shift 范围选择同语义）。
+    /// 可见行指 FilterModel 中未被折叠隐藏的行，row 索引为过滤后的可见索引
+    /// （Slint rows 下标）。modifier：None=替换，Shift=加选，Ctrl=切换。
     pub fn marquee_select(
         &mut self,
         project: &Project,
@@ -473,6 +474,10 @@ impl SequenceState {
         let mut hits: Vec<ItemId> = Vec::new();
         for idx in r_lo as usize..=r_hi as usize {
             if let Some((_, item_id, start_sec, end_sec)) = visible.get(idx) {
+                // 组头不直接选中：状态由子项全选派生（rebuild/refresh 计数）
+                if self.rows_model.is_group_item(*item_id) {
+                    continue;
+                }
                 if *end_sec <= *start_sec {
                     continue;
                 }
@@ -515,46 +520,19 @@ impl SequenceState {
         }
     }
 
+    /// 框选命中项选中。仅事件行——组头不直接选中，其状态由子项全选
+    /// 经 rebuild/refresh 计数派生为间接选中。
     fn add_select_hit(&mut self, item_id: ItemId) {
-        let Some(idx) = self.rows_model.row_index_of(item_id) else {
-            return;
-        };
-        if self.rows_model.is_group_item(item_id) {
-            let cnt = self.rows_model.group_row_count(item_id);
-            for i in idx..idx + cnt {
-                if let Some(id) = self.rows_model.item_id_at(i) {
-                    self.rows_model
-                        .set_selected(id, SlintSelectionState::DirectlySelected);
-                    self.all_highlighted_items.insert(id);
-                }
-            }
-        } else {
-            self.rows_model
-                .set_selected(item_id, SlintSelectionState::DirectlySelected);
-            self.all_highlighted_items.insert(item_id);
-        }
+        self.rows_model
+            .set_selected(item_id, SlintSelectionState::DirectlySelected);
+        self.all_highlighted_items.insert(item_id);
     }
 
     fn toggle_select_hit(&mut self, item_id: ItemId) {
-        let is_selected = self.rows_model.is_selected(item_id);
-        if is_selected {
-            let Some(idx) = self.rows_model.row_index_of(item_id) else {
-                return;
-            };
-            if self.rows_model.is_group_item(item_id) {
-                let cnt = self.rows_model.group_row_count(item_id);
-                for i in idx..idx + cnt {
-                    if let Some(id) = self.rows_model.item_id_at(i) {
-                        self.rows_model
-                            .set_selected(id, SlintSelectionState::Unselected);
-                        self.all_highlighted_items.remove(&id);
-                    }
-                }
-            } else {
-                self.rows_model
-                    .set_selected(item_id, SlintSelectionState::Unselected);
-                self.all_highlighted_items.remove(&item_id);
-            }
+        if self.rows_model.is_selected(item_id) {
+            self.rows_model
+                .set_selected(item_id, SlintSelectionState::Unselected);
+            self.all_highlighted_items.remove(&item_id);
         } else {
             self.add_select_hit(item_id);
         }
