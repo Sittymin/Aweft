@@ -25,6 +25,11 @@ export global AreaCallbacks {
     callback switch-area-type(area-key: SlintKey, area-type: SlintAreaType);
 }
 
+// 视口回调：打开视频等媒体操作（Rust 侧处理）
+export global VideoCallbacks {
+    callback open-video();
+}
+
 export global SequenceCallbacks {
     callback toggle-group-collapsed(group-id: string);
     callback increment-timecode(item-id: string, is-start-time: bool, is_batch: bool);

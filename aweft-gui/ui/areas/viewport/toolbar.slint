@@ -1,0 +1,43 @@
+// 视口标题栏：通用 AreaHeader + 中区"打开视频"按钮（@children 注入，
+// 实际文件选择由 Rust 侧处理）。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AreaHeader } from "../area_header.slint";
+import { VideoCallbacks } from "../../bridge/callbacks.slint";
+import { Mixins } from "../../theme/mixins.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component ViewportToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+
+        // 中区内容（@children）：打开视频按钮
+        Rectangle {
+            height: Theme.data.area-type-switcher.height + 4px;
+            background: Mixins.popup-item.selected-background;
+            border-radius: Theme.data.area-type-switcher.border-radius;
+            TouchArea {
+                clicked => {
+                    VideoCallbacks.open-video();
+                }
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    height: 100%;
+                    alignment: center;
+                    Text {
+                        text: "打开视频";
+                        color: #ffffff;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

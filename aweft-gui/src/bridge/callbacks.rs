@@ -2,7 +2,7 @@ use crate::actions::sequence::SequenceAction;
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, MainWindow, NodeGraphCallbacks,
-    SequenceCallbacks,
+    SequenceCallbacks, VideoCallbacks,
 };
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::reducers::media::connect_video_to_wgpu;
@@ -37,6 +37,15 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_node_graph_callbacks(instance, Rc::clone(&store));
     setup_animation_callbacks(instance, Rc::clone(&store));
     setup_nla_callbacks(instance, Rc::clone(&store));
+    setup_video_callbacks(instance, Rc::clone(&store));
+}
+
+/// 设置视口回调：打开视频（当前为占位——文件选择器接入后在此调用
+/// `initialize_media` 并连接 wgpu 输出）。
+fn setup_video_callbacks(instance: &MainWindow, _store: Rc<RefCell<AppStore>>) {
+    instance.global::<VideoCallbacks>().on_open_video(move || {
+        log::info!("打开视频：待接入文件选择对话框（rfd 等）后调用 initialize_media");
+    });
 }
 
 /// 设置节点图编辑器回调：图操作走 `Action::NodeGraph` → dispatch → tag → 投影。

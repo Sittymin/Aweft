@@ -1,15 +1,151 @@
-export component VideoPlayer {
+// 视口播放器：视频画布。
+//  - 背景铺满整个 Area，使用比视频占位更亮的颜色；clip 限制在视口 Area 内
+//  - 中间是 16:9（1080P）的黑色视频占位：以世界坐标 [0..1920]×[0..1080] 定位，
+//    初始适应视口居中；滚轮以光标为中心缩放、中键拖拽平移（同其他编辑器画布）
+//  - 横向/竖向标尺复用曲线编辑器的刻度文字（TickLabels，无背景、无刻度线、无网格），
+//    直接浮在页面上：顶部横标尺 = 水平像素，左侧竖标尺 = 垂直像素
+//  - 视频四周有几何级数外扩的同心参考框（近密远疏、渐隐），辅助定位
+//  - 未加载视频时显示为黑色占位，加载后视频画面按 contain 铺在其内
+import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { TickLabels } from "../graph_editor/ruler.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component VideoPlayer inherits Rectangle {
     in property <image> video-frame <=> image.source;
-    image := Image {
-        x: 0;
-        y: 0;
+
+    background: #3a3a40;
+    clip: true;
+
+    // 画布导航状态（屏幕坐标 = 世界坐标 × 缩放 + 平移；两轴同比例缩放保持视频比例）
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-pan-y: 0.0;
+    private property <float> nav-zoom: 1.0;
+
+    // 视频世界尺寸（1080P：1920×1080）
+    private property <float> video-world-w: 1920.0;
+    private property <float> video-world-h: 1080.0;
+
+    // 可见世界范围（X 水平像素 / Y 垂直像素，供标尺刻度计算）
+    private property <float> view-x-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    private property <float> view-x-hi: (root.width / 1px - root.nav-pan-x) / root.nav-zoom;
+    private property <float> view-y-lo: (0px - root.nav-pan-y * 1px) / (root.nav-zoom * 1px);
+    private property <float> view-y-hi: (root.height / 1px - root.nav-pan-y) / root.nav-zoom;
+
+    // 首次布局后适应视口一次（之后用户自由缩放/平移）
+    private property <bool> fitted: false;
+    changed width => {
+        root.try-fit();
+    }
+    changed height => {
+        root.try-fit();
+    }
+    function try-fit() {
+        if !root.fitted && root.width > 0px && root.height > 0px {
+            root.fit-to-view();
+            root.fitted = true;
+        }
+    }
+    function fit-to-view() {
+        let fit-z: float = min(
+            root.width / (root.video-world-w * 1px),
+            root.height / (root.video-world-h * 1px));
+        if fit-z > 0.0 {
+            root.nav-zoom = fit-z;
+            root.nav-pan-x = (root.width / 1px - root.video-world-w * fit-z) / 2.0;
+            root.nav-pan-y = (root.height / 1px - root.video-world-h * fit-z) / 2.0;
+        }
+    }
+
+    // 参考框（纯 UI）：以视频为中心、按几何级数向外扩展的同心矩形。
+    // 相邻框边长比恒定 → 间距等比递增，越靠近视频越密、越远越疏，便于定位；
+    // 透明度随层数衰减，远处渐隐减少视觉干扰。数量/增长系数可调。
+    // 性能：固定数量的 Rectangle 描边（同曲线编辑器刻度按 zoom 重算几何的思路，
+    // 但数量恒定），随导航仅重算几何，无模型/Rust 参与。
+    private property <int> frame-count: 10;
+    private property <float> frame-growth: 1.3; // 相邻框边长比（首框外扩 30%）
+    private property <float> frame-opacity: 0.3; // 首框描边不透明度
+    private property <float> frame-fade: 0.8; // 每向外一层的不透明度乘数
+
+    for frame[i] in root.frame-count: Rectangle {
+        width: root.video-world-w * Math.pow(root.frame-growth, i + 1) * root.nav-zoom * 1px;
+        height: root.video-world-h * Math.pow(root.frame-growth, i + 1) * root.nav-zoom * 1px;
+        x: root.nav-pan-x * 1px + (root.video-world-w * root.nav-zoom * 1px - self.width) / 2;
+        y: root.nav-pan-y * 1px + (root.video-world-h * root.nav-zoom * 1px - self.height) / 2;
+        border-width: 1px;
+        border-color: Theme.data.animation-editor.ruler-text;
+        opacity: max(0.04, root.frame-opacity * Math.pow(root.frame-fade, i));
+    }
+
+    // 视频占位（黑色，世界坐标按缩放/平移定位）
+    Rectangle {
+        x: root.nav-pan-x * 1px;
+        y: root.nav-pan-y * 1px;
+        width: root.video-world-w * root.nav-zoom * 1px;
+        height: root.video-world-h * root.nav-zoom * 1px;
+        background: black;
+        clip: true;
+
+        image := Image {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            horizontal-tiling: none;
+            vertical-tiling: none;
+            image-fit: contain;
+            // image-fit: fill;
+        }
+    }
+
+    // 顶部横向标尺：无背景、无刻度线，仅主刻度数字（水平像素）
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 16px;
+        clip: true;
+        TickLabels {
+            width: 100%;
+            height: 100%;
+            vertical: true;
+            view-lo: root.view-x-lo;
+            view-hi: root.view-x-hi;
+            zoom: root.nav-zoom;
+            pan: root.nav-pan-x;
+            label-color: Theme.data.animation-editor.ruler-text;
+        }
+    }
+
+    // 左侧竖向标尺：无背景、无刻度线，仅主刻度数字（垂直像素）
+    Rectangle {
+        x: 0px;
+        y: 0px;
         width: 100%;
         height: 100%;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        horizontal-tiling: none;
-        vertical-tiling: none;
-        image-fit: contain;
-        // image-fit: fill;
+        clip: true;
+        TickLabels {
+            width: 100%;
+            height: 100%;
+            vertical: false;
+            view-lo: root.view-y-lo;
+            view-hi: root.view-y-hi;
+            zoom: root.nav-zoom;
+            pan: root.nav-pan-y;
+            label-color: Theme.data.animation-editor.ruler-text;
+        }
+    }
+
+    // 画布导航（置于最上层；视频占位与标尺均无 TouchArea，事件全部由它接管）
+    nav := CanvasNavigation {
+        width: 100%;
+        height: 100%;
+        pan-x <=> root.nav-pan-x;
+        pan-y <=> root.nav-pan-y;
+        zoom-x <=> root.nav-zoom;
+        zoom-y <=> root.nav-zoom;
+        max-zoom: 16.0;
+        zoom-step: 1.2;
     }
 }

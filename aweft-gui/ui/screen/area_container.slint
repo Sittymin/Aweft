@@ -3,6 +3,7 @@ import { ActionZone } from "action_zone.slint";
 import { AreaHeader } from "../areas/area_header.slint";
 import { LineEditor } from "../areas/line_editor/view.slint";
 import { VideoPlayer } from "../areas/viewport/view.slint";
+import { ViewportToolbar } from "../areas/viewport/toolbar.slint";
 import { StyleGraphToolbar } from "../areas/style_graph/toolbar.slint";
 import { AppGraphToolbar } from "../areas/app_graph/toolbar.slint";
 import { NodeGraphEditor } from "../areas/node_graph/editor.slint";
@@ -43,7 +44,7 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
-        if area-type == SlintAreaType.viewport: AreaHeader {
+        if area-type == SlintAreaType.viewport: ViewportToolbar {
             area-key: area-key;
             area-type: area-type;
         }
