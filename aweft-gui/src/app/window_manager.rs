@@ -4,8 +4,46 @@ use crate::store::AppStore;
 use anyhow::{Context, Result};
 use aweft_model::sequence::GroupData;
 use slint::ComponentHandle;
-use slint::wgpu_29::{WGPUConfiguration, WGPUSettings};
+use slint::wgpu_30::WGPUConfiguration;
 use std::{cell::RefCell, rc::Rc};
+
+/// 自建 wgpu 设备/队列（交 slint Manual 配置使用）。
+/// TEXTURE_FORMAT_16BIT_NORM：P010 10bit 视频平面（R16Unorm/Rg16Unorm）必需。
+fn create_wgpu_device() -> Result<(
+    slint::wgpu_30::wgpu::Instance,
+    slint::wgpu_30::wgpu::Adapter,
+    slint::wgpu_30::wgpu::Device,
+    slint::wgpu_30::wgpu::Queue,
+)> {
+    use slint::wgpu_30::wgpu;
+    // surface 由 slint 后续从该 instance 创建；adapter 先按性能偏好选取
+    // （原生平台 request_adapter 在首次 poll 即完成，block_on 不会卡）
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter =
+        futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .context("无可用 wgpu 适配器")?;
+    let mut required_features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+    if adapter
+        .features()
+        .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
+    {
+        required_features |= wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+        log::info!("启用 wgpu Vulkan DMA-BUF 外部内存特性");
+    } else {
+        log::debug!("当前 wgpu 适配器不支持 Vulkan DMA-BUF 外部内存特性");
+    }
+    let (device, queue) =
+        futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            ..Default::default()
+        }))
+        .context("创建 wgpu 设备失败（TEXTURE_FORMAT_16BIT_NORM 不受支持？）")?;
+    Ok((instance, adapter, device, queue))
+}
 
 /// 简化的应用窗口管理器
 pub struct AppWindowManager {
@@ -27,13 +65,22 @@ impl AppWindowManager {
             ),
         )
         .init();
-        // 强制选择winit后端
+        // 强制选择winit后端。Manual 自建 wgpu 设备（slint 官方推荐的纹理导入
+        // 用法）：启用 16bit 归一化纹理格式（R16Unorm/Rg16Unorm，P010 10bit
+        // 视频平面导入/上传必需；WGPUSettings 为 non_exhaustive 无法局部修改，
+        // Automatic 默认不含该特性）。
         {
+            let (instance, adapter, device, queue) = create_wgpu_device()?;
             let sel = BackendSelector::new();
             let res = sel
                 .backend_name("winit".into())
                 // 使用 WGPU 渲染以支持视频显示
-                .require_wgpu_29(WGPUConfiguration::Automatic(WGPUSettings::default()))
+                .require_wgpu_30(WGPUConfiguration::Manual {
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                })
                 .select();
             if let Err(e) = res {
                 log::error!("Slint 后端选择失败: {:?}", e);
@@ -109,8 +156,12 @@ impl AppWindowManager {
     pub fn run(&mut self) -> Result<()> {
         crate::bridge::callbacks::setup_callbacks(&self.instance, Rc::clone(&self.store));
 
-        // 直接启动 UI 事件循环
-        self.instance.run().context("启动 UI 事件循环失败")
+        let result = self.instance.run().context("启动 UI 事件循环失败");
+
+        // 退出前统一释放视频管线、appsink 和 GPU 资源。
+        crate::render::video_sink::teardown(&mut self.store.borrow_mut());
+
+        result
     }
 }
 
@@ -141,9 +192,7 @@ fn create_test_subtitle_data(project: &mut aweft_model::project::Project) {
         color: None,
         children: Vec::new(),
     };
-    let group_id = sequence
-        .create_group(group, ItemLocation::Root(1))
-        .unwrap();
+    let group_id = sequence.create_group(group, ItemLocation::Root(1)).unwrap();
 
     // 在分组内创建事件
     let event2 = EventData {

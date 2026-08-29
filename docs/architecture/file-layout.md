@@ -37,7 +37,12 @@ src/
 ├── render/              # 渲染进 Slint
 │   ├── subtitle.rs      # 字幕渲染（wgpu + libass 图块实例化）
 │   ├── subtitle.wgsl    # 字幕着色器
-│   └── video_sink/      # 视频播放（gstreamer → Slint，software_rendering / wgpu_integration）
+│   └── video_sink/      # 视频播放（GStreamer → wgpu → Slint）
+│       ├── mod.rs       # 播放管线生命周期
+│       ├── wgpu.rs      # appsink、帧队列和 YUV→RGB
+│       ├── dmabuf.rs    # DMA-BUF 平面导入
+│       ├── yuv_convert.wgsl # YUV→RGB 着色器
+│       └── tests.rs     # 播放与着色器测试
 ├── screen/              # 屏幕布局（area / edge / vertex / map / primitives + ops/：split/join/move_edge/cleanup）
 ├── store/               # 状态中心：`AppState` 持有 `aweft-model::Project`（唯一真相，reducers 改 / projections 只读）+ 各编辑器状态
 │   ├── app_store.rs     # AppStore：dispatch 总表 + depsgraph 求值 + 访问器（单一数据源）
@@ -106,4 +111,3 @@ actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动 aweft-mod
 
 四层目录均为 `src/` 同层，深度一致；`store/` 字面即"落点"，不再有层级倒挂。
 改动唯一真相只有 `reducers/` 一条路（例外：启动初始化 `window_manager` / `new_editing_action`）。
-

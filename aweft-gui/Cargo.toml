@@ -5,25 +5,28 @@ edition = "2024"
 
 [dependencies]
 bitflags = "2.13.1"
-slint = { version = "1.17.1", features = [
+# Slint 上游 master：wgpu 30 支持（unstable-wgpu-30）尚未随 1.18.0 发版到
+# crates.io，故以 git 依赖固定到当前 commit。直接用 wgpu 30 原生
+# `vulkan::Device::texture_from_dmabuf_fd` 替代自建的 ash 绕过补丁
+#（wgpu-hal-29-patch 已移除）。
+slint = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d", features = [
     "backend-winit",
     "renderer-femtovg-wgpu",
     "unstable-winit-030",
-    "unstable-wgpu-29",
+    "unstable-wgpu-30",
     "live-preview",
 ] }
-wgpu = { version = "29", package = "wgpu", features = ["wgsl"] }
+# wgpu 一律经 slint 重导出使用（slint::wgpu_30::wgpu），不直接依赖，版本由 slint 统一
 slotmap = "1.1.1"
 tokio = { version = "1.53.1", features = ["full"] }
 anyhow = "1.0.104"
 log = "0.4.33"
 env_logger = "0.11.11"
 gstreamer = { version = "0.25", package = "gstreamer" }
-gstreamer-app = { version = "0.25", package = "gstreamer-app" }
-gstreamer-video = { version = "0.25", package = "gstreamer-video" }
-gstreamer-gl = { version = "0.25", package = "gstreamer-gl" }
-gstreamer-gl-egl = { version = "0.25", package = "gstreamer-gl-egl" }
-glutin_egl_sys = "0.7.1"
+gstreamer-app = { version = "0.25", package = "gstreamer-app", features = ["v1_24"] }
+gstreamer-video = { version = "0.25", package = "gstreamer-video", features = ["v1_24"] }
+gstreamer-allocators = { version = "0.25", package = "gstreamer-allocators" }
+libc = "0.2"
 url = "2.5.8"
 futures = "0.3.33"
 aweft-libass = { path = "../aweft-libass" }
@@ -36,9 +39,14 @@ chrono = "0.4.45"
 serde = "1.0.229"
 serde_json = "1.0.151"
 arboard = "3.6.1"
+# 文件对话框：Linux 走 xdg-desktop-portal（纯 DBus，无需 gtk3 系统库）；
+# async-std 后端自带执行器，future 可直接在 slint::spawn_local 中 await
+# （tokio 后端则要求 tokio reactor 上下文）
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+
 
 [build-dependencies]
-slint-build = "1.17.1"
+slint-build = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d" }
 
 [dev-dependencies]
-i-slint-backend-testing = "1.17.1"
+i-slint-backend-testing = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d" }

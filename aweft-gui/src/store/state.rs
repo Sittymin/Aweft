@@ -60,6 +60,8 @@ pub struct AppState {
     pub video_sink: Option<gstreamer::Element>,
     // WGPU 视频 Sink 实例
     pub wgpu_sink: Option<crate::render::video_sink::SlintWGPUSink>,
+    // 渲染器 GPU 句柄（RenderingSetup 时缓存；打开视频时按需连接 Sink）
+    pub video_wgpu: Option<crate::render::video_sink::WgpuHandles>,
     // 字幕渲染器
     pub subtitle_renderer: Option<crate::render::subtitle::SubtitleRenderer>,
     // libass 字幕渲染器
@@ -79,6 +81,7 @@ impl AppState {
             video_pipeline: None,
             video_sink: None,
             wgpu_sink: None,
+            video_wgpu: None,
             subtitle_renderer: None,
             libass_renderer: None,
         }

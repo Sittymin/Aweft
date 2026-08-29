@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use aweft_libass::types::Image;
-use slint::wgpu_29::wgpu;
+use slint::wgpu_30::wgpu;
 use wgpu::util::DeviceExt; // NOTE: 实例化渲染需要用到 create_buffer_init
 
 // 实例化渲染：每个字幕图块的实例数据
@@ -175,7 +175,7 @@ impl SubtitleRenderer {
     // 3. 【初始化动作】在 `new` 方法中执行一次性的资源创建。
     pub fn new(graphics_api: &slint::GraphicsAPI<'_>) -> Self {
         match graphics_api {
-            slint::GraphicsAPI::WGPU29 { device, queue, .. } => {
+            slint::GraphicsAPI::WGPU30 { device, queue, .. } => {
                 let wgpu_device = device.clone();
                 let wgpu_queue = queue.clone();
 
@@ -324,7 +324,7 @@ impl SubtitleRenderer {
                 module: &shader_module,
                 entry_point: Some("vs_main"),
                 // WARN: 需要与 wgsl 当中的定义一致
-                buffers: &[SubtitleInstanceData::vertex_buffer_layout()],
+                buffers: &[Some(SubtitleInstanceData::vertex_buffer_layout())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {

@@ -137,6 +137,9 @@ impl crate::store::AppStore {
                 ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
                 SetCurrentTime { time } => {
                     ce.current_time = time as f64;
+                    // 编辑器是时间权威：拖动播放头同步驱动视频到同一时刻
+                    // （无管线时忽略；播放中 seek 后位置查询自然从新位置继续）
+                    crate::reducers::media::seek_to_secs(&self.state, time as f64);
                     vec![Tag::GraphScalarsChanged]
                 }
                 ViewChanged { zoom_x, zoom_y } => ce.set_view(zoom_x, zoom_y),

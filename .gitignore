@@ -1,4 +1,5 @@
 /target
+/wgpu-hal-29-patch/
 
 # 忽略备份文件
 *~

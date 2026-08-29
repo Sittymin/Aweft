@@ -9,6 +9,7 @@
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { TickLabels } from "../graph_editor/ruler.slint";
 import { Theme } from "../../theme/index.slint";
+import { VideoState } from "../../bridge/state.slint";
 
 export component VideoPlayer inherits Rectangle {
     in property <image> video-frame <=> image.source;
@@ -21,9 +22,10 @@ export component VideoPlayer inherits Rectangle {
     private property <float> nav-pan-y: 0.0;
     private property <float> nav-zoom: 1.0;
 
-    // 视频世界尺寸（1080P：1920×1080）
-    private property <float> video-world-w: 1920.0;
-    private property <float> video-world-h: 1080.0;
+    // 视频世界尺寸：绑定到 VideoState，首帧到来时动态更新。
+    // 初始 0×0——无视频时占位不可见，首帧到来后 re-fit。
+    in-out property <float> video-world-w: VideoState.video-width > 0 ? VideoState.video-width : 1920.0;
+    in-out property <float> video-world-h: VideoState.video-height > 0 ? VideoState.video-height : 1080.0;
 
     // 可见世界范围（X 水平像素 / Y 垂直像素，供标尺刻度计算）
     private property <float> view-x-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
@@ -31,12 +33,21 @@ export component VideoPlayer inherits Rectangle {
     private property <float> view-y-lo: (0px - root.nav-pan-y * 1px) / (root.nav-zoom * 1px);
     private property <float> view-y-hi: (root.height / 1px - root.nav-pan-y) / root.nav-zoom;
 
-    // 首次布局后适应视口一次（之后用户自由缩放/平移）
+    // 首次布局后适应视口一次（之后用户自由缩放/平移）；
+    // 视频尺寸到来时重新适应（fitted 重置）。
     private property <bool> fitted: false;
     changed width => {
         root.try-fit();
     }
     changed height => {
+        root.try-fit();
+    }
+    changed video-world-w => {
+        root.fitted = false;
+        root.try-fit();
+    }
+    changed video-world-h => {
+        root.fitted = false;
         root.try-fit();
     }
     function try-fit() {
@@ -94,8 +105,9 @@ export component VideoPlayer inherits Rectangle {
             vertical-alignment: center;
             horizontal-tiling: none;
             vertical-tiling: none;
-            image-fit: contain;
-            // image-fit: fill;
+            // 矩形宽高由 VideoState 设置，已编码显示比例（含 PAR 换算），
+            // 必须 fill 铺满；contain 会以纹理存储比例兜底留黑边（变形片源）。
+            image-fit: fill;
         }
     }
 

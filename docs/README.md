@@ -8,6 +8,7 @@ docs/
 │   ├── slint-update-patterns.md# Slint 局部更新（adapter/两层数据源/重建白名单）
 │   ├── headless-testing.md     # 无头 UI 测试
 │   ├── animation-editor.md     # 动画编辑器
+│   ├── video-playback.md        # 视频播放管线与渲染生命周期
 │   └── file-layout.md          # 文件布局
 └── conventions/
     └── coding-style.md         # 编码规范 + 写文档规范

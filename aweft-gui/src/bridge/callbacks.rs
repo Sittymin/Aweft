@@ -5,7 +5,6 @@ use crate::bridge::types::{
     SequenceCallbacks, VideoCallbacks,
 };
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
-use crate::reducers::media::connect_video_to_wgpu;
 use crate::store::AppStore;
 use aweft_model::ids::ItemId;
 use log::warn;
@@ -40,11 +39,39 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_video_callbacks(instance, Rc::clone(&store));
 }
 
-/// 设置视口回调：打开视频（当前为占位——文件选择器接入后在此调用
-/// `initialize_media` 并连接 wgpu 输出）。
-fn setup_video_callbacks(instance: &MainWindow, _store: Rc<RefCell<AppStore>>) {
+/// 设置视口回调：打开视频走系统文件对话框（rfd xdg-portal，异步不阻塞 UI）。
+/// 选中后 dispatch 建管线（reducer 层），再连接 WGPU 输出并自动播放（渲染层）。
+/// 对话框 future 在 `spawn_local` 中 await（同官方 gstreamer-player 示例的
+/// 异步模式；portal 后端用 async-std 特性以脱离 tokio 上下文）。
+fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let weak = instance.as_weak();
     instance.global::<VideoCallbacks>().on_open_video(move || {
-        log::info!("打开视频：待接入文件选择对话框（rfd 等）后调用 initialize_media");
+        let future = rfd::AsyncFileDialog::new()
+            .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
+            .pick_file();
+        let weak = weak.clone();
+        let store = Rc::clone(&store);
+        let _ = slint::spawn_local(async move {
+            // 用户取消选择
+            let Some(file) = future.await else {
+                return;
+            };
+            // 本地路径 → file URI（playbin 需要 URI）
+            let path = file.path().to_path_buf();
+            let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
+                log::warn!("打开视频：路径无法转换为 URI：{}", path.display());
+                return;
+            };
+
+            // 1. dispatch 建管线 + 按后端嵌入/连接 + 启动（渲染层编排）
+            dispatch_and_render(
+                &store,
+                Action::Media(crate::actions::media::MediaAction::Video(
+                    crate::actions::media::VideoAction::Initialize { uri },
+                )),
+                &weak,
+            );
+        });
     });
 }
 
@@ -269,6 +296,12 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
                     handle_before_rendering(instance, &store);
                 }
             }
+            RenderingState::AfterRendering => {
+                let mut store_mut = store.borrow_mut();
+                if let Some(sink) = store_mut.state_mut().wgpu_sink.as_mut() {
+                    sink.after_rendering();
+                }
+            }
             RenderingState::RenderingTeardown => {
                 // Teardown 通常不需要实例
                 handle_rendering_teardown(&store);
@@ -280,24 +313,57 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
     }
 }
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {
-    // 清理 WGPU sink (链式调用玩直接释放锁)
-    if let Some(wgpu_sink) = &store.borrow().state().wgpu_sink {
-        wgpu_sink.deactivate_and_pause();
-    }
+    crate::render::video_sink::teardown(&mut store.borrow_mut());
 }
 
 fn handle_before_rendering(instance: &MainWindow, store: &Rc<RefCell<AppStore>>) {
+    let mut store_mut = store.borrow_mut();
+
+    // 未打开视频：高频路径零开销返回（不查位置、不碰 Sink）
+    if store_mut.state().video_pipeline.is_none() {
+        return;
+    }
+
     // 获取新的视频帧并设置到 UI
-    let mut image_opt = None;
-    if let Some(wgpu_sink) = &store.borrow_mut().state().wgpu_sink {
-        image_opt = wgpu_sink.fetch_next_frame();
-    }
-    if let Some(image) = image_opt {
+    let frame_opt = store_mut
+        .state_mut()
+        .wgpu_sink
+        .as_mut()
+        .and_then(|wgpu_sink| wgpu_sink.fetch_next_frame());
+    if let Some((image, w, h)) = frame_opt {
         log::debug!("收到新视频帧，设置到 UI");
-        instance
-            .global::<crate::bridge::types::VideoState>()
-            .set_current_video_frame(image);
+        let video_state = instance.global::<crate::bridge::types::VideoState>();
+        video_state.set_current_video_frame(image);
+        if let (Some(w), Some(h)) = (w, h) {
+            video_state.set_video_width(w as i32);
+            video_state.set_video_height(h as i32);
+        }
     }
+
+    sync_playback_time(&mut store_mut);
+}
+
+/// 播放中随帧同步管线位置到动画域当前时间，驱动全部编辑器播放头。
+/// 高频路径（每帧）与视频帧一样直接写：不经 dispatch/depsgraph，
+/// 但复用投影同一出口 `sync_animation_scalars`。
+/// 时间按视频帧时长向下取整——播放头逐帧跳动而非逐查询抖动。
+fn sync_playback_time(store: &mut AppStore) {
+    let Some((secs, frame_dur)) = crate::reducers::media::playing_position(store.state()) else {
+        return;
+    };
+    let snapped = match frame_dur {
+        Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
+        _ => secs,
+    };
+    {
+        let ce = &mut store.ui_models.animation.graph;
+        // 与上次显示值相同（同一帧内多次渲染）则跳过
+        if (ce.current_time - snapped).abs() < 0.005 {
+            return;
+        }
+        ce.current_time = snapped;
+    }
+    store.sync_animation_scalars();
 }
 
 fn handle_rendering_setup(
@@ -313,9 +379,22 @@ fn handle_rendering_setup(
     });
     dispatch_and_render(store, action, &instance.as_weak());
 
-    // HACK: 后续需要修改为按需执行
-    if let Err(e) = connect_video_to_wgpu(store, instance, graphics_api) {
-        log::error!("❌ 视频系统连接失败: {}", e);
+    // 缓存渲染器 GPU 句柄：GraphicsAPI 仅在本回调期间有效，克隆出的
+    // Instance/Device/Queue 供之后按需连接视频 Sink（打开视频时，reducers/media）。
+    match graphics_api {
+        slint::GraphicsAPI::WGPU30 {
+            instance,
+            device,
+            queue,
+            ..
+        } => {
+            store.borrow_mut().state_mut().video_wgpu = Some((
+                std::sync::Arc::new(instance.clone()),
+                std::sync::Arc::new(device.clone()),
+                std::sync::Arc::new(queue.clone()),
+            ));
+        }
+        _ => log::warn!("非 WGPU 渲染器，视频输出不可用"),
     }
 }
 
@@ -689,10 +768,7 @@ fn setup_sequence_selection_callbacks(instance: &MainWindow, store: Rc<RefCell<A
             };
             dispatch_and_render(
                 &s,
-                Action::Sequence(SequenceAction::TimelineBlockDragPreview {
-                    item_id,
-                    delta_x,
-                }),
+                Action::Sequence(SequenceAction::TimelineBlockDragPreview { item_id, delta_x }),
                 &weak,
             );
         });
@@ -707,10 +783,7 @@ fn setup_sequence_selection_callbacks(instance: &MainWindow, store: Rc<RefCell<A
             };
             dispatch_and_render(
                 &s,
-                Action::Sequence(SequenceAction::TimelineBlockDragCommit {
-                    item_id,
-                    delta_x,
-                }),
+                Action::Sequence(SequenceAction::TimelineBlockDragCommit { item_id, delta_x }),
                 &weak,
             );
         });
@@ -725,9 +798,7 @@ fn setup_sequence_selection_callbacks(instance: &MainWindow, store: Rc<RefCell<A
             };
             dispatch_and_render(
                 &s,
-                Action::Sequence(SequenceAction::TimelineBlockDragCancel {
-                    item_id,
-                }),
+                Action::Sequence(SequenceAction::TimelineBlockDragCancel { item_id }),
                 &weak,
             );
         });

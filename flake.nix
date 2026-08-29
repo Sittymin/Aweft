@@ -34,6 +34,11 @@
           fontconfig # Slint 和 libass 都需要
           vulkan-loader
           mesa
+          # GStreamer 视频硬解运行时（Intel：VA-API，iHD 驱动）
+          libva
+          intel-media-driver
+          # libgstwayland-1.0（waylandsink 子 surface 嵌入）
+          gst_all_1.gst-plugins-bad
         ];
         libassRuntimeDeps = with pkgs; [
           freetype
@@ -43,6 +48,10 @@
 
         buildToolsAndDevLibs = with pkgs; [
           pkg-config
+          curl
+          gnutar
+          gzip
+          gnupatch
 
           # libass build
           autoconf
