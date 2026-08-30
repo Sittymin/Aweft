@@ -14,8 +14,11 @@ import { DopeSheetToolbar } from "../areas/dope_sheet/toolbar.slint";
 import { NlaEditor } from "../areas/animation/nla_editor.slint";
 import { NlaToolbar } from "../areas/animation/toolbar.slint";
 import { TimelineEditor } from "../areas/timeline/timeline_editor.slint";
-import { VideoState, SubtitleState } from "../bridge/state.slint";
-import { NodeGraphState, AnimationState } from "../bridge/state.slint";
+import { TimelineToolbar } from "../areas/timeline/toolbar.slint";
+import { AudioWaveformArea } from "../areas/audio_waveform.slint";
+import { AudioWaveformToolbar } from "../areas/audio_waveform_toolbar.slint";
+import { SubtitleState } from "../bridge/state.slint";
+import { NodeGraphState, AnimationState, VideoState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
 
 // Area 容器组件：包含 Area 的边框、ActionZone 和内容
@@ -30,6 +33,11 @@ export component SlintScrArea inherits Rectangle {
 
     // 是否正在编辑链（节点图 Area 状态；切换 Area 类型时复位）
     private property <bool> chain-editing: false;
+    // This selection is intentionally local: several waveform Areas may inspect different tracks.
+    private property <int> waveform-audio-index: 0;
+    private property <float> waveform-current-time: root.waveform-audio-index >= 0
+        && root.waveform-audio-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.waveform-audio-index].time : 0.0;
 
     x: container-x;
     y: container-y;
@@ -48,7 +56,7 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
-        if area-type == SlintAreaType.timeline: AreaHeader {
+        if area-type == SlintAreaType.timeline: TimelineToolbar {
             area-key: area-key;
             area-type: area-type;
         }
@@ -74,11 +82,17 @@ export component SlintScrArea inherits Rectangle {
             area-key: area-key;
             area-type: area-type;
         }
+        if area-type == SlintAreaType.audio-waveform: AudioWaveformToolbar {
+            area-key: area-key;
+            area-type: area-type;
+            audio-index: root.waveform-audio-index;
+            audio-selected(index) => {
+                root.waveform-audio-index = index;
+            }
+        }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
-        if area-type == SlintAreaType.viewport: VideoPlayer {
-            video-frame: VideoState.current-video-frame;
-        }
+        if area-type == SlintAreaType.viewport: VideoPlayer { }
         if area-type == SlintAreaType.timeline: TimelineEditor {
             rows: SubtitleState.rows;
             timeline-root-blocks: SubtitleState.timeline-root-blocks;
@@ -149,6 +163,10 @@ export component SlintScrArea inherits Rectangle {
             // 编辑器在窗口中的位置（搜索框遮罩挖孔定位）
             window-x: root.container-x + self.x;
             window-y: root.container-y + self.y;
+        }
+        if area-type == SlintAreaType.audio-waveform: AudioWaveformArea {
+            current-time: root.waveform-current-time;
+            audio-index: root.waveform-audio-index;
         }
     }
 

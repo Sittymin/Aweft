@@ -17,8 +17,7 @@ use chrono::TimeDelta;
 use slint::{Model, ModelNotify, ModelRc, ModelTracker, SharedString, ToSharedString};
 
 use crate::bridge::{
-    SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, SlintTimelineSubBlock,
-    format_time,
+    SlintSelectionState, SlintSubtitleRow, SlintSubtitleRowType, SlintTimelineSubBlock, format_time,
 };
 
 /// 一个扁平化行的索引锚点：结构变化时重建，`row_data(i)` 用它 O(1) 定位。
@@ -255,7 +254,10 @@ impl SequenceRowsModel {
     /// 某 item 是否为分组。`group_row_counts` 的键恰为全部组头 id
     /// （flatten 时仅为 Group 插入），O(1) 查询。
     pub fn is_group_item(&self, item_id: ItemId) -> bool {
-        self.flattened.borrow().group_row_counts.contains_key(&item_id)
+        self.flattened
+            .borrow()
+            .group_row_counts
+            .contains_key(&item_id)
     }
 
     /// 通知某行值变化（时间码/折叠/选中），Slint 精确重算该行。
@@ -362,12 +364,7 @@ impl SequenceRowsModel {
     /// - 参考行是 event → 插到其后（depth 相同）；
     /// - 参考行是 group → 插到其子树末尾（depth+1，作为组内首项）。
     /// `notify.row_added`——Slint 只新建该行实例，存量复用。
-    pub fn insert_after(
-        &self,
-        sequence: &Sequence,
-        item_id: ItemId,
-        new_item_id: ItemId,
-    ) -> usize {
+    pub fn insert_after(&self, sequence: &Sequence, item_id: ItemId, new_item_id: ItemId) -> usize {
         let mut flattened = self.flattened.borrow_mut();
         let Some(ref_idx) = flattened.anchors.iter().position(|a| a.item_id == item_id) else {
             return 0;
@@ -442,12 +439,7 @@ impl SequenceRowsModel {
     /// 在指定索引批量插入多个子树（粘贴）。
     ///
     /// 一次 `notify.row_added(at, total_count)`——Slint splice 批量插入，存量复用。
-    pub fn insert_subtrees(
-        &self,
-        sequence: &Sequence,
-        at: usize,
-        items: &[ItemId],
-    ) -> usize {
+    pub fn insert_subtrees(&self, sequence: &Sequence, at: usize, items: &[ItemId]) -> usize {
         let mut flattened = self.flattened.borrow_mut();
         let depth = anchor_depth(&flattened, at.saturating_sub(1));
         let ancestors = anchor_ancestors(&flattened, at.saturating_sub(1));
@@ -614,9 +606,9 @@ fn empty_row(
         end_time: SharedString::new(),
         start_sec: 0.0,
         end_sec: 0.0,
-        child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(Vec::<
-            SlintTimelineSubBlock,
-        >::new()))),
+        child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(
+            Vec::<SlintTimelineSubBlock>::new(),
+        ))),
         item_id: item_id.to_string().to_shared_string(),
         selected: SlintSelectionState::Unselected,
         total_row_count: 1,
@@ -642,9 +634,9 @@ fn build_row(data: &RowData, sequence: &Sequence) -> Option<SlintSubtitleRow> {
             end_time: format_time(event.end_time),
             start_sec: event.start_time.num_milliseconds() as f32 / 1000.0,
             end_sec: event.end_time.num_milliseconds() as f32 / 1000.0,
-            child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(Vec::<
-                SlintTimelineSubBlock,
-            >::new()))),
+            child_blocks: ModelRc::new(Rc::new(slint::VecModel::from(
+                Vec::<SlintTimelineSubBlock>::new(),
+            ))),
             item_id: item_id_str,
             selected: SlintSelectionState::Unselected,
             text: event.text.to_shared_string(),
@@ -729,10 +721,7 @@ fn aggregate_group(group_id: ItemId, sequence: &Sequence) -> (Option<(i64, i64)>
 
 /// 递归收集分组内所有字幕行的时间块（时间线折叠组头时在组头泳道显示）。
 /// 嵌套分组递归展开；只收集有有效时间范围的字幕行。
-fn collect_child_blocks(
-    children: &[ItemId],
-    sequence: &Sequence,
-) -> Vec<SlintTimelineSubBlock> {
+fn collect_child_blocks(children: &[ItemId], sequence: &Sequence) -> Vec<SlintTimelineSubBlock> {
     let mut out: Vec<SlintTimelineSubBlock> = Vec::new();
     for id in children {
         let Some(item) = sequence.get(*id) else {

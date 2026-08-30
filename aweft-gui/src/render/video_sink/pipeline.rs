@@ -237,18 +237,23 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     Ok((pipeline, sink_element, wgpu_sink))
 }
 
-/// 惰性创建音频分支 `queue ! audioconvert ! autoaudiosink` 并加入管线，
+/// 惰性创建音频分支 `queue ! audioconvert ! volume ! autoaudiosink` 并加入管线，
 /// 返回分支入口（queue）。任一元素创建失败则返回 None（静默禁用音频）。
+///
+/// 分支中嵌入 `volume` 元素：拖拽时用软件增益把音量置 0 实现**必然静音**
+/// （与具体音频 sink 的 `mute` 是否可靠无关，也不改动 sink 状态，避免把时钟
+/// 提供方 sink 暂停导致管线崩溃）。正常播放时 volume=1 直通。
 fn build_audio_branch(pipeline: &gstreamer::Pipeline) -> Option<Element> {
     let queue = gstreamer::ElementFactory::make("queue").build().ok()?;
     let convert = gstreamer::ElementFactory::make("audioconvert")
         .build()
         .ok()?;
+    let volume = gstreamer::ElementFactory::make("volume").build().ok()?;
     let sink = gstreamer::ElementFactory::make("autoaudiosink")
         .build()
         .ok()?;
-    pipeline.add_many([&queue, &convert, &sink]).ok()?;
-    gstreamer::Element::link_many([&queue, &convert, &sink]).ok()?;
+    pipeline.add_many([&queue, &convert, &volume, &sink]).ok()?;
+    gstreamer::Element::link_many([&queue, &convert, &volume, &sink]).ok()?;
     Some(queue)
 }
 

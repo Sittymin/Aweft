@@ -1,8 +1,9 @@
 // 视口标题栏：通用 AreaHeader + 中区"打开视频"按钮（@children 注入，
-// 实际文件选择由 Rust 侧处理）。
+// 实际文件选择由 Rust 侧处理）。已打开视频时追加"追加视频"图标按钮。
 import { SlintKey, SlintAreaType } from "../../core/types.slint";
 import { AreaHeader } from "../area_header.slint";
 import { VideoCallbacks } from "../../bridge/callbacks.slint";
+import { VideoState } from "../../bridge/state.slint";
 import { Mixins } from "../../theme/mixins.slint";
 import { Theme } from "../../theme/index.slint";
 
@@ -16,7 +17,7 @@ export component ViewportToolbar inherits Rectangle {
         area-key: root.area-key;
         area-type: root.area-type;
 
-        // 中区内容（@children）：打开视频按钮
+        // 中区内容（@children）：打开视频按钮 + （已有视频时）追加视频图标按钮
         Rectangle {
             height: Theme.data.area-type-switcher.height + 4px;
             background: Mixins.popup-item.selected-background;
@@ -36,6 +37,26 @@ export component ViewportToolbar inherits Rectangle {
                         font-weight: 600;
                         vertical-alignment: center;
                     }
+                }
+            }
+        }
+
+        // 已打开视频后出现的"追加视频"图标按钮（仅图标，无文字）
+        if VideoState.video-frames.length > 0: Rectangle {
+            height: Theme.data.area-type-switcher.height;
+            width: Theme.data.area-type-switcher.height;
+            border-radius: Theme.data.area-type-switcher.border-radius;
+            background: append-area.has-hover ? Mixins.popup-item.highlight-color : transparent;
+            append-area := TouchArea {
+                clicked => {
+                    VideoCallbacks.open-video();
+                }
+                Image {
+                    source: @image-url("../../assets/icons/append_video.svg");
+                    width: Theme.data.area-type-switcher.popup-icon-size;
+                    height: Theme.data.area-type-switcher.popup-icon-size;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
                 }
             }
         }

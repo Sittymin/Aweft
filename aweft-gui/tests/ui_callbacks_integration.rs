@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use aweft_gui::bridge::callbacks::setup_callbacks;
-use aweft_gui::bridge::types::{SequenceCallbacks, MainWindow, SlintSelectionModifier};
+use aweft_gui::bridge::types::{MainWindow, SequenceCallbacks, SlintSelectionModifier};
 use aweft_gui::store::AppStore;
 use aweft_model::sequence::{EventData, ItemContent, ItemLocation};
 use slint::{ComponentHandle, Model, ModelRc};

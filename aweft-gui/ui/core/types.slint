@@ -20,6 +20,21 @@ export enum SlintAreaType {
     dope-sheet,
     // NLA 编辑器（AnimData：非破坏性动画轨道/片断）
     nla-editor,
+    // 音频波形（当前使用固定分桶的占位采样）
+    audio-waveform,
+}
+
+// 每个视频会话的一条音频峰值包络。采样在 Rust 中降采样，Slint 只渲染有界数量的桶。
+export struct SlintAudioWaveformLevel {
+    bucket-duration: float,
+    amplitudes: [float],
+}
+
+export struct SlintAudioWaveform {
+    duration: float,
+    amplitudes: [float],
+    // 预聚合峰值层（2/4/8... 个基础桶合并），由 Rust 持久维护；缩放时只切换层级。
+    levels: [SlintAudioWaveformLevel],
 }
 
 // 节点图类型：样式图（node_graph）与应用图（application_graph）
@@ -133,4 +148,28 @@ export struct SlintSubtitleRow {
     // === 分组数据字段 (row_type == GroupHead 时有效) ===
     group_name: string,
     collapsed: bool,
+}
+
+// 每个视频会话在面板中显示的控制时间条：独立位置（彩虹色）+ 选中/主视频标识。
+// 曲线/摄影表/NLA/时间线的 TimeRuler 叠加显示（TimeRuler 内置于标尺，播放头控制柄
+// 绘制在其上，不遮挡显示时间的框框）。
+export struct SlintVideoTimeBar {
+    // 视频文件名，用作其附带音频轨的波形选择标签。
+    label: string,
+    // 该视频当前播放位置（秒）
+    time: float,
+    // 彩虹色（与曲线编辑器通道同款调色板，按下标取色循环）
+    color: color,
+    // 是否当前选中（选中时时间条描边）
+    selected: bool,
+    // 是否主视频（视觉加粗标识；无选中时 seek 目标）
+    is-main: bool,
+    // 是否显式静音该视频（视口用额外外框表示）
+    muted: bool,
+}
+
+// 视频会话在视口世界坐标中的位置（级联错开落点；非主视频可拖拽移动）
+export struct SlintVideoPos {
+    x: float,
+    y: float,
 }

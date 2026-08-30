@@ -31,8 +31,8 @@ pub type WgpuHandles = (
 
 pub struct SlintWGPUSink {
     pub(crate) appsink: AppSink,
-    // 最新帧：GStreamer 线程写、渲染线程取。dmabuf 帧不可 map，统一存 Sample
-    // （自带 buffer + caps + 元数据），避免按格式分叉存储结构。
+    // GStreamer 回调始终只保留最新一帧；渲染线程慢于解码线程时覆盖旧帧，
+    // 避免积压和追帧。Sample 同时覆盖 sysmem 与 dmabuf。
     pub(crate) next_frame: Arc<Mutex<Option<Sample>>>,
     pub(crate) wgpu_device: Option<Arc<wgpu::Device>>,
     pub(crate) wgpu_queue: Option<Arc<wgpu::Queue>>,
@@ -64,8 +64,8 @@ impl SlintWGPUSink {
         Self {
             appsink: AppSink::builder()
                 .enable_last_sample(false)
-                // max-buffers=1 + drop：appsink 内部队列只保留最新帧，
-                // 渲染线程跟不上时丢旧帧保延迟（不是缓冲上限）
+                // 与 main 保持一致：按媒体时钟交付，队列只保留最新帧。
+                // UI 跟不上时丢弃过期帧，不能让解码器等待 UI 逐帧追赶。
                 .max_buffers(1)
                 .drop(true)
                 .build(),
@@ -93,7 +93,7 @@ impl SlintWGPUSink {
         handles: WgpuHandles,
         bus: &Bus,
         bus_sender: UnboundedSender<Message>,
-        on_frame_arrived: Box<dyn Fn() + Send>,
+        on_frame_arrived: Box<dyn Fn() + Send + Sync>,
     ) -> anyhow::Result<()> {
         let (_, device, queue) = handles;
         let convert = YuvConvertPipeline::new(&device);
@@ -120,20 +120,20 @@ impl SlintWGPUSink {
             .set_callbacks(Self::build_gst_appsink_callbacks(
                 self.next_frame.clone(),
                 self.frame_dur_secs.clone(),
-                Some(on_frame_arrived),
+                Some(Arc::from(on_frame_arrived)),
             ));
         Ok(())
     }
 
-    /// GStreamer appsink 回调集合。`on_frame_arrived` 为新帧就绪通知（None 供
-    /// 测试/离线拉帧用，只保留 allocation 协商）。
+    /// GStreamer appsink 回调集合。播放帧和暂停态 preroll 都在回调线程中取出，
+    /// 覆盖 `next_frame` 的旧值并通知 Slint；渲染线程永远只消费最新帧。
     /// DMA-BUF 分配必须请求 VideoMeta，以获得每个 plane 的 stride/offset。
     /// sysmem 不请求它：部分 GStreamer 分配器会附加与实际 payload 不匹配的
     /// 对齐 stride，导致紧凑 Y410 buffer 被错误解释。
     pub(crate) fn build_gst_appsink_callbacks(
         next_frame: Arc<Mutex<Option<Sample>>>,
         frame_dur_secs: Arc<Mutex<Option<f64>>>,
-        on_frame_arrived: Option<Box<dyn Fn() + Send>>,
+        on_frame_arrived: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> AppSinkCallbacks {
         let mut builder = AppSinkCallbacks::builder().propose_allocation(|_sink, query| {
             // VideoInfo 描述 caps 的紧凑逻辑布局，VideoMeta 描述具体 buffer 的实际
@@ -151,38 +151,27 @@ impl SlintWGPUSink {
             true
         });
         if let Some(frame_arrived) = on_frame_arrived {
-            builder = builder.new_sample(move |appsink| {
-                let sample = appsink
-                    .pull_sample()
-                    .map_err(|_| gstreamer::FlowError::Flushing)?;
-
-                // 记录帧时长（编辑器播放头按帧跳动用）；fps 无效（可变帧率）为 None
-                if let Some(fps) = sample
-                    .caps()
-                    .and_then(|c| c.structure(0))
-                    .and_then(|s| s.get::<Fraction>("framerate").ok())
-                {
-                    if let Ok(mut frame_dur) = frame_dur_secs.lock() {
-                        *frame_dur = if fps.numer() > 0 {
-                            Some(fps.denom() as f64 / fps.numer() as f64)
-                        } else {
-                            None
-                        };
-                    }
-                }
-
-                // try_lock 避免阻塞 GStreamer 线程；锁被渲染线程占用则丢弃本帧
-                if let Ok(mut next_frame) = next_frame.try_lock() {
-                    *next_frame = Some(sample);
-                    drop(next_frame); // 立即释放锁
-                    frame_arrived();
-                } else {
-                    // 锁竞争时丢帧是正常的背压行为；不要按帧写 debug 日志。
-                    log::trace!("丢弃一帧以保持性能");
-                }
-
-                Ok(gstreamer::FlowSuccess::Ok)
-            });
+            let sample_slot = Arc::clone(&next_frame);
+            let frame_duration = Arc::clone(&frame_dur_secs);
+            let preroll_notify = Arc::clone(&frame_arrived);
+            let preroll_slot = Arc::clone(&next_frame);
+            builder = builder
+                .new_sample(move |appsink| {
+                    let sample = appsink
+                        .pull_sample()
+                        .map_err(|_| gstreamer::FlowError::Flushing)?;
+                    update_frame_duration(&sample, &frame_duration);
+                    store_latest_sample(&sample_slot, sample, frame_arrived.as_ref());
+                    Ok(gstreamer::FlowSuccess::Ok)
+                })
+                .new_preroll(move |appsink| {
+                    let sample = appsink
+                        .pull_preroll()
+                        .map_err(|_| gstreamer::FlowError::Flushing)?;
+                    update_frame_duration(&sample, &frame_dur_secs);
+                    store_latest_sample(&preroll_slot, sample, preroll_notify.as_ref());
+                    Ok(gstreamer::FlowSuccess::Ok)
+                });
         }
         builder.build()
     }
@@ -198,16 +187,7 @@ impl SlintWGPUSink {
     pub fn fetch_next_frame(&mut self) -> Option<(slint::Image, Option<u32>, Option<u32>)> {
         let device = self.wgpu_device.clone()?;
         let queue = self.wgpu_queue.clone()?;
-
-        // try_lock + 立即取出，避免长时间持有锁阻塞 GStreamer 线程
-        let sample = match self.next_frame.try_lock() {
-            Ok(mut guard) => guard.take(),
-            Err(_) => {
-                // 渲染线程暂时持锁时跳过一帧是正常的背压行为。
-                log::trace!("跳过一帧以保持渲染性能");
-                return None;
-            }
-        }?;
+        let sample = self.next_frame.try_lock().ok()?.take()?;
 
         // 帧到位图转换（dmabuf 导入 / sysmem 上传 + 离屏转色）在 frame 模块
         let image = self.sample_to_image(&device, &queue, sample)?;
@@ -255,4 +235,26 @@ impl SlintWGPUSink {
         self.last_video_size = None;
         self.video_size_changed = false;
     }
+}
+
+fn update_frame_duration(sample: &Sample, frame_dur_secs: &Mutex<Option<f64>>) {
+    let Some(fps) = sample
+        .caps()
+        .and_then(|caps| caps.structure(0))
+        .and_then(|structure| structure.get::<Fraction>("framerate").ok())
+    else {
+        return;
+    };
+    if let Ok(mut frame_duration) = frame_dur_secs.lock() {
+        *frame_duration = (fps.numer() > 0).then(|| fps.denom() as f64 / fps.numer() as f64);
+    }
+}
+
+pub(super) fn store_latest_sample(slot: &Mutex<Option<Sample>>, sample: Sample, notify: &dyn Fn()) {
+    let Ok(mut latest) = slot.try_lock() else {
+        return;
+    };
+    *latest = Some(sample);
+    drop(latest);
+    notify();
 }

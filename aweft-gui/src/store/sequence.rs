@@ -12,11 +12,11 @@ use aweft_model::{
 use chrono::TimeDelta;
 use slint::{Model, ModelRc};
 
-use crate::bridge::{SlintSelectionState, SlintSubtitleRow, SlintTimelineSubBlock};
 use crate::bridge::types::SlintSelectionModifier;
+use crate::bridge::{SlintSelectionState, SlintSubtitleRow, SlintTimelineSubBlock};
+use crate::store::sequence_rows_model::{RowData, SequenceRowsModel};
 use crate::store::utils::marquee::{clamp_rows, normalize_time};
 use crate::store::utils::selection::{is_additive, is_replacing};
-use crate::store::sequence_rows_model::{SequenceRowsModel, RowData};
 use slint::{ToSharedString, VecModel};
 
 type SubtitleFilterModel = slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>;
@@ -190,8 +190,9 @@ impl SequenceState {
             let collapsed = collapsed_groups.borrow();
             !row.ancestor_ids.iter().any(|id| collapsed.contains(id))
         });
-        let filter_model: Rc<slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>> =
-            Rc::new(slint::FilterModel::new(rows_model, filter_predicate));
+        let filter_model: Rc<
+            slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>,
+        > = Rc::new(slint::FilterModel::new(rows_model, filter_predicate));
 
         // 3. 映射为 SlintSubtitleRow（MapModel 透传 row_changed）
         let mapped =
@@ -670,8 +671,7 @@ impl SequenceState {
             // 更新父组头聚合（若有父组）。父组在 sequence 中仍在，可查。
             if let Some(parent) = parent {
                 if let Some(pidx) = self.rows_model.row_index_of(parent) {
-                    self.rows_model
-                        .rebuild_row_content(pidx, &project.sequence);
+                    self.rows_model.rebuild_row_content(pidx, &project.sequence);
                     self.rows_model.notify_row_changed(pidx);
                 }
             }

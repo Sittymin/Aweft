@@ -63,6 +63,8 @@ pub enum AreaType {
     DopeSheet,
     // NLA 编辑器（aweft-model 的 animation::AnimData：非破坏性动画轨道/片断）
     NlaEditor,
+    // 音频波形（显示层暂用固定分桶的随机占位数据）
+    AudioWaveform,
     // StyleManager,
     // FileBrowser,
 

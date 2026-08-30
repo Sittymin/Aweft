@@ -1,6 +1,12 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
-import { SlintSubtitleRow, SlintTimelineSubBlock } from "../core/types.slint";
+import {
+    SlintSubtitleRow,
+    SlintTimelineSubBlock,
+    SlintAudioWaveform,
+    SlintVideoPos,
+    SlintVideoTimeBar,
+} from "../core/types.slint";
 import { GraphLink, GraphNode } from "../areas/node_graph/node_frame.slint";
 import { ContextMenuItem } from "../widgets/context_menu.slint";
 import {
@@ -24,9 +30,23 @@ import {
 } from "../screen/overlays/close_area.slint";
 
 export global VideoState {
-    in property <image> current-video-frame;
-    in property <int> video-width: 0;
-    in property <int> video-height: 0;
+    // 每个会话的最新视频帧（首帧到来前为空图）
+    in property <[image]> video-frames: [];
+    // 每个会话的视频尺寸（0 = 尚未收到首帧，视口用默认占位尺寸）
+    in property <[int]> video-widths: [];
+    in property <[int]> video-heights: [];
+    // 每个会话的视口世界坐标位置（相对主视频世界矩形左上角）
+    in property <[SlintVideoPos]> video-positions: [];
+    // 每个会话的控制时间条（各面板 TimeRuler 叠加显示，点击选中/拖拽 seek）
+    in property <[SlintVideoTimeBar]> time-bars: [];
+    // 每个会话的预量化音频峰值包络；行下标与 time-bars/video-frames 一致。
+    in property <[SlintAudioWaveform]> audio-waveforms: [];
+    // 当前选中视频下标（-1 = 无选中）
+    in property <int> selected-video: -1;
+    // 主视频下标（唯一带矩形参考线）
+    in property <int> main-video: -1;
+    // 播放状态（时间线 Header 播放/暂停按钮图标）
+    in property <bool> playing: false;
 }
 
 // 通用"文本编辑遮罩"状态：内嵌输入框（字符串常量等）聚焦时，

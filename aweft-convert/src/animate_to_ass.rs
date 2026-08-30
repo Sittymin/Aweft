@@ -14,7 +14,7 @@ mod convert;
 pub use convert::convert_anim_data;
 mod fit;
 
-use fit::{Acceleration, chord_error, fit_color_segment, fit_scalar_segment};
+use fit::{chord_error, fit_color_segment, fit_scalar_segment, Acceleration};
 
 // ── 拟合 / 分段精度旋钮 ───────────────────────────────────────────────────
 // 关键帧区间（Hold/Linear/Bezier）是曲线内容的真实单位：区间内部的极值来自
@@ -119,9 +119,7 @@ pub enum ProgressEvent {
         parent_chain: Vec<usize>,
     },
     /// DP 完成，`path` 是最终分段路径
-    SegmentsFound {
-        path: Vec<(usize, usize)>,
-    },
+    SegmentsFound { path: Vec<(usize, usize)> },
 }
 
 pub struct ConvertOptions {
@@ -284,7 +282,6 @@ pub fn style_to_static_tags(style: &StyleResult) -> Vec<StyleTag> {
 
     tags
 }
-
 
 pub fn match_to_ass_tags(
     matched: &aweft_model::application_graph::ApplicationGraphMatch,
@@ -566,10 +563,10 @@ fn build_alphas(
         if has_modifiers(&action_curve.curve) {
             continue;
         }
-        let alpha_start =
-            ((1.0 - evaluate_fcurve(&action_curve.curve, t0).clamp(0.0, 1.0)) * 255.0).round() as u8;
-        let alpha_end =
-            ((1.0 - evaluate_fcurve(&action_curve.curve, t1).clamp(0.0, 1.0)) * 255.0).round() as u8;
+        let alpha_start = ((1.0 - evaluate_fcurve(&action_curve.curve, t0).clamp(0.0, 1.0)) * 255.0)
+            .round() as u8;
+        let alpha_end = ((1.0 - evaluate_fcurve(&action_curve.curve, t1).clamp(0.0, 1.0)) * 255.0)
+            .round() as u8;
         tags.push(to_static_tag(make_anim(alpha_start)));
         if alpha_start != alpha_end {
             let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
@@ -713,10 +710,14 @@ mod tests {
     use aweft_model::node_graph::Vec2;
 
     fn kf(count: usize, duration: f64, y0: f64, ys: &[f64]) -> Vec<(f64, f64)> {
-        (0..count).map(|i| {
-            (i as f64 / (count - 1) as f64 * duration,
-             if i == 0 { y0 } else { ys[i - 1] })
-        }).collect()
+        (0..count)
+            .map(|i| {
+                (
+                    i as f64 / (count - 1) as f64 * duration,
+                    if i == 0 { y0 } else { ys[i - 1] },
+                )
+            })
+            .collect()
     }
 
     fn convert(kfs: &[(f64, f64)], tolerance: f64) -> AnimAssResult {
@@ -724,36 +725,65 @@ mod tests {
         let mut lib = AnimationLibrary::default();
         let id = ActionId::new();
         lib.insert_action(Action {
-            id, name: "a".into(), duration,
+            id,
+            name: "a".into(),
+            duration,
             curves: vec![ActionCurve::new(
                 PropertyPath::FontSize,
-                FCurve { keyframes: kfs.iter().map(|&(t, v)| Keyframe::linear(t, v)).collect(), ..Default::default() },
+                FCurve {
+                    keyframes: kfs.iter().map(|&(t, v)| Keyframe::linear(t, v)).collect(),
+                    ..Default::default()
+                },
             )],
         });
         convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "a".into(), base_action: None,
-                temporary_edit: false, tracks: vec![NlaTrack {
-                name: "t".into(), muted: false, solo: false,
-                strips: vec![NlaStrip::new_action("s", id)],
-            }] },
-            &lib, duration,
-            &ConvertOptions { error_tolerance: tolerance, ..Default::default() },
+            &AnimData {
+                id: AnimDataId::new(),
+                name: "a".into(),
+                base_action: None,
+                temporary_edit: false,
+                tracks: vec![NlaTrack {
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
+                    strips: vec![NlaStrip::new_action("s", id)],
+                }],
+            },
+            &lib,
+            duration,
+            &ConvertOptions {
+                error_tolerance: tolerance,
+                ..Default::default()
+            },
         )
     }
 
     // ── style_to_static_tags ────────────────────────────────────────────────
     #[test]
     fn static_tags() {
-        let style = StyleResult { font_size: Some(30.0), ..Default::default() };
+        let style = StyleResult {
+            font_size: Some(30.0),
+            ..Default::default()
+        };
         assert!(style_to_static_tags(&style).contains(&StyleTag::FontSize(30.0)));
 
-        let style = StyleResult { bold: Some(true), ..Default::default() };
-        assert!(style_to_static_tags(&style).iter().any(|t| matches!(t, StyleTag::Bold(_))));
+        let style = StyleResult {
+            bold: Some(true),
+            ..Default::default()
+        };
+        assert!(style_to_static_tags(&style)
+            .iter()
+            .any(|t| matches!(t, StyleTag::Bold(_))));
 
-        let style = StyleResult { position: Some(Vec2{x:100.0,y:200.0}), ..Default::default() };
-        assert!(!style_to_static_tags(&style).iter().any(|t| matches!(t, StyleTag::Position(_))));
+        let style = StyleResult {
+            position: Some(Vec2 { x: 100.0, y: 200.0 }),
+            ..Default::default()
+        };
+        assert!(!style_to_static_tags(&style)
+            .iter()
+            .any(|t| matches!(t, StyleTag::Position(_))));
 
         assert!(style_to_static_tags(&StyleResult::default()).is_empty());
     }
@@ -762,16 +792,33 @@ mod tests {
     #[test]
     fn power_law_fit() {
         use super::fit::{fit_power_law, FitSample};
-        for (e, name) in [(0.5, "sqrt"), (1.0, "linear"), (3.0, "cubic"), (10.0, "steep")] {
+        for (e, name) in [
+            (0.5, "sqrt"),
+            (1.0, "linear"),
+            (3.0, "cubic"),
+            (10.0, "steep"),
+        ] {
             let n = 128;
-            let samples: Vec<_> = (0..n).map(|i| {
-                let p = i as f64 / (n - 1) as f64;
-                FitSample { progress: p, value: p.powf(e) }
-            }).collect();
+            let samples: Vec<_> = (0..n)
+                .map(|i| {
+                    let p = i as f64 / (n - 1) as f64;
+                    FitSample {
+                        progress: p,
+                        value: p.powf(e),
+                    }
+                })
+                .collect();
             let fit = fit_power_law(&samples);
             let accel = fit.accel.expect("应有拟合结果");
             let rel = (accel.value() / e - 1.0).abs();
-            assert!(rel < 0.1, "{}: e={}→{} rel_err={:.4}", name, e, accel.value(), rel);
+            assert!(
+                rel < 0.1,
+                "{}: e={}→{} rel_err={:.4}",
+                name,
+                e,
+                accel.value(),
+                rel
+            );
             assert!(fit.max_err < 0.01, "{}: max_err={}", name, fit.max_err);
         }
     }
@@ -795,14 +842,22 @@ mod tests {
         ] {
             let result = convert(&kfs, 0.01);
             assert_eq!(result.segments.len(), 1);
-            assert!(result.segments[0].tags.iter().any(|t| matches!(t, StyleTag::Transform { .. })),
-                "纯线性字号应有 \\t");
+            assert!(
+                result.segments[0]
+                    .tags
+                    .iter()
+                    .any(|t| matches!(t, StyleTag::Transform { .. })),
+                "纯线性字号应有 \\t"
+            );
             assert!(result.fallbacks.is_empty());
         }
         // 往返曲线（0→30→0）起点=终点，不产生 Transform（已有行为限制）
         let result = convert(&kf(3, 2.0, 0.0, &[30.0, 0.0]), 0.01);
         assert_eq!(result.segments.len(), 1);
-        assert!(result.segments[0].tags.iter().any(|t| matches!(t, StyleTag::FontSize(_))));
+        assert!(result.segments[0]
+            .tags
+            .iter()
+            .any(|t| matches!(t, StyleTag::FontSize(_))));
     }
 
     #[test]
@@ -811,26 +866,53 @@ mod tests {
         let mut lib = AnimationLibrary::default();
         let id = ActionId::new();
         lib.insert_action(Action {
-            id, name: "p".into(), duration: 2.0,
+            id,
+            name: "p".into(),
+            duration: 2.0,
             curves: vec![
-                ActionCurve::new(PropertyPath::PositionX,
-                    FCurve { keyframes: kfs.iter().map(|&(t,v)| Keyframe::linear(t, v)).collect(), ..Default::default() }),
-                ActionCurve::new(PropertyPath::PositionY,
-                    FCurve { keyframes: kfs.iter().map(|&(t,v)| Keyframe::linear(t, v)).collect(), ..Default::default() }),
+                ActionCurve::new(
+                    PropertyPath::PositionX,
+                    FCurve {
+                        keyframes: kfs.iter().map(|&(t, v)| Keyframe::linear(t, v)).collect(),
+                        ..Default::default()
+                    },
+                ),
+                ActionCurve::new(
+                    PropertyPath::PositionY,
+                    FCurve {
+                        keyframes: kfs.iter().map(|&(t, v)| Keyframe::linear(t, v)).collect(),
+                        ..Default::default()
+                    },
+                ),
             ],
         });
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "p".into(), base_action: None,
-                temporary_edit: false, tracks: vec![NlaTrack {
-                name: "t".into(), muted: false, solo: false,
-                strips: vec![NlaStrip::new_action("s", id)],
-            }] },
-            &lib, 2.0, &ConvertOptions::default(),
+            &AnimData {
+                id: AnimDataId::new(),
+                name: "p".into(),
+                base_action: None,
+                temporary_edit: false,
+                tracks: vec![NlaTrack {
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
+                    strips: vec![NlaStrip::new_action("s", id)],
+                }],
+            },
+            &lib,
+            2.0,
+            &ConvertOptions::default(),
         );
         for seg in &result.segments {
-            assert_eq!(seg.tags.iter().filter(|t| matches!(t, StyleTag::Move{..})).count(), 1);
+            assert_eq!(
+                seg.tags
+                    .iter()
+                    .filter(|t| matches!(t, StyleTag::Move { .. }))
+                    .count(),
+                1
+            );
         }
     }
 
@@ -841,7 +923,8 @@ mod tests {
             &mut Cursor::from_style(&StyleResult::default()),
             &AnimData::new("e"),
             &AnimationLibrary::default(),
-            5.0, &ConvertOptions::default(),
+            5.0,
+            &ConvertOptions::default(),
         );
         assert!(result.segments.is_empty());
     }
@@ -851,9 +934,11 @@ mod tests {
     fn tolerance_monotonic() {
         let kfs = kf(3, 2.0, 0.0, &[80.0, 20.0]);
         let count = |tol: f64| -> usize {
-            convert(&kfs, tol).segments.iter()
+            convert(&kfs, tol)
+                .segments
+                .iter()
                 .flat_map(|s| &s.tags)
-                .filter(|t| matches!(t, StyleTag::Transform{..}))
+                .filter(|t| matches!(t, StyleTag::Transform { .. }))
                 .count()
         };
         assert!(count(1.0) >= 1);
@@ -867,25 +952,44 @@ mod tests {
         let mut lib = AnimationLibrary::default();
         let id = ActionId::new();
         lib.insert_action(Action {
-            id, name: "c".into(), duration: 2.0,
+            id,
+            name: "c".into(),
+            duration: 2.0,
             curves: vec![ActionCurve::new(
                 PropertyPath::ColorPrimaryR,
-                FCurve { keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 0.8)], ..Default::default() },
+                FCurve {
+                    keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 0.8)],
+                    ..Default::default()
+                },
             )],
         });
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "c".into(), base_action: None,
-                temporary_edit: false, tracks: vec![NlaTrack {
-                name: "t".into(), muted: false, solo: false,
-                strips: vec![NlaStrip::new_action("s", id)],
-            }] },
-            &lib, 2.0, &ConvertOptions::default(),
+            &AnimData {
+                id: AnimDataId::new(),
+                name: "c".into(),
+                base_action: None,
+                temporary_edit: false,
+                tracks: vec![NlaTrack {
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
+                    strips: vec![NlaStrip::new_action("s", id)],
+                }],
+            },
+            &lib,
+            2.0,
+            &ConvertOptions::default(),
         );
-        let c = result.segments[0].tags.iter().find_map(|t| match t {
-            StyleTag::PrimaryColor(c) => Some(c), _ => None,
-        }).expect("应有静态主颜色");
+        let c = result.segments[0]
+            .tags
+            .iter()
+            .find_map(|t| match t {
+                StyleTag::PrimaryColor(c) => Some(c),
+                _ => None,
+            })
+            .expect("应有静态主颜色");
         assert_eq!(c.green, 255);
         assert_eq!(c.blue, 255);
     }
@@ -895,27 +999,53 @@ mod tests {
         let mut lib = AnimationLibrary::default();
         let id = ActionId::new();
         lib.insert_action(Action {
-            id, name: "cf".into(), duration: 2.0,
+            id,
+            name: "cf".into(),
+            duration: 2.0,
             curves: vec![
-                ActionCurve::new(PropertyPath::ColorPrimaryR,
-                    FCurve { keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 0.8)], ..Default::default() }),
-                ActionCurve::new(PropertyPath::ColorPrimaryG,
-                    FCurve { keyframes: vec![Keyframe::linear(0.0, 0.5), Keyframe::linear(2.0, 0.5)], ..Default::default() }),
+                ActionCurve::new(
+                    PropertyPath::ColorPrimaryR,
+                    FCurve {
+                        keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 0.8)],
+                        ..Default::default()
+                    },
+                ),
+                ActionCurve::new(
+                    PropertyPath::ColorPrimaryG,
+                    FCurve {
+                        keyframes: vec![Keyframe::linear(0.0, 0.5), Keyframe::linear(2.0, 0.5)],
+                        ..Default::default()
+                    },
+                ),
             ],
         });
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "cf".into(), base_action: None,
-                temporary_edit: false, tracks: vec![NlaTrack {
-                name: "t".into(), muted: false, solo: false,
-                strips: vec![NlaStrip::new_action("s", id)],
-            }] },
-            &lib, 2.0, &ConvertOptions::default(),
+            &AnimData {
+                id: AnimDataId::new(),
+                name: "cf".into(),
+                base_action: None,
+                temporary_edit: false,
+                tracks: vec![NlaTrack {
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
+                    strips: vec![NlaStrip::new_action("s", id)],
+                }],
+            },
+            &lib,
+            2.0,
+            &ConvertOptions::default(),
         );
-        let c = result.segments[0].tags.iter().find_map(|t| match t {
-            StyleTag::PrimaryColor(c) => Some(c), _ => None,
-        }).expect("应有静态主颜色");
+        let c = result.segments[0]
+            .tags
+            .iter()
+            .find_map(|t| match t {
+                StyleTag::PrimaryColor(c) => Some(c),
+                _ => None,
+            })
+            .expect("应有静态主颜色");
         assert!((c.green as f64 - 128.0).abs() < 1.0, "flat G≠128");
         assert_eq!(result.segments.len(), 1, "平坦通道不应导致多段");
     }
@@ -925,36 +1055,72 @@ mod tests {
         let mut lib = AnimationLibrary::default();
         let r = ActionId::new();
         lib.insert_action(Action {
-            id: r, name: "r".into(), duration: 2.0,
+            id: r,
+            name: "r".into(),
+            duration: 2.0,
             curves: vec![ActionCurve::new(
                 PropertyPath::ColorPrimaryR,
-                FCurve { keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 0.5)], ..Default::default() },
+                FCurve {
+                    keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 0.5)],
+                    ..Default::default()
+                },
             )],
         });
         let g = ActionId::new();
         lib.insert_action(Action {
-            id: g, name: "g".into(), duration: 2.0,
+            id: g,
+            name: "g".into(),
+            duration: 2.0,
             curves: vec![ActionCurve::new(
                 PropertyPath::ColorPrimaryG,
-                FCurve { keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 1.0)], ..Default::default() },
+                FCurve {
+                    keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(2.0, 1.0)],
+                    ..Default::default()
+                },
             )],
         });
         let result = convert_anim_data(
             &StyleResult::default(),
             &mut Cursor::from_style(&StyleResult::default()),
-            &AnimData { id: AnimDataId::new(), name: "2".into(), base_action: None,
-                temporary_edit: false, tracks: vec![NlaTrack {
-                name: "t".into(), muted: false, solo: false,
-                strips: vec![
-                    NlaStrip { placement: StripPlacement::Absolute{start:0.0,end:2.0}, ..NlaStrip::new_action("s1", r) },
-                    NlaStrip { placement: StripPlacement::Absolute{start:2.0,end:4.0}, ..NlaStrip::new_action("s2", g) },
-                ],
-            }] },
-            &lib, 4.0, &ConvertOptions::default(),
+            &AnimData {
+                id: AnimDataId::new(),
+                name: "2".into(),
+                base_action: None,
+                temporary_edit: false,
+                tracks: vec![NlaTrack {
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
+                    strips: vec![
+                        NlaStrip {
+                            placement: StripPlacement::Absolute {
+                                start: 0.0,
+                                end: 2.0,
+                            },
+                            ..NlaStrip::new_action("s1", r)
+                        },
+                        NlaStrip {
+                            placement: StripPlacement::Absolute {
+                                start: 2.0,
+                                end: 4.0,
+                            },
+                            ..NlaStrip::new_action("s2", g)
+                        },
+                    ],
+                }],
+            },
+            &lib,
+            4.0,
+            &ConvertOptions::default(),
         );
-        let c = result.segments[1].tags.iter().find_map(|t| match t {
-            StyleTag::PrimaryColor(c) => Some(c), _ => None,
-        }).expect("第二条应有颜色");
+        let c = result.segments[1]
+            .tags
+            .iter()
+            .find_map(|t| match t {
+                StyleTag::PrimaryColor(c) => Some(c),
+                _ => None,
+            })
+            .expect("第二条应有颜色");
         assert_eq!(c.red, 128, "应从第一条继承");
         assert_eq!(c.blue, 255);
     }
@@ -965,29 +1131,46 @@ mod tests {
         let mut lib = AnimationLibrary::default();
         let id = ActionId::new();
         lib.insert_action(Action {
-            id, name: "a".into(), duration: 1.0,
+            id,
+            name: "a".into(),
+            duration: 1.0,
             curves: vec![ActionCurve::new(
                 PropertyPath::FontSize,
-                FCurve { keyframes: vec![Keyframe::linear(0.0, 24.0), Keyframe::linear(1.0, 36.0)], ..Default::default() },
+                FCurve {
+                    keyframes: vec![Keyframe::linear(0.0, 24.0), Keyframe::linear(1.0, 36.0)],
+                    ..Default::default()
+                },
             )],
         });
         let aid = AnimDataId::new();
         lib.insert_anim_data(AnimData {
-            id: aid, name: "d".into(),
+            id: aid,
+            name: "d".into(),
             base_action: None,
             temporary_edit: false,
-            tracks: vec![NlaTrack { name: "t".into(), muted: false, solo: false, strips: vec![NlaStrip::new_action("s", id)] }],
+            tracks: vec![NlaTrack {
+                name: "t".into(),
+                muted: false,
+                solo: false,
+                strips: vec![NlaStrip::new_action("s", id)],
+            }],
         });
         let result = match_to_ass_tags(
             &aweft_model::application_graph::ApplicationGraphMatch {
-                style: StyleResult { font_size: Some(24.0), bold: Some(true), ..Default::default() },
+                style: StyleResult {
+                    font_size: Some(24.0),
+                    bold: Some(true),
+                    ..Default::default()
+                },
                 animation: Some(aid),
             },
-            &lib, 2.0, &ConvertOptions::default(),
+            &lib,
+            2.0,
+            &ConvertOptions::default(),
         );
         let tags = &result.segments[0].tags;
         assert!(tags.iter().any(|t| matches!(t, StyleTag::Bold(_))));
         assert!(tags.iter().any(|t| matches!(t, StyleTag::FontSize(_))));
-        assert!(tags.iter().any(|t| matches!(t, StyleTag::Transform{..})));
+        assert!(tags.iter().any(|t| matches!(t, StyleTag::Transform { .. })));
     }
 }

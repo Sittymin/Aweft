@@ -13,8 +13,9 @@ import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { TimeRuler, VerticalGrid } from "../graph_editor/ruler.slint";
 import { TimelineBlock, TimelineSubBlocks } from "elements.slint";
 import { TimelinePanel } from "timeline_panel.slint";
-import { SequenceCallbacks, AnimationCallbacks } from "../../bridge/callbacks.slint";
-import { AnimationState } from "../../bridge/state.slint";
+import { VideoTimeBarLines } from "../../widgets/video_time_bars.slint";
+import { SequenceCallbacks, AnimationCallbacks, VideoCallbacks } from "../../bridge/callbacks.slint";
+import { AnimationState, VideoState } from "../../bridge/state.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component TimelineEditor inherits Rectangle {
@@ -191,6 +192,20 @@ export component TimelineEditor inherits Rectangle {
         time-picked(time) => {
             AnimationCallbacks.set-current-time(time);
         }
+        // 多视频控制时间条（内嵌于标尺：点击选中视频、拖拽 seek）
+        video-bars: VideoState.time-bars;
+        active-video-index: VideoState.selected-video >= 0
+            ? VideoState.selected-video
+            : VideoState.main-video;
+        video-bar-pressed(index, is-batch) => {
+            VideoCallbacks.time-bar-pressed(index, is-batch);
+        }
+        video-bar-dragged(time) => {
+            VideoCallbacks.time-bar-dragged(time);
+        }
+        video-bar-released(index) => {
+            VideoCallbacks.time-bar-released(index);
+        }
     }
 
     // 主画布
@@ -346,6 +361,18 @@ export component TimelineEditor inherits Rectangle {
             background: Theme.data.animation-editor.marquee-fill;
             border-width: 1px;
             border-color: Theme.data.animation-editor.marquee-border;
+        }
+
+        // 多视频彩色时间线（置顶绘制在播放头之前，不拦截事件）
+        VideoTimeBarLines {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 100%;
+            view-lo: root.view-time-lo;
+            view-hi: root.view-time-hi;
+            zoom-x: root.nav-zoom;
+            pan-x: root.nav-pan-x;
         }
 
         // 当前时间线（播放头，置顶但不拦截事件）
