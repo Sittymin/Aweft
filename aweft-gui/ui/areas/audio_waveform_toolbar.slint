@@ -10,6 +10,8 @@ export component AudioWaveformToolbar inherits Rectangle {
     in property <SlintAreaType> area-type;
     in property <int> audio-index: 0;
     callback audio-selected(index: int);
+    // 文件名属于 Header 的辅助信息，限制选择器宽度避免长路径撑满标题栏。
+    private property <length> audio-selector-max-width: min(320px, max(160px, root.width * 0.35));
 
     AreaHeader {
         width: 100%;
@@ -18,7 +20,7 @@ export component AudioWaveformToolbar inherits Rectangle {
         area-type: root.area-type;
 
         selector := Rectangle {
-            width: selector-content.preferred-width;
+            width: min(selector-content.preferred-width, root.audio-selector-max-width);
             height: Theme.data.area-type-switcher.height;
             background: Theme.data.area-type-switcher.background;
             border-radius: Theme.data.area-type-switcher.border-radius;
@@ -30,11 +32,14 @@ export component AudioWaveformToolbar inherits Rectangle {
                 padding-right: Theme.data.area-type-switcher.layout-padding-horizontal;
                 spacing: Theme.data.area-type-switcher.popup.item-spacing;
                 alignment: center;
+                width: 100%;
 
                 Text {
                     text: root.audio-index >= 0 && root.audio-index < VideoState.time-bars.length
                         ? VideoState.time-bars[root.audio-index].label + " - Audio"
                         : "No video audio";
+                    horizontal-stretch: 1;
+                    overflow: elide;
                     color: Theme.data.area-type-switcher.popup.item-text-color;
                     vertical-alignment: center;
                 }
