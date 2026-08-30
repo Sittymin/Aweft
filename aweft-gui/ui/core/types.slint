@@ -33,7 +33,8 @@ export struct SlintAudioWaveformLevel {
 export struct SlintAudioWaveform {
     duration: float,
     amplitudes: [float],
-    // 预聚合峰值层（2/4/8... 个基础桶合并），由 Rust 持久维护；缩放时只切换层级。
+    // 预聚合峰值层（2/5/10/20/50ms……），与横向标尺的 1/2/5×10^k 主刻度一致；
+    // 波形 Area 按“每个主刻度 10 个柱子”选择层级。
     levels: [SlintAudioWaveformLevel],
 }
 

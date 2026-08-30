@@ -1,6 +1,6 @@
 import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
-import { TimeRuler, VerticalGrid } from "./graph_editor/ruler.slint";
+import { TimeRuler, TickScale, VerticalGrid } from "./graph_editor/ruler.slint";
 import { VideoCallbacks } from "../bridge/callbacks.slint";
 import { VideoState } from "../bridge/state.slint";
 
@@ -9,21 +9,14 @@ component WaveformBar inherits Rectangle {
 
     background: transparent;
 
-    // A waveform represents pressure around silence, so both halves share one amplitude.
+    // 每个时间桶只使用一个柱子。柱高仍由峰值决定，并以中心线为基准，
+    // 避免上下两个 Rectangle 为同一个音频片段重复创建元素。
     Rectangle {
         width: parent.width;
-        height: Math.max(1px, parent.height * root.amplitude * 0.47);
-        y: parent.height * 0.5 - self.height;
+        height: Math.max(1px, parent.height * root.amplitude * 0.94);
+        y: (parent.height - self.height) * 0.5;
         border-radius: 1px;
         background: Theme.data.animation-editor.strip-active;
-    }
-
-    Rectangle {
-        width: parent.width;
-        height: Math.max(1px, parent.height * root.amplitude * 0.47);
-        y: parent.height * 0.5;
-        border-radius: 1px;
-        background: Theme.data.animation-editor.strip-active.with-alpha(58%);
     }
 }
 
@@ -37,26 +30,43 @@ export component AudioWaveformArea inherits Rectangle {
     private property <float> nav-zoom: 30.0;
     private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
     private property <float> view-time-hi: (canvas.width - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
-    // 元素池只随可视宽度变化，不随视频时长或缩放变化。约每 5px 一个槽位，
-    // 额外四个槽位覆盖左右边界；平移/缩放只重映射这些已有 WaveformBar。
-    private property <int> waveform-slot-count: max(1, ceil(root.width / 5px) + 4);
-    private property <float> waveform-target-px: 5.0;
+    // 每个横向主刻度固定显示的波形柱数。主刻度由 TickScale 统一计算，
+    // 因此波形缩放与标尺始终使用同一个 nice step（1/2/5×10^k）。
+    private property <int> waveform-bars-per-major: 10;
+
+    ruler-scale := TickScale {
+        view-lo: root.view-time-lo;
+        view-hi: root.view-time-hi;
+        zoom: root.nav-zoom;
+    }
 
     pure function waveform-level() -> int {
-        let base-px = 0.001 * root.nav-zoom;
-        if base-px >= root.waveform-target-px { return -1; }
-        if base-px * 2.0 >= root.waveform-target-px { return 0; }
-        if base-px * 4.0 >= root.waveform-target-px { return 1; }
-        if base-px * 8.0 >= root.waveform-target-px { return 2; }
-        if base-px * 16.0 >= root.waveform-target-px { return 3; }
-        if base-px * 32.0 >= root.waveform-target-px { return 4; }
-        if base-px * 64.0 >= root.waveform-target-px { return 5; }
-        if base-px * 128.0 >= root.waveform-target-px { return 6; }
-        if base-px * 256.0 >= root.waveform-target-px { return 7; }
-        if base-px * 512.0 >= root.waveform-target-px { return 8; }
-        if base-px * 1024.0 >= root.waveform-target-px { return 9; }
-        if base-px * 2048.0 >= root.waveform-target-px { return 10; }
-        return 11;
+        let target = ruler-scale.major / root.waveform-bars-per-major;
+        if target <= 0.001 { return -1; }
+        if target <= 0.002 { return 0; }
+        if target <= 0.005 { return 1; }
+        if target <= 0.010 { return 2; }
+        if target <= 0.020 { return 3; }
+        if target <= 0.050 { return 4; }
+        if target <= 0.100 { return 5; }
+        if target <= 0.200 { return 6; }
+        if target <= 0.500 { return 7; }
+        if target <= 1.000 { return 8; }
+        if target <= 2.000 { return 9; }
+        if target <= 5.000 { return 10; }
+        if target <= 10.000 { return 11; }
+        if target <= 20.000 { return 12; }
+        if target <= 50.000 { return 13; }
+        if target <= 100.000 { return 14; }
+        if target <= 200.000 { return 15; }
+        if target <= 500.000 { return 16; }
+        if target <= 1000.000 { return 17; }
+        if target <= 2000.000 { return 18; }
+        if target <= 5000.000 { return 19; }
+        if target <= 10000.000 { return 20; }
+        if target <= 20000.000 { return 21; }
+        if target <= 50000.000 { return 22; }
+        return 23;
     }
 
     pure function waveform-bucket-duration() -> float {
@@ -67,6 +77,18 @@ export component AudioWaveformArea inherits Rectangle {
 
     pure function waveform-first-bucket() -> int {
         return floor(root.view-time-lo / root.waveform-bucket-duration()) - 1;
+    }
+
+    // 可视时间区间对应的最后一个桶（包含与右边界相交的桶）。
+    // 这是每个 Area 自己的派生状态；不同 Area 的 pan/zoom 不会互相影响。
+    pure function waveform-last-bucket() -> int {
+        return ceil(root.view-time-hi / root.waveform-bucket-duration());
+    }
+
+    // 槽位数量按当前 Area 的可视时间范围计算，而不是按音频总长度计算。
+    // 这样缩放后只保留视区内的柱；高倍缩放时也不会因为固定槽位数而截断视区。
+    pure function waveform-slot-count() -> int {
+        return max(1, root.waveform-last-bucket() - root.waveform-first-bucket() + 2);
     }
 
     pure function waveform-row-count() -> int {
@@ -143,9 +165,16 @@ export component AudioWaveformArea inherits Rectangle {
         if root.audio-index >= 0 && root.audio-index < VideoState.audio-waveforms.length: Rectangle {
             width: 100%;
             height: 100%;
-            for slot in root.waveform-slot-count: WaveformBar {
+            for slot in root.waveform-slot-count(): WaveformBar {
                 private property <int> bucket-row: root.waveform-first-bucket() + slot;
-                visible: self.bucket-row >= 0 && self.bucket-row < root.waveform-row-count();
+                private property <float> bucket-start: self.bucket-row * root.waveform-bucket-duration();
+                private property <float> bucket-end: (self.bucket-row + 1) * root.waveform-bucket-duration();
+                // 只保留与当前 Area 可视时间区间相交的柱。数组边界判断仍然保留，
+                // 这样异步波形尚未解码到该区间时不会读取越界数据。
+                visible: self.bucket-row >= 0
+                    && self.bucket-row < root.waveform-row-count()
+                    && self.bucket-row <= root.waveform-last-bucket()
+                    && self.bucket-end >= root.view-time-lo;
                 x: self.bucket-row * root.waveform-bucket-duration() * root.nav-zoom * 1px
                     + root.nav-pan-x * 1px;
                 y: 12px;

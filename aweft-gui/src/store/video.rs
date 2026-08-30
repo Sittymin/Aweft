@@ -31,14 +31,58 @@ pub struct VideoUiState {
     /// 波形的持久增量模型；`SlintAudioWaveform.amplitudes` 只引用这些模型。
     /// 后台任务按批次 push/set_row_data，不重复构造完整快照。
     pub waveform_amplitudes: Vec<Rc<VecModel<f32>>>,
-    /// 与每个视频对应的持久多分辨率峰值层（2ms、4ms、8ms……）。
+    /// 与每个视频对应的持久多分辨率峰值层（2/5/10/20/50ms……）。
     /// 缩放只切换读取层级，不重新聚合或替换模型。
     pub waveform_level_amplitudes: Vec<Vec<Rc<VecModel<f32>>>>,
 }
 
-/// 按变更区间增量更新二倍峰值金字塔。每层只读取上一层相邻的两个桶，
-/// 不从基础模型反复扫描整段数据；所有层合计工作量小于基础变更量的两倍。
-/// 即根据base来计算下一层粗粒度的新增变化
+/// 将后台波形批次原地写入基础模型，尽量把连续追加合并成一次 Slint
+/// `row_added` 通知。只有覆盖已有行的修订才需要逐行 `row_changed`。
+pub(crate) fn ui_apply_waveform_batch(
+    values: &VecModel<f32>,
+    start: usize,
+    amplitudes: &[f32],
+) {
+    if amplitudes.is_empty() {
+        return;
+    }
+    let current_len = values.row_count();
+    if start > current_len {
+        values.extend(std::iter::repeat_n(0.0, start - current_len));
+    }
+
+    let overlap_end = (start + amplitudes.len()).min(values.row_count());
+    for (row, amplitude) in (start..overlap_end).zip(amplitudes.iter().copied()) {
+        values.set_row_data(row, amplitude);
+    }
+
+    let append_start = start.max(values.row_count());
+    if append_start < start + amplitudes.len() {
+        let offset = append_start - start;
+        values.extend(amplitudes[offset..].iter().copied());
+    }
+}
+
+/// 标尺兼容的波形桶宽（毫秒）：2、5、10、20、50、100……。
+pub(crate) const fn waveform_level_duration_ms(level: usize) -> usize {
+    if level == 0 {
+        return 2;
+    }
+    if level == 1 {
+        return 5;
+    }
+    let group = (level - 2) / 3;
+    let multiplier = match (level - 2) % 3 {
+        0 => 1,
+        1 => 2,
+        _ => 5,
+    };
+    multiplier * 10usize.pow((group + 1) as u32)
+}
+
+/// 按变更区间增量更新 1/2/5×10^k 峰值层。
+/// 基础桶只会从静音/较小峰值单调增大，因此每个变更基础桶直接更新其
+/// 所属粗粒度桶即可，无需重新扫描整个粗粒度时间段。
 pub(crate) fn update_peak_pyramid(
     base: &VecModel<f32>,
     levels: &[Rc<VecModel<f32>>],
@@ -48,31 +92,20 @@ pub(crate) fn update_peak_pyramid(
     if changed_count == 0 {
         return;
     }
-    let mut source_start = start;
-    let mut source_end = start + changed_count;
-
+    let end = start.saturating_add(changed_count).min(base.row_count());
     for (level_index, target) in levels.iter().enumerate() {
-        let first = source_start / 2;
-        let last = source_end.saturating_sub(1) / 2;
-        let source: &VecModel<f32> = if level_index == 0 {
-            base
-        } else {
-            levels[level_index - 1].as_ref()
-        };
-
-        for bucket in first..=last {
-            let left = source.row_data(bucket * 2).unwrap_or(0.0);
-            let right = source.row_data(bucket * 2 + 1).unwrap_or(0.0);
-            let peak = left.max(right);
-            if bucket < target.row_count() {
+        let bucket_ms = waveform_level_duration_ms(level_index);
+        for base_index in start..end {
+            let peak = base.row_data(base_index).unwrap_or(0.0);
+            let bucket = base_index / bucket_ms;
+            let target_len = target.row_count();
+            if target_len <= bucket {
+                target.extend(std::iter::repeat_n(0.0, bucket + 1 - target_len));
+            }
+            if peak > target.row_data(bucket).unwrap_or(0.0) {
                 target.set_row_data(bucket, peak);
-            } else if bucket == target.row_count() {
-                target.push(peak);
             }
         }
-
-        source_start = first;
-        source_end = last + 1;
     }
 }
 
@@ -104,6 +137,19 @@ mod tests {
         assert_eq!(
             identities,
             levels.iter().map(Rc::as_ptr).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn waveform_batch_uses_one_append_notification_and_preserves_gaps() {
+        let values = VecModel::default();
+        ui_apply_waveform_batch(&values, 2, &[0.25, 0.5]);
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![0.0, 0.0, 0.25, 0.5]);
+
+        ui_apply_waveform_batch(&values, 1, &[0.75, 0.8, 0.9]);
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![0.0, 0.75, 0.8, 0.9],
         );
     }
 }

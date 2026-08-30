@@ -7,12 +7,13 @@ use crate::bridge::types::{
 
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
+use crate::store::video::ui_apply_waveform_batch;
 use aweft_model::ids::ItemId;
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use slint::{ComponentHandle, Model, RenderingState};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Instant};
 
 /// 设置所有回调
 pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -62,8 +63,12 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
 
     {
         let s = Rc::clone(&store);
+        let mut ui_log_started_at = Instant::now();
+        let mut ui_batch_count = 0usize;
+        let mut ui_row_count = 0usize;
         instance.global::<VideoCallbacks>().on_waveform_progress(
             move |index, start, duration, amplitudes| {
+                let ui_batch_started_at = Instant::now();
                 if index < 0 {
                     return;
                 }
@@ -75,14 +80,7 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                     log::warn!("丢弃越界波形结果: video-index={index}");
                     return;
                 };
-                for (offset, amplitude) in amplitudes.iter().enumerate() {
-                    let row = start + offset;
-                    if row < values.row_count() {
-                        values.set_row_data(row, amplitude);
-                    } else if row == values.row_count() {
-                        values.push(amplitude);
-                    }
-                }
+                ui_apply_waveform_batch(values, start, &amplitudes.iter().collect::<Vec<_>>());
                 // `amplitudes` 是本批新增/变更的后缀；不能传当前模型总行数，
                 // 否则音频越长，每批都会重复重算整段历史峰值金字塔。
                 update_waveform_levels(video, index, start, amplitudes.row_count());
@@ -91,6 +89,20 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 {
                     waveform.duration = duration;
                     video.audio_waveforms.set_row_data(index, waveform);
+                }
+                ui_batch_count += 1;
+                ui_row_count += amplitudes.row_count();
+                if ui_log_started_at.elapsed().as_secs_f32() >= 1.0 {
+                    log::info!(
+                        "波形 UI 更新进度: batches={}, rows={}, last_batch_rows={}, apply_wall={:.3}ms",
+                        ui_batch_count,
+                        ui_row_count,
+                        amplitudes.row_count(),
+                        ui_batch_started_at.elapsed().as_secs_f64() * 1_000.0,
+                    );
+                    ui_batch_count = 0;
+                    ui_row_count = 0;
+                    ui_log_started_at = Instant::now();
                 }
             },
         );

@@ -146,14 +146,16 @@ fn ui_append_video_models(store: &mut AppStore, index: usize) {
     ui.time_bars.push(SlintVideoTimeBar::default());
 
     let amplitudes = Rc::new(VecModel::default());
-    let level_amplitudes = (1..=12)
+    // 1ms 基础桶之上使用与横向标尺一致的 1/2/5×10^k 时间层：
+    // 2ms、5ms、10ms、20ms、50ms……，一直覆盖到 100000s。
+    let level_amplitudes = (1..=24)
         .map(|_| Rc::new(VecModel::default()))
         .collect::<Vec<_>>();
     let levels = level_amplitudes
         .iter()
         .enumerate()
         .map(|(level, values)| SlintAudioWaveformLevel {
-            bucket_duration: 0.001 * (1usize << (level + 1)) as f32,
+            bucket_duration: crate::store::video::waveform_level_duration_ms(level) as f32 / 1_000.0,
             amplitudes: slint::ModelRc::from(values.clone()),
         })
         .collect::<Vec<_>>();

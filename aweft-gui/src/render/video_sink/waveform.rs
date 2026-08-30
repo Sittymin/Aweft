@@ -25,8 +25,13 @@ where
 {
     gstreamer::init().map_err(|error| anyhow::anyhow!("GStreamer 初始化失败: {error}"))?;
     let pipeline = gstreamer::Pipeline::new();
+    // 波形只消费音频。uridecodebin 的默认 expose-all-streams=true 会在
+    // caps 不匹配时仍暴露视频流；对 4K HEVC 容器会无谓启动视频解码器。
+    let audio_caps = gstreamer::Caps::builder("audio/x-raw").build();
     let decoder = gstreamer::ElementFactory::make("uridecodebin")
         .property("uri", uri)
+        .property("caps", audio_caps)
+        .property("expose-all-streams", false)
         .build()?;
     let queue = gstreamer::ElementFactory::make("queue").build()?;
     let convert = gstreamer::ElementFactory::make("audioconvert").build()?;
@@ -41,6 +46,8 @@ where
         .build()?;
     let sink = gstreamer::ElementFactory::make("appsink")
         .property("sync", false)
+        // 离线分析不应继承 GstBaseSink 默认的 20ms processing deadline。
+        .property("processing-deadline", 0u64)
         .property("max-buffers", 64u32)
         .build()?;
     let appsink = sink
@@ -71,7 +78,6 @@ where
     // Do not use the media duration for indexing. It is frequently unavailable until
     // decoding has started, and changing it would move already displayed waveform bars.
     let mut buckets = Vec::<f32>::new();
-    let mut decoded_samples = 0usize;
     // 仅记录自上次 progress 以来最早变化的桶；使用 usize::MAX 表示当前没有
     // 待提交区间，避免每批都从 0 重新提交整段历史波形。
     let mut dirty_start = usize::MAX;
@@ -83,42 +89,35 @@ where
             let _ = pipeline.set_state(gstreamer::State::Null);
             return Ok((buckets, 0.0));
         }
-        while let Some(sample) = appsink.try_pull_sample(gstreamer::ClockTime::ZERO) {
-            if cancelled() {
-                let _ = pipeline.set_state(gstreamer::State::Null);
-                return Ok((buckets, 0.0));
+        // 只在 appsink 上等待“数据或取消”最多 20ms；数据一到就立即处理。
+        // 这不是等待 UI：progress 回调只通过 upgrade_in_event_loop 入队，
+        // 解码线程不会等待主线程执行该闭包。短超时仅用于及时响应取消。
+        let Some(sample) = appsink.try_pull_sample(gstreamer::ClockTime::from_mseconds(20))
+        else {
+            use gstreamer::MessageView;
+            let mut reached_eos = false;
+            while let Some(message) = bus.timed_pop(gstreamer::ClockTime::ZERO) {
+                match message.view() {
+                    MessageView::Eos(..) => reached_eos = true,
+                    MessageView::Error(error) => {
+                        let _ = pipeline.set_state(gstreamer::State::Null);
+                        anyhow::bail!("音频解码失败: {}", error.error());
+                    }
+                    _ => {}
+                }
             }
-            decoded_samples += 1;
-            if let Some(changed) = accumulate_sample(&sample, &mut buckets) {
-                dirty_start = dirty_start.min(changed);
+            if reached_eos {
+                break;
             }
-            if decoded_samples % 32 == 0 && dirty_start < buckets.len() {
-                let duration = waveform_duration(buckets.len());
-                progress(dirty_start, duration, &buckets[dirty_start..]);
-                dirty_start = buckets.len();
-            }
-        }
-        use gstreamer::MessageView;
-        let Some(message) = bus.timed_pop(gstreamer::ClockTime::from_mseconds(20)) else {
             continue;
         };
-        match message.view() {
-            MessageView::Eos(..) => break,
-            MessageView::Error(error) => {
-                let _ = pipeline.set_state(gstreamer::State::Null);
-                anyhow::bail!("音频解码失败: {}", error.error());
-            }
-            _ => {}
-        }
-    }
-    while let Some(sample) = appsink.try_pull_sample(gstreamer::ClockTime::ZERO) {
-        if cancelled() {
-            let _ = pipeline.set_state(gstreamer::State::Null);
-            return Ok((buckets, 0.0));
-        }
-        decoded_samples += 1;
         if let Some(changed) = accumulate_sample(&sample, &mut buckets) {
             dirty_start = dirty_start.min(changed);
+        }
+        if dirty_start < buckets.len() {
+            let duration = waveform_duration(buckets.len());
+            progress(dirty_start, duration, &buckets[dirty_start..]);
+            dirty_start = buckets.len();
         }
     }
     let _ = pipeline.set_state(gstreamer::State::Null);
@@ -127,10 +126,6 @@ where
     if dirty_start < buckets.len() {
         progress(dirty_start, duration, &buckets[dirty_start..]);
     }
-    log::info!(
-        "波形分析完成: uri={uri}, duration={duration:.3}s, samples={decoded_samples}, nonzero-buckets={}",
-        buckets.iter().filter(|value| **value > 0.0).count(),
-    );
     Ok((buckets, duration as f32))
 }
 
