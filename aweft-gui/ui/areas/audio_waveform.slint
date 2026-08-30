@@ -43,7 +43,7 @@ export component AudioWaveformArea inherits Rectangle {
     private property <float> waveform-target-px: 5.0;
 
     pure function waveform-level() -> int {
-        let base-px = 0.1 * root.nav-zoom;
+        let base-px = 0.001 * root.nav-zoom;
         if base-px >= root.waveform-target-px { return -1; }
         if base-px * 2.0 >= root.waveform-target-px { return 0; }
         if base-px * 4.0 >= root.waveform-target-px { return 1; }
@@ -61,7 +61,7 @@ export component AudioWaveformArea inherits Rectangle {
 
     pure function waveform-bucket-duration() -> float {
         let level = root.waveform-level();
-        return level < 0 ? 0.1
+        return level < 0 ? 0.001
             : VideoState.audio-waveforms[root.audio-index].levels[level].bucket-duration;
     }
 

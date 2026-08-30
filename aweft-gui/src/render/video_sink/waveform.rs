@@ -3,9 +3,13 @@
 use gstreamer::prelude::*;
 use gstreamer_app::AppSink;
 
-/// 增量解析时每个峰值桶覆盖的固定时间宽度。桶按时间追加，因此已经通过的
+/// 增量解析时每个峰值桶覆盖的固定时间宽度（1ms）。桶按时间追加，因此已经通过的
 /// 时间段不会因媒体总时长稍后才可用而重新编号或移动。
-pub const WAVEFORM_BUCKET_DURATION_SECS: f64 = 0.1;
+pub const WAVEFORM_BUCKET_DURATION_SECS: f64 = 0.001;
+/// 1ms 峰值桶使用 8kHz 单声道分析流，每桶聚合 8 个样本。相比直接扫描原始
+/// 多声道/高采样率流，仍能减少 audioconvert/resample 和 CPU 扫描开销，同时保留
+/// 毫秒级瞬态。
+const WAVEFORM_ANALYSIS_RATE: i32 = 8_000;
 
 /// 在调用方提供的线程中解码默认音频流并压缩成峰值桶。
 /// `progress(start, duration, values)` 只提交从 `start` 开始的变更区间；调用方
@@ -29,7 +33,7 @@ where
     let resample = gstreamer::ElementFactory::make("audioresample").build()?;
     let caps = gstreamer::Caps::builder("audio/x-raw")
         .field("format", "F32LE")
-        .field("rate", 8_000i32)
+        .field("rate", WAVEFORM_ANALYSIS_RATE)
         .field("channels", 1i32)
         .build();
     let filter = gstreamer::ElementFactory::make("capsfilter")
@@ -68,7 +72,9 @@ where
     // decoding has started, and changing it would move already displayed waveform bars.
     let mut buckets = Vec::<f32>::new();
     let mut decoded_samples = 0usize;
-    let mut dirty_start = 0usize;
+    // 仅记录自上次 progress 以来最早变化的桶；使用 usize::MAX 表示当前没有
+    // 待提交区间，避免每批都从 0 重新提交整段历史波形。
+    let mut dirty_start = usize::MAX;
     let bus = pipeline
         .bus()
         .ok_or_else(|| anyhow::anyhow!("无法获取音频分析 Bus"))?;
@@ -150,25 +156,36 @@ where
 fn accumulate_sample(sample: &gstreamer::Sample, buckets: &mut Vec<f32>) -> Option<usize> {
     let buffer = sample.buffer()?;
     let map = buffer.map_readable().ok()?;
-    let peak = map
-        .as_slice()
-        .chunks_exact(4)
-        .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("4-byte PCM sample")).abs())
-        .fold(0.0_f32, f32::max)
-        .min(1.0);
     let timestamp = buffer
         .pts()
         .map(|value| value.nseconds() as f64 / 1_000_000_000.0)
         .unwrap_or(0.0);
-    let index = (timestamp.max(0.0) / WAVEFORM_BUCKET_DURATION_SECS) as usize;
-    if buckets.len() <= index {
-        buckets.resize(index + 1, 0.0);
-    }
-    if peak <= buckets[index] {
+    let samples_per_bucket = (WAVEFORM_ANALYSIS_RATE as usize / 1_000).max(1);
+    let first_index = (timestamp.max(0.0) / WAVEFORM_BUCKET_DURATION_SECS).floor() as usize;
+    let sample_count = map.as_slice().len() / 4;
+    if sample_count == 0 {
         return None;
     }
-    buckets[index] = peak;
-    Some(index)
+    let last_index = first_index + (sample_count - 1) / samples_per_bucket;
+    let previous_len = buckets.len();
+    let extended = previous_len <= last_index;
+    if extended {
+        buckets.resize(last_index + 1, 0.0);
+    }
+
+    // 若 PTS 跳过了尚未生成的时间段，必须从旧长度开始提交，才能让 UI
+    // 逐行 push 中间的零桶；连续追加时该值正好等于 first_index。
+    let mut changed_start = extended.then_some(previous_len.min(first_index));
+    for (sample_index, bytes) in map.as_slice().chunks_exact(4).enumerate() {
+        let bucket = first_index + sample_index / samples_per_bucket;
+        let peak = f32::from_le_bytes(bytes.try_into().expect("4-byte PCM sample")).abs();
+        if peak <= buckets[bucket] {
+            continue;
+        }
+        buckets[bucket] = peak.min(1.0);
+        changed_start = Some(changed_start.map_or(bucket, |start| start.min(bucket)));
+    }
+    changed_start
 }
 
 fn waveform_duration(bucket_count: usize) -> f32 {
@@ -284,7 +301,7 @@ mod tests {
         .expect("提取测试音频波形失败");
         assert!(duration > 0.0);
         assert!(duration > 7.0, "测试音频必须覆盖首秒之后的时间范围");
-        assert!(amplitudes.len() > 70, "每 100ms 必须追加一个稳定时间桶");
+        assert!(amplitudes.len() > 7_000, "每 1ms 必须追加一个稳定时间桶");
         assert!(amplitudes.iter().any(|value| *value > 0.05));
         assert!(
             amplitudes

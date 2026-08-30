@@ -153,7 +153,7 @@ fn ui_append_video_models(store: &mut AppStore, index: usize) {
         .iter()
         .enumerate()
         .map(|(level, values)| SlintAudioWaveformLevel {
-            bucket_duration: 0.1 * (1usize << (level + 1)) as f32,
+            bucket_duration: 0.001 * (1usize << (level + 1)) as f32,
             amplitudes: slint::ModelRc::from(values.clone()),
         })
         .collect::<Vec<_>>();

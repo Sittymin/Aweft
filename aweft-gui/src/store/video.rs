@@ -31,7 +31,7 @@ pub struct VideoUiState {
     /// 波形的持久增量模型；`SlintAudioWaveform.amplitudes` 只引用这些模型。
     /// 后台任务按批次 push/set_row_data，不重复构造完整快照。
     pub waveform_amplitudes: Vec<Rc<VecModel<f32>>>,
-    /// 与每个视频对应的持久多分辨率峰值层（200ms、400ms……）。
+    /// 与每个视频对应的持久多分辨率峰值层（2ms、4ms、8ms……）。
     /// 缩放只切换读取层级，不重新聚合或替换模型。
     pub waveform_level_amplitudes: Vec<Vec<Rc<VecModel<f32>>>>,
 }

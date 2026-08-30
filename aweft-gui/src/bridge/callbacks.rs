@@ -83,6 +83,8 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                         values.push(amplitude);
                     }
                 }
+                // `amplitudes` 是本批新增/变更的后缀；不能传当前模型总行数，
+                // 否则音频越长，每批都会重复重算整段历史峰值金字塔。
                 update_waveform_levels(video, index, start, amplitudes.row_count());
                 if let Some(mut waveform) = video.audio_waveforms.row_data(index)
                     && (waveform.duration - duration).abs() > f32::EPSILON
