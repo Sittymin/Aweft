@@ -167,7 +167,52 @@ fn decode_serial_lock() -> MutexGuard<'static, ()> {
 }
 
 #[test]
+fn test_production_appsink_keeps_only_latest_frame() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    gst_init();
+    let sink = SlintWGPUSink::new();
+
+    assert_eq!(sink.appsink.property::<u32>("max-buffers"), 1);
+    assert!(sink.appsink.property::<bool>("drop"));
+    assert!(
+        sink.appsink.property::<bool>("sync"),
+        "生产播放必须由媒体时钟同步，不能全速向 UI 推帧"
+    );
+}
+
+#[test]
+fn test_latest_frame_slot_overwrites_stale_sample() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    gst_init();
+    let slot = Mutex::new(None);
+    let notifications = std::sync::atomic::AtomicUsize::new(0);
+    let sample_at = |milliseconds| {
+        let mut buffer = gstreamer::Buffer::new();
+        buffer
+            .get_mut()
+            .expect("新建 buffer 应唯一持有")
+            .set_pts(gstreamer::ClockTime::from_mseconds(milliseconds));
+        Sample::builder().buffer(&buffer).build()
+    };
+
+    super::sink::store_latest_sample(&slot, sample_at(10), &|| {
+        notifications.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+    super::sink::store_latest_sample(&slot, sample_at(20), &|| {
+        notifications.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    let latest = slot.lock().unwrap().take().expect("最新帧槽位为空");
+    assert_eq!(
+        latest.buffer().and_then(|buffer| buffer.pts()),
+        Some(gstreamer::ClockTime::from_mseconds(20))
+    );
+    assert_eq!(notifications.load(std::sync::atomic::Ordering::Relaxed), 2);
+}
+
+#[test]
 fn test_runtime_dmabuf_caps_keep_modifiers() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     gst_init();
 
     let formats = gstreamer::List::new(vec![
@@ -202,8 +247,66 @@ fn test_runtime_dmabuf_caps_keep_modifiers() {
     );
 }
 
+/// 复现“导入即暂停、首帧作海报”的真实路径：appsink 安装了 new_preroll/new_sample
+/// 回调（on_frame_arrived=Some）并走完整 connect()（bus 同步处理器丢弃消息 + 构建
+/// wgpu 转换管线），管线置 Paused，再用 fetch_next_frame（渲染线程入口）拉首帧。
+/// 回归点：暂停态 preroll 必须由回调写入最新帧槽位并请求重绘，不能依赖播放态
+/// sample，也不能靠额外定时器或临时切到 Playing 才获得首帧。
+#[test]
+fn test_paused_preroll_with_callbacks() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = decode_serial_lock();
+    let path = match generated_test_video() {
+        Some(p) => p.to_path_buf(),
+        None => return,
+    };
+    let uri = url::Url::from_file_path(&path)
+        .expect("测试视频路径无法转换为 URI")
+        .to_string();
+    gst_init();
+    let (pipeline, _sink_element, mut wgpu_sink) =
+        build_decode_pipeline_with_dmabuf(&uri, false, false).expect("搭建管线失败");
+    let (instance, device, queue) = headless_wgpu();
+    let _keep = &instance;
+    let bus = pipeline.bus().expect("bus");
+    let (bus_sender, _bus_receiver) = futures::channel::mpsc::unbounded::<gstreamer::Message>();
+    wgpu_sink
+        .connect(
+            (
+                std::sync::Arc::new(instance),
+                std::sync::Arc::new(device),
+                std::sync::Arc::new(queue),
+            ),
+            &bus,
+            bus_sender,
+            Box::new(|| {}),
+        )
+        .expect("连接 GPU 输出失败");
+    pipeline
+        .set_state(gstreamer::State::Paused)
+        .expect("暂停态预滚动失败");
+
+    // new_preroll 回调把首帧写入槽位，fetch_next_frame 应能直接消费它。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut got = None;
+    while Instant::now() < deadline {
+        if let Some((_img, w, h)) = wgpu_sink.fetch_next_frame() {
+            got = Some((w, h));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = pipeline.set_state(gstreamer::State::Null);
+    let (w, h) = got.expect("connect()+Paused+fetch_next_frame 取不回首帧（黑屏根因）");
+    assert!(
+        w.is_some() && h.is_some(),
+        "首帧未携带分辨率变化（video-widths/heights 不更新，参考框尺寸错乱）"
+    );
+}
+
 #[test]
 fn test_runtime_dmabuf_caps_drop_unknown_format_but_keep_sysmem() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     gst_init();
 
     let unsupported_dmabuf = gstreamer::Caps::builder("video/x-raw")
@@ -231,6 +334,7 @@ fn test_runtime_dmabuf_caps_drop_unknown_format_but_keep_sysmem() {
 
 #[test]
 fn test_plane_bounds_reject_invalid_stride_and_truncation() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     assert!(positive_stride(-1, 0).is_none());
     assert!(plane_range(16, 0, 4, 4, 0).is_some());
     assert!(plane_range(15, 0, 4, 4, 0).is_none());
@@ -252,6 +356,7 @@ fn test_plane_bounds_reject_invalid_stride_and_truncation() {
 /// PAR 水平换算：显示宽度 = round(存储宽度 × num/den)。1:1 或无效 PAR 原样返回。
 #[test]
 fn test_display_width_from_par() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(
         display_width_from_par(720, gstreamer::Fraction::new(16, 15)),
         768
@@ -274,6 +379,7 @@ fn test_display_width_from_par() {
 /// 解析；未知格式 / 空串返回 None。优先走库函数，裸 fourcc 走 from_le_bytes 回退。
 #[test]
 fn test_plane_layout_from_drm_format() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     assert!(dmabuf::plane_layout_from_drm_format("NV12:0x0100000000000009").is_some());
     assert!(dmabuf::plane_layout_from_drm_format("P010:0x010000000000000a").is_some());
     assert!(dmabuf::plane_layout_from_drm_format("NV12").is_some());
@@ -285,6 +391,7 @@ fn test_plane_layout_from_drm_format() {
 /// 分辨率/格式/modifier 任一变化必须换代（触发导入缓存清空）。
 #[test]
 fn test_dmabuf_cache_epoch() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     gst_init();
     let dmabuf_caps = gstreamer::Caps::builder("video/x-raw")
         .features(["memory:DMABuf"])
@@ -329,6 +436,7 @@ fn test_dmabuf_cache_epoch() {
 
 #[test]
 fn test_video_caps_are_derived_from_format_capabilities() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     gst_init();
 
     let caps = video_caps_with(false, false);
@@ -563,6 +671,7 @@ fn neutral_frame(
 /// Y410（packed 4:4:4 10bit）布局。
 #[test]
 fn test_yuv_convert_shader_all_layouts() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (_instance, device, queue) = headless_wgpu();
     let convert = YuvConvertPipeline::new(&device);
     let (w, h) = (256u32, 2u32);
@@ -685,6 +794,7 @@ fn nv12_fourcc() -> u32 {
 /// 此处断言必然失败——中性灰测试无法区分 U/V，正是这类 bug 的盲区。
 #[test]
 fn test_yuv_convert_shader_color_matrices() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (_instance, device, queue) = headless_wgpu();
     let convert = YuvConvertPipeline::new(&device);
     let (w, h) = (64u32, 2u32);
@@ -743,6 +853,7 @@ fn test_yuv_convert_shader_color_matrices() {
 /// 文件不存在则跳过。
 #[test]
 fn test_playback_realpath() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Some(path) = generated_test_video() else {
         return;
@@ -854,6 +965,7 @@ fn generate_par_test_video() -> Result<PathBuf, String> {
 /// GStreamer 生成失败则跳过该测试。
 #[test]
 fn test_playback_anamorphic_par() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Ok(path) = generate_par_test_video() else {
         eprintln!("跳过：GStreamer 生成 PAR 测试视频失败");
@@ -924,6 +1036,7 @@ fn test_playback_anamorphic_par() {
 /// `test_dmabuf_zero_copy_realpath`。使用 GStreamer 生成的素材，缺素材则跳过。
 #[test]
 fn test_dmabuf_compatibility_realpath() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Some(path) = generated_test_video() else {
         return;
@@ -941,6 +1054,7 @@ fn test_dmabuf_compatibility_realpath() {
 /// 素材覆盖（需要真实 VA/Vulkan 设备的场景）。
 #[test]
 fn test_dmabuf_zero_copy_realpath() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let path = match std::env::var_os("AWEFT_DMABUF_TEST_VIDEO") {
         Some(path) => {
@@ -976,8 +1090,8 @@ fn dmabuf_optin_inner(uri: &str, require_dmabuf: bool, expected_size: Option<(u3
         .ok()
         .expect("sink 不是 appsink");
     appsink.set_callbacks(SlintWGPUSink::build_gst_appsink_callbacks(
-        Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(None)),
+        Default::default(),
+        Default::default(),
         None,
     ));
     if require_dmabuf {
@@ -1350,8 +1464,8 @@ fn render_decoded_frame_with_skip(
     // 我们直接 try_pull_sample 拉帧。
     let appsink = sink_element.clone().dynamic_cast::<AppSink>().ok()?;
     appsink.set_callbacks(SlintWGPUSink::build_gst_appsink_callbacks(
-        Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(None)),
+        Default::default(),
+        Default::default(),
         None,
     ));
 
@@ -1641,6 +1755,7 @@ fn stripe_score(rgba: &[u8], w: u32, h: u32) -> (f64, f64) {
 ///   · 三者都接近 → 解码与转色都正确，横条纹在更下游（Slint Image 上传/显示）
 #[test]
 fn test_soft_vs_hard_decode_frame_compare() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Some(path) = generated_test_video() else {
         return;
@@ -1705,6 +1820,7 @@ fn test_soft_vs_hard_decode_frame_compare() {
 /// 断言：干净帧实测 ≈0.3，逐行错位的条纹会高一个数量级以上。
 #[test]
 fn test_nv12_sysmem_vs_gst_reference() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Some(path) = generated_test_video() else {
         return;
@@ -1799,6 +1915,7 @@ fn format_vs_gst_reference(
 /// 故会同等条纹）；若接近 → YU12 着色器正确，条纹来自 dmabuf 导入本身。
 #[test]
 fn test_yu12_sysmem_vs_gst_reference() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Some(path) = generated_test_video() else {
         return;
@@ -1843,6 +1960,7 @@ fn test_yu12_sysmem_vs_gst_reference() {
 /// 区分 U/V，本测试用真实内容把该假设落实。
 #[test]
 fn test_yv12_sysmem_vs_gst_reference() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let Some(path) = generated_test_video() else {
         return;
@@ -1881,6 +1999,7 @@ fn test_yv12_sysmem_vs_gst_reference() {
 /// 可指定真实 Y410 素材覆盖。
 #[test]
 fn test_y410_sysmem_vs_gst_reference() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     let path = match std::env::var_os("AWEFT_Y410_TEST_VIDEO") {
         Some(path) => {
@@ -1966,6 +2085,7 @@ fn find_ab24_in_vpp_template(vpp: &gstreamer::Element) -> Option<(u32, u64)> {
 /// 接受性；失败（如 Arc DG2 无法导入 X-TILED）打印诊断结论后跳过。
 #[test]
 fn test_dmabuf_rgba_ab24_import_spike() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _serial = decode_serial_lock();
     gst_init();
     const W: u32 = 640;
@@ -1989,8 +2109,8 @@ fn test_dmabuf_rgba_ab24_import_spike() {
         .drop(true)
         .build();
     appsink_a.set_callbacks(SlintWGPUSink::build_gst_appsink_callbacks(
-        Arc::new(Mutex::new(None)),
-        Arc::new(Mutex::new(None)),
+        Default::default(),
+        Default::default(),
         None,
     ));
     let src_caps = gstreamer::Caps::builder("video/x-raw")

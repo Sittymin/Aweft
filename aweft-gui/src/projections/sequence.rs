@@ -28,11 +28,10 @@ pub fn op_sequence_structure(store: &mut AppStore, tags: &[Tag]) {
                 new_item_id,
             } => {
                 let (state, ui) = store.split_mut();
-                if let Err(err) = ui.sequence_state.handle_item_inserted(
-                    &state.project,
-                    *item_id,
-                    *new_item_id,
-                ) {
+                if let Err(err) =
+                    ui.sequence_state
+                        .handle_item_inserted(&state.project, *item_id, *new_item_id)
+                {
                     log::error!("Sequence 插入行失败: {}", err);
                 }
             }
@@ -85,12 +84,8 @@ pub fn op_sequence_timecode(store: &mut AppStore, tags: &[Tag]) {
                     .rows_model()
                     .clear_preview_timecode(*event_id);
                 // update_row_time 内部重建该行 + 所有祖先分组头并通知（原子刷新）
-                ui.sequence_state.update_row_time(
-                    &state.project,
-                    *event_id,
-                    *is_start_time,
-                    *time,
-                );
+                ui.sequence_state
+                    .update_row_time(&state.project, *event_id, *is_start_time, *time);
             }
             Tag::TimecodePreviewChanged {
                 event_id,
@@ -185,8 +180,14 @@ pub fn op_sequence_selection(store: &mut AppStore, tags: &[Tag]) {
         } = tag
         {
             let (state, ui) = store.split_mut();
-            ui.sequence_state
-                .marquee_select(&state.project, *x_lo, *x_hi, *row_lo, *row_hi, *modifier);
+            ui.sequence_state.marquee_select(
+                &state.project,
+                *x_lo,
+                *x_hi,
+                *row_lo,
+                *row_hi,
+                *modifier,
+            );
         }
         if let Tag::SelectionDeselectedAll = tag {
             let (state, ui) = store.split_mut();

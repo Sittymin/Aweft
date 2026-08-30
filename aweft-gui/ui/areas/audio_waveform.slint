@@ -1,0 +1,173 @@
+import { Theme } from "../theme/index.slint";
+import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
+import { TimeRuler, VerticalGrid } from "./graph_editor/ruler.slint";
+import { VideoCallbacks } from "../bridge/callbacks.slint";
+import { VideoState } from "../bridge/state.slint";
+
+component WaveformBar inherits Rectangle {
+    in property <float> amplitude: 0.0;
+
+    background: transparent;
+
+    // A waveform represents pressure around silence, so both halves share one amplitude.
+    Rectangle {
+        width: parent.width;
+        height: Math.max(1px, parent.height * root.amplitude * 0.47);
+        y: parent.height * 0.5 - self.height;
+        border-radius: 1px;
+        background: Theme.data.animation-editor.strip-active;
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: Math.max(1px, parent.height * root.amplitude * 0.47);
+        y: parent.height * 0.5;
+        border-radius: 1px;
+        background: Theme.data.animation-editor.strip-active.with-alpha(58%);
+    }
+}
+
+export component AudioWaveformArea inherits Rectangle {
+    private property <float> selection-start: 2.8;
+    private property <float> selection-end: 7.55;
+    private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+
+    // The navigation transform is shared by waveform buckets, ruler, grid, selection and playhead.
+    private property <float> nav-pan-x: 0.0;
+    private property <float> nav-zoom: 30.0;
+    private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    private property <float> view-time-hi: (canvas.width - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    // 元素池只随可视宽度变化，不随视频时长或缩放变化。约每 5px 一个槽位，
+    // 额外四个槽位覆盖左右边界；平移/缩放只重映射这些已有 WaveformBar。
+    private property <int> waveform-slot-count: max(1, ceil(root.width / 5px) + 4);
+    private property <float> waveform-target-px: 5.0;
+
+    pure function waveform-level() -> int {
+        let base-px = 0.1 * root.nav-zoom;
+        if base-px >= root.waveform-target-px { return -1; }
+        if base-px * 2.0 >= root.waveform-target-px { return 0; }
+        if base-px * 4.0 >= root.waveform-target-px { return 1; }
+        if base-px * 8.0 >= root.waveform-target-px { return 2; }
+        if base-px * 16.0 >= root.waveform-target-px { return 3; }
+        if base-px * 32.0 >= root.waveform-target-px { return 4; }
+        if base-px * 64.0 >= root.waveform-target-px { return 5; }
+        if base-px * 128.0 >= root.waveform-target-px { return 6; }
+        if base-px * 256.0 >= root.waveform-target-px { return 7; }
+        if base-px * 512.0 >= root.waveform-target-px { return 8; }
+        if base-px * 1024.0 >= root.waveform-target-px { return 9; }
+        if base-px * 2048.0 >= root.waveform-target-px { return 10; }
+        return 11;
+    }
+
+    pure function waveform-bucket-duration() -> float {
+        let level = root.waveform-level();
+        return level < 0 ? 0.1
+            : VideoState.audio-waveforms[root.audio-index].levels[level].bucket-duration;
+    }
+
+    pure function waveform-first-bucket() -> int {
+        return floor(root.view-time-lo / root.waveform-bucket-duration()) - 1;
+    }
+
+    pure function waveform-row-count() -> int {
+        let level = root.waveform-level();
+        return level < 0
+            ? VideoState.audio-waveforms[root.audio-index].amplitudes.length
+            : VideoState.audio-waveforms[root.audio-index].levels[level].amplitudes.length;
+    }
+
+    pure function waveform-amplitude(row: int) -> float {
+        if row < 0 || row >= root.waveform-row-count() { return 0.0; }
+        let level = root.waveform-level();
+        return level < 0
+            ? VideoState.audio-waveforms[root.audio-index].amplitudes[row]
+            : VideoState.audio-waveforms[root.audio-index].levels[level].amplitudes[row];
+    }
+
+    // Each Area chooses which video audio it displays; the time belongs to that video session.
+    in property <float> current-time: 0.0;
+    in property <int> audio-index: 0;
+
+    background: Theme.data.animation-editor.canvas-background;
+
+    TimeRuler {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: root.ruler-height;
+        view-lo: root.view-time-lo;
+        view-hi: root.view-time-hi;
+        zoom-x: root.nav-zoom;
+        pan-x: root.nav-pan-x;
+        current-time: root.current-time;
+        time-picked(time) => {
+            VideoCallbacks.seek-video(root.audio-index, time);
+        }
+    }
+
+    canvas := Rectangle {
+        x: 0px;
+        y: root.ruler-height;
+        width: parent.width;
+        height: parent.height - root.ruler-height;
+        clip: true;
+        background: Theme.data.animation-editor.canvas-background;
+
+        VerticalGrid {
+            width: 100%;
+            height: 100%;
+            view-lo: root.view-time-lo;
+            view-hi: root.view-time-hi;
+            zoom-x: root.nav-zoom;
+            pan-x: root.nav-pan-x;
+            line-color: Theme.data.animation-editor.grid-color;
+            minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        Rectangle {
+            x: root.selection-start * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+            width: (root.selection-end - root.selection-start) * root.nav-zoom * 1px;
+            height: parent.height;
+            background: Theme.data.animation-editor.marquee-fill.with-alpha(42%);
+        }
+
+        Rectangle {
+            y: parent.height * 0.5;
+            width: parent.width;
+            height: 1px;
+            background: Theme.data.animation-editor.grid-color;
+        }
+
+        // 固定宽度驱动的持久槽位池。缩放选择预聚合峰值层，平移只改变首桶下标；
+        // WaveformBar 本身不随原始波形长度或视图导航反复创建/销毁。
+        if root.audio-index >= 0 && root.audio-index < VideoState.audio-waveforms.length: Rectangle {
+            width: 100%;
+            height: 100%;
+            for slot in root.waveform-slot-count: WaveformBar {
+                private property <int> bucket-row: root.waveform-first-bucket() + slot;
+                visible: self.bucket-row >= 0 && self.bucket-row < root.waveform-row-count();
+                x: self.bucket-row * root.waveform-bucket-duration() * root.nav-zoom * 1px
+                    + root.nav-pan-x * 1px;
+                y: 12px;
+                width: max(1px, root.waveform-bucket-duration() * root.nav-zoom * 1px - 1px);
+                height: parent.height - 24px;
+                amplitude: root.waveform-amplitude(self.bucket-row);
+            }
+        }
+
+        CanvasNavigation {
+            pan-x <=> root.nav-pan-x;
+            zoom-x <=> root.nav-zoom;
+            lock-y-zoom: true;
+            max-zoom: 12000.0;
+            zoom-step: 1.5;
+        }
+
+        Rectangle {
+            x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
+            width: 1px;
+            height: parent.height;
+            background: Theme.data.animation-editor.playhead;
+        }
+    }
+}

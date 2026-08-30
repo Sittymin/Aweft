@@ -6,6 +6,7 @@ use super::{GraphEditorState, snap_ms};
 use crate::bridge::converters::{model_key_to_slint, slint_key_to_model};
 use crate::bridge::types::{SlintColorMode, SlintFCurveChannel, SlintKeyframe};
 use crate::depsgraph::Tag;
+use crate::store::utils::rainbow::rainbow_color;
 use aweft_model::animation::{Action as ModelAction, Keyframe as ModelKeyframe, PropertyPath};
 use aweft_model::ids::ActionId;
 
@@ -42,7 +43,7 @@ impl GraphEditorState {
         self.channels_data.push(SlintFCurveChannel {
             curve_index: idx as i32,
             name: name.into(),
-            color: Self::rainbow_color(idx),
+            color: rainbow_color(idx),
             user_color: color,
             color_mode: SlintColorMode::AutoRainbow,
             visible: true,

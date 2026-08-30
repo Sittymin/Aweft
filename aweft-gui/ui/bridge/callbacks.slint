@@ -27,7 +27,34 @@ export global AreaCallbacks {
 
 // 视口回调：打开视频等媒体操作（Rust 侧处理）
 export global VideoCallbacks {
+    // 打开/追加一个视频（首个自动成为主视频）
     callback open-video();
+    // 播放/暂停切换（时间线 Header 播放按钮）
+    callback toggle-playback();
+    // 点击视口视频 / 控制时间条选中视频（-1 = 取消选中）
+    callback select-video(video-index: int, modifier: SlintSelectionModifier);
+    // 控制时间条按下：Shift 批量拖拽选择集合，否则只拖拽当前视频
+    callback time-bar-pressed(video-index: int, is-batch: bool);
+    // 控制时间条拖拽：seek 当前选中视频（无选中则主视频）到指定秒
+    callback time-bar-dragged(time: float);
+    // 控制时间条拖拽结束：松手，暂停预览回落暂停态
+    callback time-bar-released(video-index: int);
+    // 音频波形标尺定位指定视频，不改变全局视口选择。
+    callback seek-video(video-index: int, time: float);
+    // 后台解码按区间提交波形；start-index 之前的桶保持不变。
+    callback waveform-progress(video-index: int, start-index: int, duration: float, amplitudes: [float]);
+    // 右键非主视频"设为主视频"
+    callback set-main-video(video-index: int);
+    // 右键任意视频"更换视频"：重新选择文件原地替换
+    callback replace-video(video-index: int);
+    // 切换指定视频音频静音状态
+    callback toggle-mute-video(video-index: int);
+    // 视口点击命中检测：返回该点应选中的视频下标（重叠时按选中顺序循环），-1 无
+    callback video-picked(x: float, y: float) -> int;
+    // 拖拽移动非主视频到指定世界坐标
+    callback video-moved(video-index: int, x: float, y: float);
+    // 视口命中检测：返回该点最上层的视频下标（拖拽移动起点/右键菜单目标），-1 无
+    callback video-hit-top(x: float, y: float) -> int;
 }
 
 export global SequenceCallbacks {

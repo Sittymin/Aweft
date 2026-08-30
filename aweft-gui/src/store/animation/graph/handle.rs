@@ -24,9 +24,9 @@ impl GraphEditorState {
             .selected_handles
             .contains(&HandleLoc { curve, key, is_in });
         if is_additive(modifier) {
-            let anchor =
-                self.handle_selection_anchor
-                    .unwrap_or(HandleLoc { curve, key, is_in });
+            let anchor = self
+                .handle_selection_anchor
+                .unwrap_or(HandleLoc { curve, key, is_in });
             let (lo, hi) = if anchor.curve == curve && anchor.is_in == is_in {
                 (anchor.key.min(key), anchor.key.max(key))
             } else {

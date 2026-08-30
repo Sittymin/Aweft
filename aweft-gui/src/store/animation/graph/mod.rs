@@ -252,13 +252,19 @@ impl crate::store::AppStore {
         use slint::ComponentHandle;
 
         let state = instance.global::<crate::bridge::types::AnimationState>();
-        state.set_channels(ModelRc::from(self.ui_models.animation.graph.channels.clone()));
+        state.set_channels(ModelRc::from(
+            self.ui_models.animation.graph.channels.clone(),
+        ));
         state.set_graph_channels(self.ui_models.animation.graph.graph_filter.clone());
         state.set_dope_channels(self.ui_models.animation.graph.dope_filter.clone());
         state.set_graph_segments(self.ui_models.animation.graph.graph_segments.clone());
         state.set_graph_handles(self.ui_models.animation.graph.graph_handles.clone());
-        state.set_segments(ModelRc::from(self.ui_models.animation.graph.segments.clone()));
-        state.set_handles(ModelRc::from(self.ui_models.animation.graph.handles.clone()));
+        state.set_segments(ModelRc::from(
+            self.ui_models.animation.graph.segments.clone(),
+        ));
+        state.set_handles(ModelRc::from(
+            self.ui_models.animation.graph.handles.clone(),
+        ));
         state.set_dope_connections(ModelRc::from(
             self.ui_models.animation.graph.dope_connections.clone(),
         ));

@@ -6,7 +6,7 @@
 pub mod animation;
 pub mod area;
 pub mod drag;
-pub mod sequence;
 pub mod media;
 pub mod node_graph;
 pub mod screen;
+pub mod sequence;

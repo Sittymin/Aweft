@@ -80,4 +80,3 @@ pub enum AlignmentParseError {
 
 /// libass 的 Result 类型别名
 pub type Result<T> = std::result::Result<T, LibassError>;
-

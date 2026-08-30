@@ -137,9 +137,9 @@ impl crate::store::AppStore {
                 ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
                 SetCurrentTime { time } => {
                     ce.current_time = time as f64;
-                    // 编辑器是时间权威：拖动播放头同步驱动视频到同一时刻
-                    // （无管线时忽略；播放中 seek 后位置查询自然从新位置继续）
-                    crate::reducers::media::seek_to_secs(&self.state, time as f64);
+                    // 编辑器是时间权威：拖动播放头同步驱动当前选中（无则主）视频
+                    // 到同一时刻（无视频时忽略；播放中 seek 后位置查询自然从新位置继续）
+                    self.seek_target(time as f64);
                     vec![Tag::GraphScalarsChanged]
                 }
                 ViewChanged { zoom_x, zoom_y } => ce.set_view(zoom_x, zoom_y),
@@ -179,7 +179,9 @@ impl crate::store::AppStore {
             return self.ui_models.animation.graph.reset_action();
         }
         let Some(id) = self
-            .ui_models.animation.graph
+            .ui_models
+            .animation
+            .graph
             .actions
             .get(index as usize)
             .map(|a| a.id)
@@ -196,7 +198,9 @@ impl crate::store::AppStore {
         else {
             return Vec::new();
         };
-        self.ui_models.animation.graph
+        self.ui_models
+            .animation
+            .graph
             .load_action(index as usize, action)
     }
 

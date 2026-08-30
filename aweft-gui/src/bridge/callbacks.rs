@@ -4,6 +4,7 @@ use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, MainWindow, NodeGraphCallbacks,
     SequenceCallbacks, VideoCallbacks,
 };
+
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
 use aweft_model::ids::ItemId;
@@ -39,40 +40,325 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_video_callbacks(instance, Rc::clone(&store));
 }
 
-/// 设置视口回调：打开视频走系统文件对话框（rfd xdg-portal，异步不阻塞 UI）。
+/// 设置视口回调：打开/追加/更换视频走系统文件对话框（rfd xdg-portal，异步不阻塞 UI）。
 /// 选中后 dispatch 建管线（reducer 层），再连接 WGPU 输出并自动播放（渲染层）。
 /// 对话框 future 在 `spawn_local` 中 await（同官方 gstreamer-player 示例的
 /// 异步模式；portal 后端用 async-std 特性以脱离 tokio 上下文）。
+/// 命中检测（`video-picked`/`video-context-picked`）为同步查询（点击需要立即结果）。
 fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
-    let weak = instance.as_weak();
-    instance.global::<VideoCallbacks>().on_open_video(move || {
-        let future = rfd::AsyncFileDialog::new()
-            .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
-            .pick_file();
-        let weak = weak.clone();
-        let store = Rc::clone(&store);
-        let _ = slint::spawn_local(async move {
-            // 用户取消选择
-            let Some(file) = future.await else {
-                return;
-            };
-            // 本地路径 → file URI（playbin 需要 URI）
-            let path = file.path().to_path_buf();
-            let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
-                log::warn!("打开视频：路径无法转换为 URI：{}", path.display());
-                return;
-            };
+    // 一次性绑定 Rust 持有的 VecModel 到 VideoState 全局（共享 inner，后续自动通知）
+    {
+        let s = store.borrow();
+        let vstate = instance.global::<crate::bridge::types::VideoState>();
+        vstate.set_video_frames(slint::ModelRc::from(s.ui_models.video.frames.clone()));
+        vstate.set_video_widths(slint::ModelRc::from(s.ui_models.video.widths.clone()));
+        vstate.set_video_heights(slint::ModelRc::from(s.ui_models.video.heights.clone()));
+        vstate.set_video_positions(slint::ModelRc::from(s.ui_models.video.positions.clone()));
+        vstate.set_time_bars(slint::ModelRc::from(s.ui_models.video.time_bars.clone()));
+        vstate.set_audio_waveforms(slint::ModelRc::from(
+            s.ui_models.video.audio_waveforms.clone(),
+        ));
+    }
 
-            // 1. dispatch 建管线 + 按后端嵌入/连接 + 启动（渲染层编排）
-            dispatch_and_render(
-                &store,
-                Action::Media(crate::actions::media::MediaAction::Video(
-                    crate::actions::media::VideoAction::Initialize { uri },
-                )),
-                &weak,
-            );
+    {
+        let s = Rc::clone(&store);
+        instance.global::<VideoCallbacks>().on_waveform_progress(
+            move |index, start, duration, amplitudes| {
+                if index < 0 {
+                    return;
+                }
+                let index = index as usize;
+                let start = start.max(0) as usize;
+                let store = s.borrow();
+                let video = &store.ui_models.video;
+                let Some(values) = video.waveform_amplitudes.get(index) else {
+                    log::warn!("丢弃越界波形结果: video-index={index}");
+                    return;
+                };
+                for (offset, amplitude) in amplitudes.iter().enumerate() {
+                    let row = start + offset;
+                    if row < values.row_count() {
+                        values.set_row_data(row, amplitude);
+                    } else if row == values.row_count() {
+                        values.push(amplitude);
+                    }
+                }
+                update_waveform_levels(video, index, start, amplitudes.row_count());
+                if let Some(mut waveform) = video.audio_waveforms.row_data(index)
+                    && (waveform.duration - duration).abs() > f32::EPSILON
+                {
+                    waveform.duration = duration;
+                    video.audio_waveforms.set_row_data(index, waveform);
+                }
+            },
+        );
+    }
+
+    // 打开/追加视频（首个自动成为主视频）：系统文件对话框（异步不阻塞 UI）
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance.global::<VideoCallbacks>().on_open_video(move || {
+            let future = rfd::AsyncFileDialog::new()
+                .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
+                .pick_file();
+            let weak = weak.clone();
+            let store = Rc::clone(&s);
+            let _ = slint::spawn_local(async move {
+                // 用户取消选择
+                let Some(file) = future.await else {
+                    return;
+                };
+                // 本地路径 → file URI（playbin 需要 URI）
+                let path = file.path().to_path_buf();
+                let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
+                    log::warn!("打开视频：路径无法转换为 URI：{}", path.display());
+                    return;
+                };
+                dispatch_and_render(
+                    &store,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::Append { uri },
+                    )),
+                    &weak,
+                );
+            });
         });
-    });
+    }
+
+    // 播放/暂停切换（时间线 Header 播放按钮）
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_toggle_playback(move || {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::TogglePlayback,
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 点击视口视频 / 控制时间条：选中该视频（-1 = 取消选中）
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_select_video(move |index, modifier| {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::Select {
+                            index: (index >= 0).then_some(index as usize),
+                            modifier,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 控制时间条按下：先选中该视频（随后拖拽 seek 即作用到它）
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_time_bar_pressed(move |index, is_batch| {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::SeekBegin {
+                            index: index as usize,
+                            is_batch,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 控制时间条拖拽：seek 当前选中（无选中则主视频）到指定秒
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_time_bar_dragged(move |time| {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::Seek {
+                            timestamp: (time * 1000.0) as i64,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 控制时间条拖拽结束：若拖拽前处于暂停，回到暂停（暂停预览）
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_time_bar_released(move |_index| {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::SeekEnd,
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 音频波形可查看任意视频的音轨；定位该音轨不能改变全局选中视频。
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_seek_video(move |index, time| {
+                if index < 0 {
+                    return;
+                }
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::SeekVideo {
+                            index: index as usize,
+                            timestamp: (time * 1000.0) as i64,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 右键非主视频"设为主视频"
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_set_main_video(move |index| {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::SetMain {
+                            index: index as usize,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_toggle_mute_video(move |index| {
+                if index < 0 {
+                    return;
+                }
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::ToggleMute {
+                            index: index as usize,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 右键任意视频"更换视频"：重新选择文件原地替换
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_replace_video(move |index| {
+                let future = rfd::AsyncFileDialog::new()
+                    .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
+                    .pick_file();
+                let weak = weak.clone();
+                let store = Rc::clone(&s);
+                let _ = slint::spawn_local(async move {
+                    let Some(file) = future.await else {
+                        return;
+                    };
+                    let path = file.path().to_path_buf();
+                    let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
+                        log::warn!("更换视频：路径无法转换为 URI：{}", path.display());
+                        return;
+                    };
+                    dispatch_and_render(
+                        &store,
+                        Action::Media(crate::actions::media::MediaAction::Video(
+                            crate::actions::media::VideoAction::Replace {
+                                index: index as usize,
+                                uri,
+                            },
+                        )),
+                        &weak,
+                    );
+                });
+            });
+    }
+
+    // 视口点击命中：重叠视频按选中顺序循环（同步查询）
+    let s = Rc::clone(&store);
+    instance
+        .global::<VideoCallbacks>()
+        .on_video_picked(move |x, y| -> i32 {
+            s.borrow()
+                .pick_video_at(x as f64, y as f64)
+                .map(|i| i as i32)
+                .unwrap_or(-1)
+        });
+
+    // 拖拽移动非主视频
+    {
+        let weak = instance.as_weak();
+        let s = Rc::clone(&store);
+        instance
+            .global::<VideoCallbacks>()
+            .on_video_moved(move |index, x, y| {
+                dispatch_and_render(
+                    &s,
+                    Action::Media(crate::actions::media::MediaAction::Video(
+                        crate::actions::media::VideoAction::MoveVideo {
+                            index: index as usize,
+                            x: x as f64,
+                            y: y as f64,
+                        },
+                    )),
+                    &weak,
+                );
+            });
+    }
+
+    // 视口命中：该点最上层的视频（拖拽移动起点/右键菜单目标）
+    let s = Rc::clone(&store);
+    instance
+        .global::<VideoCallbacks>()
+        .on_video_hit_top(move |x, y| -> i32 {
+            s.borrow()
+                .hit_top_video_at(x as f64, y as f64)
+                .map(|i| i as i32)
+                .unwrap_or(-1)
+        });
 }
 
 /// 设置节点图编辑器回调：图操作走 `Action::NodeGraph` → dispatch → tag → 投影。
@@ -298,8 +584,8 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
             }
             RenderingState::AfterRendering => {
                 let mut store_mut = store.borrow_mut();
-                if let Some(sink) = store_mut.state_mut().wgpu_sink.as_mut() {
-                    sink.after_rendering();
+                for session in store_mut.state_mut().video_sessions.iter_mut() {
+                    session.wgpu_sink.after_rendering();
                 }
             }
             RenderingState::RenderingTeardown => {
@@ -312,58 +598,104 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
         log::error!("设置渲染通知器失败: {}", e);
     }
 }
+
+fn update_waveform_levels(
+    video: &crate::store::video::VideoUiState,
+    index: usize,
+    start: usize,
+    changed_count: usize,
+) {
+    let Some(levels) = video.waveform_level_amplitudes.get(index) else {
+        return;
+    };
+    crate::store::video::update_peak_pyramid(
+        &video.waveform_amplitudes[index],
+        levels,
+        start,
+        changed_count,
+    );
+}
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {
     crate::render::video_sink::teardown(&mut store.borrow_mut());
 }
 
-fn handle_before_rendering(instance: &MainWindow, store: &Rc<RefCell<AppStore>>) {
+fn handle_before_rendering(_instance: &MainWindow, store: &Rc<RefCell<AppStore>>) {
     let mut store_mut = store.borrow_mut();
 
     // 未打开视频：高频路径零开销返回（不查位置、不碰 Sink）
-    if store_mut.state().video_pipeline.is_none() {
+    if store_mut.state().video_sessions.is_empty() {
         return;
     }
 
-    // 获取新的视频帧并设置到 UI
-    let frame_opt = store_mut
-        .state_mut()
-        .wgpu_sink
-        .as_mut()
-        .and_then(|wgpu_sink| wgpu_sink.fetch_next_frame());
-    if let Some((image, w, h)) = frame_opt {
-        log::debug!("收到新视频帧，设置到 UI");
-        let video_state = instance.global::<crate::bridge::types::VideoState>();
-        video_state.set_current_video_frame(image);
-        if let (Some(w), Some(h)) = (w, h) {
-            video_state.set_video_width(w as i32);
-            video_state.set_video_height(h as i32);
+    // 逐个会话拉取最新帧；帧消费与对应 UI 行立即配对，不创建临时帧数组。
+    let session_count = store_mut.state().video_sessions.len();
+    let mut received_frame = false;
+    for index in 0..session_count {
+        let frame = store_mut.state_mut().video_sessions[index]
+            .wgpu_sink
+            .fetch_next_frame();
+        if let Some((image, width, height)) = frame {
+            received_frame = true;
+            store_mut.ui_models.video.frames.set_row_data(index, image);
+            if let (Some(w), Some(h)) = (width, height) {
+                store_mut
+                    .ui_models
+                    .video
+                    .widths
+                    .set_row_data(index, w as i32);
+                store_mut
+                    .ui_models
+                    .video
+                    .heights
+                    .set_row_data(index, h as i32);
+            }
         }
     }
 
-    sync_playback_time(&mut store_mut);
+    // 新 sample/preroll 回调是播放渲染的唯一驱动；其它窗口重绘不查询媒体管线。
+    if received_frame {
+        render_sync_video_playback_time(&mut store_mut);
+    }
 }
 
-/// 播放中随帧同步管线位置到动画域当前时间，驱动全部编辑器播放头。
-/// 高频路径（每帧）与视频帧一样直接写：不经 dispatch/depsgraph，
+/// 播放中随帧同步各视频管线位置：写入各自 `session.current_time` 并局部刷新
+/// 时间条模型；活跃视频（选中无则主视频）额外驱动动画域当前时间（时间框/播放头
+/// 跟随活跃视频）。高频路径（每帧）与视频帧一样直接写：不经 dispatch/depsgraph，
 /// 但复用投影同一出口 `sync_animation_scalars`。
 /// 时间按视频帧时长向下取整——播放头逐帧跳动而非逐查询抖动。
-fn sync_playback_time(store: &mut AppStore) {
-    let Some((secs, frame_dur)) = crate::reducers::media::playing_position(store.state()) else {
+fn render_sync_video_playback_time(store: &mut AppStore) {
+    if store.state().video_sessions.is_empty() {
         return;
-    };
-    let snapped = match frame_dur {
-        Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
-        _ => secs,
-    };
-    {
-        let ce = &mut store.ui_models.animation.graph;
-        // 与上次显示值相同（同一帧内多次渲染）则跳过
-        if (ce.current_time - snapped).abs() < 0.005 {
-            return;
-        }
-        ce.current_time = snapped;
     }
-    store.sync_animation_scalars();
+    // 拖拽时间条时 current_time 由媒体 reducer 的 seek 写入（鼠标目标位置），这里不要以
+    // 实际解码（关键帧）位置覆盖，否则游标在目标/关键帧间反复跳动。
+    let dragged_targets = store
+        .state()
+        .video_seek_session
+        .as_ref()
+        .map(|drag| drag.targets.iter().map(|target| target.index).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let bars = &store.ui_models.video.time_bars;
+    for (index, session) in store.state.video_sessions.iter_mut().enumerate() {
+        let Some((secs, frame_dur)) =
+            crate::reducers::media::gst_session_playing_position(session)
+        else {
+            continue;
+        };
+        let snapped = match frame_dur {
+            Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
+            _ => secs,
+        };
+        if !dragged_targets.contains(&index)
+            && (session.current_time - snapped).abs() >= 0.0005
+        {
+            session.current_time = snapped;
+            crate::reducers::media::ui_update_video_time_bar(bars, index, snapped);
+        }
+    }
+
+    crate::reducers::media::ui_sync_active_video_time(store);
+    crate::reducers::media::ui_sync_video_playing_state(store);
 }
 
 fn handle_rendering_setup(

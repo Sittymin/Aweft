@@ -390,10 +390,7 @@ impl crate::store::AppStore {
                     }
                 }
             }
-            SequenceAction::TimelineBlockDragPreview {
-                item_id,
-                delta_x,
-            } => {
+            SequenceAction::TimelineBlockDragPreview { item_id, delta_x } => {
                 if !crate::store::utils::drag::is_valid_delta(delta_x) {
                     return Ok(vec![]);
                 }
@@ -425,10 +422,7 @@ impl crate::store::AppStore {
                 }
                 Ok(tags)
             }
-            SequenceAction::TimelineBlockDragCommit {
-                item_id,
-                delta_x,
-            } => {
+            SequenceAction::TimelineBlockDragCommit { item_id, delta_x } => {
                 if !crate::store::utils::drag::is_valid_delta(delta_x) {
                     return Ok(vec![]);
                 }
@@ -441,7 +435,10 @@ impl crate::store::AppStore {
                     .directly_selected_items()
                     .into_iter()
                     .filter(|id| {
-                        self.ui_models.sequence_state.rows_model().is_group_item(*id)
+                        self.ui_models
+                            .sequence_state
+                            .rows_model()
+                            .is_group_item(*id)
                     })
                     .collect();
                 let targets = self.block_drag_targets(item_id);
@@ -489,7 +486,12 @@ impl crate::store::AppStore {
                     }
                 }
                 // 选中集内组头条目：清各自预览覆盖 + 刷新聚合行（Domain 未变，快照即当前值）
-                for h in self.ui_models.sequence_state.rows_model().directly_selected_items() {
+                for h in self
+                    .ui_models
+                    .sequence_state
+                    .rows_model()
+                    .directly_selected_items()
+                {
                     if !self.ui_models.sequence_state.rows_model().is_group_item(h) {
                         continue;
                     }

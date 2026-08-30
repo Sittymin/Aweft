@@ -140,11 +140,7 @@ fn walk_collect(
     }
 }
 
-fn collect_subtree(
-    sequence: &Sequence,
-    id: ItemId,
-    items: &mut HashMap<ItemId, StructureItem>,
-) {
+fn collect_subtree(sequence: &Sequence, id: ItemId, items: &mut HashMap<ItemId, StructureItem>) {
     if let Some(item) = sequence.get(id) {
         items.insert(id, item.clone());
         if let ItemContent::Group(g) = &item.content {

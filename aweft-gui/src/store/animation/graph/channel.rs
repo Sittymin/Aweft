@@ -2,11 +2,12 @@
 //! channels 模型行同步、连接线/汇总重建由投影（projection.rs）完成。
 
 use log::warn;
-use slint::{Color, Model};
+use slint::Model;
 
 use super::GraphEditorState;
 use crate::bridge::types::{SlintColorMode, SlintSelectionModifier};
 use crate::depsgraph::Tag;
+use crate::store::utils::rainbow::rainbow_color;
 use crate::store::utils::selection::{is_additive, is_replacing};
 
 impl GraphEditorState {
@@ -71,12 +72,12 @@ impl GraphEditorState {
             return Vec::new();
         }
         if is_additive(modifier) {
-            let anchor =
-                if (0..self.channels_data.len() as isize).contains(&self.selection_anchor) {
-                    self.selection_anchor
-                } else {
-                    curve as isize
-                };
+            let anchor = if (0..self.channels_data.len() as isize).contains(&self.selection_anchor)
+            {
+                self.selection_anchor
+            } else {
+                curve as isize
+            };
             let (lo, hi) = if anchor <= curve as isize {
                 (anchor, curve as isize)
             } else {
@@ -169,20 +170,6 @@ impl GraphEditorState {
         }
     }
 
-    /// 自动彩虹调色板：按通道下标取色（彩虹色系）。
-    pub(super) fn rainbow_color(index: usize) -> Color {
-        const PALETTE: [(u8, u8, u8); 6] = [
-            (242, 109, 120), // 红
-            (240, 193, 78),  // 黄
-            (99, 199, 99),   // 绿
-            (78, 205, 196),  // 青
-            (112, 178, 255), // 蓝
-            (170, 122, 214), // 紫
-        ];
-        let (r, g, b) = PALETTE[index % PALETTE.len()];
-        Color::from_rgb_u8(r, g, b)
-    }
-
     /// 设置通道曲线颜色来源（自动彩虹或用户设置）。
     ///
     /// TODO: 用户设置颜色尚未完成——调色盘未实现，user-color 仅来自 push_channel 传入的初始值。
@@ -195,7 +182,7 @@ impl GraphEditorState {
         };
         ch.color_mode = mode;
         ch.color = if mode == SlintColorMode::AutoRainbow {
-            Self::rainbow_color(curve)
+            rainbow_color(curve)
         } else {
             ch.user_color
         };

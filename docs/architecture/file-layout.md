@@ -4,6 +4,7 @@
 
 - **图编辑器（Graph Editor）**：动画曲线编辑器（FCurve 通道/关键帧/手柄），UI 侧 `ui/areas/graph_editor/`
 - **节点图（Node Graph）**：样式图/应用图节点编辑器，UI 侧 `ui/areas/node_graph/`
+- **Rust 函数分层命名**：函数名使用层级前缀明确职责：`media_*` 表示媒体 reducer 编排，`gst_*` 表示 GStreamer 管线操作，`render_*` 表示渲染回调或帧驱动逻辑，`ui_*` 表示 Slint/UI 模型同步。具体规则见 `docs/conventions/coding-style.md`。
 
 每个领域在 `actions → reducers → projections → store` 四层使用同一名字，且四层为
 `src/` 下的同层兄弟目录（见下）。
@@ -46,12 +47,14 @@ src/
 ├── screen/              # 屏幕布局（area / edge / vertex / map / primitives + ops/：split/join/move_edge/cleanup）
 ├── store/               # 状态中心：`AppState` 持有 `aweft-model::Project`（唯一真相，reducers 改 / projections 只读）+ 各编辑器状态
 │   ├── app_store.rs     # AppStore：dispatch 总表 + depsgraph 求值 + 访问器（单一数据源）
-│   ├── state.rs         # AppState（持有 aweft-model Project + UI 态）
-│   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen } 汇总
+│   ├── state.rs         # AppState（持有 aweft-model Project + UI 态 + 多视频会话）
+│   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen, video } 汇总
+│   ├── video.rs         # 视频域 UI 状态（多会话帧/尺寸/位置/时间条 VecModel，驱动 VideoState）
 │   ├── utils/           # 通用工具（单一文件夹，避免重复造轮子）
 │   │   ├── marquee.rs   # 时间/行归一化与 clamp（曲线/摄影表/时间线/NLA 复用）
 │   │   ├── selection.rs # 修饰键语义 is_replacing/is_additive/is_toggling（点选/框选全局复用）
-│   │   └── drag.rs      # 拖动增量校验 is_valid_delta（字幕行/NLA/曲线共用）
+│   │   ├── drag.rs      # 拖动增量校验 is_valid_delta（字幕行/NLA/曲线共用）
+│   │   └── rainbow.rs   # 自动彩虹调色板（曲线编辑器通道色 / 多视频控制时间条共用）
 │   ├── animation/       # 动画域聚合状态（DataId::Animation 单一，因 Area 表现形式不同保留两组派生状态，TagKind 隔离）
 │   │   ├── mod.rs       # AnimationState{ graph: GraphEditorState, nla: NlaEditorState } + 初始化
 │   │   ├── graph/       # 图编辑器（Graph Editor/Dope Sheet）状态：数据层 + 派生层 + 交互/装载/投影实现

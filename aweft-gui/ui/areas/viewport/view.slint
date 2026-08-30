@@ -1,19 +1,20 @@
-// 视口播放器：视频画布。
+// 视口播放器：多视频画布。
 //  - 背景铺满整个 Area，使用比视频占位更亮的颜色；clip 限制在视口 Area 内
-//  - 中间是 16:9（1080P）的黑色视频占位：以世界坐标 [0..1920]×[0..1080] 定位，
-//    初始适应视口居中；滚轮以光标为中心缩放、中键拖拽平移（同其他编辑器画布）
+//  - 多个视频以世界坐标定位（每个会话自己的 position + 尺寸），主视频固定在
+//    原点 (0,0)；新追加的视频相对当前选中（无选中则主视频）级联错开
+//  - 主视频是唯一带矩形参考线的；选中视频描边（彩虹色）；点击命中重叠视频时
+//    按选中顺序循环，拖拽可移动非主视频，右键弹菜单（设为主视频/更换视频）
 //  - 横向/竖向标尺复用曲线编辑器的刻度文字（TickLabels，无背景、无刻度线、无网格），
 //    直接浮在页面上：顶部横标尺 = 水平像素，左侧竖标尺 = 垂直像素
-//  - 视频四周有几何级数外扩的同心参考框（近密远疏、渐隐），辅助定位
-//  - 未加载视频时显示为黑色占位，加载后视频画面按 contain 铺在其内
+//  - 未加载视频时显示为黑色占位，加载后视频画面按 fill 铺在其内
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
+import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { TickLabels } from "../graph_editor/ruler.slint";
 import { Theme } from "../../theme/index.slint";
 import { VideoState } from "../../bridge/state.slint";
+import { VideoCallbacks } from "../../bridge/callbacks.slint";
 
 export component VideoPlayer inherits Rectangle {
-    in property <image> video-frame <=> image.source;
-
     background: #3a3a40;
     clip: true;
 
@@ -22,10 +23,14 @@ export component VideoPlayer inherits Rectangle {
     private property <float> nav-pan-y: 0.0;
     private property <float> nav-zoom: 1.0;
 
-    // 视频世界尺寸：绑定到 VideoState，首帧到来时动态更新。
-    // 初始 0×0——无视频时占位不可见，首帧到来后 re-fit。
-    in-out property <float> video-world-w: VideoState.video-width > 0 ? VideoState.video-width : 1920.0;
-    in-out property <float> video-world-h: VideoState.video-height > 0 ? VideoState.video-height : 1080.0;
+    // 主视频世界尺寸（首帧到来时动态更新）：世界坐标基准面，其余视频按自身尺寸
+    // 在其上定位；初始 0×0——无主视频时占位不可见，首帧到来后 re-fit。
+    in-out property <float> video-world-w: VideoState.video-widths[VideoState.main-video] > 0
+        ? VideoState.video-widths[VideoState.main-video]
+        : 1920.0;
+    in-out property <float> video-world-h: VideoState.video-heights[VideoState.main-video] > 0
+        ? VideoState.video-heights[VideoState.main-video]
+        : 1080.0;
 
     // 可见世界范围（X 水平像素 / Y 垂直像素，供标尺刻度计算）
     private property <float> view-x-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
@@ -34,7 +39,7 @@ export component VideoPlayer inherits Rectangle {
     private property <float> view-y-hi: (root.height / 1px - root.nav-pan-y) / root.nav-zoom;
 
     // 首次布局后适应视口一次（之后用户自由缩放/平移）；
-    // 视频尺寸到来时重新适应（fitted 重置）。
+    // 主视频尺寸到来/更换时重新适应（fitted 重置）。
     private property <bool> fitted: false;
     changed width => {
         root.try-fit();
@@ -67,47 +72,143 @@ export component VideoPlayer inherits Rectangle {
         }
     }
 
-    // 参考框（纯 UI）：以视频为中心、按几何级数向外扩展的同心矩形。
+    // 拖拽移动非主视频的会话状态（marquee 机制判定点击 vs 拖动）
+    private property <bool> moving-video: false;
+    private property <int> moving-video-index: -1;
+    private property <float> move-start-wx: 0.0;
+    private property <float> move-start-wy: 0.0;
+    private property <float> move-video-sx: 0.0;
+    private property <float> move-video-sy: 0.0;
+
+    // 右键菜单状态（目标视频下标 + 弹出位置）
+    private property <bool> menu-open: false;
+    private property <int> menu-video-index: -1;
+    private property <length> menu-x: 0px;
+    private property <length> menu-y: 0px;
+
+    // 世界坐标 → 屏幕坐标辅助（供视频矩形/参考框/命中换算）
+    function screen-x(wx: float) -> length {
+        return root.nav-pan-x * 1px + wx * root.nav-zoom * 1px;
+    }
+    function screen-y(wy: float) -> length {
+        return root.nav-pan-y * 1px + wy * root.nav-zoom * 1px;
+    }
+    function world-x(px: float) -> float {
+        return (px - root.nav-pan-x) / root.nav-zoom;
+    }
+    function world-y(py: float) -> float {
+        return (py - root.nav-pan-y) / root.nav-zoom;
+    }
+
+    // 主视频矩形（世界原点，尺寸 = 主视频世界尺寸）
+    private property <length> main-rect-x: root.screen-x(0.0);
+    private property <length> main-rect-y: root.screen-y(0.0);
+    private property <length> main-rect-w: root.video-world-w * root.nav-zoom * 1px;
+    private property <length> main-rect-h: root.video-world-h * root.nav-zoom * 1px;
+
+    // 参考框（纯 UI）：以主视频为中心、按几何级数向外扩展的同心矩形。
     // 相邻框边长比恒定 → 间距等比递增，越靠近视频越密、越远越疏，便于定位；
     // 透明度随层数衰减，远处渐隐减少视觉干扰。数量/增长系数可调。
-    // 性能：固定数量的 Rectangle 描边（同曲线编辑器刻度按 zoom 重算几何的思路，
-    // 但数量恒定），随导航仅重算几何，无模型/Rust 参与。
+    // 仅在有视频时显示（无视频的空视口不画参考框）。
     private property <int> frame-count: 10;
     private property <float> frame-growth: 1.3; // 相邻框边长比（首框外扩 30%）
     private property <float> frame-opacity: 0.3; // 首框描边不透明度
     private property <float> frame-fade: 0.8; // 每向外一层的不透明度乘数
 
-    for frame[i] in root.frame-count: Rectangle {
+    for frame[i] in (VideoState.video-frames.length > 0 ? root.frame-count : 0): Rectangle {
         width: root.video-world-w * Math.pow(root.frame-growth, i + 1) * root.nav-zoom * 1px;
         height: root.video-world-h * Math.pow(root.frame-growth, i + 1) * root.nav-zoom * 1px;
-        x: root.nav-pan-x * 1px + (root.video-world-w * root.nav-zoom * 1px - self.width) / 2;
-        y: root.nav-pan-y * 1px + (root.video-world-h * root.nav-zoom * 1px - self.height) / 2;
+        x: root.main-rect-x + (root.main-rect-w - self.width) / 2;
+        y: root.main-rect-y + (root.main-rect-h - self.height) / 2;
         border-width: 1px;
         border-color: Theme.data.animation-editor.ruler-text;
         opacity: max(0.04, root.frame-opacity * Math.pow(root.frame-fade, i));
     }
 
-    // 视频占位（黑色，世界坐标按缩放/平移定位）
-    Rectangle {
-        x: root.nav-pan-x * 1px;
-        y: root.nav-pan-y * 1px;
-        width: root.video-world-w * root.nav-zoom * 1px;
-        height: root.video-world-h * root.nav-zoom * 1px;
-        background: black;
-        clip: true;
+    // 视频矩形（多个会话按下标依次绘制，最上层 = 最后绘制）。
+    // 常驻描边 = 该视频彩虹色：选中时亮且加粗，非选中暗淡（不遮挡画面内容）。
+    for v[i] in VideoState.video-frames.length: Rectangle {
+        // 当前焦点视频稍后单独绘制到最上层，这里不绘制它
+        visible: i != VideoState.selected-video;
 
-        image := Image {
-            x: 0;
-            y: 0;
-            width: 100%;
-            height: 100%;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            horizontal-tiling: none;
-            vertical-tiling: none;
-            // 矩形宽高由 VideoState 设置，已编码显示比例（含 PAR 换算），
-            // 必须 fill 铺满；contain 会以纹理存储比例兜底留黑边（变形片源）。
+        x: root.screen-x(VideoState.video-positions[i].x) - 3px;
+        y: root.screen-y(VideoState.video-positions[i].y) - 3px;
+        width: (VideoState.video-widths[i] > 0 ? VideoState.video-widths[i] : root.video-world-w)
+            * root.nav-zoom * 1px + 6px;
+        height: (VideoState.video-heights[i] > 0 ? VideoState.video-heights[i] : root.video-world-h)
+            * root.nav-zoom * 1px + 6px;
+        background: transparent;
+        border-width: VideoState.time-bars[i].muted ? 2px : 0px;
+        border-color: #d88bff.with-alpha(0.9);
+
+        // 外框与画面容器都是常驻元素；静音切换只更新 border-width，不重建 UI。
+        Rectangle {
+            x: 3px;
+            y: 3px;
+            width: parent.width - 6px;
+            height: parent.height - 6px;
+            background: black;
+            clip: true;
+            border-width: VideoState.time-bars[i].selected ? 2px : 1px;
+            border-color: VideoState.time-bars[i].color.with-alpha(
+                VideoState.time-bars[i].selected ? 1.0 : 0.35);
+
+            image := Image {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                horizontal-tiling: none;
+                vertical-tiling: none;
+            // 矩形宽高由视频实际尺寸设置（含 PAR 换算），必须 fill 铺满；
+            // contain 会以纹理存储比例兜底留黑边（变形片源）。
             image-fit: fill;
+                source: VideoState.video-frames[i];
+            }
+        }
+    }
+    // 当前焦点视频单独绘制在所有普通视频之后，避免被其它视频遮挡。
+    if VideoState.selected-video >= 0
+        && VideoState.selected-video < VideoState.video-frames.length: Rectangle {
+        property <int> index: VideoState.selected-video;
+
+        x: root.screen-x(VideoState.video-positions[index].x) - 3px;
+        y: root.screen-y(VideoState.video-positions[index].y) - 3px;
+        width: (VideoState.video-widths[index] > 0
+            ? VideoState.video-widths[index]
+            : root.video-world-w) * root.nav-zoom * 1px + 6px;
+        height: (VideoState.video-heights[index] > 0
+            ? VideoState.video-heights[index]
+            : root.video-world-h) * root.nav-zoom * 1px + 6px;
+        background: transparent;
+        border-width: VideoState.time-bars[index].muted ? 2px : 0px;
+        border-color: #d88bff.with-alpha(0.9);
+
+        Rectangle {
+            x: 3px;
+            y: 3px;
+            width: parent.width - 6px;
+            height: parent.height - 6px;
+            background: black;
+            clip: true;
+            border-width: VideoState.time-bars[index].selected ? 2px : 1px;
+            border-color: VideoState.time-bars[index].color.with-alpha(
+            VideoState.time-bars[index].selected ? 1.0 : 0.35);
+
+            Image {
+                x: 0;
+                y: 0;
+                width: 100%;
+                height: 100%;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                horizontal-tiling: none;
+                vertical-tiling: none;
+                image-fit: fill;
+                source: VideoState.video-frames[index];
+            }
         }
     }
 
@@ -149,7 +250,9 @@ export component VideoPlayer inherits Rectangle {
         }
     }
 
-    // 画布导航（置于最上层；视频占位与标尺均无 TouchArea，事件全部由它接管）
+    // 画布导航（置于最上层；视频矩形与标尺均无 TouchArea，事件全部由它接管）。
+    // 左键点击 → 命中选中视频（重叠循环）；左键拖拽起点命中非主视频 → 移动它；
+    // 右键命中视频 → 弹上下文菜单。
     nav := CanvasNavigation {
         width: 100%;
         height: 100%;
@@ -159,5 +262,92 @@ export component VideoPlayer inherits Rectangle {
         zoom-y <=> root.nav-zoom;
         max-zoom: 16.0;
         zoom-step: 1.2;
+        marquee-enabled: true;
+        marquee-dragged(x1, y1, x2, y2) => {
+            // 首次拖动：判定起点是否命中非主视频 → 进入移动会话
+            if !root.moving-video {
+                let wx: float = root.world-x(x1);
+                let wy: float = root.world-y(y1);
+                let idx: int = VideoCallbacks.video-hit-top(wx, wy);
+                if idx >= 0 && idx != VideoState.main-video {
+                    root.moving-video = true;
+                    root.moving-video-index = idx;
+                    root.move-start-wx = wx;
+                    root.move-start-wy = wy;
+                    root.move-video-sx = VideoState.video-positions[idx].x;
+                    root.move-video-sy = VideoState.video-positions[idx].y;
+                }
+            }
+            if root.moving-video {
+                let wx: float = root.world-x(x2);
+                let wy: float = root.world-y(y2);
+                VideoCallbacks.video-moved(
+                    root.moving-video-index,
+                    root.move-video-sx + (wx - root.move-start-wx),
+                    root.move-video-sy + (wy - root.move-start-wy));
+            }
+        }
+        marquee-done(x1, y1, x2, y2, modifier) => {
+            root.moving-video = false;
+        }
+        background-pressed(modifier) => {
+            // 点击（未拖成移动）：命中选中视频（重叠时按选中顺序循环）
+            let wx: float = root.world-x(nav.mouse-x / 1px);
+            let wy: float = root.world-y(nav.mouse-y / 1px);
+            VideoCallbacks.select-video(VideoCallbacks.video-picked(wx, wy), modifier);
+        }
+        context-pressed(x, y) => {
+            // 右键命中视频 → 弹上下文菜单（设为主视频/更换视频）
+            let wx: float = root.world-x(x);
+            let wy: float = root.world-y(y);
+            let idx: int = VideoCallbacks.video-hit-top(wx, wy);
+            if idx >= 0 {
+                root.menu-video-index = idx;
+                root.menu-x = x * 1px;
+                root.menu-y = y * 1px;
+                root.menu-open = true;
+            }
+        }
+    }
+
+    // 右键菜单打开时的背景点击层：点菜单外任意处关闭
+    if root.menu-open: TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.menu-open = false;
+            }
+        }
+    }
+
+    // 视频右键菜单：非主视频可设为主视频；所有视频可切换静音/更换视频
+    if root.menu-open: ContextMenu {
+        open <=> root.menu-open;
+        menu-x: root.menu-x;
+        menu-y: root.menu-y;
+        container-width: root.width;
+        container-height: root.height;
+        clamp-position: true;
+        if root.menu-video-index != VideoState.main-video: MenuItem {
+            text: "设为主视频";
+            menu-open <=> root.menu-open;
+            activated => {
+                VideoCallbacks.set-main-video(root.menu-video-index);
+            }
+        }
+        MenuItem {
+            text: VideoState.time-bars[root.menu-video-index].muted ? "取消静音" : "静音";
+            menu-open <=> root.menu-open;
+            activated => {
+                VideoCallbacks.toggle-mute-video(root.menu-video-index);
+            }
+        }
+
+        MenuItem {
+            text: "更换视频";
+            menu-open <=> root.menu-open;
+            activated => {
+                VideoCallbacks.replace-video(root.menu-video-index);
+            }
+        }
     }
 }

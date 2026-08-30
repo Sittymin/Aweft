@@ -10,20 +10,22 @@ use crate::depsgraph::{
 };
 
 mod animation;
-mod sequence;
 mod node_graph;
 mod screen;
+mod sequence;
 
 pub use animation::{
     op_graph_channel, op_graph_drag_ended, op_graph_keyframes, op_graph_scalars,
     op_graph_selection, op_graph_structure, op_nla_position, op_nla_selection,
     op_nla_strip_structure, op_nla_structure, op_nla_track_added, op_nla_track_properties,
 };
-pub use sequence::{op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode};
 pub use node_graph::{
     op_node_graph_chain, op_node_graph_links, op_node_graph_socket, op_node_graph_structure,
 };
 pub use screen::{op_screen_layout, op_screen_overlays};
+pub use sequence::{
+    op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode,
+};
 
 /// 注册所有投影组件到依赖图。在 `AppStore` 初始化时调用一次。
 pub fn register_all(depsgraph: &mut Depsgraph) {
