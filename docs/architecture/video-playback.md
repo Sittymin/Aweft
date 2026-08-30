@@ -1,8 +1,16 @@
 # 视频播放
 
-视频播放位于 `aweft-gui/src/render/video_sink/`，不参与编辑器数据投影。媒体
-Action 由 `reducers/media.rs` 编排管线，渲染层负责取帧、颜色转换和向 Slint
-提交图像；播放中的时间由视频管线位置驱动动画标量。
+视频播放位于 `aweft-gui/src/render/video_sink/`。普通媒体 Action 由
+`reducers/media.rs` 编排管线并返回 Video Tag，经 `projections/video.rs` 更新
+派生 UI 模型；渲染层负责取帧、颜色转换和向 Slint 提交图像。播放中的时间由
+视频管线位置驱动动画标量。暂停时不依赖渲染轮询推进时间：播放头/时间条的主动 seek
+由 reducer 写入会话并返回 `VideoTimeChanged`，暂停态预览帧由 preroll 回调交付；
+播放态才由渲染回调按帧读取管线位置并做实时增量同步。
+
+普通会话结构、选择/主视频、视口位置、静音、seek 时间和 transport 播放状态都
+必须经过 `Video DataId → TagKind → projection`。帧图像、逐帧播放时钟和后台波形
+批次属于高频异步实时例外：它们可以直接对持久 `VecModel` 做行级增量更新，但
+不得被当作普通 reducer UI 写入。
 
 ## 数据路径
 

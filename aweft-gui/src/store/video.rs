@@ -2,11 +2,11 @@
 //! Rust 侧持有 VecModel（共享 inner 模型，变更自动通知 Slint）：
 //! - `frames`/`widths`/`heights`：最新帧与尺寸（渲染线程逐帧 `set_row_data`）
 //! - `positions`：视口世界坐标位置（级联错开/拖拽移动）
-//! - `time_bars`：各面板控制时间条（选中/主视频/时间，reducer 与每帧同步写）
+//! - `time_bars`：各面板控制时间条（普通 Action 由投影写，播放时钟逐帧增量写）
 //!
-//! 会话增删等结构变化由 `reducers/media` 用 `push`/`set_row_data` 局部更新
-//! （不重建既有行，避免拖拽/帧模型被打断）；时间条逐帧更新走
-//! `ui_update_video_time_bar`。
+//! 会话结构与普通状态变化由 `projections/video` 用 `push`/`set_row_data` 局部更新
+//! （不重建既有行，避免拖拽/帧模型被打断）；时间条逐帧更新走投影提供的
+//! 实时专用出口。
 
 use std::rc::Rc;
 

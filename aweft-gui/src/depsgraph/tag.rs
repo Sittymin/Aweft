@@ -22,6 +22,8 @@ pub enum DataId {
     Animation,
     /// 节点图数据（NodeGraph/ApplicationGraph 的节点/连线/端口值）。
     NodeGraph,
+    /// 视频会话状态（会话结构、选择、主视频、位置、静音、时间和播放状态）。
+    Video,
 }
 
 /// 节点图类型（tag 内区分样式图/应用图，定义在 model 侧）。
@@ -329,6 +331,22 @@ pub enum Tag {
         kind: NodeGraphKind,
         change: NodeGraphChange,
     },
+
+    // ── Video ─────────────────────────────────────────────────────────
+    /// 视频会话结构变化；`inserted` 区分追加与原地替换。
+    VideoStructureChanged { index: usize, inserted: bool },
+    /// 视频视口选择变化。
+    VideoSelectionChanged,
+    /// 主视频变化（同时影响参考框、位置和时间条标量）。
+    VideoMainChanged,
+    /// 视频视口位置变化。
+    VideoPositionChanged { indices: Vec<usize> },
+    /// 单个视频静音状态变化。
+    VideoMuteChanged { index: usize },
+    /// 视频会话时间变化（seek 或非实时状态同步）。
+    VideoTimeChanged { indices: Vec<usize> },
+    /// 全局视频 transport 播放状态变化。
+    VideoPlaybackChanged,
 }
 
 /// 操作语义分类：同一语义的 Tag 归为一类，供操作按 `handles` 精确路由。
@@ -389,6 +407,20 @@ pub enum TagKind {
     NodeGraphSocket,
     /// 节点图：新建链（全量重建）。
     NodeGraphChain,
+    /// 视频：会话结构变化。
+    VideoStructure,
+    /// 视频：选择变化。
+    VideoSelection,
+    /// 视频：主视频变化。
+    VideoMain,
+    /// 视频：位置变化。
+    VideoPosition,
+    /// 视频：静音变化。
+    VideoMute,
+    /// 视频：时间变化。
+    VideoTime,
+    /// 视频：播放状态变化。
+    VideoPlayback,
 }
 
 /// 操作唯一标识（编译期检查的枚举，可无限扩展加变体）。
@@ -443,6 +475,18 @@ pub enum OperationCode {
     NlaTrackProperties,
     /// NLA 编辑器：轨道结构新增（row_added）。
     NlaTrackAdded,
+    /// 视频会话结构投影。
+    VideoStructure,
+    /// 视频选择与主视频标量投影。
+    VideoSelection,
+    /// 视频视口位置投影。
+    VideoPosition,
+    /// 视频静音投影。
+    VideoMute,
+    /// 视频时间条与活跃时间投影。
+    VideoTime,
+    /// 视频播放状态投影。
+    VideoPlayback,
 }
 
 impl Tag {
@@ -491,6 +535,14 @@ impl Tag {
             | Tag::NlaTrackAdded { .. } => DataId::Animation,
 
             Tag::NodeGraph { .. } => DataId::NodeGraph,
+
+            Tag::VideoStructureChanged { .. }
+            | Tag::VideoSelectionChanged
+            | Tag::VideoMainChanged
+            | Tag::VideoPositionChanged { .. }
+            | Tag::VideoMuteChanged { .. }
+            | Tag::VideoTimeChanged { .. }
+            | Tag::VideoPlaybackChanged => DataId::Video,
         }
     }
 
@@ -554,6 +606,14 @@ impl Tag {
                 | NodeGraphChange::ReferenceChanged { .. } => TagKind::NodeGraphSocket,
                 NodeGraphChange::ChainSwitched { .. } => TagKind::NodeGraphChain,
             },
+
+            Tag::VideoStructureChanged { .. } => TagKind::VideoStructure,
+            Tag::VideoSelectionChanged => TagKind::VideoSelection,
+            Tag::VideoMainChanged => TagKind::VideoMain,
+            Tag::VideoPositionChanged { .. } => TagKind::VideoPosition,
+            Tag::VideoMuteChanged { .. } => TagKind::VideoMute,
+            Tag::VideoTimeChanged { .. } => TagKind::VideoTime,
+            Tag::VideoPlaybackChanged => TagKind::VideoPlayback,
         }
     }
 }

@@ -1,13 +1,10 @@
 use crate::actions::media::{MediaAction, VideoAction};
-use crate::bridge::types::SlintVideoTimeBar;
 use crate::depsgraph::Tag;
 use crate::store::AppStore;
 use crate::store::state::{VideoSeekSession, VideoSeekTarget, VideoSession};
-use crate::store::utils::rainbow::rainbow_color;
 use anyhow::{Context, Result};
 use gstreamer::prelude::*;
 use slint::ComponentHandle as _;
-use slint::Model as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -17,15 +14,39 @@ fn gst_initialize_once() -> Result<(), gstreamer::glib::Error> {
     GSTREAMER_INIT_RESULT.get_or_init(gstreamer::init).clone()
 }
 
-/// 分发媒体域 Action：管线在此创建/跳转；帧推送与 GPU 连接属渲染层
-/// （`render/video_sink`），播放位置经渲染帧同步直写动画标量与视频时间条
-/// （见 `bridge/callbacks.rs:handle_before_rendering`）。媒体域不产生 tag。
+/// 分发媒体域 Action：管线在此创建/跳转；帧推送与 GPU 连接属渲染层。
+/// 普通状态变化返回 Video Tag，由 video projection 更新 UI；帧和逐帧播放时钟
+/// 仍由渲染层按实时例外直接增量同步。
 impl AppStore {
     pub(crate) fn dispatch_media(&mut self, action: MediaAction) -> Result<Vec<Tag>> {
         match action {
-            MediaAction::Video(VideoAction::Append { uri }) => media_append_video_session(self, &uri)?,
+            MediaAction::Video(VideoAction::Append { uri }) => {
+                let index = media_append_video_session(self, &uri)?;
+                let mut tags = vec![
+                    Tag::VideoStructureChanged {
+                        index,
+                        inserted: true,
+                    },
+                    Tag::VideoTimeChanged {
+                        indices: vec![index],
+                    },
+                ];
+                if index == 0 {
+                    tags.push(Tag::VideoMainChanged);
+                }
+                Ok(tags)
+            }
             MediaAction::Video(VideoAction::Replace { index, uri }) => {
-                media_replace_video_session(self, index, &uri)?
+                media_replace_video_session(self, index, &uri)?;
+                Ok(vec![
+                    Tag::VideoStructureChanged {
+                        index,
+                        inserted: false,
+                    },
+                    Tag::VideoTimeChanged {
+                        indices: vec![index],
+                    },
+                ])
             }
             MediaAction::Video(VideoAction::ToggleMute { index }) => {
                 let Some(session) = self.state_mut().video_sessions.get_mut(index) else {
@@ -34,7 +55,7 @@ impl AppStore {
                 };
                 session.muted = !session.muted;
                 gst_set_audio_muted(&session.pipeline, session.muted);
-                ui_sync_video_time_bars(self);
+                Ok(vec![Tag::VideoMuteChanged { index }])
             }
             MediaAction::Video(VideoAction::Select { index, modifier }) => {
                 if let Some(index) = index
@@ -73,19 +94,37 @@ impl AppStore {
                         }
                     }
                 }
-                // 立即让时间框跟随新选中视频（无选中时跟随主视频）
-                ui_sync_active_video_time(self);
-                // 仅局部刷新时间条（set_row_data，不重建模型——拖拽中更新会破坏 grab）
-                ui_sync_video_time_bars(self);
-                // 选择不改变任何管线状态，只改变下一次 transport 的控制目标。
-                ui_sync_video_playing_state(self);
+                let playback_changed = media_refresh_video_playing_state(self);
+                let mut tags = vec![
+                    Tag::VideoSelectionChanged,
+                    Tag::VideoTimeChanged {
+                        indices: self.state().selected_videos.clone(),
+                    },
+                ];
+                if playback_changed {
+                    tags.push(Tag::VideoPlaybackChanged);
+                }
+                Ok(tags)
             }
             MediaAction::Video(VideoAction::SetMain { index }) => {
                 if index >= self.state().video_sessions.len() {
                     log::warn!("设为主视频：下标越界 {index}");
-                } else {
-                    media_set_main_video_session(self, index);
+                    return Ok(Vec::new());
                 }
+                let moved = media_set_main_video_session(self, index);
+                let playback_changed = media_refresh_video_playing_state(self);
+                let mut tags = vec![
+                    Tag::VideoMainChanged,
+                    Tag::VideoSelectionChanged,
+                    Tag::VideoPositionChanged { indices: moved },
+                    Tag::VideoTimeChanged {
+                        indices: vec![index],
+                    },
+                ];
+                if playback_changed {
+                    tags.push(Tag::VideoPlaybackChanged);
+                }
+                Ok(tags)
             }
             MediaAction::Video(VideoAction::MoveVideo { index, x, y }) => {
                 // 主视频固定在原点（带参考框），不可移动
@@ -99,11 +138,13 @@ impl AppStore {
                 };
                 session.position_x = x;
                 session.position_y = y;
-                // 位置局部更新（set_row_data；拖拽中重建模型会破坏 nav 的 grab）
-                ui_update_video_position(self, index);
+                Ok(vec![Tag::VideoPositionChanged {
+                    indices: vec![index],
+                }])
             }
             MediaAction::Video(VideoAction::Seek { timestamp }) => {
-                self.seek_drag_targets(timestamp as f64 / 1000.0);
+                let indices = self.seek_drag_targets(timestamp as f64 / 1000.0);
+                Ok(vec![Tag::VideoTimeChanged { indices }])
             }
             MediaAction::Video(VideoAction::SeekVideo { index, timestamp }) => {
                 let Some(session) = self.state_mut().video_sessions.get_mut(index) else {
@@ -111,9 +152,9 @@ impl AppStore {
                     return Ok(Vec::new());
                 };
                 media_seek_video_session(session, timestamp as f64 / 1000.0);
-                let current_time = session.current_time;
-                let _ = session;
-                ui_update_video_time_bar(&self.ui_models.video.time_bars, index, current_time);
+                Ok(vec![Tag::VideoTimeChanged {
+                    indices: vec![index],
+                }])
             }
             MediaAction::Video(VideoAction::SeekBegin { index, is_batch }) => {
                 if index >= self.state().video_sessions.len() {
@@ -128,10 +169,6 @@ impl AppStore {
                     self.state_mut().selected_videos.clear();
                     self.state_mut().selected_videos.push(index);
                 }
-                // 立即让时间框跟随新选中视频（无选中时跟随主视频）
-                ui_sync_active_video_time(self);
-                // 仅局部刷新时间条（set_row_data，不重建模型——拖拽中更新会破坏 grab）
-                ui_sync_video_time_bars(self);
                 // 记录拖拽前状态。暂停态 seek 的 preroll 由 appsink 回调直接交付，
                 // 不需要临时切到 Playing，也不能为预览启动额外渲染循环。
                 let target_indices = if is_batch {
@@ -166,11 +203,23 @@ impl AppStore {
                         gst_set_audio_muted(&self.state().video_sessions[target.index].pipeline, true);
                     }
                 }
+                let playback_changed = media_refresh_video_playing_state(self);
+                let mut tags = vec![
+                    Tag::VideoSelectionChanged,
+                    Tag::VideoTimeChanged {
+                        indices: self.state().selected_videos.clone(),
+                    },
+                ];
+                if playback_changed {
+                    tags.push(Tag::VideoPlaybackChanged);
+                }
+                Ok(tags)
             }
             MediaAction::Video(VideoAction::SeekEnd) => {
                 let Some(drag) = self.state_mut().video_seek_session.take() else {
                     return Ok(Vec::new());
                 };
+                let indices = drag.targets.iter().map(|target| target.index).collect();
                 for target in drag.targets {
                     let Some(session) = self.state_mut().video_sessions.get_mut(target.index)
                     else {
@@ -185,18 +234,41 @@ impl AppStore {
                     // 再解除静音：从拖拽点续播，不会再冒出停在原位的旧声音
                     gst_set_audio_muted(&session.pipeline, session.muted);
                 }
-                ui_sync_video_playing_state(self);
+                let playback_changed = media_refresh_video_playing_state(self);
+                let mut tags = vec![Tag::VideoTimeChanged { indices }];
+                if playback_changed {
+                    tags.push(Tag::VideoPlaybackChanged);
+                }
+                Ok(tags)
             }
-            MediaAction::Video(VideoAction::Play) => media_apply_video_playback(self, true),
-            MediaAction::Video(VideoAction::Pause) => media_apply_video_playback(self, false),
+            MediaAction::Video(VideoAction::Play) => {
+                let indices = media_apply_video_playback(self, true);
+                Ok(vec![
+                    Tag::VideoTimeChanged { indices },
+                    Tag::VideoPlaybackChanged,
+                ])
+            }
+            MediaAction::Video(VideoAction::Pause) => {
+                let indices = media_apply_video_playback(self, false);
+                Ok(vec![
+                    Tag::VideoTimeChanged { indices },
+                    Tag::VideoPlaybackChanged,
+                ])
+            }
             MediaAction::Video(VideoAction::TogglePlayback) => {
-                media_apply_video_playback(self, !self.state().video_playing);
+                let indices = media_apply_video_playback(self, !self.state().video_playing);
+                Ok(vec![
+                    Tag::VideoTimeChanged { indices },
+                    Tag::VideoPlaybackChanged,
+                ])
             }
             // 帧由 appsink 回调和渲染通知驱动，Action 不需要重复拉取。
-            MediaAction::Video(VideoAction::UpdateFrame) => {}
-            MediaAction::Subtitle(action) => log::warn!("字幕 Action 尚未实现：{action:?}"),
+            MediaAction::Video(VideoAction::UpdateFrame) => Ok(Vec::new()),
+            MediaAction::Subtitle(action) => {
+                log::warn!("字幕 Action 尚未实现：{action:?}");
+                Ok(Vec::new())
+            }
         }
-        Ok(Vec::new())
     }
 }
 
@@ -229,13 +301,6 @@ fn gst_set_audio_muted(pipeline: &gstreamer::Pipeline, muted: bool) {
     }
 }
 
-/// 将每个会话的显式静音状态同步到音频分支；选择和 transport 不会隐式改变它。
-fn gst_sync_session_audio_mutes(store: &AppStore) {
-    for session in &store.state().video_sessions {
-        gst_set_audio_muted(&session.pipeline, session.muted);
-    }
-}
-
 /// 时间线 transport 的控制目标：有视口选择时控制整个选择集合；否则只控制主视频。
 /// 返回值始终去重且过滤越界下标。
 fn media_control_targets(store: &AppStore) -> Vec<usize> {
@@ -256,13 +321,8 @@ fn media_control_targets(store: &AppStore) -> Vec<usize> {
 }
 
 /// 设置播放状态标量（state 字段 + VideoState 属性）。
-fn ui_set_video_playing(store: &mut AppStore, playing: bool) {
+fn media_set_video_playing(store: &mut AppStore, playing: bool) {
     store.state_mut().video_playing = playing;
-    if let Some(weak) = &store.video_state
-        && let Some(state) = weak.upgrade()
-    {
-        state.set_playing(playing);
-    }
 }
 
 /// 应用时间线 transport：播放/暂停作用于视口选择集合；无选择时只作用于主视频。
@@ -274,14 +334,13 @@ fn ui_set_video_playing(store: &mut AppStore, playing: bool) {
 /// 2. 暂停/卡顿的管线同样只有 seek（flush）才能真正恢复出帧，这正是"拖动时间条
 ///    能播、按播放键不动"的原因。这里直接在播放时 seek 到当前位置，等价于用户
 ///    拖动时间条的效果，保证播放键始终能开始/恢复播放。
-fn media_apply_video_playback(store: &mut AppStore, playing: bool) {
+fn media_apply_video_playback(store: &mut AppStore, playing: bool) -> Vec<usize> {
     if store.state().video_sessions.is_empty() {
-        ui_set_video_playing(store, false);
-        return;
+        media_set_video_playing(store, false);
+        return Vec::new();
     }
-    gst_sync_session_audio_mutes(store);
     let targets = media_control_targets(store);
-    for index in targets {
+    for &index in &targets {
         let session = &mut store.state_mut().video_sessions[index];
         gst_set_session_state(
             session,
@@ -305,7 +364,8 @@ fn media_apply_video_playback(store: &mut AppStore, playing: bool) {
             session.current_time = target;
         }
     }
-    ui_set_video_playing(store, playing);
+    media_set_video_playing(store, playing);
+    targets
 }
 
 /// 管线是否（将）处于播放态：状态转换期间以目标态为准，避免过渡中闪烁。
@@ -344,7 +404,7 @@ fn gst_session_at_eos(pipeline: &gstreamer::Pipeline) -> bool {
 ///
 /// 拖拽期间不参与实时校正：拖拽会对管线做大量 flush-seek，其过渡态会让
 /// `gst_pipeline_wants_playing` 瞬时抖动；此时沿用拖拽目标开始时的播放意图。
-pub(crate) fn ui_sync_video_playing_state(store: &mut AppStore) {
+pub(crate) fn media_refresh_video_playing_state(store: &mut AppStore) -> bool {
     let playing = if let Some(drag) = &store.state().video_seek_session {
         !drag.targets.is_empty() && drag.targets.iter().all(|target| target.was_playing)
     } else {
@@ -356,38 +416,15 @@ pub(crate) fn ui_sync_video_playing_state(store: &mut AppStore) {
             })
     };
     if store.state().video_playing == playing {
-        return;
+        return false;
     }
-    ui_set_video_playing(store, playing);
-}
-
-/// 把动画编辑器当前时间同步为活跃视频（选中无则主视频）的位置。
-/// 时间框/播放头显示的就是活跃视频的时间。
-pub(crate) fn ui_sync_active_video_time(store: &mut AppStore) {
-    let Some(active) = store.state().active_video() else {
-        return;
-    };
-    let Some(secs) = store
-        .state()
-        .video_sessions
-        .get(active)
-        .map(|s| s.current_time)
-    else {
-        return;
-    };
-    {
-        let ce = &mut store.ui_models.animation.graph;
-        if (ce.current_time - secs).abs() < 0.005 {
-            return;
-        }
-        ce.current_time = secs;
-    }
-    store.sync_animation_scalars();
+    media_set_video_playing(store, playing);
+    true
 }
 
 /// 追加一个视频会话：搭建管线 + 连接 GPU + 自动播放，级联错开落点
 /// （相对当前选中视频，无选中则相对主视频）。
-fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<()> {
+fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<usize> {
     gst_initialize_once().context("GStreamer 初始化失败")?;
     let mut session = crate::render::video_sink::build_session(store, video_uri)?;
     let (x, y) = media_video_cascade_anchor(store);
@@ -398,41 +435,7 @@ fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<(
     if is_first {
         store.state_mut().main_video = Some(0);
     }
-
-    // 结构性新增一行（push 只触发 row_added，不影响既有行/帧）
-    {
-        let ui = &mut store.ui_models.video;
-        ui.frames.push(slint::Image::default());
-        ui.widths.push(0);
-        ui.heights.push(0);
-        ui.positions.push(crate::bridge::types::SlintVideoPos {
-            x: x as f32,
-            y: y as f32,
-        });
-        ui.time_bars.push(SlintVideoTimeBar::default());
-        let amplitudes = std::rc::Rc::new(slint::VecModel::default());
-        let level_amplitudes = (1..=12)
-            .map(|_| std::rc::Rc::new(slint::VecModel::default()))
-            .collect::<Vec<_>>();
-        let levels = level_amplitudes
-            .iter()
-            .enumerate()
-            .map(
-                |(level, values)| crate::bridge::types::SlintAudioWaveformLevel {
-                    bucket_duration: 0.1 * (1usize << (level + 1)) as f32,
-                    amplitudes: slint::ModelRc::from(values.clone()),
-                },
-            )
-            .collect::<Vec<_>>();
-        ui.audio_waveforms
-            .push(crate::bridge::types::SlintAudioWaveform {
-                duration: 0.0,
-                amplitudes: slint::ModelRc::from(amplitudes.clone()),
-                levels: slint::ModelRc::from(std::rc::Rc::new(slint::VecModel::from(levels))),
-            });
-        ui.waveform_amplitudes.push(amplitudes);
-        ui.waveform_level_amplitudes.push(level_amplitudes);
-    }
+    let index = store.state().video_sessions.len() - 1;
     let cancellation = Arc::new(AtomicBool::new(false));
     store
         .state_mut()
@@ -441,14 +444,14 @@ fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<(
     start_waveform_extraction(
         store,
         video_uri,
-        store.state().video_sessions.len() - 1,
+        index,
         cancellation,
     );
-    ui_sync_video_time_bars(store);
     // 新追加的视频没有被自动选中，因此不应偷偷加入当前 transport；保持暂停海报。
-    gst_sync_session_audio_mutes(store);
-    ui_sync_active_video_time(store);
-    Ok(())
+    if let Some(session) = store.state().video_sessions.get(index) {
+        gst_set_audio_muted(&session.pipeline, session.muted);
+    }
+    Ok(index)
 }
 
 /// 原地替换某个视频会话（右键"更换视频"）：新会话连接成功后才拆旧会话；
@@ -487,23 +490,6 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
     if let Some(slot) = store.state_mut().waveform_cancellations.get_mut(index) {
         *slot = cancellation.clone();
     }
-    if let Some(values) = store.ui_models.video.waveform_amplitudes.get(index) {
-        values.clear();
-    }
-    if let Some(model) = store.ui_models.video.audio_waveforms.row_data(index) {
-        let mut pending = model;
-        pending.duration = 0.0;
-        if let Some(levels) = store.ui_models.video.waveform_level_amplitudes.get(index) {
-            for level in levels {
-                level.clear();
-            }
-        }
-        store
-            .ui_models
-            .video
-            .audio_waveforms
-            .set_row_data(index, pending);
-    }
     start_waveform_extraction(store, uri, index, cancellation);
     {
         let session = &mut store.state_mut().video_sessions[index];
@@ -516,7 +502,6 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
         // 替换后的会话继承显式静音状态；无需重新遍历并改写其它会话。
         gst_set_audio_muted(&session.pipeline, session.muted);
     }
-    ui_sync_video_time_bars(store);
     Ok(())
 }
 
@@ -601,8 +586,9 @@ fn start_waveform_extraction(
 
 /// 设置主视频：与旧主视频交换视口位置（主视频恒在原点，参考框/级联基准一致），
 /// 并选中新主视频。位置用 set_row_data 局部更新，不触碰帧模型。
-fn media_set_main_video_session(store: &mut AppStore, index: usize) {
+fn media_set_main_video_session(store: &mut AppStore, index: usize) -> Vec<usize> {
     let main = store.state().main_video;
+    let mut moved = vec![index];
     if let Some(main) = main
         && main != index
     {
@@ -618,18 +604,13 @@ fn media_set_main_video_session(store: &mut AppStore, index: usize) {
         store.state_mut().video_sessions[main].position_y = new_main_pos.1;
         store.state_mut().video_sessions[index].position_x = old_main_pos.0;
         store.state_mut().video_sessions[index].position_y = old_main_pos.1;
-        ui_update_video_position(store, main);
-        ui_update_video_position(store, index);
+        moved.insert(0, main);
     }
     store.state_mut().main_video = Some(index);
     // 设为（并选中）主视频：交互对象顺带选中，视觉与参考框一致
     store.state_mut().selected_videos.clear();
     store.state_mut().selected_videos.push(index);
-    // 时间框跟随新的活跃视频
-    ui_sync_active_video_time(store);
-    ui_sync_video_time_bars(store);
-    // 活跃视频变化 → 立即重算播放状态
-    ui_sync_video_playing_state(store);
+    moved
 }
 
 /// 新会话的级联落点：相对当前选中视频（无选中则主视频）右下错开，
@@ -654,46 +635,36 @@ fn media_video_cascade_anchor(store: &AppStore) -> (f64, f64) {
     (ax + offset, ay + offset)
 }
 
-/// 当前 seek 目标视频：选中（无则主视频）。seek 后局部刷新时间条；
-/// 若目标为主视频则同步动画编辑器当前时间（关键帧/播放头跟随主视频）。
+/// 当前 seek 目标视频：选中（无则主视频）。只修改会话与 GStreamer，返回受影响下标；
+/// 时间条和动画播放头由 VideoTime projection 同步。
 impl AppStore {
-    pub(crate) fn seek_target(&mut self, secs: f64) {
+    pub(crate) fn seek_target(&mut self, secs: f64) -> Option<usize> {
         let Some(target) = self.state().active_video() else {
-            return;
+            return None;
         };
         let Some(session) = self.state_mut().video_sessions.get_mut(target) else {
             log::warn!("seek 目标视频不存在：{target}");
-            return;
+            return None;
         };
         media_seek_video_session(session, secs);
-        let current_time = session.current_time;
-        let _ = session;
-        ui_update_video_time_bar(&self.ui_models.video.time_bars, target, current_time);
-        // 时间框（播放头）跟随 seek 目标：选中无则主视频
-        ui_sync_active_video_time(self);
+        Some(target)
     }
 
     /// 时间条拖拽目标：单拖时只有焦点，批量时按锚点增量移动全部选中视频。
-    fn seek_drag_targets(&mut self, secs: f64) {
+    fn seek_drag_targets(&mut self, secs: f64) -> Vec<usize> {
         let Some(drag) = self.state().video_seek_session.clone() else {
-            self.seek_target(secs);
-            return;
+            return self.seek_target(secs).into_iter().collect();
         };
         let delta = secs - drag.anchor_time;
+        let mut indices = Vec::new();
         for target in drag.targets {
             let Some(session) = self.state_mut().video_sessions.get_mut(target.index) else {
                 continue;
             };
             media_seek_video_session(session, (target.origin_time + delta).max(0.0));
-            let current_time = session.current_time;
-            let _ = session;
-            ui_update_video_time_bar(
-                &self.ui_models.video.time_bars,
-                target.index,
-                current_time,
-            );
+            indices.push(target.index);
         }
-        ui_sync_active_video_time(self);
+        indices
     }
 
     /// 视频会话的视口世界尺寸（含 PAR 换算的显示宽度；未收到首帧用 1080P 默认）。
@@ -856,97 +827,6 @@ pub(crate) fn gst_session_playing_position(
         / 1_000_000_000.0;
     let frame_dur = session.wgpu_sink.frame_duration_secs();
     Some((secs, frame_dur))
-}
-
-/// 移动单个视频位置：只更新该行（set_row_data），避免拖拽中重建模型。
-fn ui_update_video_position(store: &mut AppStore, index: usize) {
-    let Some(session) = store.state().video_sessions.get(index) else {
-        return;
-    };
-    let (x, y) = (session.position_x, session.position_y);
-    store.ui_models.video.positions.set_row_data(
-        index,
-        crate::bridge::types::SlintVideoPos {
-            x: x as f32,
-            y: y as f32,
-        },
-    );
-}
-
-/// 把选中/主视频下标推到 VideoState 标量（视图描边/参考框据此判断）。
-fn ui_sync_video_scalars(store: &AppStore) {
-    if let Some(weak) = &store.video_state
-        && let Some(state) = weak.upgrade()
-    {
-        state.set_main_video(store.state().main_video.map(|i| i as i32).unwrap_or(-1));
-        state.set_selected_video(
-            store
-                .state()
-                .selected_videos
-                .last()
-                .map(|&i| i as i32)
-                .unwrap_or(-1),
-        );
-    }
-}
-
-/// 播放/拖拽热路径只更新一个时间条的时间字段，保留 label/color 等不变量。
-pub(crate) fn ui_update_video_time_bar(
-    bars: &slint::VecModel<SlintVideoTimeBar>,
-    index: usize,
-    time: f64,
-) {
-    let Some(mut bar) = bars.row_data(index) else {
-        return;
-    };
-    let time = time as f32;
-    if (bar.time - time).abs() < f32::EPSILON {
-        return;
-    }
-    bar.time = time;
-    bars.set_row_data(index, bar);
-}
-
-/// 选中/结构变化后局部刷新时间条模型（set_row_data，不重建模型）
-/// 并推送选中/主视频标量。颜色按下标确定性取彩虹色（与曲线编辑器同款）。
-pub(crate) fn ui_sync_video_time_bars(store: &mut AppStore) {
-    let bars = &store.ui_models.video.time_bars;
-    let sessions = &store.state().video_sessions;
-    let main = store.state().main_video;
-    let selected = &store.state().selected_videos;
-    for (i, session) in sessions.iter().enumerate() {
-        let old = bars.row_data(i).unwrap_or_default();
-        let bar = SlintVideoTimeBar {
-            label: ui_video_label(&session.uri),
-            time: session.current_time as f32,
-            color: rainbow_color(i),
-            selected: selected.contains(&i),
-            muted: session.muted,
-            is_main: main == Some(i),
-        };
-        if old.label != bar.label
-            || old.time != bar.time
-            || old.color != bar.color
-            || old.selected != bar.selected
-            || old.is_main != bar.is_main
-            || old.muted != bar.muted
-        {
-            bars.set_row_data(i, bar);
-        }
-    }
-    ui_sync_video_scalars(store);
-}
-
-fn ui_video_label(uri: &str) -> slint::SharedString {
-    url::Url::parse(uri)
-        .ok()
-        .and_then(|url| url.to_file_path().ok())
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| uri.to_owned())
-        .into()
 }
 
 /// 将会话时间限制在目标管线的有效时长内。媒体刚建立时 duration 可能尚未可用，
@@ -1192,7 +1072,7 @@ mod tests {
             reached
         };
         assert!(dur, "测试视频应能播到 EOS");
-        // 此时 ui_sync_video_playing_state 会判其处于 EOS → video_playing 应为 false
+        // 此时 media_refresh_video_playing_state 会判其处于 EOS → video_playing 应为 false
         store
             .state_mut()
             .video_sessions
@@ -1211,7 +1091,7 @@ mod tests {
         // 模拟"打开即自动播放"把 video_playing 置 true，且 UI 播放状态同步会
         // 逐帧校正把 EOS 识别为未播放（false）—— 这正是用户看到的"暂停"态。
         store.state_mut().video_playing = true;
-        crate::reducers::media::ui_sync_video_playing_state(&mut store);
+        crate::reducers::media::media_refresh_video_playing_state(&mut store);
         assert!(
             !store.state().video_playing,
             "EOS 时按钮应显示可播放（video_playing=false）"
@@ -1468,7 +1348,7 @@ mod tests {
 
         // 模拟打开即自动播放：video_playing=true，且 UI 播放状态同步应确认正在播放
         store.state_mut().video_playing = true;
-        crate::reducers::media::ui_sync_video_playing_state(&mut store);
+        crate::reducers::media::media_refresh_video_playing_state(&mut store);
         assert!(
             store.state().video_playing,
             "初始正在播放时应显示暂停图标（video_playing=true）"
@@ -1672,7 +1552,7 @@ mod tests {
     }
 
     /// 复现：拖拽期间 Header 播放按钮不应随 flush-seek 的过渡态闪烁。
-    /// 拖拽时 `ui_sync_video_playing_state` 应沿用 seek 会话记录的拖拽前意图态，
+    /// 拖拽时 `media_refresh_video_playing_state` 应沿用 seek 会话记录的拖拽前意图态，
     /// 而非实时查询管线状态——flush-seek 会让管线瞬时停在 Paused，导致图标乱跳。
     #[test]
     fn drag_keeps_header_play_state_stable() {
@@ -1720,7 +1600,7 @@ mod tests {
             }],
         });
         store.state_mut().video_playing = false;
-        super::ui_sync_video_playing_state(&mut store);
+        super::media_refresh_video_playing_state(&mut store);
         assert!(
             store.state().video_playing,
             "拖拽中应稳定显示播放态（沿用 was_playing），不应闪烁成暂停"
@@ -1728,6 +1608,6 @@ mod tests {
 
         // 松手：恢复按实时状态校正（此处管线未真正播放，校正为 false 亦合理）。
         store.state_mut().video_seek_session = None;
-        super::ui_sync_video_playing_state(&mut store);
+        super::media_refresh_video_playing_state(&mut store);
     }
 }

@@ -15,7 +15,7 @@ pub struct AppStore {
     pub(crate) overlay_state: Option<slint::Weak<crate::bridge::types::OverlayState<'static>>>,
     /// AnimationState global 弱引用：动画投影经此同步标量/重新绑定过滤视图到 Slint。
     pub(crate) animation_state: Option<slint::Weak<crate::bridge::types::AnimationState<'static>>>,
-    /// VideoState global 弱引用：视频 reducer 经此同步选中/主视频标量到 Slint。
+    /// VideoState global 弱引用：视频投影经此同步选中、主视频和播放标量到 Slint。
     pub(crate) video_state: Option<slint::Weak<crate::bridge::types::VideoState<'static>>>,
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,

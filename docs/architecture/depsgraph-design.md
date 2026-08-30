@@ -15,7 +15,7 @@ UI 事件 → Action → dispatch（reducer 改数据 + 返回 Tag）→ evaluat
 
 可被标记变更的权威数据，reducer 修改后打 tag。组件声明 `depends_on` 依赖；
 tag 命中任一数据域即调度该组件，多个组件共享数据域 → 一次 tag 联动多个投影。
-（数据域全集见 `depsgraph/tag.rs`。`Animation` 单一权威（`AnimationLibrary{actions, anim_datas}`），`Graph*`（Action 曲线）与 `Nla*`（轨道/片断）以 `TagKind` 隔离、共享同一 `Component`。）
+（数据域全集见 `depsgraph/tag.rs`。`Animation` 单一权威（`AnimationLibrary{actions, anim_datas}`），`Graph*`（Action 曲线）与 `Nla*`（轨道/片断）以 `TagKind` 隔离、共享同一 `Component`；普通视频状态使用 `DataId::Video` 与 Video TagKind，经 `projections/video.rs` 派生到 Slint。）
 
 ### Tag（变更）
 

@@ -690,12 +690,14 @@ fn render_sync_video_playback_time(store: &mut AppStore) {
             && (session.current_time - snapped).abs() >= 0.0005
         {
             session.current_time = snapped;
-            crate::reducers::media::ui_update_video_time_bar(bars, index, snapped);
+            crate::projections::ui_update_video_time_bar_value(bars, index, snapped);
         }
     }
 
-    crate::reducers::media::ui_sync_active_video_time(store);
-    crate::reducers::media::ui_sync_video_playing_state(store);
+    crate::projections::ui_sync_active_video_time_realtime(store);
+    if crate::reducers::media::media_refresh_video_playing_state(store) {
+        crate::projections::ui_sync_video_playback_scalar(store);
+    }
 }
 
 fn handle_rendering_setup(

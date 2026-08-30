@@ -22,12 +22,12 @@ src/
 ├── bridge/              # Slint ↔ Rust（callbacks / types / converters）
 ├── clipboard/           # 剪贴板（facade 强类型 API + backend 系统/内存 + kinds 数据种类）
 ├── depsgraph/           # 依赖图调度器（DataId / Component / Operation / Tag，graph.rs 调度实现）
-├── projections/         # depsgraph 投影注册（只读 aweft-model，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph）
+├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video）
 │   └── animation/       # 动画域单 Component（DataId::Animation，Graph+NLA 13 ops，TagKind 隔离）
 │       ├── mod.rs       # 重导出 op_graph_* / op_nla_*，单域注册说明
 │       ├── graph.rs     # 曲线/摄影表 6 ops（GraphStructure/Keyframes/Selection/DragEnded/Channel/Scalars）
 │       └── nla.rs       # NLA 6 ops（NlaStructure/Selection/StripStructure/StripPosition/TrackProperties/TrackAdded）
-├── reducers/            # 按域 reducer（**唯一改动 aweft-model 的入口**，改 `AppState.project` + 返回精确 tag，每域一文件/目录）
+├── reducers/            # 按域 reducer（**唯一改动权威状态的入口**，改 `AppState`/model + 返回精确 tag，每域一文件/目录）
 │   ├── area.rs / drag.rs / media.rs / screen.rs   # 纯函数 handle_*（只改 AppState）+ dispatch 包装
 │   ├── sequence.rs      # Sequence 域（impl AppStore，改 Sequence + Selection）
 │   ├── node_graph.rs    # NodeGraph 域
@@ -105,7 +105,7 @@ ui/
 ## 数据流（store 是中心，不是链尾）
 
 ```
-actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动 aweft-model 的入口，返回精确 tag）
+actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动权威状态的入口，返回精确 tag）
   → depsgraph（DataId 入口索引 + Relation 闭包 + 拓扑）
   → projections/{域}.rs（只读 aweft-model → 写派生 UI 模型）
         ↕
@@ -113,4 +113,4 @@ actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动 aweft-mod
 ```
 
 四层目录均为 `src/` 同层，深度一致；`store/` 字面即"落点"，不再有层级倒挂。
-改动唯一真相只有 `reducers/` 一条路（例外：启动初始化 `window_manager` / `new_editing_action`）。
+改动唯一真相只有 `reducers/` 一条路（例外：启动初始化 `window_manager` / `new_editing_action`；视频帧、逐帧播放时钟和波形批次属于实时渲染增量例外）。
