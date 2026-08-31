@@ -1,8 +1,8 @@
 import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
 import { TimeRuler, TickScale, VerticalGrid } from "./graph_editor/ruler.slint";
+import { AnimationState, VideoState } from "../bridge/state.slint";
 import { VideoCallbacks } from "../bridge/callbacks.slint";
-import { VideoState } from "../bridge/state.slint";
 
 component WaveformBar inherits Rectangle {
     in property <float> amplitude: 0.0;
@@ -106,9 +106,26 @@ export component AudioWaveformArea inherits Rectangle {
             : VideoState.audio-waveforms[root.audio-index].levels[level].amplitudes[row];
     }
 
-    // Each Area chooses which video audio it displays; the time belongs to that video session.
-    in property <float> current-time: 0.0;
     in property <int> audio-index: 0;
+    private property <int> focus-video-index: VideoState.selected-video >= 0
+        ? VideoState.selected-video
+        : VideoState.main-video;
+    private property <float> actual-time: root.audio-index >= 0
+        && root.audio-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.audio-index].time : 0.0;
+    private property <float> duration: root.audio-index >= 0
+        && root.audio-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.audio-index].duration : 0.0;
+    private property <color> actual-time-color: root.audio-index >= 0
+        && root.audio-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.audio-index].color : transparent;
+    // 非焦点音轨没有全局动画时间可保存范围外请求，因此只在越界时由本 Area
+    // 暂存逻辑时间；有效范围内仍直接跟随视频会话的实际播放位置。
+    private property <bool> has-outside-time: false;
+    private property <float> outside-time: 0.0;
+    private property <float> current-time: root.audio-index == root.focus-video-index
+        ? AnimationState.current-time
+        : root.has-outside-time ? root.outside-time : root.actual-time;
 
     background: Theme.data.animation-editor.canvas-background;
 
@@ -122,7 +139,14 @@ export component AudioWaveformArea inherits Rectangle {
         zoom-x: root.nav-zoom;
         pan-x: root.nav-pan-x;
         current-time: root.current-time;
+        show-reference-time: root.audio-index >= 0;
+        reference-time: root.actual-time;
+        reference-time-color: root.actual-time-color;
         time-picked(time) => {
+            root.outside-time = time;
+            root.has-outside-time = root.audio-index != root.focus-video-index
+                && root.duration > 0.0
+                && (time < 0.0 || time >= root.duration);
             VideoCallbacks.seek-video(root.audio-index, time);
         }
     }
@@ -192,6 +216,15 @@ export component AudioWaveformArea inherits Rectangle {
             zoom-step: 1.5;
         }
 
+        // 视频画面实际时间；范围外定位时停在最近的有效帧。
+        Rectangle {
+            x: (root.actual-time * root.nav-zoom * 1px + root.nav-pan-x * 1px) - self.width / 2;
+            width: 2px;
+            height: parent.height;
+            background: root.actual-time-color;
+        }
+
+        // 逻辑播放头允许位于媒体范围之外，供字幕等动画锚点使用。
         Rectangle {
             x: root.current-time * root.nav-zoom * 1px + root.nav-pan-x * 1px;
             width: 1px;
@@ -199,4 +232,7 @@ export component AudioWaveformArea inherits Rectangle {
             background: Theme.data.animation-editor.playhead;
         }
     }
+
+    changed audio-index => { root.has-outside-time = false; }
+    changed focus-video-index => { root.has-outside-time = false; }
 }

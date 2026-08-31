@@ -35,9 +35,6 @@ export component SlintScrArea inherits Rectangle {
     private property <bool> chain-editing: false;
     // This selection is intentionally local: several waveform Areas may inspect different tracks.
     private property <int> waveform-audio-index: 0;
-    private property <float> waveform-current-time: root.waveform-audio-index >= 0
-        && root.waveform-audio-index < VideoState.time-bars.length
-        ? VideoState.time-bars[root.waveform-audio-index].time : 0.0;
 
     x: container-x;
     y: container-y;
@@ -165,7 +162,6 @@ export component SlintScrArea inherits Rectangle {
             window-y: root.container-y + self.y;
         }
         if area-type == SlintAreaType.audio-waveform: AudioWaveformArea {
-            current-time: root.waveform-current-time;
             audio-index: root.waveform-audio-index;
         }
     }
@@ -178,7 +174,6 @@ export component SlintScrArea inherits Rectangle {
     changed area-type => {
         root.restore-chain-editing();
     }
-
     function restore-chain-editing() {
         if root.area-type == SlintAreaType.style-graph-editor {
             root.chain-editing = NodeGraphState.style-chain-items.length > 0;

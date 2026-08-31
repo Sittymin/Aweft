@@ -64,6 +64,12 @@ pub struct VideoSession {
     pub duration: Option<f64>,
     // 是否显式静音该视频音轨；与选择/transport 解耦。
     pub muted: bool,
+    // transport 的播放意图。由 reducer 写入，逐帧路径只读，避免查询 GStreamer 状态。
+    pub playing: bool,
+    // Bus 写入的 EOS 信号。共享原子状态让 UI 渲染路径无需逐帧查询位置/时长判断 EOS。
+    pub at_eos: std::sync::Arc<AtomicBool>,
+    // 已为当前尾端位置发出末帧 segment seek；连续范围外拖动时据此去重。
+    pub last_frame_seeked: bool,
 }
 
 /// 一次视频时间条拖拽中的单个目标快照。
@@ -101,8 +107,10 @@ pub struct AppState {
     pub main_video: Option<usize>,
     // 视口选择集合（有序、去重）；时间线 transport 控制它，为空时控制主视频
     pub selected_videos: Vec<usize>,
-    // 播放状态（供播放/暂停按钮图标与后续状态同步；随管线实际状态逐帧校正）
+    // 播放状态（供播放/暂停按钮图标；transport 即时更新，Bus EOS 触发一次校正）。
     pub video_playing: bool,
+    // Bus 在 EOS 时置位；BeforeRendering 仅在该标记变化时校正播放按钮。
+    pub video_playback_dirty: std::sync::Arc<AtomicBool>,
     // Some 表示视频时间条拖拽中；会话显式记录目标、原始时间和播放态。
     pub video_seek_session: Option<VideoSeekSession>,
     // 渲染器 GPU 句柄（RenderingSetup 时缓存；打开视频时按需连接 Sink）
@@ -128,6 +136,7 @@ impl AppState {
             main_video: None,
             selected_videos: Vec::new(),
             video_playing: false,
+            video_playback_dirty: std::sync::Arc::new(AtomicBool::new(false)),
             video_seek_session: None,
             video_wgpu: None,
             subtitle_renderer: None,

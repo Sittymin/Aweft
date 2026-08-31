@@ -2,10 +2,12 @@ use crate::store::AppStore;
 use crate::store::state::VideoSession;
 use gstreamer::prelude::*;
 
-pub(super) fn gst_set_session_state(session: &VideoSession, target: gstreamer::State) {
+pub(super) fn gst_set_session_state(session: &mut VideoSession, target: gstreamer::State) {
     if let Err(error) = session.pipeline.set_state(target) {
         log::warn!("切换视频状态到 {target:?} 失败: {error}");
+        return;
     }
+    session.playing = target == gstreamer::State::Playing;
 }
 
 /// 拖拽时间条期间静音音频：单帧预览不需要声音，且避免画面（冻结在拖拽点）与声音
@@ -74,7 +76,7 @@ pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) ->
         let session = &mut store.state_mut().video_sessions[index];
         if playing {
             let at_end = media_video_session_at_display_end(session)
-                || gst_session_at_eos(&session.pipeline);
+                || session.at_eos.load(std::sync::atomic::Ordering::Acquire);
             let target = if at_end {
                 0.0
             } else {
@@ -88,6 +90,8 @@ pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) ->
                 gst_seek_pipeline_accurate(&session.pipeline, target);
             }
             session.current_time = target;
+            session.at_eos.store(false, std::sync::atomic::Ordering::Release);
+            session.last_frame_seeked = false;
             gst_set_session_state(session, gstreamer::State::Playing);
         } else {
             gst_set_session_state(session, gstreamer::State::Paused);
@@ -97,11 +101,10 @@ pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) ->
     targets
 }
 
-/// 管线是否（将）处于播放态：状态转换期间以目标态为准，避免过渡中闪烁。
+/// 测试/诊断用的管线播放态快照。生产逐帧路径读取 `VideoSession::playing` 缓存。
 /// 用零超时做**非阻塞**快照——`state(None)` 会阻塞到目标态达成（GST_CLOCK_TIME_NONE），
-/// 在每帧渲染路径调用会卡死（打开视频时管线正进入 Playing）。
-/// 注意：到达 EOS 的管线 `current_state` 仍是 `Playing`，但已不再出帧，故这里
-/// 只判断"意图播放"，EOS 的判定由 `gst_session_at_eos` 单独负责。
+/// 到达 EOS 的管线 `current_state` 仍是 `Playing`，因此不能用它判断 EOS。
+#[cfg(test)]
 pub(crate) fn gst_pipeline_wants_playing(pipeline: &gstreamer::Pipeline) -> bool {
     let (_, current, pending) = pipeline.state(Some(gstreamer::ClockTime::from_mseconds(0)));
     if pending != gstreamer::State::VoidPending {
@@ -126,38 +129,18 @@ pub(crate) fn media_active_video_drives_timeline(store: &AppStore) -> bool {
     {
         return target.was_playing;
     }
-    store
-        .state()
-        .video_sessions
-        .get(active)
-        .is_some_and(|session| {
-            gst_pipeline_wants_playing(&session.pipeline)
-                && !gst_session_at_eos(&session.pipeline)
-        })
+    store.state().video_sessions.get(active).is_some_and(|session| {
+        session.playing && !session.at_eos.load(std::sync::atomic::Ordering::Acquire)
+    })
 }
 
-/// 管线是否已播到结尾（EOS）。仅当正处于播放意图态时才有意义：GStreamer 在
-/// EOS 后仍报 `current_state == Playing`，位置停在时长处不再推进。需 `seek`
-/// 清 EOS 才能恢复，单纯 `set_state(Playing)` 无效。
-fn gst_session_at_eos(pipeline: &gstreamer::Pipeline) -> bool {
-    if !gst_pipeline_wants_playing(pipeline) {
-        return false;
-    }
-    let pos = pipeline.query_position::<gstreamer::ClockTime>();
-    let dur = pipeline.query_duration::<gstreamer::ClockTime>();
-    match (pos, dur) {
-        (Some(p), Some(d)) if d > gstreamer::ClockTime::from_nseconds(0) => p >= d,
-        _ => false,
-    }
-}
-
-/// 按当前 transport 目标的实际状态校正全局 `video_playing`（随帧调用；
-/// 播放/暂停命令已由 `media_apply_video_playback` 即时设置，此处只做状态回退校正）。
+/// 按当前 transport 目标的缓存状态校正全局 `video_playing`。播放/暂停命令即时
+/// 设置该值；生产渲染路径仅在 Bus 报告 EOS 后调用一次，不逐帧查询 GStreamer。
 /// 已到 EOS 的管线仍报 Playing，但画面已停，故按"未播放"处理，让按钮正确显示
 /// 为"播放"且下一次按下能真正重新开始（见 `media_apply_video_playback` 中的 EOS 重启）。
 ///
 /// 拖拽期间不参与实时校正：拖拽会对管线做大量 flush-seek，其过渡态会让
-/// `gst_pipeline_wants_playing` 瞬时抖动；此时沿用拖拽目标开始时的播放意图。
+/// 管线状态会瞬时抖动；此时沿用拖拽目标开始时的播放意图。
 pub(crate) fn media_refresh_video_playing_state(store: &mut AppStore) -> bool {
     let playing = if let Some(drag) = &store.state().video_seek_session {
         !drag.targets.is_empty() && drag.targets.iter().all(|target| target.was_playing)
@@ -166,7 +149,8 @@ pub(crate) fn media_refresh_video_playing_state(store: &mut AppStore) -> bool {
         !targets.is_empty()
             && targets.iter().all(|&index| {
                 let session = &store.state().video_sessions[index];
-                gst_pipeline_wants_playing(&session.pipeline) && !gst_session_at_eos(&session.pipeline)
+                session.playing
+                    && !session.at_eos.load(std::sync::atomic::Ordering::Acquire)
             })
     };
     if store.state().video_playing == playing {
@@ -186,6 +170,12 @@ pub(super) fn media_seek_video_session(session: &mut VideoSession, secs: f64) {
         .duration
         .filter(|duration| duration.is_finite() && *duration > 0.0)
         .is_some_and(|duration| requested_secs.is_finite() && requested_secs >= duration);
+    let repeated_last_frame = media_repeated_last_frame_seek(
+        requested_past_end,
+        session.last_frame_seeked,
+        session.current_time,
+        secs,
+    );
     session.current_time = secs;
     // 暂停态 seek 产生的 preroll 会由 sink 回调保存并请求一次重绘。
     // 正向 ACCURATE seek 的目标若晚于最后一帧 PTS，即使仍小于容器 duration，
@@ -195,23 +185,38 @@ pub(super) fn media_seek_video_session(session: &mut VideoSession, secs: f64) {
     // Paused，曾导致同一交互随机残留负速率 segment。越界行为固定为先暂停。
     if requested_past_end {
         if let Some(duration) = session.duration {
+            if repeated_last_frame {
+                return;
+            }
             gst_set_session_state(session, gstreamer::State::Paused);
-            // set_state(Paused) 可能异步返回；若立即发反向 seek，切换前尚在途的
-            // 正向播放帧会先覆盖画面槽，看起来像末帧没有刷新。越界点击是低频
-            // 操作，允许有限等待管线稳定，再丢弃那张旧帧后建立末帧 segment。
-            let _ = session
-                .pipeline
-                .state(Some(gstreamer::ClockTime::from_mseconds(500)));
+            // 状态切换与反向 segment 都是异步请求；不能在 UI 回调中等待管线稳定。
+            // 清掉在途旧帧后，末帧 preroll 回调会覆盖槽位并请求重绘。
             if let Ok(mut next_frame) = session.wgpu_sink.next_frame.lock() {
                 next_frame.take();
             }
+            session.at_eos.store(false, std::sync::atomic::Ordering::Release);
+            session.last_frame_seeked = true;
             if !gst_seek_pipeline_last_frame(&session.pipeline, duration) {
+                session.last_frame_seeked = false;
                 gst_seek_pipeline_accurate(&session.pipeline, secs);
             }
             return;
         }
     }
+    session.at_eos.store(false, std::sync::atomic::Ordering::Release);
+    session.last_frame_seeked = false;
     gst_seek_pipeline_accurate(&session.pipeline, secs);
+}
+
+pub(super) fn media_repeated_last_frame_seek(
+    requested_past_end: bool,
+    last_frame_seeked: bool,
+    current_time: f64,
+    clamped_time: f64,
+) -> bool {
+    requested_past_end
+        && last_frame_seeked
+        && (current_time - clamped_time).abs() < 0.0005
 }
 
 /// 把视频画面时间限制在最近的有效时间点。优先使用会话缓存时长；缓存尚未建立时
@@ -325,7 +330,7 @@ fn gst_seek_pipeline_with_flags(
 pub(crate) fn gst_session_playing_position(
     session: &VideoSession,
 ) -> Option<(f64, Option<f64>)> {
-    if session.pipeline.current_state() != gstreamer::State::Playing {
+    if !session.playing || session.at_eos.load(std::sync::atomic::Ordering::Acquire) {
         return None;
     }
     // 纳秒转秒：seconds() 会截断到整秒，导致播放头一秒一跳

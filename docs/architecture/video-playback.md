@@ -80,16 +80,29 @@ DMA-BUF 错当成普通系统内存读取。
   Playing，避免状态转换竞态导致不刷新或短暂倒放。播放态则始终由当前焦点视频自身的实际
   播放位置接管并传播回时间轴 UI，不受其它视频是否播放影响。
 - **播放/暂停**：时间线 Header 中区的播放/暂停按钮是全局 transport；
-  `VideoAction::Play/Pause/TogglePlayback` 同时作用于全部视频会话，各会话从各自当前
-  位置继续。选择只决定 seek/时间显示和唯一音频 owner（无选中时为主视频），避免
-  多路参考音频叠加。`video_playing` 由 `media_apply_video_playback` 即时设置，并随帧按全部管线
-  状态校正。暂停态 seek 不临时切到 Playing，由 preroll 回调交付预览帧。
+  `VideoAction::Play/Pause/TogglePlayback` 作用于视口选择集合，无选择时只控制主视频，
+  各目标从自身当前位置继续。`VideoSession::playing` 缓存 transport 播放意图，EOS 由 Bus
+  写入原子缓存并触发一次播放按钮校正；逐帧渲染路径不查询管线 state/EOS，duration
+  只在会话缓存尚未建立时随新帧尝试补齐，建立后不再查询。
+  暂停态 seek 不临时切到 Playing，由 preroll 回调交付预览帧。范围外末帧 seek 不等待
+  管线状态转换，并对连续相同尾端请求去重，避免拖动时在 UI 线程反复提交 segment。
+
+实时播放时钟是 reducer/depsgraph 之外的明确例外：新视频帧到达时只查询实际收到该帧的
+会话位置，并只同步对应时间条及 `AnimationState.current-time`；动作名、范围、通道和选择等
+动画标量不随帧重复写入 Slint。波形专用的实际时间/范围外逻辑绑定位于条件实例化的
+`AudioWaveformArea` 内，普通 Timeline、Viewport、Graph Area 不订阅这些逐帧属性。
 
 ## 音频波形
 
 音频波形使用独立解码管线，不消费播放会话的 appsink。所有媒体共享一个后台
 worker，任务串行解码，避免追加多个视频时同时全速占用 CPU/解码器。每个媒体项
 持有取消令牌；替换媒体和 teardown 会取消对应任务，旧任务不能覆盖新模型。
+每个 AudioWaveform Area 可独立选择要查看的视频音轨；在波形标尺定位非焦点音轨时
+只更新该视频的时间条和画面，不改变全局动画时间。若所选音轨属于当前焦点视频，
+同一次定位还会更新动画域当前时间及所有 Area 的全局播放头；暂停态保留用户请求的
+时间，播放态继续由该焦点视频的实际管线位置接管。波形 Area 的逻辑播放头允许位于
+媒体范围之外；非焦点音轨的范围外请求时间由该 Area 本地保存。视频画面仍钳制到
+最近的有效帧，并以该视频的彩色竖线同时标出实际画面时间。
 
 波形以固定 1ms 时间桶累计峰值；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度。每个 AudioWaveform Area 按当前主刻度的十分之一选择 2ms、5ms、10ms、20ms、50ms……等预聚合层，因此一个主刻度固定约显示 10 个柱子；不同 Area 各自根据自己的视图缩放选择层级。appsink 每产生一个 PCM 缓冲区就立即提交发生变化的区间，不使用固定轮询等待；UI 保留持久的
 `VecModel<f32>`，通过 `set_row_data`/`push` 原地更新，不按批次克隆完整振幅数组或

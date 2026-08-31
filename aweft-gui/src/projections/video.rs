@@ -152,7 +152,7 @@ pub(crate) fn ui_sync_active_video_time_realtime(store: &mut AppStore) {
         return;
     }
     store.ui_models.animation.graph.current_time = secs;
-    store.sync_animation_scalars();
+    store.sync_animation_current_time();
 }
 
 fn ui_append_video_models(store: &mut AppStore, index: usize) {

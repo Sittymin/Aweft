@@ -345,6 +345,10 @@ export component TimeRuler inherits Rectangle {
     in property <float> zoom-x: 1.0;
     in property <float> pan-x: 0.0;
     in property <float> current-time: 0.0;
+    // 可选参考时间线：用于同时表达逻辑播放头与被媒体范围钳制后的实际画面位置。
+    in property <bool> show-reference-time: false;
+    in property <float> reference-time: 0.0;
+    in property <color> reference-time-color: transparent;
     // 多视频控制时间条模型（VideoState.time-bars）
     in property <[SlintVideoTimeBar]> video-bars: [];
     // 当前焦点视频下标；>= 0 时播放头时间显示框也可作为该视频的拖拽激活区。
@@ -388,6 +392,14 @@ export component TimeRuler inherits Rectangle {
         width: 1px;
         height: 100%;
         background: Theme.data.animation-editor.playhead;
+    }
+
+    if root.show-reference-time: Rectangle {
+        x: (root.reference-time * root.zoom-x * 1px + root.pan-x * 1px) - self.width / 2;
+        y: 0px;
+        width: 2px;
+        height: 100%;
+        background: root.reference-time-color;
     }
 
     // 多视频彩色时间条竖线（居中于时间点，与画布层 VideoTimeBarLines 对齐；

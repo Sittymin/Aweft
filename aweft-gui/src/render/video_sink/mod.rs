@@ -80,7 +80,15 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
 
     // 先完整连接候选会话；连接失败时回滚，避免留下半初始化状态。
     let mut wgpu_sink = wgpu_sink;
-    if let Err(error) = connect_pipeline_to_wgpu(store, &pipeline, &mut wgpu_sink) {
+    let at_eos = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let playback_dirty = std::sync::Arc::clone(&store.state().video_playback_dirty);
+    if let Err(error) = connect_pipeline_to_wgpu(
+        store,
+        &pipeline,
+        &mut wgpu_sink,
+        std::sync::Arc::clone(&at_eos),
+        playback_dirty,
+    ) {
         stop_session_parts(&pipeline, &sink_element, wgpu_sink);
         return Err(error);
     }
@@ -96,6 +104,9 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
         current_time: 0.0,
         duration,
         muted: false,
+        playing: false,
+        at_eos,
+        last_frame_seeked: false,
     })
 }
 
@@ -115,6 +126,8 @@ fn connect_pipeline_to_wgpu(
     store: &AppStore,
     pipeline: &gstreamer::Pipeline,
     wgpu_sink: &mut sink::SlintWGPUSink,
+    at_eos: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    playback_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     use anyhow::Context as _;
     use futures::StreamExt;
@@ -131,6 +144,7 @@ fn connect_pipeline_to_wgpu(
     let Some(weak_instance) = store.main_window.clone() else {
         anyhow::bail!("主窗口未初始化");
     };
+    let bus_window = weak_instance.clone();
     let next_frame_notifier: Box<dyn Fn() + Send + Sync> = Box::new(move || {
         let _ = weak_instance.upgrade_in_event_loop(|instance| {
             // slint::Window 原生支持请求重绘（跨线程安全入口已在 upgrade 内）
@@ -149,7 +163,11 @@ fn connect_pipeline_to_wgpu(
             match msg.view() {
                 MessageView::Eos(..) => {
                     log::info!("视频播放结束");
-                    break;
+                    at_eos.store(true, std::sync::atomic::Ordering::Release);
+                    playback_dirty.store(true, std::sync::atomic::Ordering::Release);
+                    let _ = bus_window.upgrade_in_event_loop(|instance| {
+                        instance.window().request_redraw();
+                    });
                 }
                 MessageView::Error(err) => {
                     log::error!(

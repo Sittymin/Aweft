@@ -249,4 +249,15 @@ impl crate::store::AppStore {
         state.set_selected_keyframes(ce.selected_keyframe_count() as i32);
         state.set_selected_interpolation(ce.selected_interpolation_state());
     }
+
+    /// 实时播放时钟只同步 current-time，避免每帧重复失效动作、通道和选择标量。
+    pub(crate) fn sync_animation_current_time(&mut self) {
+        let Some(weak) = &self.animation_state else {
+            return;
+        };
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        state.set_current_time(self.ui_models.animation.graph.current_time as f32);
+    }
 }

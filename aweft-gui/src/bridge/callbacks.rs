@@ -663,63 +663,61 @@ fn handle_before_rendering(_instance: &MainWindow, store: &Rc<RefCell<AppStore>>
                     .heights
                     .set_row_data(index, h as i32);
             }
+            render_sync_video_playback_time(&mut store_mut, index);
         }
     }
 
     // 新 sample/preroll 回调是播放渲染的唯一驱动；其它窗口重绘不查询媒体管线。
     if received_frame {
-        render_sync_video_playback_time(&mut store_mut);
+        crate::projections::ui_sync_active_video_time_realtime(&mut store_mut);
+    }
+    // Bus 在 EOS 时置一次脏标记并请求重绘。普通窗口重绘不遍历 transport 目标。
+    let playback_dirty = store_mut
+        .state()
+        .video_playback_dirty
+        .swap(false, std::sync::atomic::Ordering::AcqRel);
+    if playback_dirty
+        && crate::reducers::media::media_refresh_video_playing_state(&mut store_mut)
+    {
+        crate::projections::ui_sync_video_playback_scalar(&store_mut);
     }
 }
 
-/// 播放中随帧同步各视频管线位置：写入各自 `session.current_time` 并局部刷新
-/// 时间条模型；活跃视频（选中无则主视频）额外驱动动画域当前时间（时间框/播放头
-/// 跟随活跃视频）。高频路径（每帧）与视频帧一样直接写：不经 dispatch/depsgraph，
-/// 但复用投影同一出口 `sync_animation_scalars`。
+/// 播放中仅同步本次确有新帧的会话位置，并局部刷新其时间条模型。活跃视频
+/// （选中无则主视频）随后驱动动画域当前时间。高频路径与视频帧一样直接写：
+/// 不经 dispatch/depsgraph，但复用只更新 current-time 的实时投影出口。
 /// 时间按视频帧时长向下取整——播放头逐帧跳动而非逐查询抖动。
-fn render_sync_video_playback_time(store: &mut AppStore) {
-    if store.state().video_sessions.is_empty() {
+fn render_sync_video_playback_time(store: &mut AppStore, index: usize) {
+    if index >= store.state().video_sessions.len() {
         return;
     }
     // 拖拽时间条时 current_time 由媒体 reducer 的 seek 写入（鼠标目标位置），这里不要以
     // 实际解码（关键帧）位置覆盖，否则游标在目标/关键帧间反复跳动。
-    let dragged_targets = store
+    let dragged = store
         .state()
         .video_seek_session
         .as_ref()
-        .map(|drag| {
-            drag.targets
-                .iter()
-                .map(|target| target.index)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let bars = &store.ui_models.video.time_bars;
-    for (index, session) in store.state.video_sessions.iter_mut().enumerate() {
-        if session.duration.is_none() {
-            session.duration =
-                crate::render::video_sink::gst_query_pipeline_duration_secs(&session.pipeline);
-            if let Some(duration) = session.duration {
-                crate::projections::ui_update_video_time_bar_duration(bars, index, duration);
-            }
-        }
-        let Some((secs, frame_dur)) = crate::reducers::media::gst_session_playing_position(session)
-        else {
-            continue;
-        };
-        let snapped = match frame_dur {
-            Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
-            _ => secs,
-        };
-        if !dragged_targets.contains(&index) && (session.current_time - snapped).abs() >= 0.0005 {
-            session.current_time = snapped;
-            crate::projections::ui_update_video_time_bar_value(bars, index, snapped);
+        .is_some_and(|drag| drag.targets.iter().any(|target| target.index == index));
+    let bars = store.ui_models.video.time_bars.clone();
+    let session = &mut store.state.video_sessions[index];
+    if session.duration.is_none() {
+        session.duration =
+            crate::render::video_sink::gst_query_pipeline_duration_secs(&session.pipeline);
+        if let Some(duration) = session.duration {
+            crate::projections::ui_update_video_time_bar_duration(&bars, index, duration);
         }
     }
-
-    crate::projections::ui_sync_active_video_time_realtime(store);
-    if crate::reducers::media::media_refresh_video_playing_state(store) {
-        crate::projections::ui_sync_video_playback_scalar(store);
+    let Some((secs, frame_dur)) = crate::reducers::media::gst_session_playing_position(session)
+    else {
+        return;
+    };
+    let snapped = match frame_dur {
+        Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
+        _ => secs,
+    };
+    if !dragged && (session.current_time - snapped).abs() >= 0.0005 {
+        session.current_time = snapped;
+        crate::projections::ui_update_video_time_bar_value(&bars, index, snapped);
     }
 }
 

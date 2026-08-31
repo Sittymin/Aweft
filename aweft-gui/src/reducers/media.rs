@@ -160,17 +160,32 @@ impl AppStore {
                 ])
             }
             MediaAction::Video(VideoAction::SeekVideo { index, timestamp }) => {
-                let Some(session) = self.state_mut().video_sessions.get_mut(index) else {
+                if index >= self.state().video_sessions.len() {
                     log::warn!("指定视频 seek：下标越界 {index}");
                     return Ok(Vec::new());
-                };
-                media_seek_video_session(session, timestamp as f64 / 1000.0);
-                Ok(vec![Tag::VideoTimeChanged {
+                }
+                let requested_time = timestamp as f64 / 1000.0;
+                let is_active = self.state().active_video() == Some(index);
+                let sync_timeline =
+                    is_active && media_active_video_drives_timeline(self);
+                if is_active {
+                    // 波形 Area 可查看任意音轨；只有它正在显示焦点视频的音轨时，
+                    // 点击标尺才同时移动动画域的全局播放头。暂停态保留用户请求值，
+                    // 播放态则由下方 VideoTimeChanged 投影回钳制后的实际视频位置。
+                    self.ui_models.animation.graph.current_time = requested_time;
+                }
+                let session = &mut self.state_mut().video_sessions[index];
+                media_seek_video_session(session, requested_time);
+                let mut tags = vec![Tag::VideoTimeChanged {
                     indices: vec![index],
-                    // 波形可定位任意视频，但不改变焦点；这里只刷新该行和画面，
-                    // 不能借由活跃视频投影改写动画时间轴。
-                    sync_timeline: false,
-                }])
+                    // 非焦点音轨只刷新自身行和画面；焦点音轨播放中由实际位置
+                    // 接管全局时间，暂停时则保留上方写入的原始请求值。
+                    sync_timeline,
+                }];
+                if is_active {
+                    tags.push(Tag::GraphScalarsChanged);
+                }
+                Ok(tags)
             }
             MediaAction::Video(VideoAction::SeekBegin { index, is_batch }) => {
                 if index >= self.state().video_sessions.len() {
@@ -199,7 +214,7 @@ impl AppStore {
                         Some(VideoSeekTarget {
                             index,
                             origin_time: session.current_time,
-                            was_playing: gst_pipeline_wants_playing(&session.pipeline),
+                            was_playing: session.playing,
                         })
                     })
                     .collect();
@@ -365,7 +380,7 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
     let anchor = (old.position_x, old.position_y);
     let old_time = old.current_time;
     let old_muted = old.muted;
-    let session_was_playing = gst_pipeline_wants_playing(&old.pipeline);
+    let session_was_playing = old.playing;
 
     gst_initialize_once().context("GStreamer 初始化失败")?;
     let mut new_session = crate::render::video_sink::build_session(store, uri)?;

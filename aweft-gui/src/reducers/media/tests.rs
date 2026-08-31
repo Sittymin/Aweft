@@ -55,6 +55,99 @@
     }
 
     #[test]
+    fn repeated_past_end_seek_reuses_pending_last_frame() {
+        assert!(!media_repeated_last_frame_seek(true, false, 9.96, 9.96));
+        assert!(media_repeated_last_frame_seek(true, true, 9.96, 9.96));
+        assert!(!media_repeated_last_frame_seek(false, true, 9.96, 9.96));
+        assert!(!media_repeated_last_frame_seek(true, true, 8.0, 9.96));
+    }
+
+    #[test]
+    fn waveform_seek_syncs_global_time_only_for_active_video() {
+        let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        gstreamer::init().expect("初始化 GStreamer 失败");
+        i_slint_backend_testing::init_no_event_loop();
+        let instance = crate::bridge::types::MainWindow::new().unwrap();
+        let mut store = crate::store::AppStore::new(&instance);
+
+        for index in 0..2 {
+            let pipeline = gstreamer::Pipeline::new();
+            let wgpu_sink = crate::render::video_sink::SlintWGPUSink::new();
+            let sink_element = wgpu_sink.element();
+            store
+                .state_mut()
+                .video_sessions
+                .push(crate::store::state::VideoSession {
+                    uri: format!("test://waveform-{index}"),
+                    pipeline,
+                    sink_element,
+                    wgpu_sink,
+                    position_x: 0.0,
+                    position_y: 0.0,
+                    current_time: 0.0,
+                    duration: Some(10.0),
+                    muted: false,
+                    playing: false,
+                    at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    last_frame_seeked: false,
+                });
+        }
+        store.state_mut().main_video = Some(0);
+        store.state_mut().selected_videos = vec![1];
+        store.ui_models.animation.graph.current_time = 8.0;
+
+        let tags = store
+            .dispatch_media(crate::actions::media::MediaAction::Video(
+                crate::actions::media::VideoAction::SeekVideo {
+                    index: 0,
+                    timestamp: 12_000,
+                },
+            ))
+            .unwrap();
+        assert_eq!(store.ui_models.animation.graph.current_time, 8.0);
+        assert!(
+            store.state().video_sessions[0].current_time < 10.0,
+            "非焦点音轨范围外 seek 也应把视频画面位置钳制在有效范围"
+        );
+        assert!(!tags.iter().any(|tag| matches!(
+            tag,
+            crate::depsgraph::Tag::GraphScalarsChanged
+        )));
+        assert!(tags.iter().any(|tag| matches!(
+            tag,
+            crate::depsgraph::Tag::VideoTimeChanged {
+                indices,
+                sync_timeline: false,
+            } if indices == &[0]
+        )));
+
+        let tags = store
+            .dispatch_media(crate::actions::media::MediaAction::Video(
+                crate::actions::media::VideoAction::SeekVideo {
+                    index: 1,
+                    timestamp: 12_000,
+                },
+            ))
+            .unwrap();
+        assert_eq!(store.ui_models.animation.graph.current_time, 12.0);
+        assert!(
+            store.state().video_sessions[1].current_time < 10.0,
+            "焦点音轨范围外 seek 应保留全局请求时间，但视频画面位置仍需钳制"
+        );
+        assert!(tags.iter().any(|tag| matches!(
+            tag,
+            crate::depsgraph::Tag::GraphScalarsChanged
+        )));
+        assert!(tags.iter().any(|tag| matches!(
+            tag,
+            crate::depsgraph::Tag::VideoTimeChanged {
+                indices,
+                sync_timeline: false,
+            } if indices == &[1]
+        )));
+    }
+
+    #[test]
     fn pick_hit_without_selection_takes_topmost() {
         let r = rects();
         // (50, 50) 同时命中 0 与 1 → 无选中取最上层（下标 1）
@@ -240,6 +333,9 @@
                 current_time: 0.0,
                 duration: None,
                 muted: false,
+                playing: true,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                last_frame_seeked: false,
             });
         store.state_mut().main_video = Some(0);
 
@@ -335,6 +431,9 @@
                 current_time: 0.0,
                 duration: None,
                 muted: false,
+                playing: true,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_frame_seeked: false,
             });
         store
             .state_mut()
@@ -349,6 +448,9 @@
                 current_time: 0.0,
                 duration: None,
                 muted: false,
+                playing: false,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_frame_seeked: false,
             });
         store.state_mut().main_video = Some(0);
         store.state_mut().selected_videos.clear();
@@ -525,6 +627,9 @@
                 current_time: play_secs,
                 duration: None,
                 muted: false,
+                playing: true,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_frame_seeked: false,
             });
         store.state_mut().main_video = Some(0);
 
@@ -638,6 +743,9 @@
                 current_time: 0.0,
                 duration: None,
                 muted: false,
+                playing: true,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_frame_seeked: false,
             });
         store.state_mut().main_video = Some(0);
 
@@ -782,6 +890,9 @@
             current_time: 0.0,
             duration: Some(duration_secs),
             muted: false,
+            playing: false,
+            at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_frame_seeked: false,
         };
         // 模拟用户在播放中点击视频时长之后。即便管线当前处于 Playing，越界
         // 定位也必须确定性地暂停，再以反向 segment 只取得一张末帧 preroll。
@@ -789,6 +900,7 @@
             .pipeline
             .set_state(gstreamer::State::Playing)
             .expect("模拟播放态失败");
+        session.playing = true;
         let _ = session
             .pipeline
             .state(Some(gstreamer::ClockTime::from_seconds(2)));
@@ -919,6 +1031,9 @@
                 current_time: 0.0,
                 duration: None,
                 muted: false,
+                playing: true,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_frame_seeked: false,
             });
         store.state_mut().main_video = Some(0);
 
