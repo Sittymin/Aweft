@@ -33,7 +33,7 @@ pub use video::{
 };
 pub(crate) use video::{
     ui_sync_active_video_time_realtime, ui_sync_video_playback_scalar,
-    ui_update_video_time_bar_value,
+    ui_update_video_time_bar_duration, ui_update_video_time_bar_value,
 };
 
 /// 注册所有投影组件到依赖图。在 `AppStore` 初始化时调用一次。

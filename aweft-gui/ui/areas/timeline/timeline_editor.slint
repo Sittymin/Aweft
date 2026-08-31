@@ -47,6 +47,21 @@ export component TimelineEditor inherits Rectangle {
     private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
     private property <float> view-time-hi: ((root.width - root.track-list-width) - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
 
+    // 当前焦点视频：选择集合末项优先，无选择时回落主视频。范围遮罩只读取这一行，
+    // 避免多个视频的范围颜色同时叠加造成画布混乱。
+    private property <int> focus-video-index: VideoState.selected-video >= 0
+        ? VideoState.selected-video
+        : VideoState.main-video;
+    private property <bool> has-focus-video-range: root.focus-video-index >= 0
+        && root.focus-video-index < VideoState.time-bars.length
+        && VideoState.time-bars[root.focus-video-index].duration > 0.0;
+    private property <float> focus-video-duration: root.has-focus-video-range
+        ? VideoState.time-bars[root.focus-video-index].duration
+        : 0.0;
+    private property <color> focus-video-outside-color: root.has-focus-video-range
+        ? VideoState.time-bars[root.focus-video-index].color.darker(0.6).with-alpha(0.32)
+        : transparent;
+
     // 纵向滚动范围：只能滚到 [-(内容高-视口高), 0]，内容不足空间时不动（与摄影表一致）。
     // 第 0 行固定为根级行；展开时为根级行 + 全部可见行，收起时仅根级行。
     function content-height-px() -> float {
@@ -194,9 +209,7 @@ export component TimelineEditor inherits Rectangle {
         }
         // 多视频控制时间条（内嵌于标尺：点击选中视频、拖拽 seek）
         video-bars: VideoState.time-bars;
-        active-video-index: VideoState.selected-video >= 0
-            ? VideoState.selected-video
-            : VideoState.main-video;
+        active-video-index: root.focus-video-index;
         video-bar-pressed(index, is-batch) => {
             VideoCallbacks.time-bar-pressed(index, is-batch);
         }
@@ -249,6 +262,26 @@ export component TimelineEditor inherits Rectangle {
             pan-x: root.nav-pan-x;
             line-color: Theme.data.animation-editor.grid-color;
             minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        // 当前焦点视频时长之外的区域：沿用该视频的彩虹色，但加深并半透明叠加。
+        // 与 NLA/Dope Sheet 的范围外遮罩同层级，片段、交互和播放头仍绘制在其上。
+        Rectangle {
+            visible: root.has-focus-video-range;
+            x: 0px;
+            width: max(0px, min(parent.width, root.nav-pan-x * 1px));
+            height: 100%;
+            background: root.focus-video-outside-color;
+        }
+        Rectangle {
+            visible: root.has-focus-video-range;
+            x: max(0px, root.focus-video-duration * root.nav-zoom * 1px
+                + root.nav-pan-x * 1px);
+            width: max(0px, parent.width - max(0px,
+                root.focus-video-duration * root.nav-zoom * 1px
+                    + root.nav-pan-x * 1px));
+            height: 100%;
+            background: root.focus-video-outside-color;
         }
 
         // 根级泳道（第 0 条）：

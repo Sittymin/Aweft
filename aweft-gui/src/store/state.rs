@@ -60,6 +60,8 @@ pub struct VideoSession {
     pub position_y: f64,
     // 当前播放位置（秒）。暂停时编辑器时间权威，这里保留最后一次位置供时间条显示。
     pub current_time: f64,
+    // 媒体总时长（秒）。管线尚未发布时长时为 None，首个 preroll/sample 到达后补齐。
+    pub duration: Option<f64>,
     // 是否显式静音该视频音轨；与选择/transport 解耦。
     pub muted: bool,
 }

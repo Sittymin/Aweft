@@ -1084,6 +1084,7 @@ mod tests {
                 position_x: 0.0,
                 position_y: 0.0,
                 current_time: 0.0,
+                duration: None,
                 muted: false,
             });
         store.state_mut().main_video = Some(0);
@@ -1178,6 +1179,7 @@ mod tests {
                 position_x: 0.0,
                 position_y: 0.0,
                 current_time: 0.0,
+                duration: None,
                 muted: false,
             });
         store
@@ -1191,6 +1193,7 @@ mod tests {
                 position_x: 50.0,
                 position_y: 50.0,
                 current_time: 0.0,
+                duration: None,
                 muted: false,
             });
         store.state_mut().main_video = Some(0);
@@ -1342,6 +1345,7 @@ mod tests {
                 position_x: 0.0,
                 position_y: 0.0,
                 current_time: play_secs,
+                duration: None,
                 muted: false,
             });
         store.state_mut().main_video = Some(0);
@@ -1454,6 +1458,7 @@ mod tests {
                 position_x: 0.0,
                 position_y: 0.0,
                 current_time: 0.0,
+                duration: None,
                 muted: false,
             });
         store.state_mut().main_video = Some(0);
@@ -1582,6 +1587,7 @@ mod tests {
                 position_x: 0.0,
                 position_y: 0.0,
                 current_time: 0.0,
+                duration: None,
                 muted: false,
             });
         store.state_mut().main_video = Some(0);

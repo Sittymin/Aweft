@@ -84,6 +84,7 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
         stop_session_parts(&pipeline, &sink_element, wgpu_sink);
         return Err(error);
     }
+    let duration = gst_query_pipeline_duration_secs(&pipeline);
 
     Ok(VideoSession {
         uri: uri.to_string(),
@@ -93,8 +94,19 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
         position_x: 0.0,
         position_y: 0.0,
         current_time: 0.0,
+        duration,
         muted: false,
     })
+}
+
+/// 查询媒体管线已发布的总时长（秒）。暂停态预滚动完成前可能暂时不可用，
+/// 调用方应在首个 preroll/sample 到达后重试，而不是把缺失值固化为 0。
+pub(crate) fn gst_query_pipeline_duration_secs(
+    pipeline: &gstreamer::Pipeline,
+) -> Option<f64> {
+    let duration = pipeline.query_duration::<gstreamer::ClockTime>()?;
+    let secs = duration.nseconds() as f64 / 1_000_000_000.0;
+    (secs.is_finite() && secs > 0.0).then_some(secs)
 }
 
 /// 连接 WGPU 输出并启动播放（帧到达 → 请求 Slint 重绘）。

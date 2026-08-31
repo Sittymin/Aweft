@@ -687,12 +687,23 @@ fn render_sync_video_playback_time(store: &mut AppStore) {
         .state()
         .video_seek_session
         .as_ref()
-        .map(|drag| drag.targets.iter().map(|target| target.index).collect::<Vec<_>>())
+        .map(|drag| {
+            drag.targets
+                .iter()
+                .map(|target| target.index)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let bars = &store.ui_models.video.time_bars;
     for (index, session) in store.state.video_sessions.iter_mut().enumerate() {
-        let Some((secs, frame_dur)) =
-            crate::reducers::media::gst_session_playing_position(session)
+        if session.duration.is_none() {
+            session.duration =
+                crate::render::video_sink::gst_query_pipeline_duration_secs(&session.pipeline);
+            if let Some(duration) = session.duration {
+                crate::projections::ui_update_video_time_bar_duration(bars, index, duration);
+            }
+        }
+        let Some((secs, frame_dur)) = crate::reducers::media::gst_session_playing_position(session)
         else {
             continue;
         };
@@ -700,9 +711,7 @@ fn render_sync_video_playback_time(store: &mut AppStore) {
             Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
             _ => secs,
         };
-        if !dragged_targets.contains(&index)
-            && (session.current_time - snapped).abs() >= 0.0005
-        {
+        if !dragged_targets.contains(&index) && (session.current_time - snapped).abs() >= 0.0005 {
             session.current_time = snapped;
             crate::projections::ui_update_video_time_bar_value(bars, index, snapped);
         }

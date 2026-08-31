@@ -103,6 +103,23 @@ pub(crate) fn ui_update_video_time_bar_value(
     bars.set_row_data(index, bar);
 }
 
+/// 首个 preroll/sample 补齐媒体时长时使用的行级实时出口。
+pub(crate) fn ui_update_video_time_bar_duration(
+    bars: &VecModel<SlintVideoTimeBar>,
+    index: usize,
+    duration: f64,
+) {
+    let Some(mut bar) = bars.row_data(index) else {
+        return;
+    };
+    let duration = duration as f32;
+    if (bar.duration - duration).abs() < f32::EPSILON {
+        return;
+    }
+    bar.duration = duration;
+    bars.set_row_data(index, bar);
+}
+
 /// 实时播放时钟例外：把活跃视频时间投影到动画编辑数据层并同步 Slint 标量。
 /// 普通 seek 由 VideoTime Tag 触发同一逻辑；渲染回调按帧调用本出口，避免
 /// 每帧创建 Action/Tag。
@@ -211,6 +228,7 @@ fn ui_update_video_time_bar(store: &mut AppStore, index: usize) {
     let bar = SlintVideoTimeBar {
         label: ui_video_label(&session.uri),
         time: session.current_time as f32,
+        duration: session.duration.unwrap_or(0.0) as f32,
         color: rainbow_color(index),
         selected: store.state().selected_videos.contains(&index),
         muted: session.muted,

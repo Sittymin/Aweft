@@ -159,6 +159,8 @@ export struct SlintVideoTimeBar {
     label: string,
     // 该视频当前播放位置（秒）
     time: float,
+    // 该视频总时长（秒）；尚未由媒体管线发布时为 0
+    duration: float,
     // 彩虹色（与曲线编辑器通道同款调色板，按下标取色循环）
     color: color,
     // 是否当前选中（选中时时间条描边）
