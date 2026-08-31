@@ -16,6 +16,8 @@ pub enum VideoAction {
     Replace { index: usize, uri: String },
     /// 切换指定视频的音频静音状态。
     ToggleMute { index: usize },
+    /// 选择指定视频的实时播放音轨（波形 Area 点击左侧音轨时触发）。
+    SelectAudioTrack { video_index: usize, track_index: usize },
     /// 更新视口视频选择（普通点击替换；Ctrl 切换；Shift 追加；None 普通点击清空）。
     Select {
         index: Option<usize>,

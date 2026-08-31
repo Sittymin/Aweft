@@ -1,8 +1,11 @@
 import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
 import { TimeRuler, TickScale, VerticalGrid } from "./graph_editor/ruler.slint";
+import { SlintAudioTrack } from "../core/types.slint";
 import { AnimationState, VideoState } from "../bridge/state.slint";
 import { VideoCallbacks } from "../bridge/callbacks.slint";
+import { AudioTrackPanel } from "./audio_track_panel.slint";
+import { AudioTrackSidebar } from "./audio_track_sidebar.slint";
 
 component WaveformBar inherits Rectangle {
     in property <float> amplitude: 0.0;
@@ -24,12 +27,24 @@ export component AudioWaveformArea inherits Rectangle {
     private property <float> selection-start: 2.8;
     private property <float> selection-end: 7.55;
     private property <length> ruler-height: Theme.data.animation-editor.ruler-height;
+    private property <length> track-list-width: Theme.data.animation-editor.channel-list-width;
+    private property <length> sidebar-tab-width: Theme.data.animation-editor.sidebar-tab-width;
+    private property <length> sidebar-content-width: Theme.data.animation-editor.sidebar-content-width;
+    private property <length> sidebar-width: root.sidebar-open
+        ? root.sidebar-tab-width + root.sidebar-content-width
+        : root.sidebar-tab-width;
+    private property <bool> sidebar-open: false;
+    in property <[SlintAudioTrack]> tracks: [];
+    in property <int> track-index: 0;
+    callback track-selected(index: int);
 
     // The navigation transform is shared by waveform buckets, ruler, grid, selection and playhead.
     private property <float> nav-pan-x: 0.0;
     private property <float> nav-zoom: 30.0;
     private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
     private property <float> view-time-hi: (canvas.width - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+    private property <bool> has-waveform: root.track-index >= 0
+        && root.track-index < root.tracks.length;
     // 每个横向主刻度固定显示的波形柱数。主刻度由 TickScale 统一计算，
     // 因此波形缩放与标尺始终使用同一个 nice step（1/2/5×10^k）。
     private property <int> waveform-bars-per-major: 10;
@@ -71,8 +86,9 @@ export component AudioWaveformArea inherits Rectangle {
 
     pure function waveform-bucket-duration() -> float {
         let level = root.waveform-level();
+        if !root.has-waveform { return 1.0; }
         return level < 0 ? 0.001
-            : VideoState.audio-waveforms[root.audio-index].levels[level].bucket-duration;
+            : root.tracks[root.track-index].waveform.levels[level].bucket-duration;
     }
 
     pure function waveform-first-bucket() -> int {
@@ -92,69 +108,84 @@ export component AudioWaveformArea inherits Rectangle {
     }
 
     pure function waveform-row-count() -> int {
+        if !root.has-waveform { return 0; }
         let level = root.waveform-level();
         return level < 0
-            ? VideoState.audio-waveforms[root.audio-index].amplitudes.length
-            : VideoState.audio-waveforms[root.audio-index].levels[level].amplitudes.length;
+            ? root.tracks[root.track-index].waveform.amplitudes.length
+            : root.tracks[root.track-index].waveform.levels[level].amplitudes.length;
     }
 
     pure function waveform-amplitude(row: int) -> float {
         if row < 0 || row >= root.waveform-row-count() { return 0.0; }
         let level = root.waveform-level();
         return level < 0
-            ? VideoState.audio-waveforms[root.audio-index].amplitudes[row]
-            : VideoState.audio-waveforms[root.audio-index].levels[level].amplitudes[row];
+            ? root.tracks[root.track-index].waveform.amplitudes[row]
+            : root.tracks[root.track-index].waveform.levels[level].amplitudes[row];
     }
 
-    in property <int> audio-index: 0;
+    in property <int> video-index: 0;
     private property <int> focus-video-index: VideoState.selected-video >= 0
         ? VideoState.selected-video
         : VideoState.main-video;
-    private property <float> actual-time: root.audio-index >= 0
-        && root.audio-index < VideoState.time-bars.length
-        ? VideoState.time-bars[root.audio-index].time : 0.0;
-    private property <float> duration: root.audio-index >= 0
-        && root.audio-index < VideoState.time-bars.length
-        ? VideoState.time-bars[root.audio-index].duration : 0.0;
-    private property <color> actual-time-color: root.audio-index >= 0
-        && root.audio-index < VideoState.time-bars.length
-        ? VideoState.time-bars[root.audio-index].color : transparent;
+    private property <float> actual-time: root.video-index >= 0
+        && root.video-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.video-index].time : 0.0;
+    private property <float> duration: root.video-index >= 0
+        && root.video-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.video-index].duration : 0.0;
+    private property <color> actual-time-color: root.video-index >= 0
+        && root.video-index < VideoState.time-bars.length
+        ? VideoState.time-bars[root.video-index].color : transparent;
     // 非焦点音轨没有全局动画时间可保存范围外请求，因此只在越界时由本 Area
     // 暂存逻辑时间；有效范围内仍直接跟随视频会话的实际播放位置。
     private property <bool> has-outside-time: false;
     private property <float> outside-time: 0.0;
-    private property <float> current-time: root.audio-index == root.focus-video-index
+    private property <float> current-time: root.video-index == root.focus-video-index
         ? AnimationState.current-time
         : root.has-outside-time ? root.outside-time : root.actual-time;
 
     background: Theme.data.animation-editor.canvas-background;
 
-    TimeRuler {
+    AudioTrackPanel {
         x: 0px;
         y: 0px;
-        width: parent.width;
+        width: root.track-list-width;
+        height: root.height;
+        tracks: root.tracks;
+        current-track: root.track-index;
+        header-height: root.ruler-height;
+        track-pressed(index) => {
+            root.track-selected(index);
+            VideoCallbacks.select-audio-track(root.video-index, index);
+        }
+    }
+
+    TimeRuler {
+        x: root.track-list-width;
+        y: 0px;
+        width: parent.width - root.track-list-width - root.sidebar-width;
         height: root.ruler-height;
         view-lo: root.view-time-lo;
         view-hi: root.view-time-hi;
         zoom-x: root.nav-zoom;
         pan-x: root.nav-pan-x;
         current-time: root.current-time;
-        show-reference-time: root.audio-index >= 0;
+        show-reference-time: root.video-index >= 0;
         reference-time: root.actual-time;
         reference-time-color: root.actual-time-color;
         time-picked(time) => {
             root.outside-time = time;
-            root.has-outside-time = root.audio-index != root.focus-video-index
+            root.has-outside-time = root.video-index != root.focus-video-index
                 && root.duration > 0.0
                 && (time < 0.0 || time >= root.duration);
-            VideoCallbacks.seek-video(root.audio-index, time);
+            VideoCallbacks.seek-video(root.video-index, time);
         }
     }
 
     canvas := Rectangle {
-        x: 0px;
+        x: root.track-list-width;
         y: root.ruler-height;
-        width: parent.width;
+        width: parent.width - root.track-list-width - root.sidebar-width;
         height: parent.height - root.ruler-height;
         clip: true;
         background: Theme.data.animation-editor.canvas-background;
@@ -186,7 +217,7 @@ export component AudioWaveformArea inherits Rectangle {
 
         // 固定宽度驱动的持久槽位池。缩放选择预聚合峰值层，平移只改变首桶下标；
         // WaveformBar 本身不随原始波形长度或视图导航反复创建/销毁。
-        if root.audio-index >= 0 && root.audio-index < VideoState.audio-waveforms.length: Rectangle {
+        if root.has-waveform: Rectangle {
             width: 100%;
             height: 100%;
             for slot in root.waveform-slot-count(): WaveformBar {
@@ -233,6 +264,16 @@ export component AudioWaveformArea inherits Rectangle {
         }
     }
 
-    changed audio-index => { root.has-outside-time = false; }
+    AudioTrackSidebar {
+        x: root.width - root.sidebar-width;
+        y: 0px;
+        width: root.sidebar-width;
+        height: root.height;
+        open <=> root.sidebar-open;
+        tracks: root.tracks;
+        current-track: root.track-index;
+    }
+
+    changed video-index => { root.has-outside-time = false; }
     changed focus-video-index => { root.has-outside-time = false; }
 }

@@ -3,6 +3,7 @@ use crate::depsgraph::Tag;
 use crate::store::AppStore;
 use crate::store::state::{VideoSeekSession, VideoSeekTarget};
 use anyhow::{Context, Result};
+use gstreamer::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -54,8 +55,22 @@ impl AppStore {
                     return Ok(Vec::new());
                 };
                 session.muted = !session.muted;
-                gst_set_audio_muted(&session.pipeline, session.muted);
+                let muted = session.muted;
+                gst_set_audio_playback_muted(
+                    self.state()
+                        .audio_playbacks
+                        .get(index)
+                        .and_then(Option::as_ref),
+                    muted,
+                );
                 Ok(vec![Tag::VideoMuteChanged { index }])
+            }
+            MediaAction::Video(VideoAction::SelectAudioTrack {
+                video_index,
+                track_index,
+            }) => {
+                media_select_audio_track(self, video_index, track_index)?;
+                Ok(Vec::new())
             }
             MediaAction::Video(VideoAction::Select { index, modifier }) => {
                 if let Some(index) = index
@@ -166,8 +181,7 @@ impl AppStore {
                 }
                 let requested_time = timestamp as f64 / 1000.0;
                 let is_active = self.state().active_video() == Some(index);
-                let sync_timeline =
-                    is_active && media_active_video_drives_timeline(self);
+                let sync_timeline = is_active && media_active_video_drives_timeline(self);
                 if is_active {
                     // 波形 Area 可查看任意音轨；只有它正在显示焦点视频的音轨时，
                     // 点击标尺才同时移动动画域的全局播放头。暂停态保留用户请求值，
@@ -176,6 +190,14 @@ impl AppStore {
                 }
                 let session = &mut self.state_mut().video_sessions[index];
                 media_seek_video_session(session, requested_time);
+                let actual_time = session.current_time;
+                gst_seek_audio_playback(
+                    self.state()
+                        .audio_playbacks
+                        .get(index)
+                        .and_then(Option::as_ref),
+                    actual_time,
+                );
                 let mut tags = vec![Tag::VideoTimeChanged {
                     indices: vec![index],
                     // 非焦点音轨只刷新自身行和画面；焦点音轨播放中由实际位置
@@ -231,7 +253,13 @@ impl AppStore {
                     .flat_map(|drag| &drag.targets)
                 {
                     if target.was_playing {
-                        gst_set_audio_muted(&self.state().video_sessions[target.index].pipeline, true);
+                        gst_set_audio_playback_muted(
+                            self.state()
+                                .audio_playbacks
+                                .get(target.index)
+                                .and_then(Option::as_ref),
+                            true,
+                        );
                     }
                 }
                 let playback_changed = media_refresh_video_playing_state(self);
@@ -259,25 +287,36 @@ impl AppStore {
                 });
                 let indices = drag.targets.iter().map(|target| target.index).collect();
                 for target in drag.targets {
-                    let Some(session) = self.state_mut().video_sessions.get_mut(target.index)
-                    else {
+                    let Some(session) = self.state_mut().video_sessions.get_mut(target.index) else {
                         continue;
                     };
                     if !target.was_playing {
                         continue;
                     }
-                    if media_video_session_at_display_end(session) {
+                    let at_display_end = media_video_session_at_display_end(session);
+                    let current_time = session.current_time;
+                    let muted = session.muted;
+                    if at_display_end {
                         // 播放中拖到范围外等价于播放到结尾：末帧反向 seek 已把
                         // 管线稳定留在 Paused，这里只恢复用户静音设置，不能再切回
                         // Playing，否则会沿负速率 segment 倒放。
-                        gst_set_audio_muted(&session.pipeline, session.muted);
-                        continue;
+                    } else {
+                        // 先精确 seek 到拖拽点，再恢复视频播放。音频管线仍保持静音，
+                        // 直到下方同步 seek 完成后才恢复用户设置。
+                        gst_seek_pipeline_accurate(&session.pipeline, current_time.max(0.0));
+                        gst_set_session_state(session, gstreamer::State::Playing);
                     }
-                    // 先精确 seek 到拖拽点（此时音频 sink 仍 PAUSED，无声音）
-                    gst_seek_pipeline_accurate(&session.pipeline, session.current_time.max(0.0));
-                    gst_set_session_state(session, gstreamer::State::Playing);
-                    // 再解除静音：从拖拽点续播，不会再冒出停在原位的旧声音
-                    gst_set_audio_muted(&session.pipeline, session.muted);
+                    // 此处已不再持有 session 的可变借用，可以安全访问独立音频槽位。
+                    let audio = self
+                        .state()
+                        .audio_playbacks
+                        .get(target.index)
+                        .and_then(Option::as_ref);
+                    if !at_display_end {
+                        gst_seek_audio_playback(audio, current_time);
+                        gst_set_audio_playback_state(audio, gstreamer::State::Playing);
+                    }
+                    gst_set_audio_playback_muted(audio, muted);
                 }
                 let playback_changed = media_refresh_video_playing_state(self);
                 let mut tags = vec![Tag::VideoTimeChanged {
@@ -333,22 +372,78 @@ mod playback;
 mod waveform;
 
 use playback::*;
-use waveform::start_waveform_extraction;
 pub(crate) use playback::{
     gst_session_playing_position, media_active_video_drives_timeline,
     media_refresh_video_playing_state,
 };
+use waveform::{discover_audio_tracks, start_waveform_extractions};
+
+fn media_select_audio_track(
+    store: &mut AppStore,
+    video_index: usize,
+    track_index: usize,
+) -> Result<()> {
+    let Some(track) = store
+        .state()
+        .audio_tracks
+        .get(video_index)
+        .and_then(|tracks| tracks.get(track_index))
+        .cloned()
+    else {
+        anyhow::bail!("选择音轨越界: video={video_index}, track={track_index}");
+    };
+    let Some(session) = store.state().video_sessions.get(video_index) else {
+        anyhow::bail!("选择音轨的视频不存在: {video_index}");
+    };
+    let uri = session.uri.clone();
+    let time = session.current_time.max(0.0);
+    let playing = session.playing;
+    let muted = session.muted;
+    let (pipeline, volume) =
+        crate::render::video_sink::waveform::build_audio_playback(&uri, &track.stream_id)?;
+    let playback = crate::store::state::AudioPlayback { pipeline, volume };
+    gst_set_audio_playback_muted(Some(&playback), muted);
+    gst_seek_audio_playback(Some(&playback), time);
+    if playing {
+        gst_set_audio_playback_state(Some(&playback), gstreamer::State::Playing);
+    }
+
+    let old = store
+        .state_mut()
+        .audio_playbacks
+        .get_mut(video_index)
+        .ok_or_else(|| anyhow::anyhow!("音频播放槽位不存在: {video_index}"))?
+        .replace(playback);
+    if let Some(old) = old {
+        let _ = old.pipeline.set_state(gstreamer::State::Null);
+    }
+    store.state_mut().audio_track_indices[video_index] = Some(track_index);
+    log::info!(
+        "切换实时播放音轨: video={}, track={}, stream-id={}",
+        video_index,
+        track_index,
+        track.stream_id
+    );
+    Ok(())
+}
 
 /// 追加一个视频会话：搭建管线 + 连接 GPU + 自动播放，级联错开落点
 /// （相对当前选中视频，无选中则相对主视频）。
 fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<usize> {
     gst_initialize_once().context("GStreamer 初始化失败")?;
     let mut session = crate::render::video_sink::build_session(store, video_uri)?;
+    let audio_tracks = discover_audio_tracks(video_uri).unwrap_or_else(|error| {
+        log::warn!("发现媒体音轨失败 ({video_uri}): {error:#}");
+        Vec::new()
+    });
     let (x, y) = media_video_cascade_anchor(store);
     session.position_x = x;
     session.position_y = y;
     let is_first = store.state().video_sessions.is_empty();
     store.state_mut().video_sessions.push(session);
+    store.state_mut().audio_tracks.push(audio_tracks);
+    store.state_mut().audio_playbacks.push(None);
+    store.state_mut().audio_track_indices.push(None);
     if is_first {
         store.state_mut().main_video = Some(0);
     }
@@ -358,15 +453,11 @@ fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<u
         .state_mut()
         .waveform_cancellations
         .push(cancellation.clone());
-    start_waveform_extraction(
-        store,
-        video_uri,
-        index,
-        cancellation,
-    );
-    // 新追加的视频没有被自动选中，因此不应偷偷加入当前 transport；保持暂停海报。
-    if let Some(session) = store.state().video_sessions.get(index) {
-        gst_set_audio_muted(&session.pipeline, session.muted);
+    start_waveform_extractions(store, video_uri, index, cancellation);
+    if !store.state().audio_tracks[index].is_empty()
+        && let Err(error) = media_select_audio_track(store, index, 0)
+    {
+        log::warn!("初始化实时音轨失败: {error:#}");
     }
     Ok(index)
 }
@@ -384,6 +475,10 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
 
     gst_initialize_once().context("GStreamer 初始化失败")?;
     let mut new_session = crate::render::video_sink::build_session(store, uri)?;
+    let audio_tracks = discover_audio_tracks(uri).unwrap_or_else(|error| {
+        log::warn!("发现媒体音轨失败 ({uri}): {error:#}");
+        Vec::new()
+    });
     new_session.position_x = anchor.0;
     new_session.position_y = anchor.1;
     // 替换视频时保留原播放位置，但不能假设新视频具有相同的时长。
@@ -400,6 +495,18 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
         .expect("已在上方检查");
     let old = std::mem::replace(old, new_session);
     crate::render::video_sink::stop_session_parts(&old.pipeline, &old.sink_element, old.wgpu_sink);
+    if let Some(slot) = store.state_mut().audio_tracks.get_mut(index) {
+        *slot = audio_tracks;
+    }
+    if let Some(old) = store
+        .state_mut()
+        .audio_playbacks
+        .get_mut(index)
+        .and_then(Option::take)
+    {
+        let _ = old.pipeline.set_state(gstreamer::State::Null);
+    }
+    store.state_mut().audio_track_indices[index] = None;
     if let Some(old) = store.state().waveform_cancellations.get(index) {
         old.store(true, Ordering::Release);
     }
@@ -407,7 +514,12 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
     if let Some(slot) = store.state_mut().waveform_cancellations.get_mut(index) {
         *slot = cancellation.clone();
     }
-    start_waveform_extraction(store, uri, index, cancellation);
+    start_waveform_extractions(store, uri, index, cancellation);
+    if !store.state().audio_tracks[index].is_empty()
+        && let Err(error) = media_select_audio_track(store, index, 0)
+    {
+        log::warn!("替换媒体后初始化实时音轨失败: {error:#}");
+    }
     {
         let session = &mut store.state_mut().video_sessions[index];
         // 即使旧会话原来是暂停的，也必须把新管线定位到保留/钳制后的位置；
@@ -416,8 +528,6 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
         if session_was_playing {
             gst_set_session_state(session, gstreamer::State::Playing);
         }
-        // 替换后的会话继承显式静音状态；无需重新遍历并改写其它会话。
-        gst_set_audio_muted(&session.pipeline, session.muted);
     }
     Ok(())
 }
@@ -607,7 +717,6 @@ fn hit_top_rect(rects: &[VideoRect], x: f64, y: f64) -> Option<usize> {
         .find(|(_, rect)| rect.contains(x, y))
         .map(|(i, _)| i)
 }
-
 
 #[cfg(test)]
 mod tests;

@@ -38,6 +38,28 @@ export struct SlintAudioWaveform {
     levels: [SlintAudioWaveformLevel],
 }
 
+export struct SlintAudioTrack {
+    stream-id: string,
+    label: string,
+    language: string,
+    channels: int,
+    channel-layout: string,
+    channel-mask: string,
+    codec: string,
+    caps: string,
+    sample-rate: int,
+    bit-depth: int,
+    bitrate: int,
+    max-bitrate: int,
+    artist: string,
+    album: string,
+    comment: string,
+    description: string,
+    encoder: string,
+    encoded-by: string,
+    waveform: SlintAudioWaveform,
+}
+
 // 节点图类型：样式图（node_graph）与应用图（application_graph）
 export enum GraphType {
     style-graph,
@@ -169,6 +191,7 @@ export struct SlintVideoTimeBar {
     is-main: bool,
     // 是否显式静音该视频（视口用额外外框表示）
     muted: bool,
+    audio-tracks: [SlintAudioTrack],
 }
 
 // 视频会话在视口世界坐标中的位置（级联错开落点；非主视频可拖拽移动）

@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use slint::{Image, Model, VecModel};
 
-use crate::bridge::types::{SlintAudioWaveform, SlintVideoPos, SlintVideoTimeBar};
+use crate::bridge::types::{SlintAudioTrack, SlintVideoPos, SlintVideoTimeBar};
 
 #[derive(Default)]
 pub struct VideoUiState {
@@ -26,23 +26,19 @@ pub struct VideoUiState {
     pub positions: Rc<VecModel<SlintVideoPos>>,
     /// 每个会话的控制时间条（彩虹色 + 选中/主视频标识）
     pub time_bars: Rc<VecModel<SlintVideoTimeBar>>,
-    /// 每个会话解码后的音频峰值包络。
-    pub audio_waveforms: Rc<VecModel<SlintAudioWaveform>>,
+    /// 每个视频内部的音轨行模型；TimeBar.audio_tracks 引用对应模型。
+    pub audio_track_models: Vec<Rc<VecModel<SlintAudioTrack>>>,
     /// 波形的持久增量模型；`SlintAudioWaveform.amplitudes` 只引用这些模型。
     /// 后台任务按批次 push/set_row_data，不重复构造完整快照。
-    pub waveform_amplitudes: Vec<Rc<VecModel<f32>>>,
+    pub waveform_amplitudes: Vec<Vec<Rc<VecModel<f32>>>>,
     /// 与每个视频对应的持久多分辨率峰值层（2/5/10/20/50ms……）。
     /// 缩放只切换读取层级，不重新聚合或替换模型。
-    pub waveform_level_amplitudes: Vec<Vec<Rc<VecModel<f32>>>>,
+    pub waveform_level_amplitudes: Vec<Vec<Vec<Rc<VecModel<f32>>>>>,
 }
 
 /// 将后台波形批次原地写入基础模型，尽量把连续追加合并成一次 Slint
 /// `row_added` 通知。只有覆盖已有行的修订才需要逐行 `row_changed`。
-pub(crate) fn ui_apply_waveform_batch(
-    values: &VecModel<f32>,
-    start: usize,
-    amplitudes: &[f32],
-) {
+pub(crate) fn ui_apply_waveform_batch(values: &VecModel<f32>, start: usize, amplitudes: &[f32]) {
     if amplitudes.is_empty() {
         return;
     }
@@ -80,9 +76,8 @@ pub(crate) const fn waveform_level_duration_ms(level: usize) -> usize {
     multiplier * 10usize.pow((group + 1) as u32)
 }
 
-/// 按变更区间增量更新 1/2/5×10^k 峰值层。
-/// 基础桶只会从静音/较小峰值单调增大，因此每个变更基础桶直接更新其
-/// 所属粗粒度桶即可，无需重新扫描整个粗粒度时间段。
+/// 按变更区间增量更新 1/2/5×10^k 峰值层。每一层只遍历受影响的聚合桶，
+/// 而不是让每个基础桶都穿过全部 24 层；长音频批次因此保持近似线性成本。
 pub(crate) fn update_peak_pyramid(
     base: &VecModel<f32>,
     levels: &[Rc<VecModel<f32>>],
@@ -95,13 +90,20 @@ pub(crate) fn update_peak_pyramid(
     let end = start.saturating_add(changed_count).min(base.row_count());
     for (level_index, target) in levels.iter().enumerate() {
         let bucket_ms = waveform_level_duration_ms(level_index);
-        for base_index in start..end {
-            let peak = base.row_data(base_index).unwrap_or(0.0);
-            let bucket = base_index / bucket_ms;
-            let target_len = target.row_count();
-            if target_len <= bucket {
-                target.extend(std::iter::repeat_n(0.0, bucket + 1 - target_len));
-            }
+        let first_bucket = start / bucket_ms;
+        let last_bucket = end.saturating_sub(1) / bucket_ms;
+        if target.row_count() <= last_bucket {
+            target.extend(std::iter::repeat_n(
+                0.0,
+                last_bucket + 1 - target.row_count(),
+            ));
+        }
+        for bucket in first_bucket..=last_bucket {
+            let base_start = (bucket * bucket_ms).max(start);
+            let base_end = ((bucket + 1) * bucket_ms).min(end);
+            let peak = (base_start..base_end)
+                .filter_map(|row| base.row_data(row))
+                .fold(0.0f32, f32::max);
             if peak > target.row_data(bucket).unwrap_or(0.0) {
                 target.set_row_data(bucket, peak);
             }
@@ -147,9 +149,18 @@ mod tests {
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![0.0, 0.0, 0.25, 0.5]);
 
         ui_apply_waveform_batch(&values, 1, &[0.75, 0.8, 0.9]);
-        assert_eq!(
-            values.iter().collect::<Vec<_>>(),
-            vec![0.0, 0.75, 0.8, 0.9],
-        );
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![0.0, 0.75, 0.8, 0.9],);
+    }
+
+    #[test]
+    fn peak_pyramid_keeps_a_larger_peak_from_an_earlier_batch() {
+        let base = VecModel::from(vec![0.9]);
+        let levels = vec![Rc::new(VecModel::default())];
+        update_peak_pyramid(&base, &levels, 0, 1);
+
+        base.push(0.2);
+        update_peak_pyramid(&base, &levels, 1, 1);
+
+        assert_eq!(levels[0].iter().collect::<Vec<_>>(), vec![0.9]);
     }
 }

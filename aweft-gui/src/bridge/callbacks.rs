@@ -56,9 +56,6 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         vstate.set_video_heights(slint::ModelRc::from(s.ui_models.video.heights.clone()));
         vstate.set_video_positions(slint::ModelRc::from(s.ui_models.video.positions.clone()));
         vstate.set_time_bars(slint::ModelRc::from(s.ui_models.video.time_bars.clone()));
-        vstate.set_audio_waveforms(slint::ModelRc::from(
-            s.ui_models.video.audio_waveforms.clone(),
-        ));
     }
 
     {
@@ -67,28 +64,40 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         let mut ui_batch_count = 0usize;
         let mut ui_row_count = 0usize;
         instance.global::<VideoCallbacks>().on_waveform_progress(
-            move |index, start, duration, amplitudes| {
+            move |index, track_index, start, duration, amplitudes| {
                 let ui_batch_started_at = Instant::now();
-                if index < 0 {
+                if index < 0 || track_index < 0 {
                     return;
                 }
                 let index = index as usize;
+                let track_index = track_index as usize;
                 let start = start.max(0) as usize;
                 let store = s.borrow();
                 let video = &store.ui_models.video;
-                let Some(values) = video.waveform_amplitudes.get(index) else {
-                    log::warn!("丢弃越界波形结果: video-index={index}");
+                let Some(values) = video
+                    .waveform_amplitudes
+                    .get(index)
+                    .and_then(|tracks| tracks.get(track_index))
+                else {
+                    log::warn!("丢弃越界波形结果: video-index={index}, track-index={track_index}");
                     return;
                 };
                 ui_apply_waveform_batch(values, start, &amplitudes.iter().collect::<Vec<_>>());
                 // `amplitudes` 是本批新增/变更的后缀；不能传当前模型总行数，
                 // 否则音频越长，每批都会重复重算整段历史峰值金字塔。
-                update_waveform_levels(video, index, start, amplitudes.row_count());
-                if let Some(mut waveform) = video.audio_waveforms.row_data(index)
-                    && (waveform.duration - duration).abs() > f32::EPSILON
+                update_waveform_levels(
+                    video,
+                    index,
+                    track_index,
+                    start,
+                    amplitudes.row_count(),
+                );
+                if let Some(model) = video.audio_track_models.get(index)
+                    && let Some(mut track) = model.row_data(track_index)
+                    && (track.waveform.duration - duration).abs() > f32::EPSILON
                 {
-                    waveform.duration = duration;
-                    video.audio_waveforms.set_row_data(index, waveform);
+                    track.waveform.duration = duration;
+                    model.set_row_data(track_index, track);
                 }
                 ui_batch_count += 1;
                 ui_row_count += amplitudes.row_count();
@@ -616,14 +625,19 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
 fn update_waveform_levels(
     video: &crate::store::video::VideoUiState,
     index: usize,
+    track_index: usize,
     start: usize,
     changed_count: usize,
 ) {
-    let Some(levels) = video.waveform_level_amplitudes.get(index) else {
+    let Some(levels) = video
+        .waveform_level_amplitudes
+        .get(index)
+        .and_then(|tracks| tracks.get(track_index))
+    else {
         return;
     };
     crate::store::video::update_peak_pyramid(
-        &video.waveform_amplitudes[index],
+        &video.waveform_amplitudes[index][track_index],
         levels,
         start,
         changed_count,
@@ -676,9 +690,7 @@ fn handle_before_rendering(_instance: &MainWindow, store: &Rc<RefCell<AppStore>>
         .state()
         .video_playback_dirty
         .swap(false, std::sync::atomic::Ordering::AcqRel);
-    if playback_dirty
-        && crate::reducers::media::media_refresh_video_playing_state(&mut store_mut)
-    {
+    if playback_dirty && crate::reducers::media::media_refresh_video_playing_state(&mut store_mut) {
         crate::projections::ui_sync_video_playback_scalar(&store_mut);
     }
 }

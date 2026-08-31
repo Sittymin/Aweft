@@ -254,6 +254,16 @@ fn build_audio_branch(pipeline: &gstreamer::Pipeline) -> Option<Element> {
         .ok()?;
     pipeline.add_many([&queue, &convert, &volume, &sink]).ok()?;
     gstreamer::Element::link_many([&queue, &convert, &volume, &sink]).ok()?;
+    // 该分支是在 uridecodebin 已经进入父管线状态后动态加入的。
+    // gst_bin_add() 新加入的元素默认仍处于 NULL；如果不显式同步，
+    // queue/convert/sink 会停在 NULL，音频上游很快被反压填满，进而把
+    // 同一个 uridecodebin 上的视频分支也卡住（表现为播放约一个缓冲周期
+    // 后突然停止，而管线状态仍显示 Playing）。
+    for element in [&queue, &convert, &volume, &sink] {
+        if let Err(error) = element.sync_state_with_parent() {
+            log::warn!("同步动态音频分支状态失败（{}）: {error}", element.name());
+        }
+    }
     Some(queue)
 }
 

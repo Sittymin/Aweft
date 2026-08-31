@@ -10,6 +10,7 @@
 //  - 折叠：主体高度归零 + 不绘制（Slint 的 visible:false 单独用仍占布局空间，须配合高度归零）；
 //  - 头部可整条拖拽排序（pointer-event 区分点击与拖拽）。
 import { Theme } from "../theme/index.slint";
+import { ScrollView } from "std-widgets.slint";
 
 // 面板区块：头部略亮、主体略暗；头部点击折叠/展开、拖拽排序
 export component SidebarPanel inherits Rectangle {
@@ -155,10 +156,21 @@ export component Sidebar inherits Rectangle {
             height: 100%;
             background: root.bg;
 
-            VerticalLayout {
-                padding: 4px;
-                spacing: 4px;
-                @children
+            content-scroll := ScrollView {
+                width: 100%;
+                height: 100%;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+                content-width: self.visible-width;
+                content-height: max(self.visible-height, content.preferred-height);
+
+                content := VerticalLayout {
+                    width: content-scroll.visible-width;
+                    padding: 4px;
+                    padding-right: 8px;
+                    spacing: 4px;
+                    @children
+                }
             }
         }
 

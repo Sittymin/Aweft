@@ -34,7 +34,8 @@ export component SlintScrArea inherits Rectangle {
     // 是否正在编辑链（节点图 Area 状态；切换 Area 类型时复位）
     private property <bool> chain-editing: false;
     // This selection is intentionally local: several waveform Areas may inspect different tracks.
-    private property <int> waveform-audio-index: 0;
+    private property <int> waveform-video-index: 0;
+    private property <int> waveform-track-index: 0;
 
     x: container-x;
     y: container-y;
@@ -82,9 +83,10 @@ export component SlintScrArea inherits Rectangle {
         if area-type == SlintAreaType.audio-waveform: AudioWaveformToolbar {
             area-key: area-key;
             area-type: area-type;
-            audio-index: root.waveform-audio-index;
-            audio-selected(index) => {
-                root.waveform-audio-index = index;
+            video-index: root.waveform-video-index;
+            video-selected(index) => {
+                root.waveform-video-index = index;
+                root.waveform-track-index = 0;
             }
         }
 
@@ -162,7 +164,13 @@ export component SlintScrArea inherits Rectangle {
             window-y: root.container-y + self.y;
         }
         if area-type == SlintAreaType.audio-waveform: AudioWaveformArea {
-            audio-index: root.waveform-audio-index;
+            video-index: root.waveform-video-index;
+            tracks: root.waveform-video-index >= 0 && root.waveform-video-index < VideoState.time-bars.length
+                ? VideoState.time-bars[root.waveform-video-index].audio-tracks : [];
+            track-index: root.waveform-track-index;
+            track-selected(index) => {
+                root.waveform-track-index = index;
+            }
         }
     }
 

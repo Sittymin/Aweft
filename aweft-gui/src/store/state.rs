@@ -72,6 +72,35 @@ pub struct VideoSession {
     pub last_frame_seeked: bool,
 }
 
+/// 当前视频会话使用的实时音频播放分支。它与视频管线分离，目标音轨由
+/// 波形 Area 的 stream-id 选择；volume 是未来滤镜链之前的统一静音/增益入口。
+pub struct AudioPlayback {
+    pub pipeline: gstreamer::Pipeline,
+    pub volume: gstreamer::Element,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioTrackInfo {
+    pub stream_id: String,
+    pub label: String,
+    pub language: String,
+    pub channels: i32,
+    pub channel_layout: String,
+    pub channel_mask: String,
+    pub codec: String,
+    pub caps: String,
+    pub sample_rate: i32,
+    pub bit_depth: i32,
+    pub bitrate: i32,
+    pub max_bitrate: i32,
+    pub artist: String,
+    pub album: String,
+    pub comment: String,
+    pub description: String,
+    pub encoder: String,
+    pub encoded_by: String,
+}
+
 /// 一次视频时间条拖拽中的单个目标快照。
 #[derive(Debug, Clone, Copy)]
 pub struct VideoSeekTarget {
@@ -100,6 +129,11 @@ pub struct AppState {
     pub current_drag_operation: DragOperation,
     // 全部视频会话（多视频播放/导航的核心数据）
     pub video_sessions: Vec<VideoSession>,
+    // 与 video_sessions 同下标；每个元素是该媒体容器内发现的音频流。
+    pub audio_tracks: Vec<Vec<AudioTrackInfo>>,
+    // 与 video_sessions 同下标；当前实时播放的音轨分支（可按 Area 选择切换）。
+    pub audio_playbacks: Vec<Option<AudioPlayback>>,
+    pub audio_track_indices: Vec<Option<usize>>,
     // 与 video_sessions 同下标的波形后台任务取消令牌。媒体替换/teardown 时置位，
     // 防止迟到的后台结果覆盖新会话。
     pub waveform_cancellations: Vec<std::sync::Arc<AtomicBool>>,
@@ -132,6 +166,9 @@ impl AppState {
             initialized: false,
             current_drag_operation: DragOperation::None,
             video_sessions: Vec::new(),
+            audio_tracks: Vec::new(),
+            audio_playbacks: Vec::new(),
+            audio_track_indices: Vec::new(),
             waveform_cancellations: Vec::new(),
             main_video: None,
             selected_videos: Vec::new(),

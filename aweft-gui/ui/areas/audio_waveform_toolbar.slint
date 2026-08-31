@@ -1,4 +1,4 @@
-// Audio waveform header: the selected source belongs to this Area instance.
+// Audio waveform header: the selected video source belongs to this Area instance.
 import { SlintKey, SlintAreaType } from "../core/types.slint";
 import { AreaHeader } from "./area_header.slint";
 import { Mixins } from "../theme/mixins.slint";
@@ -8,10 +8,9 @@ import { VideoState } from "../bridge/state.slint";
 export component AudioWaveformToolbar inherits Rectangle {
     in property <SlintKey> area-key;
     in property <SlintAreaType> area-type;
-    in property <int> audio-index: 0;
-    callback audio-selected(index: int);
-    // 文件名属于 Header 的辅助信息，限制选择器宽度避免长路径撑满标题栏。
-    private property <length> audio-selector-max-width: min(320px, max(160px, root.width * 0.35));
+    in property <int> video-index: 0;
+    callback video-selected(index: int);
+    private property <length> video-selector-max-width: min(320px, max(160px, root.width * 0.35));
 
     AreaHeader {
         width: 100%;
@@ -20,7 +19,7 @@ export component AudioWaveformToolbar inherits Rectangle {
         area-type: root.area-type;
 
         selector := Rectangle {
-            width: min(selector-content.preferred-width, root.audio-selector-max-width);
+            width: min(selector-content.preferred-width, root.video-selector-max-width);
             height: Theme.data.area-type-switcher.height;
             background: Theme.data.area-type-switcher.background;
             border-radius: Theme.data.area-type-switcher.border-radius;
@@ -35,8 +34,8 @@ export component AudioWaveformToolbar inherits Rectangle {
                 width: 100%;
 
                 Text {
-                    text: root.audio-index >= 0 && root.audio-index < VideoState.time-bars.length
-                        ? VideoState.time-bars[root.audio-index].label + " - Audio"
+                    text: root.video-index >= 0 && root.video-index < VideoState.time-bars.length
+                        ? VideoState.time-bars[root.video-index].label + " - Audio"
                         : "No video audio";
                     horizontal-stretch: 1;
                     overflow: elide;
@@ -71,13 +70,13 @@ export component AudioWaveformToolbar inherits Rectangle {
 
                         for bar[i] in VideoState.time-bars: item := TouchArea {
                             clicked => {
-                                root.audio-selected(i);
+                                root.video-selected(i);
                                 popup.close();
                             }
                             Rectangle {
                                 min-height: Mixins.popup-item.min-height;
                                 border-radius: Mixins.popup-item.border-radius;
-                                background: i == root.audio-index
+                                background: i == root.video-index
                                     ? Mixins.popup-item.selected-background.mix(Mixins.popup-surface.background, 0.5)
                                     : (item.has-hover ? Mixins.popup-item.highlight-color : transparent);
                                 HorizontalLayout {

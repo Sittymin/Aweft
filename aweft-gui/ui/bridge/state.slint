@@ -3,7 +3,6 @@
 import {
     SlintSubtitleRow,
     SlintTimelineSubBlock,
-    SlintAudioWaveform,
     SlintVideoPos,
     SlintVideoTimeBar,
 } from "../core/types.slint";
@@ -39,8 +38,6 @@ export global VideoState {
     in property <[SlintVideoPos]> video-positions: [];
     // 每个会话的控制时间条（各面板 TimeRuler 叠加显示，点击选中/拖拽 seek）
     in property <[SlintVideoTimeBar]> time-bars: [];
-    // 每个会话的预量化音频峰值包络；行下标与 time-bars/video-frames 一致。
-    in property <[SlintAudioWaveform]> audio-waveforms: [];
     // 当前选中视频下标（-1 = 无选中）
     in property <int> selected-video: -1;
     // 主视频下标（唯一带矩形参考线）

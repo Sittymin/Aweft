@@ -97,6 +97,13 @@ DMA-BUF 错当成普通系统内存读取。
 音频波形使用独立解码管线，不消费播放会话的 appsink。所有媒体共享一个后台
 worker，任务串行解码，避免追加多个视频时同时全速占用 CPU/解码器。每个媒体项
 持有取消令牌；替换媒体和 teardown 会取消对应任务，旧任务不能覆盖新模型。
+波形管线禁止使用 `playbin`：它会把选流、playsink 和状态机封装在一起，不适合作为
+可插入音频处理的基础。当前管线显式分层为 `urisourcebin → parsebin → elementary
+stream-id 选择 → decodebin → queue → audioconvert → audioresample → capsfilter →
+appsink`；其中 `queue` 后的 raw-audio 链是未来插入滤镜、分析器或效果器的稳定边界。
+未选择的 elementary stream 接入异步 `fakesink`，确保解复用可以继续到 EOS，但不会启动
+不必要的视频或其它音轨解码器。Discoverer 与 parsebin 共用 stream-id，禁止用容器内
+序号或 playbin 的 current-audio 作为跨阶段选流依据。
 每个 AudioWaveform Area 可独立选择要查看的视频音轨；在波形标尺定位非焦点音轨时
 只更新该视频的时间条和画面，不改变全局动画时间。若所选音轨属于当前焦点视频，
 同一次定位还会更新动画域当前时间及所有 Area 的全局播放头；暂停态保留用户请求的
@@ -104,7 +111,7 @@ worker，任务串行解码，避免追加多个视频时同时全速占用 CPU/
 媒体范围之外；非焦点音轨的范围外请求时间由该 Area 本地保存。视频画面仍钳制到
 最近的有效帧，并以该视频的彩色竖线同时标出实际画面时间。
 
-波形以固定 1ms 时间桶累计峰值；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度。每个 AudioWaveform Area 按当前主刻度的十分之一选择 2ms、5ms、10ms、20ms、50ms……等预聚合层，因此一个主刻度固定约显示 10 个柱子；不同 Area 各自根据自己的视图缩放选择层级。appsink 每产生一个 PCM 缓冲区就立即提交发生变化的区间，不使用固定轮询等待；UI 保留持久的
+波形以固定 1ms 时间桶累计峰值；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度。每个 AudioWaveform Area 按当前主刻度的十分之一选择 2ms、5ms、10ms、20ms、50ms……等预聚合层，因此一个主刻度固定约显示 10 个柱子；不同 Area 各自根据自己的视图缩放选择层级。appsink 连续解码并将约四秒音频对应的基础桶合并为一个 UI 批次；批次异步投递，worker 不等待 Area 的可见组件完成求值，因此切换 Area 不会暂停后台解码。UI 保留持久的
 `VecModel<f32>`，通过 `set_row_data`/`push` 原地更新，不按批次克隆完整振幅数组或
 重建嵌套模型。
 

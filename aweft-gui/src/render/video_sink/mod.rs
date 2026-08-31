@@ -112,9 +112,7 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
 
 /// 查询媒体管线已发布的总时长（秒）。暂停态预滚动完成前可能暂时不可用，
 /// 调用方应在首个 preroll/sample 到达后重试，而不是把缺失值固化为 0。
-pub(crate) fn gst_query_pipeline_duration_secs(
-    pipeline: &gstreamer::Pipeline,
-) -> Option<f64> {
+pub(crate) fn gst_query_pipeline_duration_secs(pipeline: &gstreamer::Pipeline) -> Option<f64> {
     let duration = pipeline.query_duration::<gstreamer::ClockTime>()?;
     let secs = duration.nseconds() as f64 / 1_000_000_000.0;
     (secs.is_finite() && secs > 0.0).then_some(secs)
@@ -211,6 +209,14 @@ pub(crate) fn teardown(store: &mut AppStore) {
         cancellation.store(true, std::sync::atomic::Ordering::Release);
     }
     let sessions = std::mem::take(&mut store.state_mut().video_sessions);
+    let audio_playbacks = std::mem::take(&mut store.state_mut().audio_playbacks);
+    store.state_mut().audio_track_indices.clear();
+    store.state_mut().audio_tracks.clear();
+    for playback in audio_playbacks.into_iter().flatten() {
+        if let Err(error) = playback.pipeline.set_state(gstreamer::State::Null) {
+            log::warn!("停止独立音频管线失败: {error}");
+        }
+    }
     for session in sessions {
         stop_session_parts(&session.pipeline, &session.sink_element, session.wgpu_sink);
     }

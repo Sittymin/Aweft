@@ -24,6 +24,7 @@ log = "0.4.33"
 env_logger = "0.11.11"
 gstreamer = { version = "0.25", package = "gstreamer" }
 gstreamer-app = { version = "0.25", package = "gstreamer-app", features = ["v1_24"] }
+gstreamer-pbutils = { version = "0.25", package = "gstreamer-pbutils", features = ["v1_24"] }
 gstreamer-video = { version = "0.25", package = "gstreamer-video", features = ["v1_24"] }
 gstreamer-allocators = { version = "0.25", package = "gstreamer-allocators" }
 libc = "0.2"
