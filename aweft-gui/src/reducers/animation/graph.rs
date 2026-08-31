@@ -137,12 +137,15 @@ impl crate::store::AppStore {
                 ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
                 SetCurrentTime { time } => {
                     ce.current_time = time as f64;
+                    let sync_timeline =
+                        crate::reducers::media::media_active_video_drives_timeline(self);
                     // 编辑器是时间权威：拖动播放头同步驱动当前选中（无则主）视频
                     // 到同一时刻（无视频时忽略；播放中 seek 后位置查询自然从新位置继续）
                     let mut tags = vec![Tag::GraphScalarsChanged];
                     if let Some(index) = self.seek_target(time as f64) {
                         tags.push(Tag::VideoTimeChanged {
                             indices: vec![index],
+                            sync_timeline,
                         });
                     }
                     tags

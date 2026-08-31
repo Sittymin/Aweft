@@ -344,7 +344,12 @@ pub enum Tag {
     /// 单个视频静音状态变化。
     VideoMuteChanged { index: usize },
     /// 视频会话时间变化（seek 或非实时状态同步）。
-    VideoTimeChanged { indices: Vec<usize> },
+    /// sync_timeline=false 表示用户正在主动 Seek：仅刷新视频实际时间，不以钳制后的
+    /// 会话时间覆盖动画时间轴；播放时钟仍通过实时出口以实际位置接管时间轴。
+    VideoTimeChanged {
+        indices: Vec<usize>,
+        sync_timeline: bool,
+    },
     /// 全局视频 transport 播放状态变化。
     VideoPlaybackChanged,
 }

@@ -1,8 +1,11 @@
 # 视频播放
 
 视频播放位于 `aweft-gui/src/render/video_sink/`。普通媒体 Action 由
-`reducers/media.rs` 编排管线并返回 Video Tag，经 `projections/video.rs` 更新
-派生 UI 模型；渲染层负责取帧、颜色转换和向 Slint 提交图像。播放中的时间由
+`reducers/media.rs` 编排管线并返回 Video Tag；`reducers/media/playback.rs` 集中
+GStreamer transport、seek、EOS 与播放时钟查询，`reducers/media/waveform.rs` 集中
+后台波形任务，`reducers/media/tests.rs` 保留媒体回归测试。普通状态变更仍经
+`projections/video.rs` 更新派生 UI 模型；帧、播放时钟和波形批次遵循下文的实时例外。
+渲染层负责取帧、颜色转换和向 Slint 提交图像。播放中的时间由
 视频管线位置驱动动画标量。暂停时不依赖渲染轮询推进时间：播放头/时间条的主动 seek
 由 reducer 写入会话并返回 `VideoTimeChanged`，暂停态预览帧由 preroll 回调交付；
 播放态才由渲染回调按帧读取管线位置并做实时增量同步。
@@ -70,6 +73,12 @@ DMA-BUF 错当成普通系统内存读取。
   域当前时间——显示时间的框框/播放头跟随当前选中视频，而不是始终在主视频。
   时间线画布仅以该活跃视频的彩虹色加深后半透明覆盖其时长范围之外的区域；不叠加
   其它视频的范围。媒体总时长在管线发布后写入同一时间条行，未发布时不显示遮罩。
+  暂停态从 UI seek 到视频范围外时，动画时间轴保留用户请求值，视频会话与画面钳制
+  到最近的可显示帧并由 preroll 刷新画面；越过结尾时从媒体尾边界执行反向精确
+  segment seek，以首个 preroll 取得真正的最后一帧，避免正向 seek 在最后一帧 PTS
+  之后直接进入 EOS。该路径固定先暂停；再次播放固定先建立正向 segment 再进入
+  Playing，避免状态转换竞态导致不刷新或短暂倒放。播放态则始终由当前焦点视频自身的实际
+  播放位置接管并传播回时间轴 UI，不受其它视频是否播放影响。
 - **播放/暂停**：时间线 Header 中区的播放/暂停按钮是全局 transport；
   `VideoAction::Play/Pause/TogglePlayback` 同时作用于全部视频会话，各会话从各自当前
   位置继续。选择只决定 seek/时间显示和唯一音频 owner（无选中时为主视频），避免

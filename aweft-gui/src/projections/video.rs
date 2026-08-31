@@ -56,18 +56,28 @@ pub fn ui_project_video_mute(store: &mut AppStore, tags: &[Tag]) {
     }
 }
 
-/// seek/活跃视频变化：局部刷新时间条，并把活跃视频时间写入动画编辑数据层。
+/// seek/活跃视频变化：局部刷新时间条；非用户主动 Seek 时把活跃视频实际时间写入
+/// 动画编辑数据层。用户主动 Seek 可把时间轴留在视频范围外，视频行只显示钳制后的
+/// 实际画面时间；播放后实时视频时钟仍会重新接管时间轴。
 /// GraphScalars operation 显式依赖本 operation，负责随后同步 Slint 动画标量。
 pub fn ui_project_video_time(store: &mut AppStore, tags: &[Tag]) {
+    let mut sync_timeline = false;
     for tag in tags {
-        let Tag::VideoTimeChanged { indices } = tag else {
+        let Tag::VideoTimeChanged {
+            indices,
+            sync_timeline: tag_sync_timeline,
+        } = tag
+        else {
             continue;
         };
+        sync_timeline |= tag_sync_timeline;
         for &index in indices {
             ui_update_video_time_bar(store, index);
         }
     }
-    ui_project_active_video_time(store);
+    if sync_timeline {
+        ui_project_active_video_time(store);
+    }
 }
 
 /// transport 状态变化：只同步 Slint 播放标量。
@@ -124,6 +134,9 @@ pub(crate) fn ui_update_video_time_bar_duration(
 /// 普通 seek 由 VideoTime Tag 触发同一逻辑；渲染回调按帧调用本出口，避免
 /// 每帧创建 Action/Tag。
 pub(crate) fn ui_sync_active_video_time_realtime(store: &mut AppStore) {
+    if !crate::reducers::media::media_active_video_drives_timeline(store) {
+        return;
+    }
     let Some(active) = store.state().active_video() else {
         return;
     };

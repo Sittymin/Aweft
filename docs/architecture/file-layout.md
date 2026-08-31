@@ -28,7 +28,12 @@ src/
 │       ├── graph.rs     # 曲线/摄影表 6 ops（GraphStructure/Keyframes/Selection/DragEnded/Channel/Scalars）
 │       └── nla.rs       # NLA 6 ops（NlaStructure/Selection/StripStructure/StripPosition/TrackProperties/TrackAdded）
 ├── reducers/            # 按域 reducer（**唯一改动权威状态的入口**，改 `AppState`/model + 返回精确 tag，每域一文件/目录）
-│   ├── area.rs / drag.rs / media.rs / screen.rs   # 纯函数 handle_*（只改 AppState）+ dispatch 包装
+│   ├── area.rs / drag.rs / screen.rs   # 纯函数 handle_*（只改 AppState）+ dispatch 包装
+│   ├── media.rs         # Media Action 编排、会话生命周期、选择与主视频
+│   ├── media/           # 媒体 reducer 的职责子模块（不直接写 Slint 派生模型）
+│   │   ├── playback.rs  # GStreamer transport / seek / EOS / 播放时钟查询
+│   │   ├── waveform.rs  # 单 worker 波形任务与回调投递
+│   │   └── tests.rs     # 媒体 reducer 回归测试
 │   ├── sequence.rs      # Sequence 域（impl AppStore，改 Sequence + Selection）
 │   ├── node_graph.rs    # NodeGraph 域
 │   └── animation/       # 动画域统一分发（DataId::Animation 单一，Graph/NLA 子路由）
