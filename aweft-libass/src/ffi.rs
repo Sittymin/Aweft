@@ -13,6 +13,7 @@ use std::os::raw::{c_char, c_int};
 pub use self::raw::{
     ASS_DefaultFontProvider,
     ASS_Event,
+    ASS_Feature,
     ASS_Image,
     // 基础类型
     ASS_Library,
@@ -26,8 +27,9 @@ pub use self::raw::{
 
     ass_configure_prune,
     ass_flush_events,
-
     ass_free,
+
+    ass_free_event,
 
     ass_free_track,
     // 字体函数
@@ -41,13 +43,16 @@ pub use self::raw::{
     ass_malloc,
     // 轨道函数
     ass_new_track,
-    ass_process_data,
-    ass_process_force_style,
+    ass_process_chunk,
+    ass_process_codec_private,
     ass_prune_events,
+    ass_read_memory,
     ass_render_frame,
     ass_renderer_done,
     // 渲染器函数
     ass_renderer_init,
+    ass_set_cache_limits,
+    ass_set_check_readorder,
     ass_set_extract_fonts,
     ass_set_font_scale,
     ass_set_fonts,
@@ -64,9 +69,9 @@ pub use self::raw::{
 
     ass_set_shaper,
     ass_set_storage_size,
-    ass_set_style_overrides,
     ass_set_use_margins,
     ass_style,
+    ass_track_set_feature,
     // 包装器函数
     clear_message_callback,
     set_rust_message_callback,

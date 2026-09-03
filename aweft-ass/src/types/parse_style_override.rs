@@ -2,7 +2,8 @@ use super::{
     tags::{AnimatedStyleTag, BlurEdgesTypes, KaraokeKind, LibassEncoding, StyleTag},
     *,
 };
-use aweft_libass::types::{Alignment, AssColorRgb};
+use aweft_libass::color::AssColorRgb;
+use aweft_libass::types::Alignment;
 use chrono::TimeDelta;
 use log::warn;
 use nom::{

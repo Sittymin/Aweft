@@ -1,4 +1,5 @@
-use aweft_libass::types::{Alignment, AssColorRgb};
+use aweft_libass::color::AssColorRgb;
+use aweft_libass::types::Alignment;
 
 use super::{drawing::DrawingCommand, BoldType, PointF64, PointI32, WrapStyle};
 
