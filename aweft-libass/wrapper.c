@@ -6,7 +6,6 @@
 // 外部声明：这个函数在 Rust 端实现
 extern void rust_handle_message_callback(int level, const char *message, void *data);
 
-// Trampoline 函数：接收 libass 的 va_list 回调并转换为字符串传递给 Rust
 void rust_message_callback_trampoline(int level, const char *fmt, va_list args, void *data) {
     va_list args_copy;
     va_copy(args_copy, args);

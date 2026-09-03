@@ -59,8 +59,9 @@
           libtool
           nasm
 
-          # bindgen
-          libclang.lib
+          # bindgen + clangd fallback compiler
+          llvmPackages.clang
+          llvmPackages.clang-tools
 
           # gStreamer dependencies
           glib
@@ -74,17 +75,43 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = buildToolsAndDevLibs ++ [ rustToolchain ];
+          nativeBuildInputs = buildToolsAndDevLibs ++ [
+            rustToolchain
+            pkgs.rustPlatform.bindgenHook
+          ];
 
           # buildInputs 包含了所有最终程序需要链接的“零件”
-          buildInputs = libassRuntimeDeps ++ slintRuntimeDeps;
+          buildInputs = libassRuntimeDeps ++ slintRuntimeDeps ++ [ pkgs.glibc.dev ];
 
           # 环境变量可以暂时保留，以防万一
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (libassRuntimeDeps ++ slintRuntimeDeps);
           # 让 clang 找到库
-          LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
-          # 让 bindgen 调用的 libclang 找到 C 标准库头文件 (Nix 下 /usr/include 不存在)
-          BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.glibc.dev}/include";
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+          # vendored libass headers for clangd — generated at runtime to avoid
+          # Nix pure-eval filtering of git submodules (meson fs.copyfile pattern).
+          shellHook = ''
+            vendored_inc="$TMPDIR/libass-vendored-$$/include"
+            if [ -d "$PWD/aweft-libass/third_party/libass/libass" ]; then
+              mkdir -p "$vendored_inc/ass"
+              ln -sf "$PWD/aweft-libass/third_party/libass/libass/ass.h" "$vendored_inc/ass/ass.h"
+              ln -sf "$PWD/aweft-libass/third_party/libass/libass/ass_types.h" "$vendored_inc/ass/ass_types.h"
+              export C_INCLUDE_PATH="$vendored_inc''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+              export CPLUS_INCLUDE_PATH="$vendored_inc''${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+            fi
+            # Provide explicit compile flags for clangd fallback 
+            # ( ensures vendored headers are found even when compile_commands.json is absent).
+            # This file is gitignored and regenerated on each shell entry.
+            if [ -n "''${NIX_CFLAGS_COMPILE:-}" ]; then
+              mkdir -p "$PWD/aweft-libass"
+              {
+                echo "-I$vendored_inc"
+                for flag in $NIX_CFLAGS_COMPILE; do
+                  printf "%s\n" "$flag"
+                done
+              } > "$PWD/aweft-libass/compile_flags.txt"
+            fi
+          '';
 
           SLINT_BACKEND = "winit-femtovg-wgpu";
           # 实时更新

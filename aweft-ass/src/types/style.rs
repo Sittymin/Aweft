@@ -1,6 +1,7 @@
 use crate::error::{BorderStyleParseError, ParseError, Result, StyleFieldParseError};
 use crate::types::event::{Event, Events};
-use aweft_libass::types::{Alignment, AssColorRgba};
+use aweft_libass::color::AssColorRgba;
+use aweft_libass::types::Alignment;
 use log::warn;
 use std::collections::HashMap;
 use std::error::Error;

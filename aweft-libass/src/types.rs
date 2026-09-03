@@ -1,122 +1,10 @@
 use crate::error::{AlignmentParseError, Result};
 use crate::ffi;
 use bitflags::bitflags;
-use palette::{Srgb, Srgba, WithAlpha};
 use std::ffi::CString;
 use std::fmt;
 use std::fmt::Display;
-use std::ops::{Deref, DerefMut};
-use std::slice;
 use std::str::FromStr;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AssColorRgb(pub Srgb<u8>);
-
-impl Deref for AssColorRgb {
-    type Target = Srgb<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for AssColorRgb {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl AssColorRgb {
-    pub const fn new(red: u8, green: u8, blue: u8) -> Self {
-        Self(Srgb::new(red, green, blue))
-    }
-
-    pub fn with_alpha(self, alpha: u8) -> AssColorRgba {
-        // NOTE: 避免调用自己
-        AssColorRgba(self.0.with_alpha(alpha))
-    }
-    pub fn to_ass_override_u32(&self) -> u32 {
-        ((self.blue as u32) << 16) | ((self.green as u32) << 8) | self.red as u32
-    }
-    // ASS 的覆盖规范是 &HBBGGRR
-    pub fn from_ass_override_u32(color: u32) -> Self {
-        Self::new(
-            (color & 0xFF) as u8,
-            ((color >> 8) & 0xFF) as u8,
-            ((color >> 16) & 0xFF) as u8,
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AssColorRgba(pub Srgba<u8>);
-
-impl Deref for AssColorRgba {
-    type Target = Srgba<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for AssColorRgba {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl From<AssColorRgba> for Srgba<u8> {
-    fn from(color: AssColorRgba) -> Self {
-        color.0
-    }
-}
-
-impl AssColorRgba {
-    pub fn new(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
-        Self(Srgba::new(red, green, blue, alpha))
-    }
-
-    // 转换成归一化的 f32
-    pub fn to_f32_array(&self) -> [f32; 4] {
-        self.into_format::<f32, f32>().into()
-    }
-
-    // WARN: libass 颜色表示为 RGBA 的 u32 当中的 A 是**透明度** (转换为不透明度)
-    pub fn to_libass_u32(&self) -> u32 {
-        ((self.red as u32) << 24)
-            | ((self.green as u32) << 16)
-            | ((self.blue as u32) << 8)
-            // WARN: 将不透明度转换为 libass 透明度
-            | (255u8.saturating_sub(self.alpha) as u32)
-    }
-
-    // WARN: 从 libass 的 RGBA 格式解析 (A 是**透明度**)
-    pub fn from_libass_u32(color: u32) -> Self {
-        Self::new(
-            ((color >> 24) & 0xFF) as u8,
-            ((color >> 16) & 0xFF) as u8,
-            ((color >> 8) & 0xFF) as u8,
-            // WARN: 将 libass 的透明度转换为不透明度
-            255u8.saturating_sub((color & 0xFF) as u8),
-        )
-    }
-    pub fn to_ass_style_u32(&self) -> u32 {
-        // WARN: 将不透明度转换为 ASS 规范的透明度
-        ((255u8.saturating_sub(self.alpha) as u32) << 24)
-            | ((self.blue as u32) << 16)
-            | ((self.green as u32) << 8)
-            | self.red as u32
-    }
-    // ASS 的样式规范是 &HAABBGGRR (A 是透明度)
-    pub fn from_ass_style_u32(color: u32) -> Self {
-        Self::new(
-            (color & 0xFF) as u8,
-            ((color >> 8) & 0xFF) as u8,
-            ((color >> 16) & 0xFF) as u8,
-            // WARN: 将 ASS 规范的透明度转换为不透明度
-            255u8.saturating_sub(((color >> 24) & 0xFF) as u8),
-        )
-    }
-}
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,94 +129,207 @@ impl Effect {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ImageType {
-    Character = 0,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ShapingLevel {
+    Simple = 0,
+    Complex = 1,
+}
+impl TryFrom<u32> for ShapingLevel {
+    type Error = ();
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ShapingLevel::Simple),
+            1 => Ok(ShapingLevel::Complex),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum HintingType {
+    None = 0,
+    Light = 1,
+    Normal = 2,
+    Native = 3,
+}
+impl TryFrom<u32> for HintingType {
+    type Error = ();
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(HintingType::None),
+            1 => Ok(HintingType::Light),
+            2 => Ok(HintingType::Normal),
+            3 => Ok(HintingType::Native),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum DefaultFontProvider {
+    None = 0,
+    AutoDetect = 1,
+    CoreText,
+    FontConfig,
+    DirectWrite,
+}
+impl From<u32> for DefaultFontProvider {
+    fn from(provider: u32) -> Self {
+        match provider {
+            0 => DefaultFontProvider::None,
+            1 => DefaultFontProvider::AutoDetect,
+            2 => DefaultFontProvider::CoreText,
+            3 => DefaultFontProvider::FontConfig,
+            4 => DefaultFontProvider::DirectWrite,
+            _ => DefaultFontProvider::None,
+        }
+    }
+}
+
+/// Optional libass track features. Configure before the first render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackFeature {
+    IncompatibleExtensions,
+    BidiBrackets,
+    WholeTextLayout,
+    WrapUnicode,
+}
+
+impl TrackFeature {
+    pub(crate) fn to_raw(self) -> ffi::ASS_Feature {
+        // bindgen emits ASS_Feature as its underlying integer type; enum values
+        // are part of libass's stable ABI and start at zero.
+        match self {
+            Self::IncompatibleExtensions => 0,
+            Self::BidiBrackets => 1,
+            Self::WholeTextLayout => 2,
+            Self::WrapUnicode => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum TrackType {
+    Unknown = 0,
+    Ass = 1,
+    Ssa = 2,
+}
+
+/// Style border rendering mode (ASS `BorderStyle` field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum BorderStyle {
+    /// Outline + drop shadow; the default in most scripts.
     Outline = 1,
-    Shadow = 2,
+    /// Opaque box behind the text.
+    OpaqueBox = 3,
 }
 
-pub struct Image<'a> {
-    ptr: *const ffi::ASS_Image,
-    _phantom: std::marker::PhantomData<&'a ffi::ASS_Image>,
+impl BorderStyle {
+    pub(crate) fn to_raw(self) -> i32 {
+        self as i32
+    }
 }
 
-impl<'a> Image<'a> {
-    fn new(ptr: *const ffi::ASS_Image) -> Self {
-        Self {
-            ptr,
-            _phantom: std::marker::PhantomData,
-        }
-    }
+impl TryFrom<i32> for BorderStyle {
+    type Error = ();
 
-    pub fn width(&self) -> i32 {
-        unsafe { (*self.ptr).w }
-    }
-
-    pub fn height(&self) -> i32 {
-        unsafe { (*self.ptr).h }
-    }
-
-    pub fn stride(&self) -> i32 {
-        unsafe { (*self.ptr).stride }
-    }
-
-    pub fn dst_x(&self) -> i32 {
-        unsafe { (*self.ptr).dst_x }
-    }
-
-    pub fn dst_y(&self) -> i32 {
-        unsafe { (*self.ptr).dst_y }
-    }
-
-    pub fn color(&self) -> AssColorRgba {
-        unsafe { AssColorRgba::from_libass_u32((*self.ptr).color) }
-    }
-
-    pub fn image_type(&self) -> ImageType {
-        unsafe {
-            match (*self.ptr).type_ {
-                0 => ImageType::Character,
-                1 => ImageType::Outline,
-                2 => ImageType::Shadow,
-                _ => ImageType::Character, // 默认值
-            }
-        }
-    }
-
-    pub fn bitmap(&self) -> &[u8] {
-        unsafe {
-            if (*self.ptr).bitmap.is_null() || (*self.ptr).w <= 0 || (*self.ptr).h <= 0 {
-                return &[];
-            }
-            let size = ((*self.ptr).stride * ((*self.ptr).h - 1) + (*self.ptr).w) as usize;
-            slice::from_raw_parts((*self.ptr).bitmap, size)
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            1 => Ok(BorderStyle::Outline),
+            3 => Ok(BorderStyle::OpaqueBox),
+            _ => Err(()),
         }
     }
 }
 
-pub struct ImageIterator {
-    current: *const ffi::ASS_Image,
+/// Text justification independent of event alignment (ASS `Justify` field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum Justify {
+    Auto = 0,
+    Left = 1,
+    Center = 2,
+    Right = 3,
 }
 
-impl ImageIterator {
-    pub(crate) fn new(first: *const ffi::ASS_Image) -> Self {
-        Self { current: first }
+impl Justify {
+    pub(crate) fn to_raw(self) -> i32 {
+        self as i32
     }
 }
 
-impl Iterator for ImageIterator {
-    type Item = Image<'static>;
+impl TryFrom<i32> for Justify {
+    type Error = ();
 
-    fn next(&mut self) -> Option<Self::Item> {
-        unsafe {
-            if self.current.is_null() {
-                return None;
-            }
-
-            let image = Image::new(self.current);
-            self.current = (*self.current).next;
-            Some(image)
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Justify::Auto),
+            1 => Ok(Justify::Left),
+            2 => Ok(Justify::Center),
+            3 => Ok(Justify::Right),
+            _ => Err(()),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderChange {
+    None,
+    Position,
+    Content,
+    Unknown(i32),
+}
+
+impl RenderChange {
+    pub(crate) fn from_raw(value: i32) -> Self {
+        match value {
+            0 => Self::None,
+            1 => Self::Position,
+            2 => Self::Content,
+            n => Self::Unknown(n),
+        }
+    }
+    pub fn is_changed(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[repr(C)]
+    pub struct OverrideBits: u32 {
+        /// 无选择性覆盖，仅保留传统 font_scale。
+        const DEFAULT = 0;
+        /// 对话事件：应用 selective style（= FONT_NAME|FONT_SIZE_FIELDS|COLORS|BORDER|ATTRIBUTES）。
+        const STYLE = 1 << 0;
+        /// font_scale 仅作用于对话事件。
+        const SELECTIVE_FONT_SCALE = 1 << 1;
+        /// 覆盖 FontSize/Spacing/ScaleX/ScaleY。
+        const FONT_SIZE_FIELDS = 1 << 2;
+        /// 覆盖 FontName。
+        const FONT_NAME = 1 << 3;
+        /// 覆盖 Primary/Secondary/Outline/BackColour。
+        const COLORS = 1 << 4;
+        /// 覆盖 Bold/Italic/Underline/StrikeOut。
+        const ATTRIBUTES = 1 << 5;
+        /// 覆盖 BorderStyle/Outline/Shadow。
+        const BORDER = 1 << 6;
+        /// 覆盖 Alignment。
+        const ALIGNMENT = 1 << 7;
+        /// 覆盖 MarginL/MarginR/MarginV。
+        const MARGINS = 1 << 8;
+        /// 无条件替换全部样式字段。
+        const FULL_STYLE = 1 << 9;
+        /// 覆盖 Justify。
+        const JUSTIFY = 1 << 10;
+        /// 覆盖 Blur。
+        const BLUR = 1 << 11;
     }
 }

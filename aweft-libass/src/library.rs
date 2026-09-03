@@ -1,6 +1,6 @@
 use crate::error::{LibassError, Result};
 use crate::ffi;
-use crate::renderer::DefaultFontProvider;
+use crate::types::DefaultFontProvider;
 use libc::{c_char, c_int, c_void};
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -40,7 +40,7 @@ impl From<i32> for MessageLevel {
 pub type MessageCallback = dyn Fn(MessageLevel, &str) + Send + Sync;
 
 // 全局回调存储：使用库指针作为键来存储回调
-static GLOBAL_CALLBACKS: LazyLock<Mutex<HashMap<usize, Arc<MessageCallback>>>> =
+static MESSAGE_CALLBACKS: LazyLock<Mutex<HashMap<usize, Arc<MessageCallback>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 从 C 端调用的 Rust 函数（通过 trampoline）
@@ -62,10 +62,10 @@ pub extern "C" fn rust_handle_message_callback(
         }
     };
 
-    // data 是库指针，用于查找对应的回调
+    // data 是 ASS_Library 指针，用于查找对应的回调
     let library_ptr = data as usize;
 
-    if let Ok(callbacks) = GLOBAL_CALLBACKS.lock() {
+    if let Ok(callbacks) = MESSAGE_CALLBACKS.lock() {
         if let Some(callback) = callbacks.get(&library_ptr) {
             callback(level, message_str);
         }
@@ -101,7 +101,7 @@ impl Library {
         Ok(())
     }
 
-    pub fn set_extract_fonts(&mut self, extract: bool) {
+    pub(crate) fn set_extract_fonts(&self, extract: bool) {
         unsafe {
             ffi::ass_set_extract_fonts(self.ptr, if extract { 1 } else { 0 });
         }
@@ -143,9 +143,11 @@ impl Library {
 
         // 存储回调到全局映射中
         {
-            let mut callbacks = GLOBAL_CALLBACKS.lock().map_err(|_| LibassError::Internal {
-                context: "无法获取回调锁".to_string(),
-            })?;
+            let mut callbacks = MESSAGE_CALLBACKS
+                .lock()
+                .map_err(|_| LibassError::Internal {
+                    context: "无法获取回调锁".to_string(),
+                })?;
             callbacks.insert(library_ptr, callback_arc);
         }
 
@@ -163,9 +165,11 @@ impl Library {
 
         // 从全局映射中移除回调
         {
-            let mut callbacks = GLOBAL_CALLBACKS.lock().map_err(|_| LibassError::Internal {
-                context: "无法获取回调锁".to_string(),
-            })?;
+            let mut callbacks = MESSAGE_CALLBACKS
+                .lock()
+                .map_err(|_| LibassError::Internal {
+                    context: "无法获取回调锁".to_string(),
+                })?;
             callbacks.remove(&library_ptr);
         }
 

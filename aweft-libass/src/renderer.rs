@@ -1,77 +1,17 @@
 use crate::error::{LibassError, Result};
 use crate::ffi;
+use crate::image::Image;
 use crate::library::Library;
 use crate::track::Track;
-use crate::types::ImageIterator;
-use bitflags::bitflags;
+use crate::types::{DefaultFontProvider, HintingType, OverrideBits, RenderChange, ShapingLevel};
 use libc::{c_char, c_double, c_int};
 use std::ffi::{CStr, CString};
-use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum ShapingLevel {
-    Simple = 0,
-    Complex = 1,
-}
-impl TryFrom<u32> for ShapingLevel {
-    type Error = ();
-
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ShapingLevel::Simple),
-            1 => Ok(ShapingLevel::Complex),
-            _ => Err(()),
-        }
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum HintingType {
-    None = 0,
-    Light = 1,
-    Normal = 2,
-    Native = 3,
-}
-impl TryFrom<u32> for HintingType {
-    type Error = ();
-
-    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(HintingType::None),
-            1 => Ok(HintingType::Light),
-            2 => Ok(HintingType::Normal),
-            3 => Ok(HintingType::Native),
-            _ => Err(()),
-        }
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum DefaultFontProvider {
-    None = 0,
-    AutoDetect = 1,
-    CoreText,
-    FontConfig,
-    DirectWrite,
-}
-impl From<u32> for DefaultFontProvider {
-    fn from(provider: u32) -> Self {
-        match provider {
-            0 => DefaultFontProvider::None,
-            1 => DefaultFontProvider::AutoDetect,
-            2 => DefaultFontProvider::CoreText,
-            3 => DefaultFontProvider::FontConfig,
-            4 => DefaultFontProvider::DirectWrite,
-            _ => DefaultFontProvider::None,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
-#[repr(C)]
 pub struct AssStyle {
     pub name: String,
     pub font_name: String,
@@ -207,86 +147,6 @@ pub struct Renderer {
     ptr: *mut ffi::ASS_Renderer,
 }
 
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    #[repr(C)]
-    pub struct OverrideBits: u32 {
-        /**
-         * 默认模式 (值为 0)。
-         * 所有选择性覆盖功能都将被禁用，但像 ass_set_font_scale() 这样的传统覆盖会无条件应用。
-         */
-        const DEFAULT = 0;
-
-        /**
-         * 对看起来像对话的事件应用通过 ass_set_selective_style_override() 设置的样式。
-         * 其他样式覆盖也以此方式应用，除了字体缩放。
-         *
-         * 这等效于设置以下所有标志：
-         * - `FONT_NAME`
-         * - `FONT_SIZE_FIELDS`
-         * - `COLORS`
-         * - `BORDER`
-         * - `ATTRIBUTES`
-         */
-        const STYLE = 1 << 0;
-
-        /**
-         * 仅对看起来像对话的事件应用 ass_set_font_scale()。
-         * 如果未设置，字体缩放将应用于所有事件。
-         */
-        const SELECTIVE_FONT_SCALE = 1 << 1;
-
-        /**
-         * 在对话事件上覆盖：FontSize, Spacing, ScaleX, ScaleY
-         */
-        const FONT_SIZE_FIELDS = 1 << 2;
-
-        /**
-         * 在对话事件上覆盖：FontName, treat_fontname_as_pattern
-         */
-        const FONT_NAME = 1 << 3;
-
-        /**
-         * 在对话事件上覆盖：PrimaryColour, SecondaryColour, OutlineColour, BackColour
-         */
-        const COLORS = 1 << 4;
-
-        /**
-         * 在对话事件上覆盖：Bold, Italic, Underline, StrikeOut
-         */
-        const ATTRIBUTES = 1 << 5;
-
-        /**
-         * 在对话事件上覆盖：BorderStyle, Outline, Shadow
-         */
-        const BORDER = 1 << 6;
-
-        /**
-         * 在对话事件上覆盖：Alignment
-         */
-        const ALIGNMENT = 1 << 7;
-
-        /**
-         * 在对话事件上覆盖：MarginL, MarginR, MarginV
-         */
-        const MARGINS = 1 << 8;
-
-        /**
-         * 无条件地用 ass_set_selective_style_override() 提供的新样式替换所有样式的全部字段。
-         */
-        const FULL_STYLE = 1 << 9;
-
-        /**
-         * 在对话事件上覆盖：Justify
-         */
-        const JUSTIFY = 1 << 10;
-
-        /**
-         * 在对话事件上覆盖：Blur
-         */
-        const BLUR = 1 << 11;
-    }
-}
 impl Renderer {
     pub fn new(library: Arc<Library>) -> Result<Self> {
         unsafe {
@@ -317,7 +177,7 @@ impl Renderer {
         }
     }
 
-    // 使用 ShapingLevel::Complex 时可以有连字功能等
+    // 使用 ShapingLevel::Complex 时会有更多高级功能
     pub fn set_shaper(&mut self, level: ShapingLevel) {
         unsafe {
             ffi::ass_set_shaper(self.ptr, level as u32);
@@ -376,29 +236,25 @@ impl Renderer {
 
     pub fn set_fonts(
         &mut self,
-        default_font: Option<&Path>,
-        default_family: Option<&str>,
+        default_font: Option<&Path>,  // 文件兜底（最后）
+        default_family: Option<&str>, // 族名回退（先查）
         font_provider: DefaultFontProvider,
-        config: Option<&Path>,
+        fontconfig_config: Option<&Path>,
     ) -> Result<()> {
-        // 处理 default_font
         let default_font_cstring;
         let default_font_ptr = match default_font {
             Some(path) => {
-                // 将路径转换为绝对路径
-                let absolute_path = fs::canonicalize(path)?;
-
-                // Path -> &str
-                let path_str = absolute_path.to_str().ok_or_else(|| {
-                    LibassError::InvalidParameter {
-                        context: format!(
-                            "默认字体路径包含无效UTF-8字符: {}",
-                            absolute_path.display()
-                        ),
-                    }
-                })?;
-                // &str -> CString
-                default_font_cstring = CString::new(path_str)?;
+                #[cfg(unix)]
+                {
+                    default_font_cstring = CString::new(path.as_os_str().as_bytes())?;
+                }
+                #[cfg(not(unix))]
+                {
+                    let s = path.to_str().ok_or_else(|| LibassError::InvalidParameter {
+                        context: format!("默认字体路径包含无效UTF-8: {}", path.display()),
+                    })?;
+                    default_font_cstring = CString::new(s)?;
+                }
                 default_font_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -416,22 +272,19 @@ impl Renderer {
 
         // 处理 config
         let config_cstring;
-        let config_ptr = match config {
+        let config_ptr = match fontconfig_config {
             Some(path) => {
-                // 将路径转换为绝对路径
-                let absolute_path = fs::canonicalize(path)?;
-
-                // Path -> &str
-                let path_str = absolute_path.to_str().ok_or_else(|| {
-                    LibassError::InvalidParameter {
-                        context: format!(
-                            "配置文件路径包含无效UTF-8字符: {}",
-                            absolute_path.display()
-                        ),
-                    }
-                })?;
-                // &str -> CString
-                config_cstring = CString::new(path_str)?;
+                #[cfg(unix)]
+                {
+                    config_cstring = CString::new(path.as_os_str().as_bytes())?;
+                }
+                #[cfg(not(unix))]
+                {
+                    let s = path.to_str().ok_or_else(|| LibassError::InvalidParameter {
+                        context: format!("配置文件路径包含无效UTF-8: {}", path.display()),
+                    })?;
+                    config_cstring = CString::new(s)?;
+                }
                 config_cstring.as_ptr()
             }
             Option::None => std::ptr::null(),
@@ -467,14 +320,37 @@ impl Renderer {
         Ok(())
     }
 
-    // 在 libass 中注释说不要使用它，除非是内存受限的地方与调试
-    // pub fn set_cache_limits(self, glyph_max: i32, bitmap_max_size: i32){}
+    /// Configure libass glyph/bitmap cache limits.
+    pub fn set_cache_limits(&mut self, glyph_max: usize, bitmap_max_size: usize) -> Result<()> {
+        let glyph_max = i32::try_from(glyph_max).map_err(|_| LibassError::InvalidParameter {
+            context: "glyph cache limit exceeds libass range".into(),
+        })?;
+        let bitmap_max_size =
+            i32::try_from(bitmap_max_size).map_err(|_| LibassError::InvalidParameter {
+                context: "bitmap cache limit exceeds libass range".into(),
+            })?;
+        unsafe {
+            ffi::ass_set_cache_limits(self.ptr, glyph_max, bitmap_max_size);
+        }
+        Ok(())
+    }
 
-    pub fn render_frame(&mut self, track: &Track, timestamp: i64) -> Result<RenderResult> {
+    pub fn render_frame(&mut self, track: &mut Track, timestamp: i64) -> Result<RenderResult> {
         unsafe {
             let mut change = 0i32;
             let images = ffi::ass_render_frame(self.ptr, track.as_ptr(), timestamp, &mut change);
-            Ok(RenderResult::new(images, change != 0))
+            // ASS_Image nodes and bitmaps are owned by libass and invalidated by
+            // the next render. Copy them immediately into an owned frame.
+            let mut owned = Vec::new();
+            let mut image = images;
+            while !image.is_null() {
+                if let Some(copy) = Image::from_raw(image) {
+                    owned.push(copy);
+                }
+                image = (*image).next;
+            }
+            track.mark_rendered();
+            Ok(RenderResult::new(owned, RenderChange::from_raw(change)))
         }
     }
 }
@@ -486,32 +362,38 @@ impl Drop for Renderer {
         }
     }
 }
-// ============================================================================
-// 渲染结果封装
-// ============================================================================
-
+#[derive(Debug, Clone)]
 pub struct RenderResult {
-    images: *const ffi::ASS_Image,
-    has_changed: bool,
+    images: Vec<Image>,
+    change: RenderChange,
 }
 
 impl RenderResult {
-    fn new(images: *const ffi::ASS_Image, has_changed: bool) -> Self {
-        Self {
-            images,
-            has_changed,
-        }
+    fn new(images: Vec<Image>, change: RenderChange) -> Self {
+        Self { images, change }
     }
 
     pub fn has_changed(&self) -> bool {
-        self.has_changed
+        self.change.is_changed()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.images.is_null()
+        self.images.is_empty()
     }
 
-    pub fn iter(&self) -> ImageIterator {
-        ImageIterator::new(self.images)
+    pub fn change(&self) -> RenderChange {
+        self.change
+    }
+    pub fn images(&self) -> &[Image] {
+        &self.images
+    }
+}
+
+impl IntoIterator for RenderResult {
+    type Item = Image;
+    type IntoIter = std::vec::IntoIter<Image>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.images.into_iter()
     }
 }

@@ -337,7 +337,8 @@ mod tests {
         use crate::types::event::{parse_dialogue_line, Comment, Event};
         use crate::types::style::{BorderStyle, StyleWithoutName};
         use crate::types::BoldType;
-        use aweft_libass::types::{Alignment, AssColorRgba};
+        use aweft_libass::color::AssColorRgba;
+        use aweft_libass::types::Alignment;
         pub const SCRIPTTYPES: &[&str] = &["v4.00", "v4.00+", "v4.00++"];
 
         pub const YCBCRMATRIXS: &[&str] = &[

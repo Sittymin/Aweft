@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use aweft_libass::types::Image;
+use aweft_libass::image::Image;
 use slint::wgpu_30::wgpu;
 use wgpu::util::DeviceExt; // NOTE: 实例化渲染需要用到 create_buffer_init
 
@@ -102,7 +102,7 @@ struct AtlasLayout {
 /// 使用简单的“货架”算法计算纹理图集布局
 /// 返回 (布局列表, 图集总尺寸)
 fn calculate_atlas_layout(
-    images: &[aweft_libass::types::Image],
+    images: &[aweft_libass::image::Image],
 ) -> (Vec<AtlasLayout>, wgpu::Extent3d) {
     const MAX_ATLAS_WIDTH: u32 = 2048; // 可根据需要调整
     if images.is_empty() {
@@ -352,12 +352,12 @@ impl SubtitleRenderer {
 
     pub fn render_subtitles_gpu(
         &mut self,
-        images: aweft_libass::types::ImageIterator,
+        images: Vec<aweft_libass::image::Image>,
     ) -> Result<RenderedSubtitleTexture> {
         let device = &self.wgpu_device;
         let queue = &self.wgpu_queue;
 
-        let image_list: Vec<aweft_libass::types::Image> = images.collect();
+        let image_list = images;
         if image_list.is_empty() {
             return Err(anyhow!("空的图片列表"));
         }
