@@ -24,18 +24,30 @@ export enum SlintAreaType {
     audio-waveform,
 }
 
-// 每个视频会话的一条音频峰值包络。采样在 Rust 中降采样，Slint 只渲染有界数量的桶。
+// 单个时间桶的 min/max/rms 包络（Audacity 式三值；空桶/静音段全 0）。
+export struct SlintWaveformBucket {
+    min: float,
+    max: float,
+    rms: float,
+}
+
+// 每个视频会话的一条音频 min/max/rms 包络。采样在 Rust 中降采样，Slint 只渲染有界数量的桶。
 export struct SlintAudioWaveformLevel {
     bucket-duration: float,
-    amplitudes: [float],
+    buckets: [SlintWaveformBucket],
 }
 
 export struct SlintAudioWaveform {
     duration: float,
-    amplitudes: [float],
-    // 预聚合峰值层（2/5/10/20/50ms……），与横向标尺的 1/2/5×10^k 主刻度一致；
-    // 波形 Area 按“每个主刻度 10 个柱子”选择层级。
+    buckets: [SlintWaveformBucket],
+    // 预聚合 min/max/rms 层（2/5/10/20/50ms……），与横向标尺的 1/2/5×10^k 主刻度一致；
+    // 波形 Area 按每像素秒数选择层级。
     levels: [SlintAudioWaveformLevel],
+}
+
+export struct SlintEnvelopePoint {
+    time: float,
+    gain: float,
 }
 
 export struct SlintAudioTrack {
@@ -57,6 +69,8 @@ export struct SlintAudioTrack {
     description: string,
     encoder: string,
     encoded-by: string,
+    // 音量包络点列（空 = 恒等增益 1.0）；绘制层按桶时间求值后乘到 min/max/rms 上。
+    envelope: [SlintEnvelopePoint],
     waveform: SlintAudioWaveform,
 }
 

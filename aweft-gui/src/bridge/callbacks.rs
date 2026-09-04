@@ -64,7 +64,7 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         let mut ui_batch_count = 0usize;
         let mut ui_row_count = 0usize;
         instance.global::<VideoCallbacks>().on_waveform_progress(
-            move |index, track_index, start, duration, amplitudes| {
+            move |index, track_index, start, duration, buckets| {
                 let ui_batch_started_at = Instant::now();
                 if index < 0 || track_index < 0 {
                     return;
@@ -75,22 +75,22 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 let store = s.borrow();
                 let video = &store.ui_models.video;
                 let Some(values) = video
-                    .waveform_amplitudes
+                    .waveform_buckets
                     .get(index)
                     .and_then(|tracks| tracks.get(track_index))
                 else {
                     log::warn!("丢弃越界波形结果: video-index={index}, track-index={track_index}");
                     return;
                 };
-                ui_apply_waveform_batch(values, start, &amplitudes.iter().collect::<Vec<_>>());
-                // `amplitudes` 是本批新增/变更的后缀；不能传当前模型总行数，
-                // 否则音频越长，每批都会重复重算整段历史峰值金字塔。
+                ui_apply_waveform_batch(values, start, &buckets.iter().collect::<Vec<_>>());
+                // `buckets` 是本批新增/变更的后缀；不能传当前模型总行数，
+                // 否则音频越长，每批都会重复重算整段历史波形金字塔。
                 update_waveform_levels(
                     video,
                     index,
                     track_index,
                     start,
-                    amplitudes.row_count(),
+                    buckets.row_count(),
                 );
                 if let Some(model) = video.audio_track_models.get(index)
                     && let Some(mut track) = model.row_data(track_index)
@@ -100,19 +100,38 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                     model.set_row_data(track_index, track);
                 }
                 ui_batch_count += 1;
-                ui_row_count += amplitudes.row_count();
+                ui_row_count += buckets.row_count();
                 if ui_log_started_at.elapsed().as_secs_f32() >= 1.0 {
                     log::info!(
                         "波形 UI 更新进度: batches={}, rows={}, last_batch_rows={}, apply_wall={:.3}ms",
                         ui_batch_count,
                         ui_row_count,
-                        amplitudes.row_count(),
+                        buckets.row_count(),
                         ui_batch_started_at.elapsed().as_secs_f64() * 1_000.0,
                     );
                     ui_batch_count = 0;
                     ui_row_count = 0;
                     ui_log_started_at = Instant::now();
                 }
+            },
+        );
+    }
+
+    {
+        let s = Rc::clone(&store);
+        instance.global::<VideoCallbacks>().on_envelope_gain(
+            move |video_index, track_index, time| {
+                if video_index < 0 || track_index < 0 {
+                    return 1.0;
+                }
+                let store = s.borrow();
+                store
+                    .state()
+                    .audio_tracks
+                    .get(video_index as usize)
+                    .and_then(|tracks| tracks.get(track_index as usize))
+                    .map(|track| crate::store::state::envelope_gain_at(&track.envelope, time))
+                    .unwrap_or(1.0)
             },
         );
     }
@@ -630,14 +649,14 @@ fn update_waveform_levels(
     changed_count: usize,
 ) {
     let Some(levels) = video
-        .waveform_level_amplitudes
+        .waveform_level_buckets
         .get(index)
         .and_then(|tracks| tracks.get(track_index))
     else {
         return;
     };
-    crate::store::video::update_peak_pyramid(
-        &video.waveform_amplitudes[index][track_index],
+    crate::store::video::update_waveform_pyramid(
+        &video.waveform_buckets[index][track_index],
         levels,
         start,
         changed_count,

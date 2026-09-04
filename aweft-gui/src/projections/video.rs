@@ -8,7 +8,8 @@ use std::rc::Rc;
 use slint::{Model as _, VecModel};
 
 use crate::bridge::types::{
-    SlintAudioTrack, SlintAudioWaveform, SlintAudioWaveformLevel, SlintVideoPos, SlintVideoTimeBar,
+    SlintAudioTrack, SlintAudioWaveform, SlintAudioWaveformLevel, SlintEnvelopePoint,
+    SlintVideoPos, SlintVideoTimeBar, SlintWaveformBucket,
 };
 use crate::depsgraph::Tag;
 use crate::store::AppStore;
@@ -184,11 +185,11 @@ fn ui_append_video_models(store: &mut AppStore, index: usize) {
     ui.positions.push(position);
     ui.time_bars.push(SlintVideoTimeBar::default());
 
-    let (track_rows, amplitudes, level_amplitudes) = ui_build_audio_track_models(&tracks);
+    let (track_rows, buckets, level_buckets) = ui_build_audio_track_models(&tracks);
     ui.audio_track_models
         .push(Rc::new(VecModel::from(track_rows)));
-    ui.waveform_amplitudes.push(amplitudes);
-    ui.waveform_level_amplitudes.push(level_amplitudes);
+    ui.waveform_buckets.push(buckets);
+    ui.waveform_level_buckets.push(level_buckets);
 }
 
 fn ui_reset_video_waveform(store: &mut AppStore, index: usize) {
@@ -198,17 +199,17 @@ fn ui_reset_video_waveform(store: &mut AppStore, index: usize) {
         .get(index)
         .cloned()
         .unwrap_or_default();
-    let (track_rows, amplitudes, level_amplitudes) = ui_build_audio_track_models(&tracks);
+    let (track_rows, buckets, level_buckets) = ui_build_audio_track_models(&tracks);
     let ui = &mut store.ui_models.video;
     let model = Rc::new(VecModel::from(track_rows));
     if let Some(slot) = ui.audio_track_models.get_mut(index) {
         *slot = model;
     }
-    if let Some(slot) = ui.waveform_amplitudes.get_mut(index) {
-        *slot = amplitudes;
+    if let Some(slot) = ui.waveform_buckets.get_mut(index) {
+        *slot = buckets;
     }
-    if let Some(slot) = ui.waveform_level_amplitudes.get_mut(index) {
-        *slot = level_amplitudes;
+    if let Some(slot) = ui.waveform_level_buckets.get_mut(index) {
+        *slot = level_buckets;
     }
     // TimeBar 持有 ModelRc；替换视频后必须让该行引用新的音轨模型。
     ui_update_video_time_bar(store, index);
@@ -218,8 +219,8 @@ fn ui_build_audio_track_models(
     tracks: &[crate::store::state::AudioTrackInfo],
 ) -> (
     Vec<SlintAudioTrack>,
-    Vec<Rc<VecModel<f32>>>,
-    Vec<Vec<Rc<VecModel<f32>>>>,
+    Vec<Rc<VecModel<SlintWaveformBucket>>>,
+    Vec<Vec<Rc<VecModel<SlintWaveformBucket>>>>,
 ) {
     let mut rows = Vec::with_capacity(tracks.len());
     let mut bases = Vec::with_capacity(tracks.len());
@@ -235,7 +236,7 @@ fn ui_build_audio_track_models(
             .map(|(level, values)| SlintAudioWaveformLevel {
                 bucket_duration: crate::store::video::waveform_level_duration_ms(level) as f32
                     / 1_000.0,
-                amplitudes: slint::ModelRc::from(values.clone()),
+                buckets: slint::ModelRc::from(values.clone()),
             })
             .collect::<Vec<_>>();
         rows.push(SlintAudioTrack {
@@ -257,9 +258,19 @@ fn ui_build_audio_track_models(
             description: track.description.clone().into(),
             encoder: track.encoder.clone().into(),
             encoded_by: track.encoded_by.clone().into(),
+            envelope: slint::ModelRc::from(Rc::new(VecModel::from(
+                track
+                    .envelope
+                    .iter()
+                    .map(|point| SlintEnvelopePoint {
+                        time: point.time,
+                        gain: point.gain,
+                    })
+                    .collect::<Vec<_>>(),
+            ))),
             waveform: SlintAudioWaveform {
                 duration: 0.0,
-                amplitudes: slint::ModelRc::from(base.clone()),
+                buckets: slint::ModelRc::from(base.clone()),
                 levels: slint::ModelRc::from(Rc::new(VecModel::from(levels))),
             },
         });

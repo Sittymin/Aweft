@@ -51,11 +51,20 @@ fn run_waveform_job(job: WaveformJob) {
         &job.uri,
         &job.stream_id,
         || job.cancellation.load(Ordering::Acquire),
-        |start, duration, amplitudes| {
+        |start, duration, buckets| {
             if job.cancellation.load(Ordering::Acquire) {
                 return;
             }
-            let batch = amplitudes.to_vec();
+            // 渲染桶 → UI 桶是线程/模块边界转换：字段一一对应，
+            // Slint 侧只认 codegen 的 SlintWaveformBucket 类型。
+            let batch = buckets
+                .iter()
+                .map(|bucket| crate::bridge::types::SlintWaveformBucket {
+                    min: bucket.min,
+                    max: bucket.max,
+                    rms: bucket.rms,
+                })
+                .collect::<Vec<_>>();
             let cancellation = job.cancellation.clone();
             // 四秒级合批已将事件数压低到与媒体时长成线性的较小规模。这里不能
             // 同步等待 UI 回执：Area 一旦显示波形，模型通知成本会变化，若让解码
@@ -89,11 +98,11 @@ fn run_waveform_job(job: WaveformJob) {
         return;
     }
     match result {
-        Ok((amplitudes, duration)) => log::info!(
+        Ok((buckets, duration)) => log::info!(
             "音频波形提取完成: video={}, track={}, duration={duration:.3}s, buckets={}",
             job.video_index,
             job.track_index,
-            amplitudes.len(),
+            buckets.len(),
         ),
         Err(error) => log::warn!(
             "音频波形提取失败 ({}, track={}, stream-id={}): {error:#}",
@@ -167,6 +176,7 @@ pub(super) fn discover_audio_tracks(uri: &str) -> anyhow::Result<Vec<AudioTrackI
             description: tag_text(gstreamer::tags::Description::TAG_NAME),
             encoder: tag_text(gstreamer::tags::Encoder::TAG_NAME),
             encoded_by: tag_text(gstreamer::tags::EncodedBy::TAG_NAME),
+            envelope: Vec::new(),
         });
     }
     Ok(tracks)

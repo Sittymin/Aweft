@@ -5,18 +5,33 @@ use gstreamer_app::AppSink;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 增量解析时每个峰值桶覆盖的固定时间宽度（1ms）。桶按时间追加，因此已经通过的
+/// 增量解析时每个 min/max/rms 桶覆盖的固定时间宽度（1ms）。桶按时间追加，因此已经通过的
 /// 时间段不会因媒体总时长稍后才可用而重新编号或移动。
 pub const WAVEFORM_BUCKET_DURATION_SECS: f64 = 0.001;
-/// 1ms 峰值桶使用 8kHz 单声道分析流，每桶聚合 8 个样本。相比直接扫描原始
+/// 1ms 波形桶使用 8kHz 单声道分析流，每桶聚合 8 个样本。相比直接扫描原始
 /// 多声道/高采样率流，仍能减少 audioconvert/resample 和 CPU 扫描开销，同时保留
 /// 毫秒级瞬态。
 const WAVEFORM_ANALYSIS_RATE: i32 = 8_000;
-/// 累积约四秒的 1ms 峰值桶后再通知 UI。解码仍持续进行，只降低跨线程闭包、
-/// VecModel 通知和峰值金字塔更新的频率。
+/// 累积约四秒的 1ms 波形桶后再通知 UI。解码仍持续进行，只降低跨线程闭包、
+/// VecModel 通知和波形金字塔更新的频率。
 const WAVEFORM_PROGRESS_BATCH_BUCKETS: usize = 4_096;
 
-/// 在调用方提供的线程中解码指定音轨并压缩成峰值桶。显式低层管线在解码前按
+/// 单个 1ms 时间桶的 min/max/rms 包络（Audacity 式三值）。
+/// 空桶/静音段为全 0，显示为中心零线；只含负样本的桶 `max` 保持 0.0，
+/// 只含正样本的桶 `min` 保持 0.0。
+/// `min` 只减小、`max` 只增大（单调极值）；`rms` 是桶内全部样本的均方根，
+/// 非单调——金字塔用 `rms²×名义跨度` 加权聚合（见 `update_waveform_pyramid`）。
+/// `sumsq`/`count` 是 rms 的累积状态，不跨模块边界（Slint 侧只有 min/max/rms）。
+#[derive(Clone, Copy, Default, Debug)]
+pub struct WaveformBucket {
+    pub min: f32,
+    pub max: f32,
+    pub rms: f32,
+    sumsq: f64,
+    count: u32,
+}
+
+/// 在调用方提供的线程中解码指定音轨并压缩成 min/max 桶。显式低层管线在解码前按
 /// stream-id 选择 elementary stream；decodebin 后的 raw-audio 链是未来滤镜插入点。
 /// `progress(start, duration, values)` 只提交从 `start` 开始的变更区间；调用方
 /// 可以原地更新持久模型。`cancelled` 在解码循环内检查，替换媒体/退出时及时停工。
@@ -25,10 +40,10 @@ pub fn extract_cancelable<C, F>(
     target_stream_id: &str,
     cancelled: C,
     mut progress: F,
-) -> anyhow::Result<(Vec<f32>, f32)>
+) -> anyhow::Result<(Vec<WaveformBucket>, f32)>
 where
     C: Fn() -> bool,
-    F: FnMut(usize, f32, &[f32]),
+    F: FnMut(usize, f32, &[WaveformBucket]),
 {
     gstreamer::init().map_err(|error| anyhow::anyhow!("GStreamer 初始化失败: {error}"))?;
     let pipeline = gstreamer::Pipeline::new();
@@ -143,7 +158,7 @@ where
         .ok_or_else(|| anyhow::anyhow!("无法获取音频分析 Bus"))?;
     // Do not use the media duration for indexing. It is frequently unavailable until
     // decoding has started, and changing it would move already displayed waveform bars.
-    let mut buckets = Vec::<f32>::new();
+    let mut buckets = Vec::<WaveformBucket>::new();
     // 仅记录自上次 progress 以来最早变化的桶；使用 usize::MAX 表示当前没有
     // 待提交区间，避免每批都从 0 重新提交整段历史波形。
     let mut dirty_start = usize::MAX;
@@ -287,9 +302,9 @@ pub fn build_audio_playback(
 }
 
 #[cfg(test)]
-pub fn extract<F>(uri: &str, mut progress: F) -> anyhow::Result<(Vec<f32>, f32)>
+pub fn extract<F>(uri: &str, mut progress: F) -> anyhow::Result<(Vec<WaveformBucket>, f32)>
 where
-    F: FnMut(f32, &[f32]),
+    F: FnMut(f32, &[WaveformBucket]),
 {
     let mut all = Vec::new();
     extract_cancelable(
@@ -298,7 +313,7 @@ where
         || false,
         |start, duration, batch| {
             if all.len() < start + batch.len() {
-                all.resize(start + batch.len(), 0.0);
+                all.resize(start + batch.len(), WaveformBucket::default());
             }
             all[start..start + batch.len()].copy_from_slice(batch);
             progress(duration, &all);
@@ -326,7 +341,10 @@ fn audio_stream_ids(uri: &str) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-fn accumulate_sample(sample: &gstreamer::Sample, buckets: &mut Vec<f32>) -> Option<usize> {
+fn accumulate_sample(
+    sample: &gstreamer::Sample,
+    buckets: &mut Vec<WaveformBucket>,
+) -> Option<usize> {
     let buffer = sample.buffer()?;
     let map = buffer.map_readable().ok()?;
     let timestamp = buffer
@@ -343,19 +361,27 @@ fn accumulate_sample(sample: &gstreamer::Sample, buckets: &mut Vec<f32>) -> Opti
     let previous_len = buckets.len();
     let extended = previous_len <= last_index;
     if extended {
-        buckets.resize(last_index + 1, 0.0);
+        buckets.resize(last_index + 1, WaveformBucket::default());
     }
 
     // 若 PTS 跳过了尚未生成的时间段，必须从旧长度开始提交，才能让 UI
     // 逐行 push 中间的零桶；连续追加时该值正好等于 first_index。
+    // 每个落入桶的样本都标记变更：rms 几乎每次都会变化（非单调），
+    // 即使 min/max 未突破也必须上报，否则 UI 内层 rms 线条会滞后。
     let mut changed_start = extended.then_some(previous_len.min(first_index));
     for (sample_index, bytes) in map.as_slice().chunks_exact(4).enumerate() {
         let bucket = first_index + sample_index / samples_per_bucket;
-        let peak = f32::from_le_bytes(bytes.try_into().expect("4-byte PCM sample")).abs();
-        if peak <= buckets[bucket] {
-            continue;
+        let value =
+            f32::from_le_bytes(bytes.try_into().expect("4-byte PCM sample")).clamp(-1.0, 1.0);
+        let entry = &mut buckets[bucket];
+        if value < entry.min {
+            entry.min = value;
+        } else if value > entry.max {
+            entry.max = value;
         }
-        buckets[bucket] = peak.min(1.0);
+        entry.sumsq += (value as f64) * (value as f64);
+        entry.count += 1;
+        entry.rms = (entry.sumsq / entry.count as f64).sqrt() as f32;
         changed_start = Some(changed_start.map_or(bucket, |start| start.min(bucket)));
     }
     changed_start
@@ -536,25 +562,32 @@ mod tests {
             .to_string();
         let stream_id = first_audio_stream_id(&uri).expect("测试媒体应包含音轨 stream-id");
         let mut updates = Vec::new();
-        let (amplitudes, duration) = extract_cancelable(
+        let (buckets, duration) = extract_cancelable(
             &uri,
             &stream_id,
             || false,
-            |start, _, buckets| {
-                updates.push((start, buckets.len()));
-                assert!(!buckets.is_empty());
+            |start, _, batch| {
+                updates.push((start, batch.len()));
+                assert!(!batch.is_empty());
             },
         )
         .expect("提取测试音频波形失败");
         assert!(duration > 0.0);
         assert!(duration > 7.0, "测试音频必须覆盖首秒之后的时间范围");
-        assert!(amplitudes.len() > 7_000, "每 1ms 必须追加一个稳定时间桶");
-        assert!(amplitudes.iter().any(|value| *value > 0.05));
+        assert!(buckets.len() > 7_000, "每 1ms 必须追加一个稳定时间桶");
+        assert!(buckets.iter().any(|bucket| bucket.max > 0.05));
+        assert!(buckets.iter().any(|bucket| bucket.rms > 0.05));
         assert!(
-            amplitudes
+            buckets
                 .iter()
-                .skip(amplitudes.len() / 4)
-                .any(|value| *value > 0.05),
+                .all(|bucket| bucket.rms <= bucket.max.max(-bucket.min) + 1e-5),
+            "rms 是桶内样本的均方根，不可能超出 min/max 包络",
+        );
+        assert!(
+            buckets
+                .iter()
+                .skip(buckets.len() / 4)
+                .any(|bucket| bucket.max > 0.05),
             "首秒后的音频必须进入后续波形桶",
         );
         assert!(!updates.is_empty(), "解码过程中必须产生增量波形更新");
@@ -564,8 +597,8 @@ mod tests {
         );
         assert_eq!(
             updates.iter().map(|(_, rows)| *rows).sum::<usize>(),
-            amplitudes.len(),
-            "EOS 前不足一批的尾部峰值也必须完整提交"
+            buckets.len(),
+            "EOS 前不足一批的尾部波形桶也必须完整提交"
         );
         assert_eq!(updates[0].0, 0, "首次更新必须从模型开头开始");
         assert!(
@@ -596,13 +629,24 @@ mod tests {
             .expect("提取第一条测试音轨失败");
         let (silent, _) = extract_cancelable(&uri, &stream_ids[1], || false, |_, _, _| {})
             .expect("提取第二条测试音轨失败");
-        let tone_peak = tone.into_iter().fold(0.0f32, f32::max);
-        let silent_peak = silent.into_iter().fold(0.0f32, f32::max);
+        let tone_peak = tone.iter().map(|bucket| bucket.max).fold(0.0f32, f32::max);
+        let silent_min = silent
+            .iter()
+            .map(|bucket| bucket.min)
+            .fold(0.0f32, f32::min);
+        let silent_peak = silent
+            .iter()
+            .map(|bucket| bucket.max)
+            .fold(0.0f32, f32::max);
+        let silent_rms = silent
+            .iter()
+            .map(|bucket| bucket.rms)
+            .fold(0.0f32, f32::max);
 
         assert!(tone_peak > 0.1, "第一轨应包含正弦波: {tone_peak}");
         assert!(
-            silent_peak < 0.01,
-            "第二轨应保持静音，不能残留第一轨 preroll: {silent_peak}"
+            silent_peak < 0.01 && silent_min > -0.01 && silent_rms < 0.01,
+            "第二轨应保持静音，不能残留第一轨 preroll: [{silent_min}, {silent_peak}] rms={silent_rms}"
         );
     }
 
@@ -618,12 +662,12 @@ mod tests {
             .to_string();
         let stream_id = first_audio_stream_id(&uri).expect("测试媒体应包含音轨 stream-id");
         let mut published = false;
-        let (amplitudes, duration) =
+        let (buckets, duration) =
             extract_cancelable(&uri, &stream_id, || true, |_, _, _| published = true)
                 .expect("取消波形任务不应失败");
 
         assert!(!published, "已取消任务不能再覆盖 UI 模型");
-        assert!(amplitudes.is_empty());
+        assert!(buckets.is_empty());
         assert_eq!(duration, 0.0);
     }
 
@@ -635,7 +679,19 @@ mod tests {
             crate::bridge::types::SlintAudioTrack {
                 waveform: crate::bridge::types::SlintAudioWaveform {
                     duration: 2.0,
-                    amplitudes: std::rc::Rc::new(slint::VecModel::from(vec![0.25, 0.75])).into(),
+                    buckets: std::rc::Rc::new(slint::VecModel::from(vec![
+                        crate::bridge::types::SlintWaveformBucket {
+                            min: -0.25,
+                            max: 0.25,
+                            rms: 0.15,
+                        },
+                        crate::bridge::types::SlintWaveformBucket {
+                            min: -0.75,
+                            max: 0.75,
+                            rms: 0.45,
+                        },
+                    ]))
+                    .into(),
                     levels: slint::ModelRc::default(),
                 },
                 ..Default::default()
@@ -659,6 +715,12 @@ mod tests {
             .row_data(0)
             .expect("无头 Slint 未收到嵌套音轨模型");
         assert_eq!(track.waveform.duration, 2.0);
-        assert_eq!(track.waveform.amplitudes.row_count(), 2);
+        assert_eq!(track.waveform.buckets.row_count(), 2);
+        let bucket = track
+            .waveform
+            .buckets
+            .row_data(0)
+            .expect("无头 Slint 未收到波形桶模型");
+        assert_eq!((bucket.min, bucket.max, bucket.rms), (-0.25, 0.25, 0.15));
     }
 }

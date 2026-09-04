@@ -1,6 +1,6 @@
 import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
-import { TimeRuler, TickScale, VerticalGrid } from "./graph_editor/ruler.slint";
+import { TimeRuler, VerticalGrid } from "./graph_editor/ruler.slint";
 import { SlintAudioTrack } from "../core/types.slint";
 import { AnimationState, VideoState } from "../bridge/state.slint";
 import { VideoCallbacks } from "../bridge/callbacks.slint";
@@ -8,18 +8,25 @@ import { AudioTrackPanel } from "./audio_track_panel.slint";
 import { AudioTrackSidebar } from "./audio_track_sidebar.slint";
 
 component WaveformBar inherits Rectangle {
-    in property <float> amplitude: 0.0;
+    in property <float> bucket-min: 0.0;
+    in property <float> bucket-max: 0.0;
+    in property <float> bucket-rms: 0.0;
 
     background: transparent;
 
-    // 每个时间桶只使用一个柱子。柱高仍由峰值决定，并以中心线为基准，
-    // 避免上下两个 Rectangle 为同一个音频片段重复创建元素。
+    // 单像素竖线（Audacity 式）：min→max 外线 + 显示 rms 的内层线条（加亮），宽度跟随槽位。
+    // 零桶（全 0）退化为中心 1px 点；值域 [-1, 1] 映射到柱高。
     Rectangle {
         width: parent.width;
-        height: Math.max(1px, parent.height * root.amplitude * 0.94);
-        y: (parent.height - self.height) * 0.5;
-        border-radius: 1px;
+        height: Math.max(1px, parent.height * (root.bucket-max - root.bucket-min) * 0.47);
+        y: parent.height * (1.0 - root.bucket-max) * 0.5;
         background: Theme.data.animation-editor.strip-active;
+    }
+    Rectangle {
+        width: parent.width;
+        height: Math.max(1px, parent.height * (root.bucket-rms - (-root.bucket-rms)) * 0.47);
+        y: parent.height * (1.0 - root.bucket-rms) * 0.5;
+        background: Theme.data.animation-editor.strip-active.brighter(0.4);
     }
 }
 
@@ -45,18 +52,12 @@ export component AudioWaveformArea inherits Rectangle {
     private property <float> view-time-hi: (canvas.width - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
     private property <bool> has-waveform: root.track-index >= 0
         && root.track-index < root.tracks.length;
-    // 每个横向主刻度固定显示的波形柱数。主刻度由 TickScale 统一计算，
-    // 因此波形缩放与标尺始终使用同一个 nice step（1/2/5×10^k）。
-    private property <int> waveform-bars-per-major: 10;
-
-    ruler-scale := TickScale {
-        view-lo: root.view-time-lo;
-        view-hi: root.view-time-hi;
-        zoom: root.nav-zoom;
-    }
-
+    // Audacity 式密度：每像素约一列。target 是“每像素秒数”，选桶时长 ≥ 该值的
+    // 最细层级；下表阈值恰好就是各级桶时长（1ms、2ms、5ms……），与 Rust 侧
+    // `waveform_level_duration_ms` 一致。横向标尺（TimeRuler/VerticalGrid）只管刻度，
+    // 不管波形密度。
     pure function waveform-level() -> int {
-        let target = ruler-scale.major / root.waveform-bars-per-major;
+        let target = 1.0 / root.nav-zoom;
         if target <= 0.001 { return -1; }
         if target <= 0.002 { return 0; }
         if target <= 0.005 { return 1; }
@@ -111,16 +112,43 @@ export component AudioWaveformArea inherits Rectangle {
         if !root.has-waveform { return 0; }
         let level = root.waveform-level();
         return level < 0
-            ? root.tracks[root.track-index].waveform.amplitudes.length
-            : root.tracks[root.track-index].waveform.levels[level].amplitudes.length;
+            ? root.tracks[root.track-index].waveform.buckets.length
+            : root.tracks[root.track-index].waveform.levels[level].buckets.length;
     }
 
-    pure function waveform-amplitude(row: int) -> float {
+    // 包络增益查询：空包络直接返回 1.0，不进 Rust 回调；
+    // 回调是 pure 标注，可进纯函数（见 bridge/callbacks.slint 声明处纯度契约）。
+    pure function envelope-gain-at(video-index: int, track-index: int, time: float) -> float {
+        if track-index < 0 || track-index >= root.tracks.length { return 1.0; }
+        if root.tracks[track-index].envelope.length == 0 { return 1.0; }
+        return VideoCallbacks.envelope-gain(video-index, track-index, time);
+    }
+
+    pure function waveform-bucket-min(row: int) -> float {
         if row < 0 || row >= root.waveform-row-count() { return 0.0; }
         let level = root.waveform-level();
-        return level < 0
-            ? root.tracks[root.track-index].waveform.amplitudes[row]
-            : root.tracks[root.track-index].waveform.levels[level].amplitudes[row];
+        let base = level < 0
+            ? root.tracks[root.track-index].waveform.buckets[row].min
+            : root.tracks[root.track-index].waveform.levels[level].buckets[row].min;
+        return base * root.envelope-gain-at(root.video-index, root.track-index, row * root.waveform-bucket-duration());
+    }
+
+    pure function waveform-bucket-max(row: int) -> float {
+        if row < 0 || row >= root.waveform-row-count() { return 0.0; }
+        let level = root.waveform-level();
+        let base = level < 0
+            ? root.tracks[root.track-index].waveform.buckets[row].max
+            : root.tracks[root.track-index].waveform.levels[level].buckets[row].max;
+        return base * root.envelope-gain-at(root.video-index, root.track-index, row * root.waveform-bucket-duration());
+    }
+
+    pure function waveform-bucket-rms(row: int) -> float {
+        if row < 0 || row >= root.waveform-row-count() { return 0.0; }
+        let level = root.waveform-level();
+        let base = level < 0
+            ? root.tracks[root.track-index].waveform.buckets[row].rms
+            : root.tracks[root.track-index].waveform.levels[level].buckets[row].rms;
+        return base * root.envelope-gain-at(root.video-index, root.track-index, row * root.waveform-bucket-duration());
     }
 
     in property <int> video-index: 0;
@@ -215,11 +243,13 @@ export component AudioWaveformArea inherits Rectangle {
             background: Theme.data.animation-editor.grid-color;
         }
 
-        // 固定宽度驱动的持久槽位池。缩放选择预聚合峰值层，平移只改变首桶下标；
+        // 桶屏宽驱动的持久槽位池。缩放选择预聚合波形层，平移只改变首桶下标；
         // WaveformBar 本身不随原始波形长度或视图导航反复创建/销毁。
         if root.has-waveform: Rectangle {
             width: 100%;
             height: 100%;
+            // 播放时播放头每帧都走，波形本体只在新批次/缩放时变；缓存层避免静态帧重复光栅化。
+            cache-rendering-hint: true;
             for slot in root.waveform-slot-count(): WaveformBar {
                 private property <int> bucket-row: root.waveform-first-bucket() + slot;
                 private property <float> bucket-start: self.bucket-row * root.waveform-bucket-duration();
@@ -233,9 +263,14 @@ export component AudioWaveformArea inherits Rectangle {
                 x: self.bucket-row * root.waveform-bucket-duration() * root.nav-zoom * 1px
                     + root.nav-pan-x * 1px;
                 y: 12px;
-                width: max(1px, root.waveform-bucket-duration() * root.nav-zoom * 1px - 1px);
+                // 槽位宽度 = 桶屏宽：层级选择已保证桶屏宽 ≥ 1px（每像素约一列），
+                // 正常缩放下即 1px 线；极限放大时线加宽铺满桶区间成 band。
+                // 相邻槽位恰好平铺（x 按桶起始定位），无缝隙无重叠。
+                width: max(1px, root.waveform-bucket-duration() * root.nav-zoom * 1px);
                 height: parent.height - 24px;
-                amplitude: root.waveform-amplitude(self.bucket-row);
+                bucket-min: root.waveform-bucket-min(self.bucket-row);
+                bucket-max: root.waveform-bucket-max(self.bucket-row);
+                bucket-rms: root.waveform-bucket-rms(self.bucket-row);
             }
         }
 

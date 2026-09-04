@@ -3,6 +3,7 @@ import {
     ActionZoneCorner,
     SlintAreaType,
     SlintSubtitleRow,
+    SlintWaveformBucket,
     GraphType,
     SlintSelectionModifier,
 } from "../core/types.slint";
@@ -42,7 +43,10 @@ export global VideoCallbacks {
     // 音频波形标尺定位指定视频，不改变全局视口选择。
     callback seek-video(video-index: int, time: float);
     // 后台解码按区间提交波形；start-index 之前的桶保持不变。
-    callback waveform-progress(video-index: int, track-index: int, start-index: int, duration: float, amplitudes: [float]);
+    callback waveform-progress(video-index: int, track-index: int, start-index: int, duration: float, buckets: [SlintWaveformBucket]);
+    // 查询指定视频音轨在某秒处的包络增益（空包络恒返回 1.0）；绘制层按桶时间调用。
+    // pure：Rust 绑定只读 store，无副作用；包络变更时须同时触碰包络模型以刷新绑定。
+    pure callback envelope-gain(video-index: int, track-index: int, time: float) -> float;
     // 右键非主视频"设为主视频"
     callback set-main-video(video-index: int);
     // 右键任意视频"更换视频"：重新选择文件原地替换

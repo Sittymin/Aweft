@@ -79,7 +79,42 @@ pub struct AudioPlayback {
     pub volume: gstreamer::Element,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 音量包络控制点：`time` 秒处的线性增益（1.0 = 原样）。
+/// 点列调用方保证按 `time` 递增；空包络恒等（增益 1.0）。
+/// 只有显示层（波形绘制）与未来的播放跟随消费它——我们不是音频编辑器，
+/// 没有包络编辑 UI，点列只由导入/自动化逻辑填充。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnvelopePoint {
+    pub time: f32,
+    pub gain: f32,
+}
+
+/// 包络求值：区间外钳制端点，区间内线性插值；空包络返回 1.0。
+/// 增益下钳 0.0（负增益无意义），上不封顶。
+/// Slint 绘制侧有同语义的 `envelope-gain-at`（注释互指），两者改动需同步。
+pub fn envelope_gain_at(points: &[EnvelopePoint], time: f32) -> f32 {
+    let Some(first) = points.first() else {
+        return 1.0;
+    };
+    if time <= first.time {
+        return first.gain.max(0.0);
+    }
+    let mut previous = first;
+    for point in &points[1..] {
+        if time <= point.time {
+            let span = point.time - previous.time;
+            if span <= 0.0 {
+                return point.gain.max(0.0);
+            }
+            let t = (time - previous.time) / span;
+            return (previous.gain + (point.gain - previous.gain) * t).max(0.0);
+        }
+        previous = point;
+    }
+    previous.gain.max(0.0)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AudioTrackInfo {
     pub stream_id: String,
     pub label: String,
@@ -99,6 +134,8 @@ pub struct AudioTrackInfo {
     pub description: String,
     pub encoder: String,
     pub encoded_by: String,
+    /// 音量包络点列（空 = 恒等）；绘制层按桶时间求值后乘到 min/max/rms 上。
+    pub envelope: Vec<EnvelopePoint>,
 }
 
 /// 一次视频时间条拖拽中的单个目标快照。
@@ -194,5 +231,27 @@ impl AppState {
     /// 当前焦点视频：选择集合末项优先，无选择时回落主视频。
     pub fn active_video(&self) -> Option<usize> {
         self.selected_videos.last().copied().or(self.main_video)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(time: f32, gain: f32) -> EnvelopePoint {
+        EnvelopePoint { time, gain }
+    }
+
+    #[test]
+    fn envelope_gain_at_handles_empty_single_and_ramp() {
+        assert_eq!(envelope_gain_at(&[], 3.0), 1.0);
+        assert_eq!(envelope_gain_at(&[point(2.0, 0.5)], 0.0), 0.5);
+        assert_eq!(envelope_gain_at(&[point(2.0, 0.5)], 9.0), 0.5);
+
+        let ramp = vec![point(1.0, 0.0), point(3.0, 1.0)];
+        assert_eq!(envelope_gain_at(&ramp, 0.0), 0.0);
+        assert_eq!(envelope_gain_at(&ramp, 2.0), 0.5);
+        assert_eq!(envelope_gain_at(&ramp, 4.0), 1.0);
+        assert_eq!(envelope_gain_at(&[point(1.0, -2.0)], 5.0), 0.0);
     }
 }
