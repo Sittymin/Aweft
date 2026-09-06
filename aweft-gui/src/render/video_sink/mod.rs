@@ -208,6 +208,7 @@ pub(crate) fn teardown(store: &mut AppStore) {
     for cancellation in std::mem::take(&mut store.state_mut().waveform_cancellations) {
         cancellation.store(true, std::sync::atomic::Ordering::Release);
     }
+    store.state_mut().waveform_ui_sender.take();
     let sessions = std::mem::take(&mut store.state_mut().video_sessions);
     let audio_playbacks = std::mem::take(&mut store.state_mut().audio_playbacks);
     store.state_mut().audio_track_indices.clear();

@@ -10,6 +10,7 @@ use crate::depsgraph::{
 };
 
 mod animation;
+mod audio;
 mod node_graph;
 mod screen;
 mod sequence;

@@ -3,28 +3,28 @@
 //! 帧图像、逐帧播放时钟和波形后台批次属于高频异步流，不走本投影；这些实时
 //! 例外只允许行级更新，并在 `docs/architecture/video-playback.md` 中单独说明。
 
-use std::rc::Rc;
-
 use slint::{Model as _, VecModel};
 
-use crate::bridge::types::{
-    SlintAudioTrack, SlintAudioWaveform, SlintAudioWaveformLevel, SlintEnvelopePoint,
-    SlintVideoPos, SlintVideoTimeBar, SlintWaveformBucket,
-};
+use crate::bridge::types::{SlintVideoPos, SlintVideoTimeBar};
 use crate::depsgraph::Tag;
 use crate::store::AppStore;
 use crate::store::utils::rainbow::rainbow_color;
 
 /// 会话结构变化：追加时只 push 新行；替换时保留帧/尺寸行并重置对应波形。
+/// 音频行由 `super::audio` 同 tag 同步（先视频行，后音频行；重置时先音频模型，
+/// 再重绑时间条行，顺序与拆分前一致）。
 pub fn ui_project_video_structure(store: &mut AppStore, tags: &[Tag]) {
     for tag in tags {
         let Tag::VideoStructureChanged { index, inserted } = tag else {
             continue;
         };
         if *inserted {
-            ui_append_video_models(store, *index);
+            if ui_append_video_models(store, *index) {
+                super::audio::ui_project_audio_structure(store, std::slice::from_ref(tag));
+            }
         } else {
-            ui_reset_video_waveform(store, *index);
+            super::audio::ui_project_audio_structure(store, std::slice::from_ref(tag));
+            ui_update_video_time_bar(store, *index);
         }
     }
 }
@@ -156,128 +156,29 @@ pub(crate) fn ui_sync_active_video_time_realtime(store: &mut AppStore) {
     store.sync_animation_current_time();
 }
 
-fn ui_append_video_models(store: &mut AppStore, index: usize) {
+fn ui_append_video_models(store: &mut AppStore, index: usize) -> bool {
     let Some(session) = store.state().video_sessions.get(index) else {
         log::warn!("视频投影追加失败：会话下标越界 {index}");
-        return;
+        return false;
     };
     let position = SlintVideoPos {
         x: session.position_x as f32,
         y: session.position_y as f32,
     };
-    let tracks = store
-        .state()
-        .audio_tracks
-        .get(index)
-        .cloned()
-        .unwrap_or_default();
     let ui = &mut store.ui_models.video;
     if ui.frames.row_count() != index {
         log::error!(
             "视频投影结构不同步：期望追加下标 {index}，现有 {} 行",
             ui.frames.row_count()
         );
-        return;
+        return false;
     }
     ui.frames.push(slint::Image::default());
     ui.widths.push(0);
     ui.heights.push(0);
     ui.positions.push(position);
     ui.time_bars.push(SlintVideoTimeBar::default());
-
-    let (track_rows, buckets, level_buckets) = ui_build_audio_track_models(&tracks);
-    ui.audio_track_models
-        .push(Rc::new(VecModel::from(track_rows)));
-    ui.waveform_buckets.push(buckets);
-    ui.waveform_level_buckets.push(level_buckets);
-}
-
-fn ui_reset_video_waveform(store: &mut AppStore, index: usize) {
-    let tracks = store
-        .state()
-        .audio_tracks
-        .get(index)
-        .cloned()
-        .unwrap_or_default();
-    let (track_rows, buckets, level_buckets) = ui_build_audio_track_models(&tracks);
-    let ui = &mut store.ui_models.video;
-    let model = Rc::new(VecModel::from(track_rows));
-    if let Some(slot) = ui.audio_track_models.get_mut(index) {
-        *slot = model;
-    }
-    if let Some(slot) = ui.waveform_buckets.get_mut(index) {
-        *slot = buckets;
-    }
-    if let Some(slot) = ui.waveform_level_buckets.get_mut(index) {
-        *slot = level_buckets;
-    }
-    // TimeBar 持有 ModelRc；替换视频后必须让该行引用新的音轨模型。
-    ui_update_video_time_bar(store, index);
-}
-
-fn ui_build_audio_track_models(
-    tracks: &[crate::store::state::AudioTrackInfo],
-) -> (
-    Vec<SlintAudioTrack>,
-    Vec<Rc<VecModel<SlintWaveformBucket>>>,
-    Vec<Vec<Rc<VecModel<SlintWaveformBucket>>>>,
-) {
-    let mut rows = Vec::with_capacity(tracks.len());
-    let mut bases = Vec::with_capacity(tracks.len());
-    let mut pyramids = Vec::with_capacity(tracks.len());
-    for track in tracks {
-        let base = Rc::new(VecModel::default());
-        let pyramid = (1..=24)
-            .map(|_| Rc::new(VecModel::default()))
-            .collect::<Vec<_>>();
-        let levels = pyramid
-            .iter()
-            .enumerate()
-            .map(|(level, values)| SlintAudioWaveformLevel {
-                bucket_duration: crate::store::video::waveform_level_duration_ms(level) as f32
-                    / 1_000.0,
-                buckets: slint::ModelRc::from(values.clone()),
-            })
-            .collect::<Vec<_>>();
-        rows.push(SlintAudioTrack {
-            stream_id: track.stream_id.clone().into(),
-            label: track.label.clone().into(),
-            language: track.language.clone().into(),
-            channels: track.channels,
-            channel_layout: track.channel_layout.clone().into(),
-            channel_mask: track.channel_mask.clone().into(),
-            codec: track.codec.clone().into(),
-            caps: track.caps.clone().into(),
-            sample_rate: track.sample_rate,
-            bit_depth: track.bit_depth,
-            bitrate: track.bitrate,
-            max_bitrate: track.max_bitrate,
-            artist: track.artist.clone().into(),
-            album: track.album.clone().into(),
-            comment: track.comment.clone().into(),
-            description: track.description.clone().into(),
-            encoder: track.encoder.clone().into(),
-            encoded_by: track.encoded_by.clone().into(),
-            envelope: slint::ModelRc::from(Rc::new(VecModel::from(
-                track
-                    .envelope
-                    .iter()
-                    .map(|point| SlintEnvelopePoint {
-                        time: point.time,
-                        gain: point.gain,
-                    })
-                    .collect::<Vec<_>>(),
-            ))),
-            waveform: SlintAudioWaveform {
-                duration: 0.0,
-                buckets: slint::ModelRc::from(base.clone()),
-                levels: slint::ModelRc::from(Rc::new(VecModel::from(levels))),
-            },
-        });
-        bases.push(base);
-        pyramids.push(pyramid);
-    }
-    (rows, bases, pyramids)
+    true
 }
 
 fn ui_update_video_position(store: &mut AppStore, index: usize) {
@@ -311,14 +212,6 @@ fn ui_update_video_time_bar(store: &mut AppStore, index: usize) {
         selected: store.state().selected_videos.contains(&index),
         muted: session.muted,
         is_main: store.state().main_video == Some(index),
-        audio_tracks: store
-            .ui_models
-            .video
-            .audio_track_models
-            .get(index)
-            .cloned()
-            .map(slint::ModelRc::from)
-            .unwrap_or_default(),
     };
     if old != bar {
         store.ui_models.video.time_bars.set_row_data(index, bar);

@@ -1,9 +1,9 @@
 import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
 import { TimeRuler, VerticalGrid } from "./graph_editor/ruler.slint";
-import { SlintAudioTrack } from "../core/types.slint";
+import { SlintAudioTrack, SlintKey, SlintWaveformBucket } from "../core/types.slint";
 import { AnimationState, VideoState } from "../bridge/state.slint";
-import { VideoCallbacks } from "../bridge/callbacks.slint";
+import { VideoCallbacks, AudioCallbacks } from "../bridge/callbacks.slint";
 import { AudioTrackPanel } from "./audio_track_panel.slint";
 import { AudioTrackSidebar } from "./audio_track_sidebar.slint";
 
@@ -43,6 +43,7 @@ export component AudioWaveformArea inherits Rectangle {
     private property <bool> sidebar-open: false;
     in property <[SlintAudioTrack]> tracks: [];
     in property <int> track-index: 0;
+    in property <SlintKey> area-key;
     callback track-selected(index: int);
 
     // The navigation transform is shared by waveform buckets, ruler, grid, selection and playhead.
@@ -52,44 +53,36 @@ export component AudioWaveformArea inherits Rectangle {
     private property <float> view-time-hi: (canvas.width - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
     private property <bool> has-waveform: root.track-index >= 0
         && root.track-index < root.tracks.length;
-    // Audacity 式密度：每像素约一列。target 是“每像素秒数”，选桶时长 ≥ 该值的
-    // 最细层级；下表阈值恰好就是各级桶时长（1ms、2ms、5ms……），与 Rust 侧
-    // `waveform_level_duration_ms` 一致。横向标尺（TimeRuler/VerticalGrid）只管刻度，
-    // 不管波形密度。
-    pure function waveform-level() -> int {
-        let target = 1.0 / root.nav-zoom;
-        if target <= 0.001 { return -1; }
-        if target <= 0.002 { return 0; }
-        if target <= 0.005 { return 1; }
-        if target <= 0.010 { return 2; }
-        if target <= 0.020 { return 3; }
-        if target <= 0.050 { return 4; }
-        if target <= 0.100 { return 5; }
-        if target <= 0.200 { return 6; }
-        if target <= 0.500 { return 7; }
-        if target <= 1.000 { return 8; }
-        if target <= 2.000 { return 9; }
-        if target <= 5.000 { return 10; }
-        if target <= 10.000 { return 11; }
-        if target <= 20.000 { return 12; }
-        if target <= 50.000 { return 13; }
-        if target <= 100.000 { return 14; }
-        if target <= 200.000 { return 15; }
-        if target <= 500.000 { return 16; }
-        if target <= 1000.000 { return 17; }
-        if target <= 2000.000 { return 18; }
-        if target <= 5000.000 { return 19; }
-        if target <= 10000.000 { return 20; }
-        if target <= 20000.000 { return 21; }
-        if target <= 50000.000 { return 22; }
-        return 23;
-    }
-
+    // Audacity 式密度：每像素约一列。target 是“每像素秒数”，列宽取 ≥ 该值的
+    // 最细 1/2/5×10^k 档（1ms、2ms、5ms……）。横向标尺（TimeRuler/VerticalGrid）
+    // 只管刻度，不管波形密度。列数据由 Rust 现算（见 compute-columns），这里只定窗口。
     pure function waveform-bucket-duration() -> float {
-        let level = root.waveform-level();
-        if !root.has-waveform { return 1.0; }
-        return level < 0 ? 0.001
-            : root.tracks[root.track-index].waveform.levels[level].bucket-duration;
+        let target = 1.0 / root.nav-zoom;
+        if target <= 0.001 { return 0.001; }
+        if target <= 0.002 { return 0.002; }
+        if target <= 0.005 { return 0.005; }
+        if target <= 0.010 { return 0.010; }
+        if target <= 0.020 { return 0.020; }
+        if target <= 0.050 { return 0.050; }
+        if target <= 0.100 { return 0.100; }
+        if target <= 0.200 { return 0.200; }
+        if target <= 0.500 { return 0.500; }
+        if target <= 1.000 { return 1.000; }
+        if target <= 2.000 { return 2.000; }
+        if target <= 5.000 { return 5.000; }
+        if target <= 10.000 { return 10.000; }
+        if target <= 20.000 { return 20.000; }
+        if target <= 50.000 { return 50.000; }
+        if target <= 100.000 { return 100.000; }
+        if target <= 200.000 { return 200.000; }
+        if target <= 500.000 { return 500.000; }
+        if target <= 1000.000 { return 1000.000; }
+        if target <= 2000.000 { return 2000.000; }
+        if target <= 5000.000 { return 5000.000; }
+        if target <= 10000.000 { return 10000.000; }
+        if target <= 20000.000 { return 20000.000; }
+        if target <= 50000.000 { return 50000.000; }
+        return 100000.000;
     }
 
     pure function waveform-first-bucket() -> int {
@@ -108,47 +101,30 @@ export component AudioWaveformArea inherits Rectangle {
         return max(1, root.waveform-last-bucket() - root.waveform-first-bucket() + 2);
     }
 
-    pure function waveform-row-count() -> int {
-        if !root.has-waveform { return 0; }
-        let level = root.waveform-level();
-        return level < 0
-            ? root.tracks[root.track-index].waveform.buckets.length
-            : root.tracks[root.track-index].waveform.levels[level].buckets.length;
+    // 持久列模型：窗口（首桶、列数）与上列函数同源，列下标恒等于槽位序号；
+    // 绑定重求值恒返回同一模型（标识不变，槽位不重建），行值与数量由 Rust 增量同步。
+    // 新批次到达由 pump 直接写列模型触发重绘，不经过本绑定。
+    property <[SlintWaveformBucket]> wave-columns: AudioCallbacks.waveform-view(
+        root.area-key,
+        root.video-index,
+        root.track-index,
+        root.waveform-bucket-duration(),
+        root.waveform-first-bucket(),
+        root.waveform-slot-count());
+
+    pure function waveform-bucket-min(slot: int) -> float {
+        if slot < 0 || slot >= root.wave-columns.length { return 0.0; }
+        return root.wave-columns[slot].min;
     }
 
-    // 包络增益查询：空包络直接返回 1.0，不进 Rust 回调；
-    // 回调是 pure 标注，可进纯函数（见 bridge/callbacks.slint 声明处纯度契约）。
-    pure function envelope-gain-at(video-index: int, track-index: int, time: float) -> float {
-        if track-index < 0 || track-index >= root.tracks.length { return 1.0; }
-        if root.tracks[track-index].envelope.length == 0 { return 1.0; }
-        return VideoCallbacks.envelope-gain(video-index, track-index, time);
+    pure function waveform-bucket-max(slot: int) -> float {
+        if slot < 0 || slot >= root.wave-columns.length { return 0.0; }
+        return root.wave-columns[slot].max;
     }
 
-    pure function waveform-bucket-min(row: int) -> float {
-        if row < 0 || row >= root.waveform-row-count() { return 0.0; }
-        let level = root.waveform-level();
-        let base = level < 0
-            ? root.tracks[root.track-index].waveform.buckets[row].min
-            : root.tracks[root.track-index].waveform.levels[level].buckets[row].min;
-        return base * root.envelope-gain-at(root.video-index, root.track-index, row * root.waveform-bucket-duration());
-    }
-
-    pure function waveform-bucket-max(row: int) -> float {
-        if row < 0 || row >= root.waveform-row-count() { return 0.0; }
-        let level = root.waveform-level();
-        let base = level < 0
-            ? root.tracks[root.track-index].waveform.buckets[row].max
-            : root.tracks[root.track-index].waveform.levels[level].buckets[row].max;
-        return base * root.envelope-gain-at(root.video-index, root.track-index, row * root.waveform-bucket-duration());
-    }
-
-    pure function waveform-bucket-rms(row: int) -> float {
-        if row < 0 || row >= root.waveform-row-count() { return 0.0; }
-        let level = root.waveform-level();
-        let base = level < 0
-            ? root.tracks[root.track-index].waveform.buckets[row].rms
-            : root.tracks[root.track-index].waveform.levels[level].buckets[row].rms;
-        return base * root.envelope-gain-at(root.video-index, root.track-index, row * root.waveform-bucket-duration());
+    pure function waveform-bucket-rms(slot: int) -> float {
+        if slot < 0 || slot >= root.wave-columns.length { return 0.0; }
+        return root.wave-columns[slot].rms;
     }
 
     in property <int> video-index: 0;
@@ -184,7 +160,7 @@ export component AudioWaveformArea inherits Rectangle {
         header-height: root.ruler-height;
         track-pressed(index) => {
             root.track-selected(index);
-            VideoCallbacks.select-audio-track(root.video-index, index);
+            AudioCallbacks.select-audio-track(root.video-index, index);
         }
     }
 
@@ -254,10 +230,9 @@ export component AudioWaveformArea inherits Rectangle {
                 private property <int> bucket-row: root.waveform-first-bucket() + slot;
                 private property <float> bucket-start: self.bucket-row * root.waveform-bucket-duration();
                 private property <float> bucket-end: (self.bucket-row + 1) * root.waveform-bucket-duration();
-                // 只保留与当前 Area 可视时间区间相交的柱。数组边界判断仍然保留，
-                // 这样异步波形尚未解码到该区间时不会读取越界数据。
-                visible: self.bucket-row >= 0
-                    && self.bucket-row < root.waveform-row-count()
+                // 只保留与当前 Area 可视时间区间相交的柱。列数组边界判断仍然保留，
+                // 这样异步波形尚未解码到该区间时不会读取越界数据（越界列为零桶）。
+                visible: slot < root.wave-columns.length
                     && self.bucket-row <= root.waveform-last-bucket()
                     && self.bucket-end >= root.view-time-lo;
                 x: self.bucket-row * root.waveform-bucket-duration() * root.nav-zoom * 1px
@@ -268,9 +243,9 @@ export component AudioWaveformArea inherits Rectangle {
                 // 相邻槽位恰好平铺（x 按桶起始定位），无缝隙无重叠。
                 width: max(1px, root.waveform-bucket-duration() * root.nav-zoom * 1px);
                 height: parent.height - 24px;
-                bucket-min: root.waveform-bucket-min(self.bucket-row);
-                bucket-max: root.waveform-bucket-max(self.bucket-row);
-                bucket-rms: root.waveform-bucket-rms(self.bucket-row);
+                bucket-min: root.waveform-bucket-min(slot);
+                bucket-max: root.waveform-bucket-max(slot);
+                bucket-rms: root.waveform-bucket-rms(slot);
             }
         }
 

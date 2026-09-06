@@ -18,7 +18,7 @@ import { TimelineToolbar } from "../areas/timeline/toolbar.slint";
 import { AudioWaveformArea } from "../areas/audio_waveform.slint";
 import { AudioWaveformToolbar } from "../areas/audio_waveform_toolbar.slint";
 import { SubtitleState } from "../bridge/state.slint";
-import { NodeGraphState, AnimationState, VideoState } from "../bridge/state.slint";
+import { NodeGraphState, AnimationState, VideoState, AudioState } from "../bridge/state.slint";
 import { Theme } from "../theme/index.slint";
 
 // Area 容器组件：包含 Area 的边框、ActionZone 和内容
@@ -164,9 +164,10 @@ export component SlintScrArea inherits Rectangle {
             window-y: root.container-y + self.y;
         }
         if area-type == SlintAreaType.audio-waveform: AudioWaveformArea {
+            area-key: area-key;
             video-index: root.waveform-video-index;
-            tracks: root.waveform-video-index >= 0 && root.waveform-video-index < VideoState.time-bars.length
-                ? VideoState.time-bars[root.waveform-video-index].audio-tracks : [];
+            tracks: root.waveform-video-index >= 0 && root.waveform-video-index < AudioState.audio-tracks.length
+                ? AudioState.audio-tracks[root.waveform-video-index] : [];
             track-index: root.waveform-track-index;
             track-selected(index) => {
                 root.waveform-track-index = index;

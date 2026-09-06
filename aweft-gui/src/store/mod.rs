@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod app_store;
+pub mod audio;
 pub mod node_graph;
 pub mod sequence;
 pub mod sequence_rows_model;

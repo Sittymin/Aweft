@@ -7,13 +7,12 @@ use crate::bridge::types::{
 
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
-use crate::store::video::ui_apply_waveform_batch;
 use aweft_model::ids::ItemId;
 use log::warn;
 use slint::winit_030::winit::{self, event::WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use slint::{ComponentHandle, Model, RenderingState};
-use std::{cell::RefCell, rc::Rc, time::Instant};
+use std::{cell::RefCell, rc::Rc};
 
 /// 设置所有回调
 pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -39,6 +38,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_animation_callbacks(instance, Rc::clone(&store));
     setup_nla_callbacks(instance, Rc::clone(&store));
     setup_video_callbacks(instance, Rc::clone(&store));
+    setup_audio_callbacks(instance, Rc::clone(&store));
 }
 
 /// 设置视口回调：打开/追加/更换视频走系统文件对话框（rfd xdg-portal，异步不阻塞 UI）。
@@ -56,84 +56,6 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         vstate.set_video_heights(slint::ModelRc::from(s.ui_models.video.heights.clone()));
         vstate.set_video_positions(slint::ModelRc::from(s.ui_models.video.positions.clone()));
         vstate.set_time_bars(slint::ModelRc::from(s.ui_models.video.time_bars.clone()));
-    }
-
-    {
-        let s = Rc::clone(&store);
-        let mut ui_log_started_at = Instant::now();
-        let mut ui_batch_count = 0usize;
-        let mut ui_row_count = 0usize;
-        instance.global::<VideoCallbacks>().on_waveform_progress(
-            move |index, track_index, start, duration, buckets| {
-                let ui_batch_started_at = Instant::now();
-                if index < 0 || track_index < 0 {
-                    return;
-                }
-                let index = index as usize;
-                let track_index = track_index as usize;
-                let start = start.max(0) as usize;
-                let store = s.borrow();
-                let video = &store.ui_models.video;
-                let Some(values) = video
-                    .waveform_buckets
-                    .get(index)
-                    .and_then(|tracks| tracks.get(track_index))
-                else {
-                    log::warn!("丢弃越界波形结果: video-index={index}, track-index={track_index}");
-                    return;
-                };
-                ui_apply_waveform_batch(values, start, &buckets.iter().collect::<Vec<_>>());
-                // `buckets` 是本批新增/变更的后缀；不能传当前模型总行数，
-                // 否则音频越长，每批都会重复重算整段历史波形金字塔。
-                update_waveform_levels(
-                    video,
-                    index,
-                    track_index,
-                    start,
-                    buckets.row_count(),
-                );
-                if let Some(model) = video.audio_track_models.get(index)
-                    && let Some(mut track) = model.row_data(track_index)
-                    && (track.waveform.duration - duration).abs() > f32::EPSILON
-                {
-                    track.waveform.duration = duration;
-                    model.set_row_data(track_index, track);
-                }
-                ui_batch_count += 1;
-                ui_row_count += buckets.row_count();
-                if ui_log_started_at.elapsed().as_secs_f32() >= 1.0 {
-                    log::info!(
-                        "波形 UI 更新进度: batches={}, rows={}, last_batch_rows={}, apply_wall={:.3}ms",
-                        ui_batch_count,
-                        ui_row_count,
-                        buckets.row_count(),
-                        ui_batch_started_at.elapsed().as_secs_f64() * 1_000.0,
-                    );
-                    ui_batch_count = 0;
-                    ui_row_count = 0;
-                    ui_log_started_at = Instant::now();
-                }
-            },
-        );
-    }
-
-    {
-        let s = Rc::clone(&store);
-        instance.global::<VideoCallbacks>().on_envelope_gain(
-            move |video_index, track_index, time| {
-                if video_index < 0 || track_index < 0 {
-                    return 1.0;
-                }
-                let store = s.borrow();
-                store
-                    .state()
-                    .audio_tracks
-                    .get(video_index as usize)
-                    .and_then(|tracks| tracks.get(track_index as usize))
-                    .map(|track| crate::store::state::envelope_gain_at(&track.envelope, time))
-                    .unwrap_or(1.0)
-            },
-        );
     }
 
     // 打开/追加视频（首个自动成为主视频）：系统文件对话框（异步不阻塞 UI）
@@ -641,26 +563,64 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
     }
 }
 
-fn update_waveform_levels(
-    video: &crate::store::video::VideoUiState,
-    index: usize,
-    track_index: usize,
-    start: usize,
-    changed_count: usize,
-) {
-    let Some(levels) = video
-        .waveform_level_buckets
-        .get(index)
-        .and_then(|tracks| tracks.get(track_index))
-    else {
-        return;
-    };
-    crate::store::video::update_waveform_pyramid(
-        &video.waveform_buckets[index][track_index],
-        levels,
-        start,
-        changed_count,
-    );
+/// 设置音频接线：绑定 AudioState 音轨模型，并启动波形批次的 UI 线程 pump 任务。
+/// 波形批次属于实时渲染增量例外，直接行级更新持久 VecModel（见
+/// `docs/architecture/video-playback.md`），不走 reducer/depsgraph。
+fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    // 一次性绑定 Rust 持有的音轨模型到 AudioState 全局（共享 inner，后续自动通知）
+    {
+        let s = store.borrow();
+        let astate = instance.global::<crate::bridge::types::AudioState>();
+        astate.set_audio_tracks(slint::ModelRc::from(s.ui_models.audio.tracks.clone()));
+    }
+
+    // 波形后台 worker 经通道发批次，pump 任务在 UI 线程写模型（见
+    // `store::audio::ui_pump_waveform_batches`）。发送端存入 AppState 供任务入队时克隆。
+    {
+        let (ui_sender, ui_receiver) = futures::channel::mpsc::unbounded::<
+            crate::store::audio::WaveformBatch,
+        >();
+        let _ = slint::spawn_local(crate::store::audio::ui_pump_waveform_batches(
+            Rc::clone(&store),
+            ui_receiver,
+        ));
+        store.borrow_mut().state_mut().waveform_ui_sender = Some(ui_sender);
+    }
+
+    // 视图上报：Slint 绑定按导航求值，返回该 Area 的持久列模型（标识恒定，
+    // Slint 侧不重建槽位）。副作用是登记视图并同步列，pump 据此重算新批次。
+    {
+        use crate::bridge::types::{AudioCallbacks, SlintKey};
+        use crate::screen::area::ScrAreaKey;
+        use crate::store::audio::AreaWaveformView;
+        let s = Rc::clone(&store);
+        instance.global::<AudioCallbacks>().on_waveform_view(
+            move |area_key: SlintKey,
+                  video_index: i32,
+                  track_index: i32,
+                  bucket_ms: f32,
+                  first: i32,
+                  count: i32| {
+                if video_index < 0 || track_index < 0 || count <= 0 {
+                    return slint::ModelRc::from(Rc::new(slint::VecModel::default()));
+                }
+                let key: ScrAreaKey = crate::bridge::types::slint_area_key_to_key(&area_key);
+                let view = AreaWaveformView {
+                    video_index: video_index as usize,
+                    track_index: track_index as usize,
+                    bucket_ms: (bucket_ms * 1_000.0).round().max(1.0) as usize,
+                    first,
+                    count: count.max(0) as usize,
+                };
+                let mut store = s.borrow_mut();
+                slint::ModelRc::from(crate::store::audio::ui_sync_waveform_columns(
+                    &mut store.ui_models.audio,
+                    key,
+                    view,
+                ))
+            },
+        );
+    }
 }
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {
     crate::render::video_sink::teardown(&mut store.borrow_mut());

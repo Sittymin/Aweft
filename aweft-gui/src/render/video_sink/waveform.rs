@@ -20,7 +20,7 @@ const WAVEFORM_PROGRESS_BATCH_BUCKETS: usize = 4_096;
 /// 空桶/静音段为全 0，显示为中心零线；只含负样本的桶 `max` 保持 0.0，
 /// 只含正样本的桶 `min` 保持 0.0。
 /// `min` 只减小、`max` 只增大（单调极值）；`rms` 是桶内全部样本的均方根，
-/// 非单调——金字塔用 `rms²×名义跨度` 加权聚合（见 `update_waveform_pyramid`）。
+/// 非单调——可见列聚合用 `rms²` 均值开方（见 `store::audio::fold_waveform_bucket`）。
 /// `sumsq`/`count` 是 rms 的累积状态，不跨模块边界（Slint 侧只有 min/max/rms）。
 #[derive(Clone, Copy, Default, Debug)]
 pub struct WaveformBucket {
@@ -169,8 +169,8 @@ where
             return Ok((buckets, 0.0));
         }
         // 只在 appsink 上等待“数据或取消”最多 20ms；数据一到就立即处理。
-        // 这不是等待 UI：progress 回调只通过 upgrade_in_event_loop 入队，
-        // 解码线程不会等待主线程执行该闭包。短超时仅用于及时响应取消。
+        // 这不是等待 UI：progress 回调只做无界通道发送，解码线程不会等待
+        // UI 线程写模型。短超时仅用于及时响应取消。
         let Some(sample) = appsink.try_pull_sample(gstreamer::ClockTime::from_mseconds(20)) else {
             if parser_exposed_all_pads.load(Ordering::Acquire)
                 && !target_linked.load(Ordering::Acquire)
@@ -677,50 +677,23 @@ mod tests {
         let instance = crate::bridge::types::MainWindow::new().expect("创建无头 MainWindow 失败");
         let tracks = std::rc::Rc::new(slint::VecModel::from(vec![
             crate::bridge::types::SlintAudioTrack {
-                waveform: crate::bridge::types::SlintAudioWaveform {
-                    duration: 2.0,
-                    buckets: std::rc::Rc::new(slint::VecModel::from(vec![
-                        crate::bridge::types::SlintWaveformBucket {
-                            min: -0.25,
-                            max: 0.25,
-                            rms: 0.15,
-                        },
-                        crate::bridge::types::SlintWaveformBucket {
-                            min: -0.75,
-                            max: 0.75,
-                            rms: 0.45,
-                        },
-                    ]))
-                    .into(),
-                    levels: slint::ModelRc::default(),
-                },
+                waveform: crate::bridge::types::SlintAudioWaveform { duration: 2.0 },
                 ..Default::default()
             },
         ]));
         let model = std::rc::Rc::new(slint::VecModel::from(vec![
-            crate::bridge::types::SlintVideoTimeBar {
-                audio_tracks: tracks.into(),
-                ..Default::default()
-            },
+            slint::ModelRc::from(tracks),
         ]));
         instance
-            .global::<crate::bridge::types::VideoState>()
-            .set_time_bars(slint::ModelRc::from(model));
+            .global::<crate::bridge::types::AudioState>()
+            .set_audio_tracks(slint::ModelRc::from(model));
         let track = instance
-            .global::<crate::bridge::types::VideoState>()
-            .get_time_bars()
+            .global::<crate::bridge::types::AudioState>()
+            .get_audio_tracks()
             .row_data(0)
-            .expect("无头 Slint 未收到视频时间条模型")
-            .audio_tracks
+            .expect("无头 Slint 未收到音频轨模型")
             .row_data(0)
             .expect("无头 Slint 未收到嵌套音轨模型");
         assert_eq!(track.waveform.duration, 2.0);
-        assert_eq!(track.waveform.buckets.row_count(), 2);
-        let bucket = track
-            .waveform
-            .buckets
-            .row_data(0)
-            .expect("无头 Slint 未收到波形桶模型");
-        assert_eq!((bucket.min, bucket.max, bucket.rms), (-0.25, 0.25, 0.15));
     }
 }

@@ -1,17 +1,17 @@
 use crate::store::AppStore;
+use crate::store::audio::WaveformBatch;
 use crate::store::state::AudioTrackInfo;
 use gstreamer_pbutils::prelude::*;
-use slint::ComponentHandle as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 struct WaveformJob {
-    window: slint::Weak<crate::bridge::types::MainWindow>,
     uri: String,
     video_index: usize,
     track_index: usize,
     stream_id: String,
     cancellation: Arc<AtomicBool>,
+    ui_sender: futures::channel::mpsc::UnboundedSender<WaveformBatch>,
 }
 
 fn waveform_worker() -> &'static std::sync::mpsc::Sender<WaveformJob> {
@@ -56,35 +56,27 @@ fn run_waveform_job(job: WaveformJob) {
                 return;
             }
             // 渲染桶 → UI 桶是线程/模块边界转换：字段一一对应，
-            // Slint 侧只认 codegen 的 SlintWaveformBucket 类型。
-            let batch = buckets
-                .iter()
-                .map(|bucket| crate::bridge::types::SlintWaveformBucket {
-                    min: bucket.min,
-                    max: bucket.max,
-                    rms: bucket.rms,
-                })
-                .collect::<Vec<_>>();
-            let cancellation = job.cancellation.clone();
-            // 四秒级合批已将事件数压低到与媒体时长成线性的较小规模。这里不能
-            // 同步等待 UI 回执：Area 一旦显示波形，模型通知成本会变化，若让解码
-            // 线程等待可见组件完成求值，后台进度就会错误地依赖当前 Area 类型。
-            let queued = job.window.upgrade_in_event_loop(move |instance| {
-                if cancellation.load(Ordering::Acquire) {
-                    return;
-                }
-                instance
-                    .global::<crate::bridge::types::VideoCallbacks>()
-                    .invoke_waveform_progress(
-                        job.video_index as i32,
-                        job.track_index as i32,
-                        start as i32,
-                        duration,
-                        slint::ModelRc::from(std::rc::Rc::new(slint::VecModel::from(batch))),
-                    );
-            });
-            if let Err(error) = queued {
-                log::warn!("波形批次无法投递到 UI: {error}");
+            // UI 模型行只认 SlintWaveformBucket 类型。
+            let batch = WaveformBatch {
+                video_index: job.video_index,
+                track_index: job.track_index,
+                start,
+                duration,
+                buckets: buckets
+                    .iter()
+                    .map(|bucket| crate::bridge::types::SlintWaveformBucket {
+                        min: bucket.min,
+                        max: bucket.max,
+                        rms: bucket.rms,
+                    })
+                    .collect::<Vec<_>>(),
+                cancellation: job.cancellation.clone(),
+            };
+            // 四秒级合批已将事件数压低到与媒体时长成线性的较小规模。无界通道
+            // 发送不阻塞：UI 线程的 pump 任务负责写模型，解码线程不等待 Area
+            // 的可见组件完成求值，后台进度不会依赖当前 Area 类型。
+            if job.ui_sender.unbounded_send(batch).is_err() {
+                log::warn!("波形批次无法投递到 UI：接收端已关闭");
             }
         },
     );
@@ -176,7 +168,6 @@ pub(super) fn discover_audio_tracks(uri: &str) -> anyhow::Result<Vec<AudioTrackI
             description: tag_text(gstreamer::tags::Description::TAG_NAME),
             encoder: tag_text(gstreamer::tags::Encoder::TAG_NAME),
             encoded_by: tag_text(gstreamer::tags::EncodedBy::TAG_NAME),
-            envelope: Vec::new(),
         });
     }
     Ok(tracks)
@@ -201,7 +192,11 @@ pub(super) fn start_waveform_extractions(
     video_index: usize,
     cancellation: Arc<AtomicBool>,
 ) {
-    let Some(window) = store.main_window.clone() else {
+    if store.main_window.is_none() {
+        return;
+    }
+    let Some(ui_sender) = store.state().waveform_ui_sender.clone() else {
+        log::warn!("波形投递通道尚未安装，跳过视频 {video_index} 的波形任务");
         return;
     };
     let Some(tracks) = store.state().audio_tracks.get(video_index) else {
@@ -217,12 +212,12 @@ pub(super) fn start_waveform_extractions(
         );
         if waveform_worker()
             .send(WaveformJob {
-                window: window.clone(),
                 uri: uri.to_owned(),
                 video_index,
                 track_index,
                 stream_id: track.stream_id.clone(),
                 cancellation: cancellation.clone(),
+                ui_sender: ui_sender.clone(),
             })
             .is_err()
         {

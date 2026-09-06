@@ -31,23 +31,8 @@ export struct SlintWaveformBucket {
     rms: float,
 }
 
-// 每个视频会话的一条音频 min/max/rms 包络。采样在 Rust 中降采样，Slint 只渲染有界数量的桶。
-export struct SlintAudioWaveformLevel {
-    bucket-duration: float,
-    buckets: [SlintWaveformBucket],
-}
-
 export struct SlintAudioWaveform {
     duration: float,
-    buckets: [SlintWaveformBucket],
-    // 预聚合 min/max/rms 层（2/5/10/20/50ms……），与横向标尺的 1/2/5×10^k 主刻度一致；
-    // 波形 Area 按每像素秒数选择层级。
-    levels: [SlintAudioWaveformLevel],
-}
-
-export struct SlintEnvelopePoint {
-    time: float,
-    gain: float,
 }
 
 export struct SlintAudioTrack {
@@ -69,8 +54,6 @@ export struct SlintAudioTrack {
     description: string,
     encoder: string,
     encoded-by: string,
-    // 音量包络点列（空 = 恒等增益 1.0）；绘制层按桶时间求值后乘到 min/max/rms 上。
-    envelope: [SlintEnvelopePoint],
     waveform: SlintAudioWaveform,
 }
 
@@ -205,7 +188,6 @@ export struct SlintVideoTimeBar {
     is-main: bool,
     // 是否显式静音该视频（视口用额外外框表示）
     muted: bool,
-    audio-tracks: [SlintAudioTrack],
 }
 
 // 视频会话在视口世界坐标中的位置（级联错开落点；非主视频可拖拽移动）

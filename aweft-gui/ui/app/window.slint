@@ -20,7 +20,7 @@ import {
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
-import { VideoState, SubtitleState, OverlayState, NodeGraphState, EditOverlayState, AnimationState } from "../bridge/state.slint";
+import { VideoState, AudioState, SubtitleState, OverlayState, NodeGraphState, EditOverlayState, AnimationState } from "../bridge/state.slint";
 import {
     DragCallbacks,
     AreaCallbacks,
@@ -28,12 +28,14 @@ import {
     NodeGraphCallbacks,
     AnimationCallbacks,
     VideoCallbacks,
+    AudioCallbacks,
 } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
 // 重新导出全局对象，使其在 Rust 侧可见
 export {
     VideoState,
+    AudioState,
     SubtitleState,
     OverlayState,
     NodeGraphState,
@@ -45,6 +47,7 @@ export {
     NodeGraphCallbacks,
     AnimationCallbacks,
     VideoCallbacks,
+    AudioCallbacks,
     Theme
 }
 

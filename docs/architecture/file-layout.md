@@ -22,7 +22,7 @@ src/
 ├── bridge/              # Slint ↔ Rust（callbacks / types / converters）
 ├── clipboard/           # 剪贴板（facade 强类型 API + backend 系统/内存 + kinds 数据种类）
 ├── depsgraph/           # 依赖图调度器（DataId / Component / Operation / Tag，graph.rs 调度实现）
-├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video）
+├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video/audio）
 │   └── animation/       # 动画域单 Component（DataId::Animation，Graph+NLA 13 ops，TagKind 隔离）
 │       ├── mod.rs       # 重导出 op_graph_* / op_nla_*，单域注册说明
 │       ├── graph.rs     # 曲线/摄影表 6 ops（GraphStructure/Keyframes/Selection/DragEnded/Channel/Scalars）
@@ -52,9 +52,10 @@ src/
 ├── screen/              # 屏幕布局（area / edge / vertex / map / primitives + ops/：split/join/move_edge/cleanup）
 ├── store/               # 状态中心：`AppState` 持有 `aweft-model::Project`（唯一真相，reducers 改 / projections 只读）+ 各编辑器状态
 │   ├── app_store.rs     # AppStore：dispatch 总表 + depsgraph 求值 + 访问器（单一数据源）
-│   ├── state.rs         # AppState（持有 aweft-model Project + UI 态 + 多视频会话）
-│   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen, video } 汇总
+│   ├── state.rs         # AppState（持有 aweft-model Project + UI 态 + 多视频会话 + 音频发现/播放分支）
+│   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen, video, audio } 汇总
 │   ├── video.rs         # 视频域 UI 状态（多会话帧/尺寸/位置/时间条 VecModel，驱动 VideoState）
+│   ├── audio.rs         # 音频域 UI 状态（各视频音轨行/1ms 基础桶 VecModel + 可见列现算，驱动 AudioState）
 │   ├── utils/           # 通用工具（单一文件夹，避免重复造轮子）
 │   │   ├── marquee.rs   # 时间/行归一化与 clamp（曲线/摄影表/时间线/NLA 复用）
 │   │   ├── selection.rs # 修饰键语义 is_replacing/is_additive/is_toggling（点选/框选全局复用）

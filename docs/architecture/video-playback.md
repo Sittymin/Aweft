@@ -3,8 +3,10 @@
 视频播放位于 `aweft-gui/src/render/video_sink/`。普通媒体 Action 由
 `reducers/media.rs` 编排管线并返回 Video Tag；`reducers/media/playback.rs` 集中
 GStreamer transport、seek、EOS 与播放时钟查询，`reducers/media/waveform.rs` 集中
-后台波形任务，`reducers/media/tests.rs` 保留媒体回归测试。普通状态变更仍经
-`projections/video.rs` 更新派生 UI 模型；帧、播放时钟和波形批次遵循下文的实时例外。
+后台波形任务，`reducers/media/tests.rs` 保留媒体回归测试。视频状态变更经
+`projections/video.rs` 更新 `VideoState` 派生模型，音频模型经 `projections/audio.rs`
+更新 `AudioState` 派生模型（两者由同一 `VideoStructureChanged` tag 驱动，拓扑不变）；
+帧、播放时钟和波形批次遵循下文的实时例外。
 渲染层负责取帧、颜色转换和向 Slint 提交图像。播放中的时间由
 视频管线位置驱动动画标量。暂停时不依赖渲染轮询推进时间：播放头/时间条的主动 seek
 由 reducer 写入会话并返回 `VideoTimeChanged`，暂停态预览帧由 preroll 回调交付；
@@ -111,8 +113,8 @@ appsink`；其中 `queue` 后的 raw-audio 链是未来插入滤镜、分析器�
 媒体范围之外；非焦点音轨的范围外请求时间由该 Area 本地保存。视频画面仍钳制到
 最近的有效帧，并以该视频的彩色竖线同时标出实际画面时间。
 
-波形以固定 1ms 时间桶累计 min/max/rms 三值（Audacity 式包络）；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度，但波形密度独立于标尺：按“每像素秒数”选择桶屏宽 ≥ 1px 的最细预聚合层（2ms、5ms、10ms、20ms、50ms……），因此正常缩放下每像素约一列竖线（min→max 外线加显示 rms 的内层线条），极限放大时线加宽铺满桶区间；不同 Area 各自根据自己的视图缩放选择层级。appsink 连续解码并将约四秒音频对应的基础桶合并为一个 UI 批次；批次异步投递，worker 不等待 Area 的可见组件完成求值，因此切换 Area 不会暂停后台解码。UI 保留持久的
-`VecModel<SlintWaveformBucket>`，通过 `set_row_data`/`push` 原地更新，不按批次克隆完整桶数组或
-重建嵌套模型。预聚合层按覆盖全区间重算（min/max 取极值，rms 按 `rms²×名义跨度` 加权），结果恒精确。
+波形以固定 1ms 时间桶累计 min/max/rms 三值（Audacity 式包络），全文件保留作耐久层；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度，但波形密度独立于标尺：各 Area 按“每像素秒数”选桶屏宽 ≥ 1px 的最细列宽，经 `AudioCallbacks.waveform-view` 上报可视窗口（列宽、首列、列数）并取回持久列模型（`store::audio::ui_sync_waveform_columns` 直接聚合基础桶，不预建全文件金字塔；min/max 取极值，rms 取均方根，结果精确对应覆盖区间；数量变化走局部增删、行值走原地更新，槽位组件不重建），因此正常缩放下每像素约一列竖线（min→max 外线加显示 rms 的内层线条），极限放大时线加宽铺满桶区间；不同 Area 按 `slotmap` 键各自登记视图求值，互不干扰，关闭的 Area 由 pump 顺带裁剪。appsink 连续解码并将约四秒音频对应的基础桶合并为一个 UI 批次；批次经 Rust 无界通道发往 UI 线程的 pump 任务（`store::audio::ui_pump_waveform_batches`）写模型，不经过 Slint 回调，worker 不等待 Area 的可见组件完成求值，因此切换 Area 不会暂停后台解码。解码进度（`waveform.duration` 随批次变）驱动 Slint 列绑定重算，新批次到达即刷新可见列。UI 保留持久的
+`VecModel<SlintWaveformBucket>` 基础桶，通过 `set_row_data`/`push` 原地更新，不按批次克隆完整桶数组或
+重建嵌套模型。
 
 渲染器 teardown 会停止全部管线并释放 sink 的 GPU 资源。
