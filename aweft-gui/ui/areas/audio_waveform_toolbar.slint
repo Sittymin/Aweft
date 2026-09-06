@@ -1,0 +1,106 @@
+// Audio waveform header: the selected video source belongs to this Area instance.
+import { SlintKey, SlintAreaType } from "../core/types.slint";
+import { AreaHeader } from "./area_header.slint";
+import { Mixins } from "../theme/mixins.slint";
+import { Theme } from "../theme/index.slint";
+import { VideoState } from "../bridge/state.slint";
+
+export component AudioWaveformToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+    in property <int> video-index: 0;
+    callback video-selected(index: int);
+    private property <length> video-selector-max-width: min(320px, max(160px, root.width * 0.35));
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+
+        selector := Rectangle {
+            width: min(selector-content.preferred-width, root.video-selector-max-width);
+            height: Theme.data.area-type-switcher.height;
+            background: Theme.data.area-type-switcher.background;
+            border-radius: Theme.data.area-type-switcher.border-radius;
+            border-width: Theme.data.area-type-switcher.border-width;
+            border-color: Theme.data.area-type-switcher.border-color;
+
+            selector-content := HorizontalLayout {
+                padding-left: Theme.data.area-type-switcher.layout-padding-horizontal;
+                padding-right: Theme.data.area-type-switcher.layout-padding-horizontal;
+                spacing: Theme.data.area-type-switcher.popup.item-spacing;
+                alignment: center;
+                width: 100%;
+
+                Text {
+                    text: root.video-index >= 0 && root.video-index < VideoState.time-bars.length
+                        ? VideoState.time-bars[root.video-index].label + " - Audio"
+                        : "No video audio";
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    color: Theme.data.area-type-switcher.popup.item-text-color;
+                    vertical-alignment: center;
+                }
+                Image {
+                    source: @image-url("../assets/icons/arrow_drop_down.svg");
+                    width: Theme.data.area-type-switcher.popup-icon-size;
+                    height: Theme.data.area-type-switcher.popup-icon-size;
+                    vertical-alignment: center;
+                }
+            }
+
+            TouchArea { clicked => { popup.show(); } }
+
+            popup := PopupWindow {
+                x: 0px;
+                y: root.height;
+                width: menu.preferred-width;
+                height: menu.preferred-height;
+
+                Rectangle {
+                    background: Mixins.popup-surface.background;
+                    border-radius: Mixins.popup-surface.border-radius;
+                    border-width: Mixins.popup-surface.border-width;
+                    border-color: Mixins.popup-surface.border-color;
+
+                    menu := VerticalLayout {
+                        padding: Mixins.popup-surface.padding;
+                        spacing: Mixins.popup-surface.spacing;
+
+                        for bar[i] in VideoState.time-bars: item := TouchArea {
+                            clicked => {
+                                root.video-selected(i);
+                                popup.close();
+                            }
+                            Rectangle {
+                                min-height: Mixins.popup-item.min-height;
+                                border-radius: Mixins.popup-item.border-radius;
+                                background: i == root.video-index
+                                    ? Mixins.popup-item.selected-background.mix(Mixins.popup-surface.background, 0.5)
+                                    : (item.has-hover ? Mixins.popup-item.highlight-color : transparent);
+                                HorizontalLayout {
+                                    padding-left: Mixins.popup-item.padding-horizontal;
+                                    padding-right: Mixins.popup-item.padding-horizontal;
+                                    spacing: Mixins.popup-item.spacing;
+                                    Rectangle {
+                                        width: 10px;
+                                        height: 10px;
+                                        border-radius: 5px;
+                                        background: bar.color;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+                                    Text {
+                                        text: bar.label + " - Audio";
+                                        color: Mixins.popup-item.text-color;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,6 +1,6 @@
 // Slint-Rust 桥接层：状态管理
 // Rust 侧通过 set_xxx 更新这些状态
-import { SlintSubtitleRow, SlintTimelineSubBlock } from "../core/types.slint";
+import { SlintSubtitleRow, SlintTimelineSubBlock, SlintAudioTrack } from "../core/types.slint";
 import { GraphLink, GraphNode } from "../areas/node_graph/node_frame.slint";
 import { ContextMenuItem } from "../widgets/context_menu.slint";
 import {
@@ -27,6 +27,12 @@ export global VideoState {
     in property <image> current-video-frame;
     in property <int> video-width: 0;
     in property <int> video-height: 0;
+}
+
+export global AudioState {
+    // 每个视频会话的音频轨（外层下标 = 视频下标；内层 = 该容器内的音轨）。
+    // 与 VideoState.time-bars 平行，不再嵌在时间条行内。
+    in property <[[SlintAudioTrack]]> audio-tracks: [];
 }
 
 // 通用"文本编辑遮罩"状态：内嵌输入框（字符串常量等）聚焦时，

@@ -1,0 +1,103 @@
+import { SlintAudioTrack } from "../core/types.slint";
+import { Sidebar, SidebarPanel } from "../widgets/sidebar.slint";
+import { Theme } from "../theme/index.slint";
+
+component InfoRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 24px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: 72px;
+            text: root.label;
+            color: Theme.data.animation-editor.sidebar-muted-text;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.value != "" ? root.value : "未提供";
+            color: Theme.data.animation-editor.sidebar-header-text;
+            font-size: 11px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+export component AudioTrackSidebar inherits Rectangle {
+    in-out property <bool> open: false;
+    in property <[SlintAudioTrack]> tracks;
+    in property <int> current-track: -1;
+    private property <bool> has-track: root.current-track >= 0
+        && root.current-track < root.tracks.length;
+
+    Sidebar {
+        width: 100%;
+        height: 100%;
+        categories: ["音轨"];
+        open <=> root.open;
+
+        if !root.has-track: SidebarPanel {
+            title: "音轨";
+            Text {
+                text: "未选择音轨";
+                color: Theme.data.animation-editor.sidebar-muted-text;
+                font-size: 12px;
+            }
+        }
+
+        if root.has-track: VerticalLayout {
+            SidebarPanel {
+                title: "概要";
+                InfoRow { label: "名称"; value: root.tracks[root.current-track].label; }
+                InfoRow { label: "语言"; value: root.tracks[root.current-track].language; }
+                InfoRow { label: "声道"; value: root.tracks[root.current-track].channels > 0 ? root.tracks[root.current-track].channels + "" : ""; }
+                InfoRow { label: "布局"; value: root.tracks[root.current-track].channel-layout; }
+                InfoRow {
+                    label: "波形时长";
+                    value: root.tracks[root.current-track].waveform.duration > 0
+                        ? round(root.tracks[root.current-track].waveform.duration * 1000) / 1000 + " s"
+                        : "";
+                }
+            }
+            SidebarPanel {
+                title: "技术信息";
+                InfoRow { label: "编码"; value: root.tracks[root.current-track].codec; }
+                InfoRow {
+                    label: "采样率";
+                    value: root.tracks[root.current-track].sample-rate > 0 ? root.tracks[root.current-track].sample-rate + " Hz" : "";
+                }
+                InfoRow {
+                    label: "位深";
+                    value: root.tracks[root.current-track].bit-depth > 0 ? root.tracks[root.current-track].bit-depth + " bit" : "";
+                }
+                InfoRow {
+                    label: "码率";
+                    value: root.tracks[root.current-track].bitrate > 0 ? round(root.tracks[root.current-track].bitrate / 1000) + " kb/s" : "";
+                }
+                InfoRow {
+                    label: "最大码率";
+                    value: root.tracks[root.current-track].max-bitrate > 0 ? round(root.tracks[root.current-track].max-bitrate / 1000) + " kb/s" : "";
+                }
+            }
+            SidebarPanel {
+                title: "标签";
+                InfoRow { label: "艺术家"; value: root.tracks[root.current-track].artist; }
+                InfoRow { label: "专辑"; value: root.tracks[root.current-track].album; }
+                InfoRow { label: "描述"; value: root.tracks[root.current-track].description; }
+                InfoRow { label: "注释"; value: root.tracks[root.current-track].comment; }
+                InfoRow { label: "编码器"; value: root.tracks[root.current-track].encoder; }
+                InfoRow { label: "编码者"; value: root.tracks[root.current-track].encoded-by; }
+            }
+            SidebarPanel {
+                title: "标识与原始信息";
+                InfoRow { label: "Stream ID"; value: root.tracks[root.current-track].stream-id; }
+                InfoRow { label: "声道掩码"; value: root.tracks[root.current-track].channel-mask; }
+                InfoRow { label: "Caps"; value: root.tracks[root.current-track].caps; }
+            }
+        }
+    }
+}

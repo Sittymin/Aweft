@@ -1,0 +1,94 @@
+import { SlintAudioTrack } from "../core/types.slint";
+import { Theme } from "../theme/index.slint";
+
+// 音频波形左侧音轨面板。条目只依赖 VideoTimeBar 的通用媒体信息，
+// 未来接入独立音频源时可继续复用同一行模型。
+export component AudioTrackPanel inherits Rectangle {
+    in property <[SlintAudioTrack]> tracks;
+    in property <int> current-track: -1;
+    in property <length> header-height: Theme.data.animation-editor.ruler-height;
+    in property <length> row-height: Theme.data.animation-editor.track-row-height;
+    callback track-pressed(index: int);
+
+    private property <float> pan-y: 0.0;
+
+    clip: true;
+    background: Theme.data.animation-editor.channel-list-background;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: root.header-height;
+        background: Theme.data.animation-editor.channel-row-background;
+        Text {
+            x: 8px;
+            width: parent.width - 16px;
+            height: parent.height;
+            text: "音轨";
+            color: Theme.data.animation-editor.channel-muted-text;
+            font-size: 11px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    TouchArea {
+        x: 0px;
+        y: root.header-height;
+        width: 100%;
+        height: root.height - root.header-height;
+        scroll-event(event) => {
+            let content-height = root.tracks.length * (root.row-height / 1px);
+            let view-height = (root.height - root.header-height) / 1px;
+            let max-scroll = max(0.0, content-height - view-height);
+            root.pan-y = min(0.0, max(-max-scroll, root.pan-y + event.delta-y / 1px));
+            return EventResult.accept;
+        }
+    }
+
+    for bar[i] in root.tracks: Rectangle {
+        x: 0px;
+        y: root.header-height + i * root.row-height + root.pan-y * 1px;
+        width: 100%;
+        height: root.row-height;
+        background: i == root.current-track
+            ? Theme.data.animation-editor.channel-row-selected
+            : Theme.data.animation-editor.channel-row-background;
+
+        TouchArea {
+            clicked => { root.track-pressed(i); }
+        }
+
+        HorizontalLayout {
+            spacing: 7px;
+            padding-left: 8px;
+            padding-right: 6px;
+            Rectangle {
+                width: 7px;
+                height: 7px;
+                border-radius: 4px;
+                background: Theme.data.animation-editor.strip-active;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: bar.label;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: i == root.current-track
+                    ? #f2c14e
+                    : Theme.data.animation-editor.channel-text;
+                font-size: 12px;
+                overflow: elide;
+            }
+            Text {
+                text: bar.language != ""
+                    ? bar.language
+                    : (bar.channel-layout != "" ? bar.channel-layout : "音频");
+                vertical-alignment: center;
+                color: Theme.data.animation-editor.channel-muted-text;
+                font-size: 10px;
+            }
+        }
+    }
+}

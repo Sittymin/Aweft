@@ -3,6 +3,7 @@ import {
     ActionZoneCorner,
     SlintAreaType,
     SlintSubtitleRow,
+    SlintWaveformBucket,
     GraphType,
     SlintSelectionModifier,
 } from "../core/types.slint";
@@ -28,6 +29,19 @@ export global AreaCallbacks {
 // 视口回调：打开视频等媒体操作（Rust 侧处理）
 export global VideoCallbacks {
     callback open-video();
+}
+
+// 音频回调：音轨选择与视图上报（Rust 侧处理）。
+// 波形后台批次经 Rust 通道直写基础桶模型，不经过 Slint 回调（见 store/audio.rs）。
+// 视图上报返回该 Area 的持久列模型（标识恒定，Slint 侧不重建槽位）：bucket-ms
+// 为列宽（秒），first/count 为列窗口；上报同时登记视图，pump 据此重算新批次。
+export global AudioCallbacks {
+    // 波形 Area 选择音轨（各 Area 本地 tracks/track-index 自持，仅通知 Rust 侧）
+    callback select-audio-track(video-index: int, track-index: int);
+    // 上报可视窗口并取持久列模型：聚合基础桶，结果恒与覆盖区间精确对应。
+    // pure：返回值仅由参数与基础模型决定（Rust 侧持久化是备忘实现），可进绑定；
+    // 重复求值写相同内容，幂等。
+    pure callback waveform-view(area-key: SlintKey, video-index: int, track-index: int, bucket-ms: float, first: int, count: int) -> [SlintWaveformBucket];
 }
 
 export global SequenceCallbacks {
