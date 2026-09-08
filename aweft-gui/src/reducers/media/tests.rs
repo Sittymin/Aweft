@@ -1,4 +1,3 @@
-
 use super::*;
 use gstreamer::prelude::*;
 use gstreamer_app::AppSink;
@@ -25,6 +24,172 @@ fn rects() -> Vec<VideoRect> {
             h: 100.0,
         }, // 2：独立
     ]
+}
+
+/// tick 入图：逐帧时间传播走 `VideoTick` kind，只推当前时间，
+/// 不触发离散 seek 的全量标量同步（动作名等标量保持不动）。
+#[test]
+fn video_clock_tick_propagates_time_selectively() {
+    use slint::ComponentHandle as _;
+
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    gstreamer::init().expect("初始化 GStreamer 失败");
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = crate::bridge::types::MainWindow::new().unwrap();
+    let mut store = crate::store::AppStore::new(&instance);
+
+    for index in 0..2 {
+        let pipeline = gstreamer::Pipeline::new();
+        let wgpu_sink = crate::render::video_sink::SlintWGPUSink::new();
+        let sink_element = wgpu_sink.element();
+        store
+            .state_mut()
+            .video_sessions
+            .push(crate::store::state::VideoSession {
+                uri: format!("test://tick-{index}"),
+                pipeline,
+                sink_element,
+                wgpu_sink,
+                audio: None,
+                position_x: 0.0,
+                position_y: 0.0,
+                current_time: 3.0,
+                duration: Some(10.0),
+                muted: false,
+                playing: true,
+                at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_frame_seeked: false,
+            });
+    }
+    store.state_mut().main_video = Some(0);
+    store.state_mut().selected_videos = vec![1];
+    store.ui_models.animation.graph.current_time = 0.0;
+    instance
+        .global::<crate::bridge::types::AnimationState>()
+        .set_action_name("SENTINEL".into());
+
+    store.depsgraph.tag(crate::depsgraph::Tag::VideoClockTick);
+    store.evaluate_depsgraph();
+
+    assert_eq!(
+        instance
+            .global::<crate::bridge::types::AnimationState>()
+            .get_current_time(),
+        3.0,
+        "tick 应把活跃视频时间推给动画时间轴"
+    );
+    assert_eq!(
+        instance
+            .global::<crate::bridge::types::AnimationState>()
+            .get_action_name()
+            .as_str(),
+        "SENTINEL",
+        "tick 不得触发离散全量标量同步"
+    );
+}
+
+/// 视图上报入图：打标求值后注册表与列模型同步，Slint 侧拿到的即该模型。
+#[test]
+fn video_waveform_view_routes_through_graph() {
+    use slint::{ComponentHandle as _, Model as _};
+
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = crate::bridge::types::MainWindow::new().unwrap();
+    let mut store = crate::store::AppStore::new(&instance);
+
+    let base = std::rc::Rc::new(slint::VecModel::from(vec![
+        crate::bridge::types::SlintWaveformBucket {
+            min: -0.5,
+            max: 0.5,
+            rms: 0.4,
+        };
+        8
+    ]));
+    store.ui_models.audio.buckets.push(vec![base]);
+    let key: crate::screen::area::ScrAreaKey = slotmap::KeyData::from_ffi(7).into();
+
+    store
+        .depsgraph
+        .tag(crate::depsgraph::Tag::VideoWaveformViewChanged {
+            area: key,
+            video_index: 0,
+            track_index: 0,
+            bucket_ms: 2,
+            first: 1,
+            count: 3,
+        });
+    store.evaluate_depsgraph();
+
+    let columns = store
+        .ui_models
+        .audio
+        .columns
+        .get(&key)
+        .expect("视图上报应创建持久列模型");
+    assert_eq!(columns.row_count(), 3);
+    let first = columns.row_data(0).expect("首列应已聚合");
+    assert_eq!((first.min, first.max), (-0.5, 0.5));
+    assert!(
+        store.ui_models.audio.views.contains_key(&key),
+        "视图应登记注册表供后续批次重算"
+    );
+}
+
+/// EOS 校正走正常分发：reducer 更新状态，打标后投影同步播放标量。
+#[test]
+fn refresh_playing_state_dispatches_through_graph() {
+    use slint::ComponentHandle as _;
+
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    gstreamer::init().expect("初始化 GStreamer 失败");
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = crate::bridge::types::MainWindow::new().unwrap();
+    let mut store = crate::store::AppStore::new(&instance);
+
+    let pipeline = gstreamer::Pipeline::new();
+    let wgpu_sink = crate::render::video_sink::SlintWGPUSink::new();
+    let sink_element = wgpu_sink.element();
+    store
+        .state_mut()
+        .video_sessions
+        .push(crate::store::state::VideoSession {
+            uri: "test://refresh-eos".to_owned(),
+            pipeline,
+            sink_element,
+            wgpu_sink,
+            audio: None,
+            position_x: 0.0,
+            position_y: 0.0,
+            current_time: 9.0,
+            duration: Some(10.0),
+            muted: false,
+            playing: true,
+            at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            last_frame_seeked: false,
+        });
+    store.state_mut().main_video = Some(0);
+    store.state_mut().video_playing = true;
+    instance
+        .global::<crate::bridge::types::VideoState>()
+        .set_playing(true);
+
+    // 经完整分发入图（`dispatch_media` 只返回 tags，入图是 `dispatch` 做的）。
+    // 状态翻转断言隐含打标正确：无 tag 则投影不跑，标量保持原值。
+    store
+        .dispatch(crate::actions::Action::Media(
+            crate::actions::media::MediaAction::Video(
+                crate::actions::media::VideoAction::RefreshPlayingState,
+            ),
+        ))
+        .unwrap();
+    store.evaluate_depsgraph();
+    assert!(!store.state().video_playing, "EOS 会话应校正为未播放");
+    assert!(
+        !instance
+            .global::<crate::bridge::types::VideoState>()
+            .get_playing(),
+        "播放标量应经投影同步"
+    );
 }
 
 #[test]
@@ -86,6 +251,7 @@ fn waveform_seek_syncs_global_time_only_for_active_video() {
                 pipeline,
                 sink_element,
                 wgpu_sink,
+                audio: None,
                 position_x: 0.0,
                 position_y: 0.0,
                 current_time: 0.0,
@@ -113,11 +279,9 @@ fn waveform_seek_syncs_global_time_only_for_active_video() {
         store.state().video_sessions[0].current_time < 10.0,
         "非焦点音轨范围外 seek 也应把视频画面位置钳制在有效范围"
     );
-    assert!(
-        !tags
-            .iter()
-            .any(|tag| matches!(tag, crate::depsgraph::Tag::GraphScalarsChanged))
-    );
+    assert!(!tags
+        .iter()
+        .any(|tag| matches!(tag, crate::depsgraph::Tag::GraphScalarsChanged)));
     assert!(tags.iter().any(|tag| matches!(
         tag,
         crate::depsgraph::Tag::VideoTimeChanged {
@@ -139,10 +303,9 @@ fn waveform_seek_syncs_global_time_only_for_active_video() {
         store.state().video_sessions[1].current_time < 10.0,
         "焦点音轨范围外 seek 应保留全局请求时间，但视频画面位置仍需钳制"
     );
-    assert!(
-        tags.iter()
-            .any(|tag| matches!(tag, crate::depsgraph::Tag::GraphScalarsChanged))
-    );
+    assert!(tags
+        .iter()
+        .any(|tag| matches!(tag, crate::depsgraph::Tag::GraphScalarsChanged)));
     assert!(tags.iter().any(|tag| matches!(
         tag,
         crate::depsgraph::Tag::VideoTimeChanged {
@@ -190,7 +353,7 @@ fn hit_top_returns_topmost_at_point() {
 // 真实 GStreamer 语义：到达 EOS 的管线 `current_state()` 仍是 `Playing`，
 // 但单靠 `set_state(Playing)` 无法恢复出帧，必须先 `seek` 清 EOS。
 // 旧逻辑只切状态、不 seek，于是播放键"按下却画面不动"——只有拖动时间条
-// 触发 seek 才能救活。`media_apply_video_playback(true)` 会对 EOS
+// 触发 seek 才能救活。`media_apply_video_transport(true)` 会对 EOS
 // 会话先 seek 回起点，播放键始终能重启。
 
 /// 用 GStreamer 现场生成一段极短视频（约 0.5s），避免依赖用户机器素材。
@@ -244,7 +407,11 @@ fn tiny_test_video() -> Option<std::path::PathBuf> {
         }
     }
     let _ = pipeline.set_state(gstreamer::State::Null);
-    if out.is_file() { Some(out) } else { None }
+    if out.is_file() {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// 轮询直到 `cond` 为真或超时（毫秒）。用于等管线推进到 EOS / 重启后出帧。
@@ -311,7 +478,7 @@ fn play_restarts_from_eos_after_open() {
     let mut store = crate::store::AppStore::new(&instance);
 
     // 直接搭一条真实解码管线（与 build_session 同源，但本测试不连 WGPU sink）。
-    let (pipeline, sink_element, mut wgpu_sink) =
+    let (pipeline, sink_element, mut wgpu_sink, _audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(
             &url::Url::from_file_path(&video).unwrap().to_string(),
             false,
@@ -349,6 +516,7 @@ fn play_restarts_from_eos_after_open() {
             pipeline,
             sink_element,
             wgpu_sink,
+            audio: None,
             position_x: 0.0,
             position_y: 0.0,
             current_time: 0.0,
@@ -415,10 +583,11 @@ fn play_controls_selected_video_sessions_and_defaults_to_main() {
 
     // 两条独立真实解码管线（同源短片，互不影响）
     let build = || {
-        let (p, s, w) = crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(
-            &uri, false, false,
-        )
-        .expect("搭建解码管线失败");
+        let (p, s, w, _audio) =
+            crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(
+                &uri, false, false,
+            )
+            .expect("搭建解码管线失败");
         p.set_state(gstreamer::State::Playing).expect("启动失败");
         (p, s, w)
     };
@@ -447,6 +616,7 @@ fn play_controls_selected_video_sessions_and_defaults_to_main() {
             pipeline: p0,
             sink_element: s0,
             wgpu_sink: w0,
+            audio: None,
             position_x: 0.0,
             position_y: 0.0,
             current_time: 0.0,
@@ -464,6 +634,7 @@ fn play_controls_selected_video_sessions_and_defaults_to_main() {
             pipeline: p1,
             sink_element: s1,
             wgpu_sink: w1,
+            audio: None,
             position_x: 50.0,
             position_y: 50.0,
             current_time: 0.0,
@@ -571,7 +742,7 @@ fn play_controls_selected_video_sessions_and_defaults_to_main() {
     store.state_mut().video_sessions[1].current_time = 0.3;
     store.ui_models.animation.graph.current_time = 12.0;
     assert!(
-        !media_active_video_drives_timeline(&store),
+        !media_should_active_video_drive_timeline(&store),
         "焦点视频暂停时不应因其它视频播放而驱动时间轴"
     );
     crate::projections::ui_sync_active_video_time_realtime(&mut store);
@@ -595,7 +766,7 @@ fn resume_continues_from_paused_position() {
     let instance = crate::bridge::types::MainWindow::new().unwrap();
     let mut store = crate::store::AppStore::new(&instance);
 
-    let (pipeline, sink_element, mut wgpu_sink) =
+    let (pipeline, sink_element, mut wgpu_sink, _audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
             .expect("搭建解码管线失败");
     pipeline
@@ -627,7 +798,7 @@ fn resume_continues_from_paused_position() {
 
     // 模拟渲染循环里的 render_sync_video_playback_time：把真实播放位置同步进 current_time。
     // 背压下 pipeline.query_position 在暂停时会回退到 sink 已提交位置（滞后于解码位置），
-    // 因此续播必须以 current_time 为准（media_apply_video_playback 也是这么做）。
+    // 因此续播必须以 current_time 为准（media_apply_video_transport 也是这么做）。
     let play_pos = pipeline
         .query_position::<gstreamer::ClockTime>()
         .expect("播放中应能查询位置");
@@ -641,6 +812,7 @@ fn resume_continues_from_paused_position() {
             pipeline,
             sink_element,
             wgpu_sink,
+            audio: None,
             position_x: 0.0,
             position_y: 0.0,
             current_time: play_secs,
@@ -670,7 +842,7 @@ fn resume_continues_from_paused_position() {
         .pipeline
         .query_position::<gstreamer::ClockTime>()
         .expect("暂停时应有位置");
-    // 续播点以 current_time 为准（见 media_apply_video_playback）；此处仅校验明显已推进、非空
+    // 续播点以 current_time 为准（见 media_apply_video_transport）；此处仅校验明显已推进、非空
     let pause_point = gstreamer::ClockTime::from_nseconds(
         (store.state().video_sessions[0].current_time * 1_000_000_000.0) as u64,
     );
@@ -729,7 +901,7 @@ fn drag_seek_moves_playback_position() {
     let instance = crate::bridge::types::MainWindow::new().unwrap();
     let mut store = crate::store::AppStore::new(&instance);
 
-    let (pipeline, sink_element, mut wgpu_sink) =
+    let (pipeline, sink_element, mut wgpu_sink, _audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
             .expect("搭建解码管线失败");
     pipeline
@@ -755,6 +927,7 @@ fn drag_seek_moves_playback_position() {
             pipeline,
             sink_element,
             wgpu_sink,
+            audio: None,
             position_x: 0.0,
             position_y: 0.0,
             current_time: 0.0,
@@ -846,7 +1019,7 @@ fn paused_seek_past_end_prerolls_last_frame() {
         return;
     };
     let uri = url::Url::from_file_path(&video).unwrap().to_string();
-    let (pipeline, sink_element, wgpu_sink) =
+    let (pipeline, sink_element, wgpu_sink, _audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
             .expect("搭建解码管线失败");
     let appsink = sink_element
@@ -898,6 +1071,7 @@ fn paused_seek_past_end_prerolls_last_frame() {
         pipeline: pipeline.clone(),
         sink_element,
         wgpu_sink,
+        audio: None,
         position_x: 0.0,
         position_y: 0.0,
         current_time: 0.0,
@@ -986,27 +1160,354 @@ fn paused_seek_past_end_prerolls_last_frame() {
         .set_state(gstreamer::State::Null);
 }
 
-/// 验证 `gst_set_audio_muted` 能真正落到音频 sink 上：
-/// `volume` 元素同时暴露 `mute` 与 `volume`，正是兜底分支命中的元素类型
-/// （与 pulsesink/autoaudiosink→child 同一条设置路径）。若此断言通过，
-/// 说明拖拽静音的属性写入逻辑有效，运行时无声音是该路径生效的直接结果。
+/// 回归：播放中直接 seek（SeekVideo）到媒体时长之外会被钳制停靠为暂停。该路径
+/// 没有 EOS，逐帧渲染不会自动校正播放按钮；seek 后必须刷新全局播放状态并打
+/// `VideoPlaybackChanged`，否则主播放按钮停在"播放中"，下一次按下被 Toggle
+/// 误判成"暂停"，表现为停住后按播放再也无法续播。
 #[test]
-fn drag_audio_mute_targets_audio_sink() {
-    use gstreamer::prelude::*;
-    gstreamer::init().unwrap();
-    let pipeline = gstreamer::Pipeline::new();
-    let vol = gstreamer::ElementFactory::make("volume")
-        .build()
-        .expect("需要 volume 插件来验证静音逻辑");
-    pipeline.add(&vol).unwrap();
+fn playing_seek_past_end_refreshes_play_button_and_resumes() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(video) = tiny_test_video() else {
+        eprintln!("跳过：GStreamer 不可用或测试视频生成失败");
+        return;
+    };
+    let uri = url::Url::from_file_path(&video).unwrap().to_string();
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = crate::bridge::types::MainWindow::new().unwrap();
+    let mut store = crate::store::AppStore::new(&instance);
 
-    gst_set_audio_muted(&pipeline, true);
-    assert!(vol.property::<bool>("mute"), "静音时应置 mute=true");
-    assert_eq!(vol.property::<f64>("volume"), 0.0, "静音时应置 volume=0");
+    let (pipeline, sink_element, wgpu_sink, _audio) =
+        crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
+            .expect("搭建解码管线失败");
+    pipeline
+        .set_state(gstreamer::State::Paused)
+        .expect("暂停预滚动失败");
+    let _ = pipeline.state(Some(gstreamer::ClockTime::from_seconds(5)));
+    let duration = pipeline
+        .query_duration::<gstreamer::ClockTime>()
+        .expect("测试视频没有 duration");
+    let duration_secs = duration.nseconds() as f64 / 1_000_000_000.0;
 
-    gst_set_audio_muted(&pipeline, false);
-    assert!(!vol.property::<bool>("mute"), "解除静音应置 mute=false");
-    assert_eq!(vol.property::<f64>("volume"), 1.0, "解除静音应置 volume=1");
+    store
+        .state_mut()
+        .video_sessions
+        .push(crate::store::state::VideoSession {
+            uri,
+            pipeline,
+            sink_element,
+            wgpu_sink,
+            audio: None,
+            position_x: 0.0,
+            position_y: 0.0,
+            current_time: 0.0,
+            duration: Some(duration_secs),
+            muted: false,
+            playing: false,
+            at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_frame_seeked: false,
+        });
+    store.state_mut().main_video = Some(0);
+
+    // 先播起来。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Play,
+        ))
+        .unwrap();
+    assert!(
+        pump_until(&mut store, 3000, |store| {
+            store.state().video_playing
+                && store.state().video_sessions[0]
+                    .pipeline
+                    .query_position::<gstreamer::ClockTime>()
+                    .is_some_and(|position| position > gstreamer::ClockTime::from_mseconds(30))
+        }),
+        "会话应先进入播放并前进"
+    );
+
+    // 播放中 seek 到范围外：钳制停靠为暂停，按钮标量必须同步翻回（播放按钮显
+    // 示为可再次播放），否则下一次按下会被 Toggle 当暂停处理。
+    let past_end_ms = ((duration_secs + 0.5) * 1000.0) as i64;
+    let tags = store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::SeekVideo {
+                index: 0,
+                timestamp: past_end_ms,
+            },
+        ))
+        .unwrap();
+    assert!(
+        !store.state().video_playing,
+        "播放中越界 seek 停靠后，全局播放状态必须翻回暂停"
+    );
+    assert!(
+        tags.iter().any(|tag| matches!(
+            tag,
+            crate::depsgraph::Tag::VideoPlaybackChanged
+        )),
+        "越界停靠后必须打 VideoPlaybackChanged，主按钮才会更新"
+    );
+
+    // 停靠后再次播放应从钳制位置恢复正向推进。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Play,
+        ))
+        .unwrap();
+    assert!(
+        store.state().video_playing,
+        "再次按下播放应重新进入播放态"
+    );
+    assert!(
+        pump_until(&mut store, 3000, |store| {
+            store.state().video_sessions[0]
+                .pipeline
+                .query_position::<gstreamer::ClockTime>()
+                .is_some_and(|position| {
+                    position > gstreamer::ClockTime::from_mseconds(50) && position < duration
+                })
+        }),
+        "越界停靠后再次播放应正向推进"
+    );
+    let _ = store.state().video_sessions[0]
+        .pipeline
+        .set_state(gstreamer::State::Null);
+}
+
+/// 引擎级复现"播放中单击时间条到结尾之后"：播放 → 拖拽式 Seek（`VideoAction::Seek`）
+/// 越界钳制停靠 → 再 Seek 回范围内 → 按播放。必须能正向续播，且每次把播放中的
+/// 会话停靠下来都要立即刷新按钮标量。
+#[test]
+fn seek_clamp_cycle_while_playing_then_resumes() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(video) = tiny_test_video() else {
+        eprintln!("跳过：GStreamer 不可用或测试视频生成失败");
+        return;
+    };
+    let uri = url::Url::from_file_path(&video).unwrap().to_string();
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = crate::bridge::types::MainWindow::new().unwrap();
+    let mut store = crate::store::AppStore::new(&instance);
+
+    let (pipeline, sink_element, wgpu_sink, _audio) =
+        crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
+            .expect("搭建解码管线失败");
+    pipeline
+        .set_state(gstreamer::State::Paused)
+        .expect("暂停预滚动失败");
+    let _ = pipeline.state(Some(gstreamer::ClockTime::from_seconds(5)));
+    let duration = pipeline
+        .query_duration::<gstreamer::ClockTime>()
+        .expect("测试视频没有 duration");
+    let duration_secs = duration.nseconds() as f64 / 1_000_000_000.0;
+    let past_end_ms = ((duration_secs + 0.5) * 1000.0) as i64;
+    let mid_ms = ((duration_secs * 0.5) * 1000.0) as i64;
+
+    store
+        .state_mut()
+        .video_sessions
+        .push(crate::store::state::VideoSession {
+            uri,
+            pipeline,
+            sink_element,
+            wgpu_sink,
+            audio: None,
+            position_x: 0.0,
+            position_y: 0.0,
+            current_time: 0.0,
+            duration: Some(duration_secs),
+            muted: false,
+            playing: false,
+            at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_frame_seeked: false,
+        });
+    store.state_mut().main_video = Some(0);
+
+    // 1) 播起来。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Play,
+        ))
+        .unwrap();
+    assert!(
+        pump_until(&mut store, 3000, |store| {
+            store.state().video_playing
+                && store.state().video_sessions[0]
+                    .pipeline
+                    .query_position::<gstreamer::ClockTime>()
+                    .is_some_and(|p| p > gstreamer::ClockTime::from_mseconds(30))
+        }),
+        "会话应先进入播放并前进"
+    );
+
+    // 2) 播放中单击到结尾之后：`Seek` 越界，钳制停靠为暂停。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Seek {
+                timestamp: past_end_ms,
+            },
+        ))
+        .unwrap();
+    assert!(
+        !store.state().video_playing,
+        "Seek 路径越界停靠后按钮标量必须翻回暂停（真实单击不再续播的根因）"
+    );
+
+    // 3) Seek 回范围内（暂停预览）。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Seek { timestamp: mid_ms },
+        ))
+        .unwrap();
+    assert!(
+        (store.state().video_sessions[0].current_time - duration_secs * 0.5).abs() < 0.05,
+        "范围内 Seek 应落在请求点"
+    );
+
+    // 4) 按播放应正向续播。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Play,
+        ))
+        .unwrap();
+    assert!(store.state().video_playing, "再次播放应进入播放态");
+    assert!(
+        pump_until(&mut store, 3000, |store| {
+            store.state().video_sessions[0]
+                .pipeline
+                .query_position::<gstreamer::ClockTime>()
+                .is_some_and(|position| position > gstreamer::ClockTime::from_mseconds(50))
+        }),
+        "越界→回范围→播放应正向推进"
+    );
+    let _ = store.state().video_sessions[0]
+        .pipeline
+        .set_state(gstreamer::State::Null);
+}
+
+/// 拖拽（SeekBegin…Seek…SeekEnd）把播放中的会话拖到范围外停靠时，拖动过程中
+/// 播放按钮必须保持拖拽前的播放态（不随 flush-seek 过渡态闪烁），释放（SeekEnd）
+/// 后才按结果决定：停在末帧 → 自动翻回暂停。这是"到末帧自动暂停、拖动中不更新
+/// 按钮"的既定语义。
+#[test]
+fn drag_park_out_of_range_keeps_button_stable_then_ends_paused() {
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(video) = tiny_test_video() else {
+        eprintln!("跳过：GStreamer 不可用或测试视频生成失败");
+        return;
+    };
+    let uri = url::Url::from_file_path(&video).unwrap().to_string();
+    i_slint_backend_testing::init_no_event_loop();
+    let instance = crate::bridge::types::MainWindow::new().unwrap();
+    let mut store = crate::store::AppStore::new(&instance);
+
+    let (pipeline, sink_element, wgpu_sink, _audio) =
+        crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
+            .expect("搭建解码管线失败");
+    pipeline
+        .set_state(gstreamer::State::Paused)
+        .expect("暂停预滚动失败");
+    let _ = pipeline.state(Some(gstreamer::ClockTime::from_seconds(5)));
+    let duration = pipeline
+        .query_duration::<gstreamer::ClockTime>()
+        .expect("测试视频没有 duration");
+    let duration_secs = duration.nseconds() as f64 / 1_000_000_000.0;
+    let past_end_ms = ((duration_secs + 0.5) * 1000.0) as i64;
+
+    store
+        .state_mut()
+        .video_sessions
+        .push(crate::store::state::VideoSession {
+            uri,
+            pipeline,
+            sink_element,
+            wgpu_sink,
+            audio: None,
+            position_x: 0.0,
+            position_y: 0.0,
+            current_time: 0.0,
+            duration: Some(duration_secs),
+            muted: false,
+            playing: false,
+            at_eos: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_frame_seeked: false,
+        });
+    store.state_mut().main_video = Some(0);
+
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Play,
+        ))
+        .unwrap();
+    assert!(
+        pump_until(&mut store, 3000, |store| {
+            store.state().video_playing
+                && store.state().video_sessions[0]
+                    .pipeline
+                    .query_position::<gstreamer::ClockTime>()
+                    .is_some_and(|p| p > gstreamer::ClockTime::from_mseconds(30))
+        }),
+        "会话应先进入播放并前进"
+    );
+
+    // 模拟时间条按下（拖拽会话建立）。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::SeekBegin {
+                index: 0,
+                is_batch: false,
+            },
+        ))
+        .unwrap();
+    assert!(store.state().video_seek_session.is_some(), "应进入拖拽会话");
+    assert!(store.state().video_playing, "拖拽开始按钮保持播放态");
+
+    // 拖拽移动把会话拖到范围外：会话停靠末帧，但拖动过程中按钮保持播放态。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Seek {
+                timestamp: past_end_ms,
+            },
+        ))
+        .unwrap();
+    assert!(
+        store.state().video_playing,
+        "拖动中播放按钮应保持拖拽前的播放态（不得随停靠立即翻回）"
+    );
+    assert!(
+        store.state().video_sessions[0].last_frame_seeked && !store.state().video_sessions[0].playing,
+        "拖到范围外会话应已停靠末帧"
+    );
+
+    // 释放：停在末帧 → 自动暂停（按钮翻回）。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::SeekEnd,
+        ))
+        .unwrap();
+    assert!(!store.state().video_playing, "释放后停在末帧应自动暂停");
+
+    // 暂停后再次播放可从起点重新正向推进。
+    store
+        .dispatch_media(crate::actions::media::MediaAction::Video(
+            crate::actions::media::VideoAction::Play,
+        ))
+        .unwrap();
+    assert!(store.state().video_playing, "再次播放应进入播放态");
+    assert!(
+        pump_until(&mut store, 3000, |store| {
+            store.state().video_sessions[0]
+                .pipeline
+                .query_position::<gstreamer::ClockTime>()
+                .is_some_and(|position| {
+                    position > gstreamer::ClockTime::from_mseconds(50) && position < duration
+                })
+        }),
+        "末帧暂停后再次播放应正向推进"
+    );
+    let _ = store.state().video_sessions[0]
+        .pipeline
+        .set_state(gstreamer::State::Null);
 }
 
 /// 复现：拖拽期间 Header 播放按钮不应随 flush-seek 的过渡态闪烁。
@@ -1024,7 +1525,7 @@ fn drag_keeps_header_play_state_stable() {
     let instance = crate::bridge::types::MainWindow::new().unwrap();
     let mut store = crate::store::AppStore::new(&instance);
 
-    let (pipeline, sink_element, wgpu_sink) =
+    let (pipeline, sink_element, wgpu_sink, _audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
             .expect("搭建解码管线失败");
     store
@@ -1035,6 +1536,7 @@ fn drag_keeps_header_play_state_stable() {
             pipeline,
             sink_element,
             wgpu_sink,
+            audio: None,
             position_x: 0.0,
             position_y: 0.0,
             current_time: 0.0,

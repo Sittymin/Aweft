@@ -55,6 +55,8 @@ pub struct VideoSession {
     pub sink_element: gstreamer::Element,
     // WGPU 视频 Sink 实例
     pub wgpu_sink: crate::render::video_sink::SlintWGPUSink,
+    // 会话内实时音频分支（与视频同管线同源；无音轨媒体为 None，尾段惰性装配）。
+    pub(crate) audio: Option<crate::render::video_sink::audio::SessionAudio>,
     // 视口世界坐标位置（相对主视频世界矩形左上角；级联错开，可拖拽移动）
     pub position_x: f64,
     pub position_y: f64,
@@ -70,13 +72,6 @@ pub struct VideoSession {
     pub at_eos: std::sync::Arc<AtomicBool>,
     // 已为当前尾端位置发出末帧 segment seek；连续范围外拖动时据此去重。
     pub last_frame_seeked: bool,
-}
-
-/// 当前视频会话使用的实时音频播放分支。它与视频管线分离，目标音轨由
-/// 波形 Area 的 stream-id 选择；volume 是未来滤镜链之前的统一静音/增益入口。
-pub struct AudioPlayback {
-    pub pipeline: gstreamer::Pipeline,
-    pub volume: gstreamer::Element,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,10 +124,9 @@ pub struct AppState {
     pub current_drag_operation: DragOperation,
     // 全部视频会话（多视频播放/导航的核心数据）
     pub video_sessions: Vec<VideoSession>,
-    // 与 video_sessions 同下标；每个元素是该媒体容器内发现的音频流。
+    // 与 video_sessions 同下标；该媒体容器内发现的音频流。
     pub audio_tracks: Vec<Vec<AudioTrackInfo>>,
-    // 与 video_sessions 同下标；当前实时播放的音轨分支（可按 Area 选择切换）。
-    pub audio_playbacks: Vec<Option<AudioPlayback>>,
+    // 与 video_sessions 同下标；当前选中的音轨（在 audio_tracks 内的下标）。
     pub audio_track_indices: Vec<Option<usize>>,
     // 与 video_sessions 同下标的波形后台任务取消令牌。媒体替换/teardown 时置位，
     // 防止迟到的后台结果覆盖新会话。
@@ -171,7 +165,6 @@ impl AppState {
             current_drag_operation: DragOperation::None,
             video_sessions: Vec::new(),
             audio_tracks: Vec::new(),
-            audio_playbacks: Vec::new(),
             audio_track_indices: Vec::new(),
             waveform_cancellations: Vec::new(),
             waveform_ui_sender: None,
@@ -201,5 +194,3 @@ impl AppState {
         self.selected_videos.last().copied().or(self.main_video)
     }
 }
-
-

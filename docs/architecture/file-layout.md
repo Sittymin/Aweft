@@ -45,6 +45,7 @@ src/
 │   ├── subtitle.wgsl    # 字幕着色器
 │   └── video_sink/      # 视频播放（GStreamer → wgpu → Slint）
 │       ├── mod.rs       # 播放管线生命周期
+│       ├── audio.rs     # 会话内实时音频分支（input-selector 选流，与视频同管线同源同钟）
 │       ├── wgpu.rs      # appsink、帧队列和 YUV→RGB
 │       ├── dmabuf.rs    # DMA-BUF 平面导入
 │       ├── yuv_convert.wgsl # YUV→RGB 着色器

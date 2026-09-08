@@ -47,7 +47,7 @@ fn run_waveform_job(job: WaveformJob) {
         job.stream_id,
         std::thread::current().name().unwrap_or("<unnamed>"),
     );
-    let result = crate::render::video_sink::waveform::extract_cancelable(
+    let result = crate::render::video_sink::waveform::decode_waveform_buckets(
         &job.uri,
         &job.stream_id,
         || job.cancellation.load(Ordering::Acquire),

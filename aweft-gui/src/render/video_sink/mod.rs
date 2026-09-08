@@ -1,10 +1,12 @@
 //! 视频播放：appsink 硬解管线 + dmabuf 零拷贝导入（或 sysmem 上传回退）+
 //! wgpu 离屏 YUV→RGB + slint::Image。
 //! ```text
-//! uridecodebin(硬解) → vapostproc(GPU 444p10→P010/NV12 转换) → appsink(dmabuf)
+//! urisourcebin → parsebin → 视频 decodebin(硬解) → vapostproc(GPU 转换) → appsink(dmabuf)
 //!   → 每 plane fd → Vulkan 导入(VK_EXT_external_memory_dma_buf) → yuv_convert
 //!   → slint::Image(零拷贝)
 //! ```
+//! 会话内的实时音频分支与视频同管线同源（见 `audio`），音轨经 input-selector
+//! 选流后走独立的 decodebin → 尾段，与视频共享管线时钟。
 //! dmabuf 不可用（无 VA / 非 Vulkan 后端 / stride 不匹配）时协商自动落
 //! sysmem NV12 或 mmap 上传，路径选择见 `frame` 与 `dmabuf`。
 //! （Wayland 子 surface 直通方案因跨 Rust/C 两套 libwayland 连接不可行而移除，
@@ -28,6 +30,7 @@
 //! WGSL 转色」就是本机硬件上的最优形态。能力探针见
 //! `tests::test_dmabuf_rgba_ab24_import_spike`，驱动升级后可复验。
 
+pub(crate) mod audio;
 pub(crate) mod convert;
 pub(crate) mod dmabuf;
 pub(crate) mod frame;
@@ -75,7 +78,7 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
                 .features()
                 .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
         });
-    let (pipeline, sink_element, wgpu_sink) =
+    let (pipeline, sink_element, wgpu_sink, session_audio) =
         pipeline::build_decode_pipeline_with_dmabuf(uri, ten_bit, dmabuf)?;
 
     // 先完整连接候选会话；连接失败时回滚，避免留下半初始化状态。
@@ -89,7 +92,7 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
         std::sync::Arc::clone(&at_eos),
         playback_dirty,
     ) {
-        stop_session_parts(&pipeline, &sink_element, wgpu_sink);
+        stop_session_parts(&pipeline, wgpu_sink);
         return Err(error);
     }
     let duration = gst_query_pipeline_duration_secs(&pipeline);
@@ -99,6 +102,7 @@ pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSess
         pipeline,
         sink_element,
         wgpu_sink,
+        audio: Some(session_audio),
         position_x: 0.0,
         position_y: 0.0,
         current_time: 0.0,
@@ -194,7 +198,6 @@ fn connect_pipeline_to_wgpu(
 /// 停止单个会话的管线与 sink（替换/回滚时复用）。
 pub(crate) fn stop_session_parts(
     pipeline: &gstreamer::Pipeline,
-    _sink_element: &gstreamer::Element,
     mut wgpu_sink: sink::SlintWGPUSink,
 ) {
     if let Err(error) = pipeline.set_state(gstreamer::State::Null) {
@@ -210,16 +213,11 @@ pub(crate) fn teardown(store: &mut AppStore) {
     }
     store.state_mut().waveform_ui_sender.take();
     let sessions = std::mem::take(&mut store.state_mut().video_sessions);
-    let audio_playbacks = std::mem::take(&mut store.state_mut().audio_playbacks);
     store.state_mut().audio_track_indices.clear();
     store.state_mut().audio_tracks.clear();
-    for playback in audio_playbacks.into_iter().flatten() {
-        if let Err(error) = playback.pipeline.set_state(gstreamer::State::Null) {
-            log::warn!("停止独立音频管线失败: {error}");
-        }
-    }
+    // 音频分支位于会话管线内（同源同钟），置 Null 时随会话一并释放，无需单独处理。
     for session in sessions {
-        stop_session_parts(&session.pipeline, &session.sink_element, session.wgpu_sink);
+        stop_session_parts(&session.pipeline, session.wgpu_sink);
     }
     store.state_mut().main_video = None;
     store.state_mut().selected_videos.clear();

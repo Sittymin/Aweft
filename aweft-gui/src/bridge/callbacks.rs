@@ -587,12 +587,11 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         store.borrow_mut().state_mut().waveform_ui_sender = Some(ui_sender);
     }
 
-    // 视图上报：Slint 绑定按导航求值，返回该 Area 的持久列模型（标识恒定，
-    // Slint 侧不重建槽位）。副作用是登记视图并同步列，pump 据此重算新批次。
+    // 视图上报：Slint 绑定按导航求值，经依赖图同步该 Area 的持久列模型
+    // （标识恒定，Slint 侧不重建槽位），返回模型供绑定。pump 据登记视图重算新批次。
     {
         use crate::bridge::types::{AudioCallbacks, SlintKey};
         use crate::screen::area::ScrAreaKey;
-        use crate::store::audio::AreaWaveformView;
         let s = Rc::clone(&store);
         instance.global::<AudioCallbacks>().on_waveform_view(
             move |area_key: SlintKey,
@@ -605,19 +604,24 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                     return slint::ModelRc::from(Rc::new(slint::VecModel::default()));
                 }
                 let key: ScrAreaKey = crate::bridge::types::slint_area_key_to_key(&area_key);
-                let view = AreaWaveformView {
+                let mut store = s.borrow_mut();
+                store.depsgraph.tag(crate::depsgraph::Tag::VideoWaveformViewChanged {
+                    area: key,
                     video_index: video_index as usize,
                     track_index: track_index as usize,
                     bucket_ms: (bucket_ms * 1_000.0).round().max(1.0) as usize,
                     first,
                     count: count.max(0) as usize,
-                };
-                let mut store = s.borrow_mut();
-                slint::ModelRc::from(crate::store::audio::ui_sync_waveform_columns(
-                    &mut store.ui_models.audio,
-                    key,
-                    view,
-                ))
+                });
+                store.evaluate_depsgraph();
+                let model = store
+                    .ui_models
+                    .audio
+                    .columns
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| Rc::new(slint::VecModel::default()));
+                slint::ModelRc::from(model)
             },
         );
     }
@@ -661,16 +665,27 @@ fn handle_before_rendering(_instance: &MainWindow, store: &Rc<RefCell<AppStore>>
     }
 
     // 新 sample/preroll 回调是播放渲染的唯一驱动；其它窗口重绘不查询媒体管线。
+    // 时间传播走依赖图 tick kind（与离散 seek 共实现、调度统一），逐帧全量标量
+    // 仍由 kind 隔离（`GraphScalars` 只跟 `VideoTime`）。
     if received_frame {
-        crate::projections::ui_sync_active_video_time_realtime(&mut store_mut);
+        store_mut.depsgraph.tag(crate::depsgraph::Tag::VideoClockTick);
+        store_mut.evaluate_depsgraph();
     }
     // Bus 在 EOS 时置一次脏标记并请求重绘。普通窗口重绘不遍历 transport 目标。
+    // 校正走正常分发（reducer 更新状态 + `VideoPlaybackChanged` 投影标量）。
     let playback_dirty = store_mut
         .state()
         .video_playback_dirty
         .swap(false, std::sync::atomic::Ordering::AcqRel);
-    if playback_dirty && crate::reducers::media::media_refresh_video_playing_state(&mut store_mut) {
-        crate::projections::ui_sync_video_playback_scalar(&store_mut);
+    if playback_dirty {
+        use crate::actions::media::{MediaAction, VideoAction};
+        use crate::actions::Action;
+        if let Err(error) = store_mut.dispatch(Action::Media(MediaAction::Video(
+            VideoAction::RefreshPlayingState,
+        ))) {
+            log::error!("播放状态校正分发失败: {error}");
+        }
+        store_mut.evaluate_depsgraph();
     }
 }
 
@@ -698,13 +713,13 @@ fn render_sync_video_playback_time(store: &mut AppStore, index: usize) {
             crate::projections::ui_update_video_time_bar_duration(&bars, index, duration);
         }
     }
-    let Some((secs, frame_dur)) = crate::reducers::media::gst_session_playing_position(session)
+    let Some(position) = crate::reducers::media::gst_session_playing_position(session)
     else {
         return;
     };
-    let snapped = match frame_dur {
-        Some(d) if d > f64::EPSILON => (secs / d).floor() * d,
-        _ => secs,
+    let snapped = match position.frame_duration_secs {
+        Some(d) if d > f64::EPSILON => (position.secs / d).floor() * d,
+        _ => position.secs,
     };
     if !dragged && (session.current_time - snapped).abs() >= 0.0005 {
         session.current_time = snapped;
@@ -1722,6 +1737,28 @@ fn setup_animation_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>
     instance
         .global::<AnimationCallbacks>()
         .on_set_current_time(move |time| {
+            // 共享时间轴标尺同时驱动焦点（活跃）视频：有视频打开时，把播放头放
+            // 到标尺位置等价于 scrub 该视频。越界（超过视频时长）时按既有 seek
+            // 语义钳制停靠，播放中则立即把播放标量翻回；范围内播放中直接精确跳
+            // 转续播。这样"点范围外→到末尾停、按钮翻暂停"由媒体 reducer 一处负责。
+            let active_index = {
+                let store = s.borrow();
+                store
+                    .state()
+                    .active_video()
+                    .filter(|&index| index < store.state().video_sessions.len())
+            };
+            if let Some(index) = active_index {
+                use crate::actions::media::{MediaAction, VideoAction};
+                dispatch_and_render(
+                    &s,
+                    Action::Media(MediaAction::Video(VideoAction::SeekVideo {
+                        index,
+                        timestamp: (time * 1000.0) as i64,
+                    })),
+                    &weak,
+                );
+            }
             dispatch_and_render(
                 &s,
                 Action::Animation(AnimationAction::Graph(GraphAction::SetCurrentTime { time })),

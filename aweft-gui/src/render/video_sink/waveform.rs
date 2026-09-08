@@ -31,20 +31,40 @@ pub struct WaveformBucket {
     count: u32,
 }
 
+/// 已装配好的离线波形解码管线。构建与排空分离：`build_waveform_extraction_pipeline`
+/// 负责搭管线，`drain_waveform_extraction_pipeline` 负责拉采样。
+struct WaveformExtractionPipeline {
+    pipeline: gstreamer::Pipeline,
+    appsink: AppSink,
+    bus: gstreamer::Bus,
+    target_linked: Arc<AtomicBool>,
+    parser_exposed_all_pads: Arc<AtomicBool>,
+    target_stream_id: String,
+}
+
 /// 在调用方提供的线程中解码指定音轨并压缩成 min/max 桶。显式低层管线在解码前按
 /// stream-id 选择 elementary stream；decodebin 后的 raw-audio 链是未来滤镜插入点。
 /// `progress(start, duration, values)` 只提交从 `start` 开始的变更区间；调用方
 /// 可以原地更新持久模型。`cancelled` 在解码循环内检查，替换媒体/退出时及时停工。
-pub fn extract_cancelable<C, F>(
+pub fn decode_waveform_buckets<C, F>(
     uri: &str,
     target_stream_id: &str,
     cancelled: C,
-    mut progress: F,
+    progress: F,
 ) -> anyhow::Result<(Vec<WaveformBucket>, f32)>
 where
     C: Fn() -> bool,
     F: FnMut(usize, f32, &[WaveformBucket]),
 {
+    let extraction = build_waveform_extraction_pipeline(uri, target_stream_id)?;
+    drain_waveform_extraction_pipeline(extraction, cancelled, progress)
+}
+
+/// 搭建离线波形解码管线并置为 Playing，不拉取任何采样。
+fn build_waveform_extraction_pipeline(
+    uri: &str,
+    target_stream_id: &str,
+) -> anyhow::Result<WaveformExtractionPipeline> {
     gstreamer::init().map_err(|error| anyhow::anyhow!("GStreamer 初始化失败: {error}"))?;
     let pipeline = gstreamer::Pipeline::new();
     let source = gstreamer::ElementFactory::make("urisourcebin")
@@ -86,33 +106,15 @@ where
     ])?;
     gstreamer::Element::link_many([&queue, &convert, &resample, &filter, &sink])?;
 
-    let raw_entry = queue.clone();
-    decoder.connect_pad_added(move |_decoder, pad| {
-        let is_audio = pad
-            .current_caps()
-            .or_else(|| Some(pad.query_caps(None)))
-            .and_then(|caps| caps.structure(0).map(|s| s.name().starts_with("audio/")))
-            .unwrap_or(false);
-        if !is_audio {
-            return;
-        }
-        if let Some(sink_pad) = raw_entry.static_pad("sink")
-            && !sink_pad.is_linked()
-        {
-            let _ = pad.link(&sink_pad);
-        }
-    });
-
+    // 动态 pad 按信号流向顺序装配：source → parsebin → decodebin。
     let target_linked = Arc::new(AtomicBool::new(false));
     let parser_exposed_all_pads = Arc::new(AtomicBool::new(false));
     let parser_exposed_all_pads_for_signal = parser_exposed_all_pads.clone();
-    parser.connect_no_more_pads(move |_| {
-        parser_exposed_all_pads_for_signal.store(true, Ordering::Release);
-    });
     let target_linked_for_pad = target_linked.clone();
     let target_id = target_stream_id.to_owned();
     let decoder_entry = decoder.clone();
     let dynamic_pipeline = pipeline.clone();
+    let raw_entry = queue.clone();
     let parser_sink = parser
         .static_pad("sink")
         .ok_or_else(|| anyhow::anyhow!("parsebin 缺少 sink pad"))?;
@@ -124,6 +126,9 @@ where
         }
     });
 
+    parser.connect_no_more_pads(move |_| {
+        parser_exposed_all_pads_for_signal.store(true, Ordering::Release);
+    });
     parser.connect_pad_added(move |_parser, pad| {
         let stream_id = pad.stream_id().map(|id| id.to_string()).unwrap_or_default();
         if stream_id == target_id && !target_linked_for_pad.swap(true, Ordering::AcqRel) {
@@ -143,12 +148,36 @@ where
             .property("async", false)
             .build()
         else {
+            log::warn!("丢弃流 fakesink 创建失败，跳过非目标流 ({stream_id})");
             return;
         };
-        if dynamic_pipeline.add(&discard).is_err() || discard.sync_state_with_parent().is_err() {
+        if dynamic_pipeline.add(&discard).is_err() {
+            log::warn!("丢弃流 fakesink 加入管线失败，跳过非目标流 ({stream_id})");
+            return;
+        }
+        if discard.sync_state_with_parent().is_err() {
+            log::warn!("丢弃流 fakesink 状态同步失败，跳过非目标流 ({stream_id})");
             return;
         }
         if let Some(sink_pad) = discard.static_pad("sink") {
+            if let Err(error) = pad.link(&sink_pad) {
+                log::warn!("非目标流连接 fakesink 失败 ({stream_id}): {error}");
+            }
+        }
+    });
+
+    decoder.connect_pad_added(move |_decoder, pad| {
+        let is_audio = pad
+            .current_caps()
+            .or_else(|| Some(pad.query_caps(None)))
+            .and_then(|caps| caps.structure(0).map(|s| s.name().starts_with("audio/")))
+            .unwrap_or(false);
+        if !is_audio {
+            return;
+        }
+        if let Some(sink_pad) = raw_entry.static_pad("sink")
+            && !sink_pad.is_linked()
+        {
             let _ = pad.link(&sink_pad);
         }
     });
@@ -158,11 +187,39 @@ where
         .ok_or_else(|| anyhow::anyhow!("无法获取音频分析 Bus"))?;
     // Do not use the media duration for indexing. It is frequently unavailable until
     // decoding has started, and changing it would move already displayed waveform bars.
+    pipeline.set_state(gstreamer::State::Playing)?;
+    Ok(WaveformExtractionPipeline {
+        pipeline,
+        appsink,
+        bus,
+        target_linked,
+        parser_exposed_all_pads,
+        target_stream_id: target_stream_id.to_owned(),
+    })
+}
+
+/// 从已装配管线拉取采样并累积成 1ms 波形桶。结束时把管线置 Null。
+fn drain_waveform_extraction_pipeline<C, F>(
+    extraction: WaveformExtractionPipeline,
+    cancelled: C,
+    mut progress: F,
+) -> anyhow::Result<(Vec<WaveformBucket>, f32)>
+where
+    C: Fn() -> bool,
+    F: FnMut(usize, f32, &[WaveformBucket]),
+{
+    let WaveformExtractionPipeline {
+        pipeline,
+        appsink,
+        bus,
+        target_linked,
+        parser_exposed_all_pads,
+        target_stream_id,
+    } = extraction;
     let mut buckets = Vec::<WaveformBucket>::new();
     // 仅记录自上次 progress 以来最早变化的桶；使用 usize::MAX 表示当前没有
     // 待提交区间，避免每批都从 0 重新提交整段历史波形。
     let mut dirty_start = usize::MAX;
-    pipeline.set_state(gstreamer::State::Playing)?;
     loop {
         if cancelled() {
             let _ = pipeline.set_state(gstreamer::State::Null);
@@ -219,106 +276,6 @@ where
         progress(dirty_start, duration, &buckets[dirty_start..]);
     }
     Ok((buckets, duration as f32))
-}
-
-/// 构建独立的实时音频播放管线。它与视口视频管线完全分离：parsebin 暴露容器内
-/// elementary streams，只有目标 stream-id 接入 decodebin；其它流接入异步 fakesink，
-/// 因而不会被解码。返回的 volume 是统一的静音/增益入口，后续可在其前后插入滤镜。
-pub fn build_audio_playback(
-    uri: &str,
-    target_stream_id: &str,
-) -> anyhow::Result<(gstreamer::Pipeline, gstreamer::Element)> {
-    let pipeline = gstreamer::Pipeline::new();
-    let source = gstreamer::ElementFactory::make("urisourcebin")
-        .property("uri", uri)
-        .property("parse-streams", false)
-        .property("use-buffering", false)
-        .build()?;
-    let parser = gstreamer::ElementFactory::make("parsebin").build()?;
-    let decoder = gstreamer::ElementFactory::make("decodebin")
-        .property("caps", gstreamer::Caps::builder("audio/x-raw").build())
-        .property("expose-all-streams", false)
-        .build()?;
-    let queue = gstreamer::ElementFactory::make("queue").build()?;
-    let convert = gstreamer::ElementFactory::make("audioconvert").build()?;
-    let volume = gstreamer::ElementFactory::make("volume").build()?;
-    let sink = gstreamer::ElementFactory::make("autoaudiosink").build()?;
-    pipeline.add_many([&source, &parser, &decoder, &queue, &convert, &volume, &sink])?;
-    gstreamer::Element::link_many([&queue, &convert, &volume, &sink])?;
-
-    let parser_sink = parser
-        .static_pad("sink")
-        .ok_or_else(|| anyhow::anyhow!("parsebin 缺少 sink pad"))?;
-    source.connect_pad_added(move |_source, pad| {
-        if !parser_sink.is_linked() {
-            let _ = pad.link(&parser_sink);
-        }
-    });
-
-    let target_id = target_stream_id.to_owned();
-    let decoder_entry = decoder.clone();
-    let dynamic_pipeline = pipeline.clone();
-    parser.connect_pad_added(move |_parser, pad| {
-        let stream_id = pad.stream_id().map(|id| id.to_string()).unwrap_or_default();
-        if stream_id == target_id {
-            if let Some(sink_pad) = decoder_entry.static_pad("sink")
-                && !sink_pad.is_linked()
-            {
-                let _ = pad.link(&sink_pad);
-            }
-            return;
-        }
-        let Ok(discard) = gstreamer::ElementFactory::make("fakesink")
-            .property("sync", false)
-            .property("async", false)
-            .build()
-        else {
-            return;
-        };
-        if dynamic_pipeline.add(&discard).is_ok()
-            && discard.sync_state_with_parent().is_ok()
-            && let Some(sink_pad) = discard.static_pad("sink")
-        {
-            let _ = pad.link(&sink_pad);
-        }
-    });
-
-    let raw_entry = queue.clone();
-    decoder.connect_pad_added(move |_decoder, pad| {
-        let is_audio = pad
-            .current_caps()
-            .or_else(|| Some(pad.query_caps(None)))
-            .and_then(|caps| caps.structure(0).map(|s| s.name().starts_with("audio/")))
-            .unwrap_or(false);
-        if is_audio
-            && let Some(sink_pad) = raw_entry.static_pad("sink")
-            && !sink_pad.is_linked()
-        {
-            let _ = pad.link(&sink_pad);
-        }
-    });
-    pipeline.set_state(gstreamer::State::Paused)?;
-    Ok((pipeline, volume))
-}
-
-#[cfg(test)]
-pub fn extract<F>(uri: &str, mut progress: F) -> anyhow::Result<(Vec<WaveformBucket>, f32)>
-where
-    F: FnMut(f32, &[WaveformBucket]),
-{
-    let mut all = Vec::new();
-    extract_cancelable(
-        uri,
-        &first_audio_stream_id(uri)?,
-        || false,
-        |start, duration, batch| {
-            if all.len() < start + batch.len() {
-                all.resize(start + batch.len(), WaveformBucket::default());
-            }
-            all[start..start + batch.len()].copy_from_slice(batch);
-            progress(duration, &all);
-        },
-    )
 }
 
 #[cfg(test)]
@@ -562,7 +519,7 @@ mod tests {
             .to_string();
         let stream_id = first_audio_stream_id(&uri).expect("测试媒体应包含音轨 stream-id");
         let mut updates = Vec::new();
-        let (buckets, duration) = extract_cancelable(
+        let (buckets, duration) = decode_waveform_buckets(
             &uri,
             &stream_id,
             || false,
@@ -625,9 +582,9 @@ mod tests {
             .to_string();
         let stream_ids = audio_stream_ids(&uri).expect("Discoverer 读取双音轨失败");
         assert_eq!(stream_ids.len(), 2, "测试媒体必须暴露两条真实音轨");
-        let (tone, _) = extract_cancelable(&uri, &stream_ids[0], || false, |_, _, _| {})
+        let (tone, _) = decode_waveform_buckets(&uri, &stream_ids[0], || false, |_, _, _| {})
             .expect("提取第一条测试音轨失败");
-        let (silent, _) = extract_cancelable(&uri, &stream_ids[1], || false, |_, _, _| {})
+        let (silent, _) = decode_waveform_buckets(&uri, &stream_ids[1], || false, |_, _, _| {})
             .expect("提取第二条测试音轨失败");
         let tone_peak = tone.iter().map(|bucket| bucket.max).fold(0.0f32, f32::max);
         let silent_min = silent
@@ -663,7 +620,7 @@ mod tests {
         let stream_id = first_audio_stream_id(&uri).expect("测试媒体应包含音轨 stream-id");
         let mut published = false;
         let (buckets, duration) =
-            extract_cancelable(&uri, &stream_id, || true, |_, _, _| published = true)
+            decode_waveform_buckets(&uri, &stream_id, || true, |_, _, _| published = true)
                 .expect("取消波形任务不应失败");
 
         assert!(!published, "已取消任务不能再覆盖 UI 模型");

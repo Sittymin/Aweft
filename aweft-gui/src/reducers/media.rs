@@ -3,7 +3,6 @@ use crate::depsgraph::Tag;
 use crate::store::AppStore;
 use crate::store::state::{VideoSeekSession, VideoSeekTarget};
 use anyhow::{Context, Result};
-use gstreamer::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -14,8 +13,8 @@ fn gst_initialize_once() -> Result<(), gstreamer::glib::Error> {
 }
 
 /// 分发媒体域 Action：管线在此创建/跳转；帧推送与 GPU 连接属渲染层。
-/// 普通状态变化返回 Video Tag，由 video projection 更新 UI；帧和逐帧播放时钟
-/// 仍由渲染层按实时例外直接增量同步。
+/// 普通状态变化返回 Video Tag，由 video projection 更新 UI；逐帧播放时钟经
+/// tick tag 入图调度，帧图像仍由渲染层按实时例外直接增量同步。
 impl AppStore {
     pub(crate) fn dispatch_media(&mut self, action: MediaAction) -> Result<Vec<Tag>> {
         match action {
@@ -55,14 +54,9 @@ impl AppStore {
                     return Ok(Vec::new());
                 };
                 session.muted = !session.muted;
-                let muted = session.muted;
-                gst_set_audio_playback_muted(
-                    self.state()
-                        .audio_playbacks
-                        .get(index)
-                        .and_then(Option::as_ref),
-                    muted,
-                );
+                if let Some(audio) = session.audio.as_ref() {
+                    audio.set_muted(session.muted);
+                }
                 Ok(vec![Tag::VideoMuteChanged { index }])
             }
             MediaAction::Video(VideoAction::SelectAudioTrack {
@@ -161,18 +155,25 @@ impl AppStore {
             }
             MediaAction::Video(VideoAction::Seek { timestamp }) => {
                 let requested_time = timestamp as f64 / 1000.0;
-                let sync_timeline = media_active_video_drives_timeline(self);
+                let sync_timeline = media_should_active_video_drive_timeline(self);
                 self.ui_models.animation.graph.current_time = requested_time;
                 let indices = self.seek_drag_targets(requested_time);
                 // 暂停态由编辑器时间轴保持用户请求值；播放态则由视频钳制后的实际
                 // 时间立即接管，后续仍由逐帧 GStreamer 时钟持续驱动。
-                Ok(vec![
+                let mut tags = vec![
                     Tag::VideoTimeChanged {
                         indices,
                         sync_timeline,
                     },
                     Tag::GraphScalarsChanged,
-                ])
+                ];
+                // 越界钳制停靠无 EOS、逐帧渲染不会自动校正按钮；非拖拽的 seek
+                // 停靠后在此立即刷新。拖拽中 media_refresh 沿用拖拽前意图态，按钮
+                // 保持不动，释放时由 SeekEnd 决定"恢复播放 / 到末帧自动暂停"。
+                if media_refresh_video_playing_state(self) {
+                    tags.push(Tag::VideoPlaybackChanged);
+                }
+                Ok(tags)
             }
             MediaAction::Video(VideoAction::SeekVideo { index, timestamp }) => {
                 if index >= self.state().video_sessions.len() {
@@ -181,7 +182,7 @@ impl AppStore {
                 }
                 let requested_time = timestamp as f64 / 1000.0;
                 let is_active = self.state().active_video() == Some(index);
-                let sync_timeline = is_active && media_active_video_drives_timeline(self);
+                let sync_timeline = is_active && media_should_active_video_drive_timeline(self);
                 if is_active {
                     // 波形 Area 可查看任意音轨；只有它正在显示焦点视频的音轨时，
                     // 点击标尺才同时移动动画域的全局播放头。暂停态保留用户请求值，
@@ -190,14 +191,7 @@ impl AppStore {
                 }
                 let session = &mut self.state_mut().video_sessions[index];
                 media_seek_video_session(session, requested_time);
-                let actual_time = session.current_time;
-                gst_seek_audio_playback(
-                    self.state()
-                        .audio_playbacks
-                        .get(index)
-                        .and_then(Option::as_ref),
-                    actual_time,
-                );
+                // 音频分支与会话管线同源同钟：seek 已作用于整条管线，无需单独 seek。
                 let mut tags = vec![Tag::VideoTimeChanged {
                     indices: vec![index],
                     // 非焦点音轨只刷新自身行和画面；焦点音轨播放中由实际位置
@@ -206,6 +200,13 @@ impl AppStore {
                 }];
                 if is_active {
                     tags.push(Tag::GraphScalarsChanged);
+                }
+                // 单击（共享标尺/波形标尺）把播放中的视频 seek 到范围外会被钳制并
+                // 停靠为暂停；该路径无 EOS、逐帧渲染不会校正播放按钮，若不在此刷新
+                // `video_playing` 并打 PlaybackChanged，按钮仍显示"播放中"，下一次
+                // 按下会被 Toggle 当成"暂停"，表现为"停住后按播放再也无法续播"。
+                if media_refresh_video_playing_state(self) {
+                    tags.push(Tag::VideoPlaybackChanged);
                 }
                 Ok(tags)
             }
@@ -245,6 +246,8 @@ impl AppStore {
                     anchor_time,
                     targets,
                 });
+                // 拖拽期间对原本播放中的目标先静音：flush-seek 的停顿期间音频
+                // 会发出切帧爆音/杂声，拖拽结束恢复播放时再还原用户静音设置。
                 for target in self
                     .state()
                     .video_seek_session
@@ -252,14 +255,11 @@ impl AppStore {
                     .into_iter()
                     .flat_map(|drag| &drag.targets)
                 {
-                    if target.was_playing {
-                        gst_set_audio_playback_muted(
-                            self.state()
-                                .audio_playbacks
-                                .get(target.index)
-                                .and_then(Option::as_ref),
-                            true,
-                        );
+                    if target.was_playing
+                        && let Some(session) = self.state().video_sessions.get(target.index)
+                        && let Some(audio) = session.audio.as_ref()
+                    {
+                        audio.set_muted(true);
                     }
                 }
                 let playback_changed = media_refresh_video_playing_state(self);
@@ -301,22 +301,15 @@ impl AppStore {
                         // 管线稳定留在 Paused，这里只恢复用户静音设置，不能再切回
                         // Playing，否则会沿负速率 segment 倒放。
                     } else {
-                        // 先精确 seek 到拖拽点，再恢复视频播放。音频管线仍保持静音，
-                        // 直到下方同步 seek 完成后才恢复用户设置。
+                        // 先精确 seek 到拖拽点，再恢复视频播放。音频分支与视频同源
+                        // 同钟，seek + Playing 已一并作用于它。
                         gst_seek_pipeline_accurate(&session.pipeline, current_time.max(0.0));
-                        gst_set_session_state(session, gstreamer::State::Playing);
+                        gst_set_video_session_state(session, gstreamer::State::Playing);
                     }
-                    // 此处已不再持有 session 的可变借用，可以安全访问独立音频槽位。
-                    let audio = self
-                        .state()
-                        .audio_playbacks
-                        .get(target.index)
-                        .and_then(Option::as_ref);
-                    if !at_display_end {
-                        gst_seek_audio_playback(audio, current_time);
-                        gst_set_audio_playback_state(audio, gstreamer::State::Playing);
+                    // 还原拖拽开始时的用户静音设置（拖拽期间由 SeekBegin 静音）。
+                    if let Some(audio) = session.audio.as_ref() {
+                        audio.set_muted(muted);
                     }
-                    gst_set_audio_playback_muted(audio, muted);
                 }
                 let playback_changed = media_refresh_video_playing_state(self);
                 let mut tags = vec![Tag::VideoTimeChanged {
@@ -328,8 +321,15 @@ impl AppStore {
                 }
                 Ok(tags)
             }
+            MediaAction::Video(VideoAction::RefreshPlayingState) => {
+                if media_refresh_video_playing_state(self) {
+                    Ok(vec![Tag::VideoPlaybackChanged])
+                } else {
+                    Ok(vec![])
+                }
+            }
             MediaAction::Video(VideoAction::Play) => {
-                let indices = media_apply_video_playback(self, true);
+                let indices = media_apply_video_transport(self, true);
                 Ok(vec![
                     Tag::VideoTimeChanged {
                         indices,
@@ -339,7 +339,7 @@ impl AppStore {
                 ])
             }
             MediaAction::Video(VideoAction::Pause) => {
-                let indices = media_apply_video_playback(self, false);
+                let indices = media_apply_video_transport(self, false);
                 Ok(vec![
                     Tag::VideoTimeChanged {
                         indices,
@@ -349,7 +349,7 @@ impl AppStore {
                 ])
             }
             MediaAction::Video(VideoAction::TogglePlayback) => {
-                let indices = media_apply_video_playback(self, !self.state().video_playing);
+                let indices = media_apply_video_transport(self, !self.state().video_playing);
                 Ok(vec![
                     Tag::VideoTimeChanged {
                         indices,
@@ -373,11 +373,15 @@ mod waveform;
 
 use playback::*;
 pub(crate) use playback::{
-    gst_session_playing_position, media_active_video_drives_timeline,
+    gst_session_playing_position, media_should_active_video_drive_timeline,
     media_refresh_video_playing_state,
 };
 use waveform::{discover_audio_tracks, start_waveform_extractions};
 
+/// 切换会话的实时播放音轨。音轨在会话同一条管线内：input-selector 改写 active-pad
+/// 后，对整条管线做一次精确 flush-seek 到当前时间，让新音轨与视频从同一时间点
+/// 重新对齐（同一解码头/时钟下本来就能自动同步，flush-seek 补上的是新音轨
+/// 启动时错过的 segment 状态，见 `gst_seek_pipeline_accurate` 的既有语义）。
 fn media_select_audio_track(
     store: &mut AppStore,
     video_index: usize,
@@ -395,35 +399,29 @@ fn media_select_audio_track(
     let Some(session) = store.state().video_sessions.get(video_index) else {
         anyhow::bail!("选择音轨的视频不存在: {video_index}");
     };
-    let uri = session.uri.clone();
-    let time = session.current_time.max(0.0);
-    let playing = session.playing;
-    let muted = session.muted;
-    let (pipeline, volume) =
-        crate::render::video_sink::waveform::build_audio_playback(&uri, &track.stream_id)?;
-    let playback = crate::store::state::AudioPlayback { pipeline, volume };
-    gst_set_audio_playback_muted(Some(&playback), muted);
-    gst_seek_audio_playback(Some(&playback), time);
-    if playing {
-        gst_set_audio_playback_state(Some(&playback), gstreamer::State::Playing);
-    }
+    let stream_id = track.stream_id.clone();
+    let Some(audio) = session.audio.as_ref() else {
+        anyhow::bail!("会话未装配音频分支，无法选轨: video={video_index}");
+    };
+    // parsebin 尚未暴露目标音轨时 select_stream 只登记 pending，pad 到达后自动生效；
+    // 这里无法确知生效时机，仍按已生效处理（失败只记录日志，不打断视频会话）。
+    let applied_now = audio.select_stream(&stream_id);
 
-    let old = store
-        .state_mut()
-        .audio_playbacks
-        .get_mut(video_index)
-        .ok_or_else(|| anyhow::anyhow!("音频播放槽位不存在: {video_index}"))?
-        .replace(playback);
-    if let Some(old) = old {
-        let _ = old.pipeline.set_state(gstreamer::State::Null);
-    }
     store.state_mut().audio_track_indices[video_index] = Some(track_index);
     log::info!(
-        "切换实时播放音轨: video={}, track={}, stream-id={}",
-        video_index,
-        track_index,
-        track.stream_id
+        "切换实时播放音轨: video={video_index}, track={track_index}, stream-id={stream_id}"
     );
+
+    // 新音轨从当前时间对齐。媒体刚追加时管线尚在暂停预滚动，音轨 pad 可能尚未
+    // 暴露；此时不做 flush-seek（首播由 transport 的播放路径负责），只对已建链
+    // 的会话重新对齐。
+    if applied_now {
+        let session = &mut store.state_mut().video_sessions[video_index];
+        media_seek_video_session(session, session.current_time);
+        if let Some(audio) = session.audio.as_ref() {
+            audio.set_muted(session.muted);
+        }
+    }
     Ok(())
 }
 
@@ -442,7 +440,6 @@ fn media_append_video_session(store: &mut AppStore, video_uri: &str) -> Result<u
     let is_first = store.state().video_sessions.is_empty();
     store.state_mut().video_sessions.push(session);
     store.state_mut().audio_tracks.push(audio_tracks);
-    store.state_mut().audio_playbacks.push(None);
     store.state_mut().audio_track_indices.push(None);
     if is_first {
         store.state_mut().main_video = Some(0);
@@ -494,18 +491,11 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
         .get_mut(index)
         .expect("已在上方检查");
     let old = std::mem::replace(old, new_session);
-    crate::render::video_sink::stop_session_parts(&old.pipeline, &old.sink_element, old.wgpu_sink);
+    crate::render::video_sink::stop_session_parts(&old.pipeline, old.wgpu_sink);
     if let Some(slot) = store.state_mut().audio_tracks.get_mut(index) {
         *slot = audio_tracks;
     }
-    if let Some(old) = store
-        .state_mut()
-        .audio_playbacks
-        .get_mut(index)
-        .and_then(Option::take)
-    {
-        let _ = old.pipeline.set_state(gstreamer::State::Null);
-    }
+    // 新会话自带的音频分支随会话置 Null 一起释放，无需单独处理。
     store.state_mut().audio_track_indices[index] = None;
     if let Some(old) = store.state().waveform_cancellations.get(index) {
         old.store(true, Ordering::Release);
@@ -526,7 +516,7 @@ fn media_replace_video_session(store: &mut AppStore, index: usize, uri: &str) ->
         // 否则 UI 的 current_time 与新管线实际位置会分离（新管线仍在 0 秒）。
         gst_seek_pipeline_accurate(&session.pipeline, session.current_time);
         if session_was_playing {
-            gst_set_session_state(session, gstreamer::State::Playing);
+            gst_set_video_session_state(session, gstreamer::State::Playing);
         }
     }
     Ok(())

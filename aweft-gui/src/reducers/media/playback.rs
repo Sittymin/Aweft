@@ -1,60 +1,13 @@
 use crate::store::AppStore;
-use crate::store::state::{AudioPlayback, VideoSession};
+use crate::store::state::VideoSession;
 use gstreamer::prelude::*;
 
-pub(super) fn gst_set_session_state(session: &mut VideoSession, target: gstreamer::State) {
+pub(super) fn gst_set_video_session_state(session: &mut VideoSession, target: gstreamer::State) {
     if let Err(error) = session.pipeline.set_state(target) {
         log::warn!("切换视频状态到 {target:?} 失败: {error}");
         return;
     }
     session.playing = target == gstreamer::State::Playing;
-}
-
-/// 独立音轨管线中的软件增益入口。视口视频管线不包含音频分支。
-pub(super) fn gst_set_audio_playback_muted(playback: Option<&AudioPlayback>, muted: bool) {
-    let Some(playback) = playback else {
-        return;
-    };
-    let volume = if muted { 0.0 } else { 1.0 };
-    playback.volume.set_property("mute", muted);
-    playback.volume.set_property("volume", volume);
-}
-
-#[cfg(test)]
-pub(super) fn gst_set_audio_muted(pipeline: &gstreamer::Pipeline, muted: bool) {
-    let volume = if muted { 0.0 } else { 1.0 };
-    for element in pipeline.iterate_elements().into_iter().flatten() {
-        if element
-            .factory()
-            .is_some_and(|factory| factory.name() == "volume")
-        {
-            element.set_property("mute", muted);
-            element.set_property("volume", volume);
-        }
-    }
-}
-
-pub(super) fn gst_seek_audio_playback(playback: Option<&AudioPlayback>, secs: f64) {
-    if let Some(playback) = playback
-        && let Err(error) = playback.pipeline.seek_simple(
-            gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
-            gstreamer::ClockTime::from_mseconds((secs.max(0.0) * 1000.0) as u64),
-        )
-    {
-        // 独立音频管线可能仍在动态建链；失败不应影响视频 transport。
-        log::debug!("独立音频 seek 暂未成功: {error}");
-    }
-}
-
-pub(super) fn gst_set_audio_playback_state(
-    playback: Option<&AudioPlayback>,
-    target: gstreamer::State,
-) {
-    if let Some(playback) = playback
-        && let Err(error) = playback.pipeline.set_state(target)
-    {
-        log::warn!("切换独立音频状态到 {target:?} 失败: {error}");
-    }
 }
 
 /// 时间线 transport 的控制目标：有视口选择时控制整个选择集合；否则只控制主视频。
@@ -82,15 +35,20 @@ fn media_set_video_playing(store: &mut AppStore, playing: bool) {
 }
 
 /// 应用时间线 transport：播放/暂停作用于视口选择集合；无选择时只作用于主视频。
-/// current_time，因此参考视频仍可独立 seek；按下播放后从各自位置同步启动。
+/// 播放从各自的 `current_time` 启动，参考视频仍可独立 seek。
 ///
-/// 发起播放时不仅要 `set_state(Playing)`，还要对该管线做一次 flush-seek：
-/// 1. 处于 EOS（播完）的管线 `current_state` 仍是 `Playing`，但单靠
-///    `set_state(Playing)` 不会重新出帧——必须先 `seek` 清 EOS（EOS 时回到起点）；
-/// 2. 暂停/卡顿的管线同样只有 seek（flush）才能真正恢复出帧，这正是"拖动时间条
-///    能播、按播放键不动"的原因。这里直接在播放时 seek 到当前位置，等价于用户
-///    拖动时间条的效果，保证播放键始终能开始/恢复播放。
-pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) -> Vec<usize> {
+/// 进入 Playing 前先对管线做一次 flush-seek，把它置回已知良好状态
+/// （正向 segment、无 EOS 锁存），再 `set_state(Playing)`。其中 seek 是
+/// "必须"的有两种情形：
+/// 1. EOS 锁存：播完的管线 `current_state` 仍是 `Playing`，但下游锁存的
+///    sticky EOS 只有 flush-seek 能清除——`at_end` 时 seek 回起点重播；
+/// 2. 负速率残留：暂停态越界定位会 park 一个 rate=-1 的末帧 segment
+///    （见 `media_seek_video_session`），不先发正向 seek 就会倒放或卡住。
+/// 除此之外的普通暂停→播放，seek 只是统一的防御措施（等价于用户拖动时间条，
+/// 花一次 flush 免去逐个分辨状态），并非 GStreamer 要求。这正是"拖动时间条能播、
+/// 旧播放键不动"的原因：
+/// 拖动自带 seek 清状态，旧播放键只有 `set_state`，落在锁存态上就是空操作。
+pub(super) fn media_apply_video_transport(store: &mut AppStore, playing: bool) -> Vec<usize> {
     if store.state().video_sessions.is_empty() {
         media_set_video_playing(store, false);
         return Vec::new();
@@ -101,7 +59,7 @@ pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) ->
         if playing {
             let at_end = media_video_session_at_display_end(session)
                 || session.at_eos.load(std::sync::atomic::Ordering::Acquire);
-            let target = if at_end {
+            let start_secs = if at_end {
                 0.0
             } else {
                 session.current_time.max(0.0)
@@ -112,31 +70,21 @@ pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) ->
             // 唤醒数据流，必须先 flush-seek。seek 失败只记录日志，不能阻止
             // 后续进入 PLAYING（否则一次瞬时 seek 失败会让 Header 播放永久失效）。
             if at_end {
-                let _ = gst_seek_pipeline_to_secs(&session.pipeline, target);
+                let _ = gst_seek_pipeline_key_unit(&session.pipeline, start_secs);
             } else {
-                let _ = gst_seek_pipeline_accurate(&session.pipeline, target);
+                let _ = gst_seek_pipeline_accurate(&session.pipeline, start_secs);
             }
-            session.current_time = target;
+            session.current_time = start_secs;
             session
                 .at_eos
                 .store(false, std::sync::atomic::Ordering::Release);
             session.last_frame_seeked = false;
-            gst_set_session_state(session, gstreamer::State::Playing);
+            gst_set_video_session_state(session, gstreamer::State::Playing);
         } else {
-            gst_set_session_state(session, gstreamer::State::Paused);
+            gst_set_video_session_state(session, gstreamer::State::Paused);
         }
-        let audio = store
-            .state()
-            .audio_playbacks
-            .get(index)
-            .and_then(Option::as_ref);
-        if playing {
-            // 普通暂停→播放不强制 seek，避免在管线状态转换/动态 pad 建链期间
-            // 触发偶发 Failed to seek；EOS 重播由上面的正向 seek 负责复位。
-            gst_set_audio_playback_state(audio, gstreamer::State::Playing);
-        } else {
-            gst_set_audio_playback_state(audio, gstreamer::State::Paused);
-        }
+        // 音频分支与会话管线同源同钟：上面的 seek/状态切换随管线一起作用于音频，
+        // 不需要（也不能）单独驱动一条独立音频管线。
     }
     media_set_video_playing(store, playing);
     targets
@@ -158,7 +106,7 @@ pub(crate) fn gst_pipeline_wants_playing(pipeline: &gstreamer::Pipeline) -> bool
 /// 当前焦点视频是否应以实际播放时间驱动动画时间轴。多视频的全局 transport 标量
 /// 不能回答这个问题：其它视频可以仍在播放，而焦点视频已经暂停。拖拽期间管线会因
 /// flush-seek 短暂进入过渡态，因此优先使用该焦点目标在拖拽开始时记录的播放意图。
-pub(crate) fn media_active_video_drives_timeline(store: &AppStore) -> bool {
+pub(crate) fn media_should_active_video_drive_timeline(store: &AppStore) -> bool {
     let Some(active) = store.state().active_video() else {
         return false;
     };
@@ -182,7 +130,7 @@ pub(crate) fn media_active_video_drives_timeline(store: &AppStore) -> bool {
 /// 按当前 transport 目标的缓存状态校正全局 `video_playing`。播放/暂停命令即时
 /// 设置该值；生产渲染路径仅在 Bus 报告 EOS 后调用一次，不逐帧查询 GStreamer。
 /// 已到 EOS 的管线仍报 Playing，但画面已停，故按"未播放"处理，让按钮正确显示
-/// 为"播放"且下一次按下能真正重新开始（见 `media_apply_video_playback` 中的 EOS 重启）。
+/// 为"播放"且下一次按下能真正重新开始（见 `media_apply_video_transport` 中的 EOS 重启）。
 ///
 /// 拖拽期间不参与实时校正：拖拽会对管线做大量 flush-seek，其过渡态会让
 /// 管线状态会瞬时抖动；此时沿用拖拽目标开始时的播放意图。
@@ -232,7 +180,7 @@ pub(super) fn media_seek_video_session(session: &mut VideoSession, secs: f64) {
             if repeated_last_frame {
                 return;
             }
-            gst_set_session_state(session, gstreamer::State::Paused);
+            gst_set_video_session_state(session, gstreamer::State::Paused);
             // 状态切换与反向 segment 都是异步请求；不能在 UI 回调中等待管线稳定。
             // 清掉在途旧帧后，末帧 preroll 回调会覆盖槽位并请求重绘。
             if let Ok(mut next_frame) = session.wgpu_sink.next_frame.lock() {
@@ -316,8 +264,9 @@ pub(super) fn media_video_session_at_display_end(session: &VideoSession) -> bool
     session.current_time + 0.0005 >= display_end
 }
 
-/// 跳转管线到指定秒。FLUSH 立即生效，KEY_UNIT 快速定位（高频拖动以精度换流畅）。
-fn gst_seek_pipeline_to_secs(pipeline: &gstreamer::Pipeline, secs: f64) -> bool {
+/// 快速跳转（FLUSH + KEY_UNIT）：落到最近关键帧，解码代价小。只用于对精确帧
+/// 无要求的场合（EOS 重播回 0 秒：流起点本身就是关键帧）。
+fn gst_seek_pipeline_key_unit(pipeline: &gstreamer::Pipeline, secs: f64) -> bool {
     gst_seek_pipeline_with_flags(
         pipeline,
         secs,
@@ -325,9 +274,9 @@ fn gst_seek_pipeline_to_secs(pipeline: &gstreamer::Pipeline, secs: f64) -> bool 
     )
 }
 
-/// 精确跳转（FLUSH + ACCURATE）：用于"从暂停/卡顿恢复播放"——回到**确切**位置
-/// 而非最近关键帧，避免 KEY_UNIT 回退到开头；同时 flush 能让只靠 set_state(Playing)
-/// 起不来（需先 seek 清流）的管线真正开始出帧（现象即"只有拖动时间条能播"）。
+/// 精确跳转（FLUSH + ACCURATE）：落到**确切**位置。用于暂停恢复与替换负速率
+/// segment——KEY_UNIT 可能回退到目标之前的关键帧。与 key_unit 的唯一区别是
+/// 定位标志，FLUSH 清流语义两者相同。
 pub(super) fn gst_seek_pipeline_accurate(pipeline: &gstreamer::Pipeline, secs: f64) -> bool {
     gst_seek_pipeline_with_flags(
         pipeline,
@@ -371,9 +320,16 @@ fn gst_seek_pipeline_with_flags(
     true
 }
 
-/// 查询单个会话播放位置（秒）与视频帧时长（秒）：仅播放中返回（暂停时编辑器是
-/// 时间权威，避免拖动播放头被陈旧位置回写）。无位置返回 None。
-pub(crate) fn gst_session_playing_position(session: &VideoSession) -> Option<(f64, Option<f64>)> {
+/// 播放中会话的位置快照：`secs` 为管线当前位置（秒），`frame_duration_secs`
+/// 为帧时长（秒；未知/可变帧率为 None，调用方回退为不量化）。
+pub(crate) struct VideoPlayingPosition {
+    pub(crate) secs: f64,
+    pub(crate) frame_duration_secs: Option<f64>,
+}
+
+/// 查询单个会话播放位置：仅播放中返回（暂停时编辑器是时间权威，避免拖动
+/// 播放头被陈旧位置回写）。无位置返回 None。
+pub(crate) fn gst_session_playing_position(session: &VideoSession) -> Option<VideoPlayingPosition> {
     if !session.playing || session.at_eos.load(std::sync::atomic::Ordering::Acquire) {
         return None;
     }
@@ -383,8 +339,11 @@ pub(crate) fn gst_session_playing_position(session: &VideoSession) -> Option<(f6
         .query_position::<gstreamer::ClockTime>()?
         .nseconds() as f64
         / 1_000_000_000.0;
-    let frame_dur = session.wgpu_sink.frame_duration_secs();
-    Some((secs, frame_dur))
+    let frame_duration_secs = session.wgpu_sink.frame_duration_secs();
+    Some(VideoPlayingPosition {
+        secs,
+        frame_duration_secs,
+    })
 }
 
 /// 将会话时间限制在目标管线的有效时长内。媒体刚建立时 duration 可能尚未可用，

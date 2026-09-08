@@ -157,15 +157,20 @@ fn try_vapostproc(requested_caps: &gstreamer::Caps) -> Option<(Element, gstreame
     Some((element, selected_caps))
 }
 
-// —— 通用回退后端的管线搭建与启动 ——
+// —— 视频会话管线的搭建 ——
 
-/// 搭建解码管线（解码器按 rank 自动择优，VA-API 驱动存在时硬解优先）：
+/// 搭建视频会话管线（解码器按 rank 自动择优，VA-API 驱动存在时硬解优先）：
 /// ```text
-/// uridecodebin ─ video → queue ! vapostproc ! capsfilter ! appsink
-///              │            （GPU 444p10→P010/NV12；dmabuf 零拷贝或 sysmem 下载；
-///              │             无 VA 退 autovideoconvert CPU 转换）
-///              └ audio → queue ! audioconvert ! autoaudiosink
+/// urisourcebin → parsebin ─┬─ video elementary → 视频 decodebin
+///                          │     → queue → vapostproc → capsfilter → appsink
+///                          │        （GPU 444p10→P010/NV12；dmabuf 零拷贝或
+///                          │          sysmem 下载；无 VA 退 autovideoconvert）
+///                          └─ audio elementary → 见 `super::audio`（input-selector
+///                             选流，解码链在本管线内，与视频共享时钟）
 /// ```
+/// 头部显式分层为 urisourcebin + parsebin：parsebin 暴露与 Discoverer 相同的
+/// elementary stream-id，音轨选择按该 id 进行（视频分支只取首个视频流，其余
+/// 视频流与字幕等接到 fakesink 丢弃，保证解复用推进到 EOS 且不启动多余解码器）。
 /// vapostproc rank 为 0 不会被 autoplug，必须显式添加：它在 GPU 上完成
 /// 444p10→YU12/P010 转换与 CSC（CPU 端 videoconvert 在 4K 下极昂贵）。
 /// 测试可在任意支持 dmabuf 的管线按需协商零拷贝导入；不支持时走 sysmem 回退。
@@ -173,21 +178,46 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     uri: &str,
     ten_bit: bool,
     dmabuf: bool,
-) -> anyhow::Result<(gstreamer::Pipeline, Element, SlintWGPUSink)> {
+) -> anyhow::Result<(
+    gstreamer::Pipeline,
+    Element,
+    SlintWGPUSink,
+    super::audio::SessionAudio,
+)> {
     use gstreamer::prelude::*;
 
     let pipeline = gstreamer::Pipeline::new();
-    let decoder = gstreamer::ElementFactory::make("uridecodebin")
-        .name("video-decoder")
+    let source = gstreamer::ElementFactory::make("urisourcebin")
         .property("uri", uri)
+        // 关闭 parse-streams：让显式 parsebin 暴露与 Discoverer 一致的
+        // elementary stream-id，供音频分支按 stream-id 选流。
+        .property("parse-streams", false)
+        .property("use-buffering", false)
         .build()
-        .context("创建 uridecodebin 失败（gst-plugins-base 缺失？）")?;
-    pipeline.add(&decoder)?;
+        .context("创建 urisourcebin 失败（gst-plugins-base 缺失？）")?;
+    let parser = gstreamer::ElementFactory::make("parsebin")
+        .build()
+        .context("创建 parsebin 失败")?;
+    pipeline.add_many([&source, &parser])?;
 
-    // vapostproc rank 为 0 不会被 autoplug，必须显式添加：它在 GPU 上完成
-    // 444p10→P010/NV12 转换与 CSC（CPU 端 videoconvert 在 4K 下极昂贵）。
-    // 候选 caps 先按当前 WGPU 导入能力生成，再由 vapostproc READY 后的
-    // 运行时 src caps 进一步收窄；最终格式由 GStreamer 的 fixate 规则选择。
+    // urisourcebin 的 src pad 是 sometimes（typefind 后才出现）：出现即连进
+    // parsebin 的静态 sink，与波形提取管线同构。
+    let parser_sink = parser.static_pad("sink").context("parsebin 缺少 sink pad")?;
+    source.connect_pad_added(move |_source, pad| {
+        if !parser_sink.is_linked()
+            && let Err(error) = pad.link(&parser_sink)
+        {
+            log::warn!("URISource 连接 parsebin 失败: {error}");
+        }
+    });
+
+    // 视频解码：parsebin 的 video elementary pad → 视频 decodebin（显式，VA 硬解
+    // 优先）→ 视频 tail。decodebin 的 raw-video src pad 是动态的，出现后再链
+    // 到 video_queue。
+    let decoder = gstreamer::ElementFactory::make("decodebin")
+        .name("video-decoder")
+        .build()
+        .context("创建视频 decodebin 失败")?;
     let (sink_element, wgpu_sink) = create_sink();
     let video_queue = gstreamer::ElementFactory::make("queue").build()?;
     let requested_caps = video_caps_with(dmabuf, ten_bit);
@@ -205,103 +235,82 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     let capsfilter = gstreamer::ElementFactory::make("capsfilter")
         .property("caps", output_caps)
         .build()?;
-    pipeline.add_many([&video_queue, &video_convert, &capsfilter, &sink_element])?;
+    pipeline.add_many([
+        &decoder,
+        &video_queue,
+        &video_convert,
+        &capsfilter,
+        &sink_element,
+    ])?;
     gstreamer::Element::link_many([&video_queue, &video_convert, &capsfilter, &sink_element])?;
 
-    // 音频分支惰性创建：源确实带音频（pad_added 出现 audio pad）时才把
-    // queue ! audioconvert ! autoaudiosink 加入管线。若构建期就无条件加进管线，
-    // 无音频素材的音频分支虽不链接，却仍会随管线状态传播被拉进 PAUSED——
-    // 在无音频设备的 headless 环境 autoaudiosink 卡在 Ready→Paused，整条管线
-    // 无法进入 PLAYING，视频分支也不出帧。
-    let video_entry = video_queue.clone();
-    let pipeline_for_audio = pipeline.clone();
-    let audio_state = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let video_tail = video_queue.clone();
     decoder.connect_pad_added(move |_decoder, pad| {
-        let kind = classify_pad(pad);
-        let entry = match kind {
-            PadMediaKind::Video => Some(video_entry.clone()),
-            PadMediaKind::Audio => {
-                let mut guard = audio_state.lock().unwrap_or_else(|e| e.into_inner());
-                if guard.is_none() {
-                    *guard = build_audio_branch(&pipeline_for_audio);
-                }
-                guard.clone()
-            }
-            PadMediaKind::Other => None,
+        let Some(tail_sink) = video_tail.static_pad("sink") else {
+            return;
         };
-        if let Some(entry) = entry {
-            link_pad_by_media_type(pad, &entry);
+        if !tail_sink.is_linked() {
+            let _ = pad.link(&tail_sink);
         }
     });
 
-    Ok((pipeline, sink_element, wgpu_sink))
-}
-
-/// 惰性创建音频分支 `queue ! audioconvert ! volume ! autoaudiosink` 并加入管线，
-/// 返回分支入口（queue）。任一元素创建失败则返回 None（静默禁用音频）。
-///
-/// 分支中嵌入 `volume` 元素：拖拽时用软件增益把音量置 0 实现**必然静音**
-/// （与具体音频 sink 的 `mute` 是否可靠无关，也不改动 sink 状态，避免把时钟
-/// 提供方 sink 暂停导致管线崩溃）。正常播放时 volume=1 直通。
-fn build_audio_branch(pipeline: &gstreamer::Pipeline) -> Option<Element> {
-    let queue = gstreamer::ElementFactory::make("queue").build().ok()?;
-    let convert = gstreamer::ElementFactory::make("audioconvert")
-        .build()
-        .ok()?;
-    let volume = gstreamer::ElementFactory::make("volume").build().ok()?;
-    let sink = gstreamer::ElementFactory::make("autoaudiosink")
-        .build()
-        .ok()?;
-    pipeline.add_many([&queue, &convert, &volume, &sink]).ok()?;
-    gstreamer::Element::link_many([&queue, &convert, &volume, &sink]).ok()?;
-    // 该分支是在 uridecodebin 已经进入父管线状态后动态加入的。
-    // gst_bin_add() 新加入的元素默认仍处于 NULL；如果不显式同步，
-    // queue/convert/sink 会停在 NULL，音频上游很快被反压填满，进而把
-    // 同一个 uridecodebin 上的视频分支也卡住（表现为播放约一个缓冲周期
-    // 后突然停止，而管线状态仍显示 Playing）。
-    for element in [&queue, &convert, &volume, &sink] {
-        if let Err(error) = element.sync_state_with_parent() {
-            log::warn!("同步动态音频分支状态失败（{}）: {error}", element.name());
+    // parsebin 的 elementary pad 路由：视频交给视频 decodebin，音频交给
+    // `super::audio` 的处理器（input-selector 选流，独占这些 pad——本处理器
+    // 若抢先给音频 pad 接 fakesink，audio.rs 就再也链不上 selector，autoaudiosink
+    // 无数据会把整条管线拖在 preroll），其它流接到 fakesink。
+    let dynamic_pipeline = pipeline.clone();
+    let decoder_entry = decoder.clone();
+    parser.connect_pad_added(move |_parser, pad| {
+        let Some(media) = pad
+            .current_caps()
+            .or_else(|| Some(pad.query_caps(None)))
+            .and_then(|caps| caps.structure(0).map(|s| s.name().to_string()))
+        else {
+            return;
+        };
+        if media.starts_with("audio/") {
+            // 音频 pad 由 audio.rs 统一接入 input-selector，这里不得触碰。
+            return;
         }
-    }
-    Some(queue)
-}
+        let decode_target = if media.starts_with("video/") {
+            decoder_entry.static_pad("sink").filter(|sink| !sink.is_linked())
+        } else {
+            None
+        };
+        if let Some(sink_pad) = decode_target {
+            if let Err(error) = pad.link(&sink_pad) {
+                log::warn!("视频流连接 decodebin 失败: {error}");
+            }
+            return;
+        }
+        // 非目标流必须被消费，容器才能持续解复用到 EOS；异步 fakesink 直接丢弃
+        // 不会为视频/字幕/其它音轨启动解码器（与波形提取管线的口径一致）。
+        let Ok(discard) = gstreamer::ElementFactory::make("fakesink")
+            .property("sync", false)
+            .property("async", false)
+            .build()
+        else {
+            log::warn!("fakesink 创建失败，跳过非目标流");
+            return;
+        };
+        if dynamic_pipeline.add(&discard).is_err() {
+            log::warn!("fakesink 加入管线失败，跳过非目标流");
+            return;
+        }
+        if discard.sync_state_with_parent().is_err() {
+            log::warn!("fakesink 状态同步失败，跳过非目标流");
+            return;
+        }
+        if let Some(sink_pad) = discard.static_pad("sink")
+            && !sink_pad.is_linked()
+        {
+            let _ = pad.link(&sink_pad);
+        }
+    });
 
-/// uridecodebin 源 pad 按当前 caps 的 media type 分类（视频/音频/其他）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PadMediaKind {
-    Video,
-    Audio,
-    Other,
-}
+    // 音频分支装配：parsebin 的 audio pad 到达时由 audio.rs 惰性创建
+    // input-selector → 音频 decodebin → 尾段，并登记到会话句柄。
+    let session_audio = super::audio::build_session_audio(&pipeline, &parser);
 
-/// 读取 pad 的当前 caps，用第一个 structure 的 media type 字符串分类。
-fn classify_pad(pad: &gstreamer::Pad) -> PadMediaKind {
-    use gstreamer::prelude::*;
-    let caps = pad.current_caps().or_else(|| Some(pad.query_caps(None)));
-    let Some(media) = caps.and_then(|caps| caps.structure(0).map(|s| s.name().to_string())) else {
-        return PadMediaKind::Other;
-    };
-    if media.starts_with("video/") {
-        PadMediaKind::Video
-    } else if media.starts_with("audio/") {
-        PadMediaKind::Audio
-    } else {
-        PadMediaKind::Other
-    }
-}
-
-/// 把 uridecodebin 新增的源 pad 链到目标分支入口（视频 queue 或音频 queue）。
-fn link_pad_by_media_type(pad: &gstreamer::Pad, target: &Element) {
-    use gstreamer::prelude::*;
-
-    let Some(sink_pad) = target.static_pad("sink") else {
-        return;
-    };
-    if sink_pad.is_linked() {
-        return;
-    }
-    if let Err(e) = pad.link(&sink_pad) {
-        log::warn!("链接分支失败: {e}");
-    }
+    Ok((pipeline, sink_element, wgpu_sink, session_audio))
 }

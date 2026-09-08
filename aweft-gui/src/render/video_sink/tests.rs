@@ -264,7 +264,7 @@ fn test_paused_preroll_with_callbacks() {
         .expect("测试视频路径无法转换为 URI")
         .to_string();
     gst_init();
-    let (pipeline, _sink_element, mut wgpu_sink) =
+    let (pipeline, _sink_element, mut wgpu_sink, _audio) =
         build_decode_pipeline_with_dmabuf(&uri, false, false).expect("搭建管线失败");
     let (instance, device, queue) = headless_wgpu();
     let _keep = &instance;
@@ -863,7 +863,7 @@ fn test_playback_realpath() {
         .expect("测试视频路径无法转换为 URI")
         .to_string();
 
-    let (pipeline, _sink_element, mut sink) =
+    let (pipeline, _sink_element, mut sink, _audio) =
         build_decode_pipeline_with_dmabuf(&uri, true, true).expect("搭建解码管线失败");
     // sync=true：纯视频无音频时钟，让 appsink 按系统时钟以 30fps 实时节奏消费，
     // 避免全速解码把 VA 表面池灌满而卡死（本机 headless 环境实测约 20 帧后停）。
@@ -1079,7 +1079,7 @@ fn test_dmabuf_zero_copy_realpath() {
 }
 
 fn dmabuf_optin_inner(uri: &str, require_dmabuf: bool, expected_size: Option<(u32, u32)>) {
-    let (pipeline, sink_element, _sink) =
+    let (pipeline, sink_element, _sink, _audio) =
         build_decode_pipeline_with_dmabuf(uri, true, true).expect("搭建 dmabuf 管线失败");
     // sync=true：纯视频无音频时钟时全速解码会把 VA 表面池灌满卡死（约 20 帧后停），
     // 该测试需要连续拉 40+ 帧，必须用系统时钟做实时节奏。
@@ -1589,7 +1589,9 @@ fn our_render_frame(uri: &str, force_sw: bool) -> Option<(Vec<u8>, u32, u32)> {
         build_soft_pipeline(uri)?
     } else {
         set_decode_ranks(false);
-        build_decode_pipeline_with_dmabuf(uri, true, true).ok()?
+        let (pipeline, sink_element, sink, _audio) =
+            build_decode_pipeline_with_dmabuf(uri, true, true).ok()?;
+        (pipeline, sink_element, sink)
     };
     render_decoded_frame(pipeline, sink_element, sink)
 }
@@ -1832,7 +1834,7 @@ fn test_nv12_sysmem_vs_gst_reference() {
     gst_init();
     let uri = uri.to_string();
     set_decode_ranks(false);
-    let (pipeline, sink_element, sink) =
+    let (pipeline, sink_element, sink, _audio) =
         build_decode_pipeline_with_dmabuf(&uri, false, true).expect("搭建 NV12 管线失败");
     let Some((nv12, w, h)) = render_decoded_frame(pipeline, sink_element, sink) else {
         panic!("NV12 渲染失败");
@@ -2384,4 +2386,212 @@ fn test_dmabuf_rgba_ab24_import_spike() {
         "slint::Image 拒绝导入纹理——A2 直通方案需改走 blit 降级"
     );
     eprintln!("✅ AB24 单平面零拷贝导入全链路验证通过");
+}
+
+/// 生成一段同时含 H.264 视频 + FLAC 音频的 Matroska 测试媒体并缓存（用于验证
+/// 会话管线的音频分支：parsebin 的音频 pad 必须真正接入 input-selector，而不是被
+/// 视频侧抢去 fakesink）。返回 None 表示插件不可用（调用方跳过）。
+fn generated_av_test_media() -> Option<&'static Path> {
+    static CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            gst_init();
+            let out = std::env::temp_dir().join("aweft_generated_av_v1.mkv");
+            if out.is_file() {
+                return Some(out);
+            }
+            let pipeline = gstreamer::Pipeline::new();
+            let mux = gstreamer::ElementFactory::make("matroskamux")
+                .build()
+                .ok()?;
+            let sink = gstreamer::ElementFactory::make("filesink")
+                .property("location", &out)
+                .build()
+                .ok()?;
+            pipeline.add_many([&mux, &sink]).ok()?;
+            mux.link(&sink).ok()?;
+
+            // 视频分支：videotestsrc → videoconvert → I420 → x264enc → queue → mux。
+            let video_src = gstreamer::ElementFactory::make("videotestsrc")
+                .property("num-buffers", 30i32)
+                .build()
+                .ok()?;
+            let video_caps = gstreamer::ElementFactory::make("capsfilter")
+                .property(
+                    "caps",
+                    gstreamer::Caps::builder("video/x-raw")
+                        .field("format", "I420")
+                        .field("width", 320i32)
+                        .field("height", 240i32)
+                        .field("framerate", gstreamer::Fraction::new(30, 1))
+                        .build(),
+                )
+                .build()
+                .ok()?;
+            let video_convert = gstreamer::ElementFactory::make("videoconvert")
+                .build()
+                .ok()?;
+            let enc = gstreamer::ElementFactory::make("x264enc")
+                .property("key-int-max", 30u32)
+                .build()
+                .ok()?;
+            let video_queue = gstreamer::ElementFactory::make("queue").build().ok()?;
+            pipeline
+                .add_many([&video_src, &video_convert, &video_caps, &enc, &video_queue])
+                .ok()?;
+            gstreamer::Element::link_many([
+                &video_src,
+                &video_convert,
+                &video_caps,
+                &enc,
+                &video_queue,
+            ])
+            .ok()?;
+            let mux_video = mux.request_pad_simple("video_%u")?;
+            video_queue.static_pad("src")?.link(&mux_video).ok()?;
+
+            // 音频分支：audiotestsrc → capsfilter → audioconvert → flacenc → queue → mux。
+            let audio_src = gstreamer::ElementFactory::make("audiotestsrc")
+                .property_from_str("wave", "sine")
+                .property("freq", 440.0f64)
+                .property("num-buffers", 16i32)
+                .build()
+                .ok()?;
+            let audio_caps = gstreamer::ElementFactory::make("capsfilter")
+                .property(
+                    "caps",
+                    gstreamer::Caps::builder("audio/x-raw")
+                        .field("rate", 8_000i32)
+                        .field("channels", 1i32)
+                        .field("format", "S16LE")
+                        .build(),
+                )
+                .build()
+                .ok()?;
+            let audio_convert = gstreamer::ElementFactory::make("audioconvert")
+                .build()
+                .ok()?;
+            let audio_enc = gstreamer::ElementFactory::make("flacenc").build().ok()?;
+            let audio_queue = gstreamer::ElementFactory::make("queue").build().ok()?;
+            pipeline
+                .add_many([
+                    &audio_src,
+                    &audio_caps,
+                    &audio_convert,
+                    &audio_enc,
+                    &audio_queue,
+                ])
+                .ok()?;
+            gstreamer::Element::link_many([
+                &audio_src,
+                &audio_caps,
+                &audio_convert,
+                &audio_enc,
+                &audio_queue,
+            ])
+            .ok()?;
+            let mux_audio = mux.request_pad_simple("audio_%u")?;
+            audio_queue.static_pad("src")?.link(&mux_audio).ok()?;
+
+            let bus = pipeline.bus()?;
+            pipeline.set_state(gstreamer::State::Playing).ok()?;
+            let message = bus.timed_pop_filtered(
+                gstreamer::ClockTime::from_seconds(20),
+                &[gstreamer::MessageType::Eos, gstreamer::MessageType::Error],
+            );
+            let _ = pipeline.set_state(gstreamer::State::Null);
+            match message.as_ref().map(|message| message.view()) {
+                Some(gstreamer::MessageView::Eos(..)) if out.is_file() => Some(out),
+                Some(gstreamer::MessageView::Error(error)) => {
+                    eprintln!("跳过：生成带音轨测试媒体失败: {}", error.error());
+                    None
+                }
+                _ => None,
+            }
+        })
+        .as_deref()
+}
+
+/// 回归：会话管线（含音轨媒体）必须能完成暂停预滚动并进入 Playing，音频 pad
+/// 必须真正接进 input-selector（音频侧独占路由），管线里恰好一个音频尾段且
+/// volume 命名为 audio-volume。曾因 parsebin 视频路由处理器抢先给音频 pad 接
+/// fakesink，导致 selector 永远收不到音轨、autoaudiosink 无输入把整条管线拖在
+/// preroll——表现为「无法播放 + Failed to seek」。
+#[test]
+fn session_pipeline_with_audio_prerolls_and_seeks() {
+    use gstreamer::prelude::*;
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    // 2024 edition：set_var 为 unsafe。
+    unsafe { std::env::set_var("AWEFT_AUDIO_SINK", "fakesink") };
+
+    let Some(path) = generated_av_test_media() else {
+        eprintln!("跳过：无法生成带音轨的测试媒体");
+        return;
+    };
+    let uri = url::Url::from_file_path(path).unwrap().to_string();
+    let (pipeline, _sink_element, _wgpu_sink, session_audio) =
+        build_decode_pipeline_with_dmabuf(&uri, false, false).expect("搭建会话管线失败");
+
+    pipeline
+        .set_state(gstreamer::State::Paused)
+        .expect("暂停预滚动失败（音频分支可能把整条管线拖住）");
+
+    // 音频 pad 在 parsebin 逐个暴露，等待 selector 收齐。
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while session_audio.attached_stream_count() < 1 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        session_audio.attached_stream_count(),
+        1,
+        "音频 pad 必须被 audio 分支独占接进 input-selector（不应被视频侧抢走）"
+    );
+
+    // 管线内必须恰好一个音频尾段，且 volume 命名 audio-volume。
+    let mut audio_sinks = 0;
+    let mut named_volume = false;
+    for element in pipeline.iterate_elements().into_iter().flatten() {
+        let factory = element.factory().map(|factory| factory.name().to_string());
+        if matches!(factory.as_deref(), Some("autoaudiosink" | "fakesink")) {
+            audio_sinks += 1;
+        }
+        if element.name() == super::audio::AUDIO_VOLUME_NAME {
+            named_volume = true;
+        }
+    }
+    assert_eq!(audio_sinks, 1, "会话内只允许一个音频尾段 sink");
+    assert!(named_volume, "音频尾段 volume 必须命名 audio-volume");
+
+    // 已预滚动成功：flush-seek 与进入 Playing 都应可用（复现的 Failed to seek
+    // 正是 preroll 被拖住的表现）。
+    pipeline
+        .seek_simple(
+            gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
+            gstreamer::ClockTime::ZERO,
+        )
+        .expect("预滚动完成后 seek 必须成功");
+    pipeline
+        .set_state(gstreamer::State::Playing)
+        .expect("进入 Playing 失败");
+    let played = pump_until(
+        || {
+            pipeline
+                .query_position::<gstreamer::ClockTime>()
+                .is_some_and(|position| position > gstreamer::ClockTime::from_mseconds(50))
+        },
+        8,
+    );
+    assert!(played, "进入 Playing 后播放位置应持续前进");
+    let _ = pipeline.set_state(gstreamer::State::Null);
+}
+
+fn pump_until(mut condition: impl FnMut() -> bool, seconds: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    while Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    condition()
 }

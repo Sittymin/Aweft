@@ -13,6 +13,33 @@ use crate::bridge::types::{SlintAudioTrack, SlintAudioWaveform};
 use crate::depsgraph::Tag;
 use crate::store::AppStore;
 
+/// 波形视图上报：某 Area 的可视窗口变化，同步其持久列模型（数量局部增删、
+/// 行值原地更新，模型标识恒定，Slint 侧不重建槽位）。
+pub fn ui_project_video_waveform_view(store: &mut AppStore, tags: &[Tag]) {
+    use crate::store::audio::AreaWaveformView;
+    for tag in tags {
+        let Tag::VideoWaveformViewChanged {
+            area,
+            video_index,
+            track_index,
+            bucket_ms,
+            first,
+            count,
+        } = tag
+        else {
+            continue;
+        };
+        let view = AreaWaveformView {
+            video_index: *video_index,
+            track_index: *track_index,
+            bucket_ms: *bucket_ms,
+            first: *first,
+            count: *count,
+        };
+        crate::store::audio::ui_sync_waveform_columns(&mut store.ui_models.audio, *area, view);
+    }
+}
+
 /// 会话结构变化：追加时只 push 新行；替换时保留桶模型槽位并重建对应音轨行。
 pub fn ui_project_audio_structure(store: &mut AppStore, tags: &[Tag]) {
     for tag in tags {

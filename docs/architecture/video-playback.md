@@ -6,32 +6,47 @@ GStreamer transport、seek、EOS 与播放时钟查询，`reducers/media/wavefor
 后台波形任务，`reducers/media/tests.rs` 保留媒体回归测试。视频状态变更经
 `projections/video.rs` 更新 `VideoState` 派生模型，音频模型经 `projections/audio.rs`
 更新 `AudioState` 派生模型（两者由同一 `VideoStructureChanged` tag 驱动，拓扑不变）；
-帧、播放时钟和波形批次遵循下文的实时例外。
+帧图像与波形批次遵循下文的实时例外，播放时钟经 `VideoTick` kind 入图调度。
 渲染层负责取帧、颜色转换和向 Slint 提交图像。播放中的时间由
 视频管线位置驱动动画标量。暂停时不依赖渲染轮询推进时间：播放头/时间条的主动 seek
 由 reducer 写入会话并返回 `VideoTimeChanged`，暂停态预览帧由 preroll 回调交付；
 播放态才由渲染回调按帧读取管线位置并做实时增量同步。
 
-普通会话结构、选择/主视频、视口位置、静音、seek 时间和 transport 播放状态都
-必须经过 `Video DataId → TagKind → projection`。帧图像、逐帧播放时钟和后台波形
-批次属于高频异步实时例外：它们可以直接对持久 `VecModel` 做行级增量更新，但
-不得被当作普通 reducer UI 写入。
+普通会话结构、选择/主视频、视口位置、静音、seek 时间、transport 播放状态和逐帧
+播放时钟都必须经过 `Video DataId → TagKind → projection`（时钟走专用的 `VideoTick`
+kind，只做时间传播）。波形视图上报走 `VideoWaveformView` kind，EOS 按钮校正走
+`RefreshPlayingState` 分发。帧图像和后台波形批次属于高频异步实时例外：它们可以直接
+对持久 `VecModel` 做行级增量更新，但不得被当作普通 reducer UI 写入。
 
 ## 数据路径
 
 ```text
-uridecodebin（硬解）
-  → vapostproc（GPU 颜色转换）
-  → appsink
-  → wgpu YUV→RGB
-  → slint::Image
+urisourcebin → parsebin
+  ├─ video elementary → decodebin（硬解）→ queue → vapostproc（GPU 颜色转换）
+  │     → appsink → wgpu YUV→RGB → slint::Image
+  └─ audio elementary → input-selector → decodebin → queue → audioconvert
+        → volume("audio-volume") → autoaudiosink
 ```
+
+会话管线显式分层为 `urisourcebin → parsebin`：parsebin 暴露与 Discoverer 相同的
+elementary stream-id，视频分支用独立 decodebin 解码，音频分支见
+`video_sink/audio.rs`。视频与音频共享同一解码头与管线时钟，A/V 天然同步；
+音轨选择只改写 input-selector 的 `active-pad`（运行中可写），未选择的音轨在
+selector 内被丢弃、不启动解码器。其余 elementary stream（第二视频流/字幕等）
+接异步 fakesink，保证解复用推进到 EOS。
 
 默认路径会探测 Vulkan 外部内存能力，并在可用时协商并导入 dmabuf。运行时 caps 保留 vapostproc 提供的实际
 fourcc/modifier，并过滤渲染器没有对应平面布局的格式；其余情况仍可协商到
 系统内存上传路径。已协商为 DMA-BUF 但 Vulkan 导入失败的帧会被丢弃，不会把
 DMA-BUF 错当成普通系统内存读取。
 `AWEFT_SWAP_UV=1` 仅用于调试 U/V 顺序。
+
+`video_sink/audio.rs` 负责会话内实时音频分支（selector/decodebin/尾段装配、
+`SessionAudio::select_stream`/`set_muted`）；尾段 `volume` 命名
+`audio-volume`，是静音与拖拽静音的唯一软件入口。音频尾段随首个音频 pad
+惰性装配，纯视频媒体不会创建 autoaudiosink（headless 无音频设备时不拖累
+视频管线）。切换音轨后调用方对整条管线做一次 flush-seek，从当前时间重开
+新音轨的 segment。
 
 `video_sink/sink.rs` 负责 appsink、最新帧槽位与渲染资源生命周期，`frame.rs`
 负责帧上传/导入和 YUV 转换，`dmabuf.rs` 只负责 DMA-BUF 平面导入。
@@ -89,10 +104,13 @@ DMA-BUF 错当成普通系统内存读取。
   暂停态 seek 不临时切到 Playing，由 preroll 回调交付预览帧。范围外末帧 seek 不等待
   管线状态转换，并对连续相同尾端请求去重，避免拖动时在 UI 线程反复提交 segment。
 
-实时播放时钟是 reducer/depsgraph 之外的明确例外：新视频帧到达时只查询实际收到该帧的
-会话位置，并只同步对应时间条及 `AnimationState.current-time`；动作名、范围、通道和选择等
-动画标量不随帧重复写入 Slint。波形专用的实际时间/范围外逻辑绑定位于条件实例化的
-`AudioWaveformArea` 内，普通 Timeline、Viewport、Graph Area 不订阅这些逐帧属性。
+实时播放时钟经依赖图调度，但走专用的 tick kind：新视频帧到达时只查询实际收到该帧的
+会话位置，帧配对的时间条行直接行级写入，时间轴传播打 `VideoClockTick` 经 `VideoTick`
+操作执行（与离散 seek 共实现）；动作名、范围、通道和选择等动画标量不随帧重复写入
+Slint（`GraphScalars` 只跟 `VideoTime`，tick 不触发）。需要逐帧联动的新操作显式
+handles `TagKind::VideoTick`，不得复用 `VideoTime` 的离散语义。波形专用的实际时间/
+范围外逻辑绑定位于条件实例化的 `AudioWaveformArea` 内，普通 Timeline、Viewport、
+Graph Area 不订阅这些逐帧属性。
 
 ## 音频波形
 
@@ -113,7 +131,7 @@ appsink`；其中 `queue` 后的 raw-audio 链是未来插入滤镜、分析器�
 媒体范围之外；非焦点音轨的范围外请求时间由该 Area 本地保存。视频画面仍钳制到
 最近的有效帧，并以该视频的彩色竖线同时标出实际画面时间。
 
-波形以固定 1ms 时间桶累计 min/max/rms 三值（Audacity 式包络），全文件保留作耐久层；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度，但波形密度独立于标尺：各 Area 按“每像素秒数”选桶屏宽 ≥ 1px 的最细列宽，经 `AudioCallbacks.waveform-view` 上报可视窗口（列宽、首列、列数）并取回持久列模型（`store::audio::ui_sync_waveform_columns` 直接聚合基础桶，不预建全文件金字塔；min/max 取极值，rms 取均方根，结果精确对应覆盖区间；数量变化走局部增删、行值走原地更新，槽位组件不重建），因此正常缩放下每像素约一列竖线（min→max 外线加显示 rms 的内层线条），极限放大时线加宽铺满桶区间；不同 Area 按 `slotmap` 键各自登记视图求值，互不干扰，关闭的 Area 由 pump 顺带裁剪。appsink 连续解码并将约四秒音频对应的基础桶合并为一个 UI 批次；批次经 Rust 无界通道发往 UI 线程的 pump 任务（`store::audio::ui_pump_waveform_batches`）写模型，不经过 Slint 回调，worker 不等待 Area 的可见组件完成求值，因此切换 Area 不会暂停后台解码。解码进度（`waveform.duration` 随批次变）驱动 Slint 列绑定重算，新批次到达即刷新可见列。UI 保留持久的
+波形以固定 1ms 时间桶累计 min/max/rms 三值（Audacity 式包络），全文件保留作耐久层；横向主标尺与波形共享 1/2/5×10^k 的 nice 时间粒度，但波形密度独立于标尺：各 Area 按“每像素秒数”选桶屏宽 ≥ 1px 的最细列宽，经 `AudioCallbacks.waveform-view` 上报可视窗口（列宽、首列、列数）并取回持久列模型（`store::audio::ui_sync_waveform_columns` 直接聚合基础桶，不预建全文件金字塔；min/max 取极值，rms 取均方根，结果精确对应覆盖区间；数量变化走局部增删、行值走原地更新，槽位组件不重建），因此正常缩放下每像素约一列竖线（min→max 外线加显示 rms 的内层线条），极限放大时线加宽铺满桶区间；不同 Area 按 `slotmap` 键各自登记视图求值，互不干扰，关闭的 Area 由 pump 顺带裁剪。appsink 连续解码并将约四秒音频对应的基础桶合并为一个 UI 批次；批次经 Rust 无界通道发往 UI 线程的 pump 任务（`store::audio::ui_pump_waveform_batches`）写基础桶与时长，并重算已登记视图的列模型（与上报走同一同步函数），不经过 Slint 回调，worker 不等待 Area 的可见组件完成求值，因此切换 Area 不会暂停后台解码。新批次到达即刷新可见列，无需 Slint 侧动作。UI 保留持久的
 `VecModel<SlintWaveformBucket>` 基础桶，通过 `set_row_data`/`push` 原地更新，不按批次克隆完整桶数组或
 重建嵌套模型。
 

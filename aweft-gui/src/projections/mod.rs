@@ -11,6 +11,8 @@ use crate::depsgraph::{
 
 mod animation;
 mod audio;
+
+pub use audio::ui_project_video_waveform_view;
 mod node_graph;
 mod screen;
 mod sequence;
@@ -30,7 +32,8 @@ pub use sequence::{
 };
 pub use video::{
     ui_project_video_mute, ui_project_video_playback, ui_project_video_position,
-    ui_project_video_selection, ui_project_video_structure, ui_project_video_time,
+    ui_project_video_selection, ui_project_video_structure, ui_project_video_tick,
+    ui_project_video_time,
 };
 pub(crate) use video::{
     ui_sync_active_video_time_realtime, ui_sync_video_playback_scalar,
@@ -87,6 +90,20 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                 handles: &[TagKind::VideoPlayback],
                 depends_on: &[OperationCode::VideoStructure],
                 exec: ui_project_video_playback,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoTick,
+                handles: &[TagKind::VideoTick],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_tick,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoWaveformView,
+                handles: &[TagKind::VideoWaveformView],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_waveform_view,
             },
         ],
     });

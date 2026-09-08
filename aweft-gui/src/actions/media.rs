@@ -27,6 +27,8 @@ pub enum VideoAction {
     SetMain { index: usize },
     /// 拖拽移动非主视频在视口中的位置（世界坐标，相对主视频世界矩形左上角）
     MoveVideo { index: usize, x: f64, y: f64 },
+    /// 按缓存的 transport 意图与 EOS 状态校正全局播放按钮（Bus EOS 后由渲染循环分发）。
+    RefreshPlayingState,
     /// 播放视口选择集合；无选择时播放主视频
     Play,
     /// 暂停视口选择集合；无选择时暂停主视频

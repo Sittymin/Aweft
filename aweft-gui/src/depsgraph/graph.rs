@@ -237,11 +237,12 @@ impl Depsgraph {
         if self.pending_tags.is_empty() {
             return;
         }
-        let tags = std::mem::take(&mut self.pending_tags);
+        let mut tags = std::mem::take(&mut self.pending_tags);
 
         // 1. flush：data_id → 依赖组件 → handles 入口 → BFS 闭包（含跨组件边）
         let affected = self.flush_affected(&tags);
         if affected.is_empty() {
+            self.reuse_tag_buffer(tags);
             return;
         }
 
@@ -253,6 +254,17 @@ impl Depsgraph {
             if let Some(op) = self.op_nodes.get(&op_id) {
                 (op.exec)(store, &tags);
             }
+        }
+        self.reuse_tag_buffer(tags);
+    }
+
+    /// 复用 tag 缓冲：逐帧 tick 的 tag 列表不再每轮堆分配。
+    /// 投影按设计约束不产生新 tag；若执行中确有新 tag 到达则保留它们，
+    /// 旧缓冲丢弃（正确性优先于复用）。
+    fn reuse_tag_buffer(&mut self, mut tags: Vec<Tag>) {
+        tags.clear();
+        if self.pending_tags.is_empty() {
+            self.pending_tags = tags;
         }
     }
 }
@@ -634,6 +646,37 @@ mod tests {
             log.as_slice(),
             &["op_a", "op_b"],
             "evaluate 应按拓扑顺序执行：op_a（上游）先，op_b（下游）后，实际: {log:?}"
+        );
+    }
+
+    #[test]
+    fn evaluate_reuses_tag_buffer() {
+        // 逐帧 tick 不应每轮重建 pending Vec：求值后缓冲容量保留，供下一轮复用。
+        // 组件 handles 该 tag，走完整 flush+topo+exec 路径。
+        let mut g = Depsgraph::new();
+        let a = make_component(&[DataId::Sequence], &[TagKind::SequenceStructure], noop);
+        g.register(a);
+
+        i_slint_backend_testing::init_no_event_loop();
+        let instance = crate::bridge::types::MainWindow::new().unwrap();
+        let mut store = crate::store::AppStore::new(&instance);
+        store.depsgraph = g;
+
+        store.depsgraph.tag(Tag::StructureChanged);
+        store.evaluate_depsgraph();
+        assert!(
+            store.depsgraph.pending_tags.capacity() > 0,
+            "求值后应保留 tag 缓冲容量"
+        );
+
+        // 第二轮复用同一缓冲：容量不收缩。
+        let capacity = store.depsgraph.pending_tags.capacity();
+        store.depsgraph.tag(Tag::StructureChanged);
+        store.evaluate_depsgraph();
+        assert_eq!(
+            store.depsgraph.pending_tags.capacity(),
+            capacity,
+            "复用的缓冲容量应保持稳定"
         );
     }
 

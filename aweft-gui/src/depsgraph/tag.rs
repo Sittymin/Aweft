@@ -352,6 +352,19 @@ pub enum Tag {
     },
     /// 全局视频 transport 播放状态变化。
     VideoPlaybackChanged,
+    /// 播放时钟 tick（逐帧）：渲染循环在收到新帧后打标，只做时间传播，
+    /// 不做离散 seek 的全量标量同步（见 `TagKind::VideoTick`）。
+    VideoClockTick,
+    /// 波形视图上报：某 Area 的可视窗口变化，同步其持久列模型。
+    /// 视图参数内联存放（`slotmap` 键标识 Area），投影只做行级增删改。
+    VideoWaveformViewChanged {
+        area: ScrAreaKey,
+        video_index: usize,
+        track_index: usize,
+        bucket_ms: usize,
+        first: i32,
+        count: usize,
+    },
 }
 
 /// 操作语义分类：同一语义的 Tag 归为一类，供操作按 `handles` 精确路由。
@@ -426,6 +439,11 @@ pub enum TagKind {
     VideoTime,
     /// 视频：播放状态变化。
     VideoPlayback,
+    /// 视频：播放时钟 tick（逐帧时间传播，不做全量标量同步）。
+    /// 离散 seek 走 `VideoTime`；需要逐帧联动的新操作显式 handles 本 kind。
+    VideoTick,
+    /// 视频：波形视图变化（某 Area 可视窗口上报，同步其持久列模型）。
+    VideoWaveformView,
 }
 
 /// 操作唯一标识（编译期检查的枚举，可无限扩展加变体）。
@@ -492,6 +510,10 @@ pub enum OperationCode {
     VideoTime,
     /// 视频播放状态投影。
     VideoPlayback,
+    /// 视频播放时钟 tick 投影（逐帧时间传播）。
+    VideoTick,
+    /// 视频波形视图投影（某 Area 可视窗口同步）。
+    VideoWaveformView,
 }
 
 impl Tag {
@@ -547,6 +569,8 @@ impl Tag {
             | Tag::VideoPositionChanged { .. }
             | Tag::VideoMuteChanged { .. }
             | Tag::VideoTimeChanged { .. }
+            | Tag::VideoClockTick
+            | Tag::VideoWaveformViewChanged { .. }
             | Tag::VideoPlaybackChanged => DataId::Video,
         }
     }
@@ -618,6 +642,8 @@ impl Tag {
             Tag::VideoPositionChanged { .. } => TagKind::VideoPosition,
             Tag::VideoMuteChanged { .. } => TagKind::VideoMute,
             Tag::VideoTimeChanged { .. } => TagKind::VideoTime,
+            Tag::VideoClockTick => TagKind::VideoTick,
+            Tag::VideoWaveformViewChanged { .. } => TagKind::VideoWaveformView,
             Tag::VideoPlaybackChanged => TagKind::VideoPlayback,
         }
     }

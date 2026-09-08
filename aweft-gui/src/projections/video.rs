@@ -86,6 +86,14 @@ pub fn ui_project_video_playback(store: &mut AppStore, _tags: &[Tag]) {
     ui_sync_video_playback_scalar(store);
 }
 
+/// 播放时钟 tick：逐帧时间传播（渲染循环在收到新帧后打标）。
+/// 与离散 seek 共用 `ui_sync_active_video_time_realtime` 实现，只是不经
+/// `VideoTime` kind，因此 `GraphScalars` 等离散依赖不参与逐帧求值；
+/// 需要逐帧联动的新操作显式 handles `TagKind::VideoTick`。
+pub fn ui_project_video_tick(store: &mut AppStore, _tags: &[Tag]) {
+    ui_sync_active_video_time_realtime(store);
+}
+
 /// 将权威播放状态同步到 Slint 标量。渲染时钟校正播放状态时也复用此实时出口。
 pub(crate) fn ui_sync_video_playback_scalar(store: &AppStore) {
     let Some(weak) = &store.video_state else {
@@ -135,7 +143,7 @@ pub(crate) fn ui_update_video_time_bar_duration(
 /// 普通 seek 由 VideoTime Tag 触发同一逻辑；渲染回调按帧调用本出口，避免
 /// 每帧创建 Action/Tag。
 pub(crate) fn ui_sync_active_video_time_realtime(store: &mut AppStore) {
-    if !crate::reducers::media::media_active_video_drives_timeline(store) {
+    if !crate::reducers::media::media_should_active_video_drive_timeline(store) {
         return;
     }
     let Some(active) = store.state().active_video() else {
