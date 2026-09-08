@@ -41,6 +41,9 @@ pub struct AudioUiState {
     pub tracks: Rc<VecModel<slint::ModelRc<SlintAudioTrack>>>,
     /// 每个视频内部的音轨行模型；`tracks` 各行引用对应模型。
     pub track_models: Vec<Rc<VecModel<SlintAudioTrack>>>,
+    /// 每个视频当前选中的播放音轨下标（-1 = 未选/静音）。
+    /// 与 Slint `AudioState.playback-tracks` 共享 inner。
+    pub playback_tracks: Rc<VecModel<i32>>,
     /// 波形的持久增量模型；可见列计算的数据源。
     /// 后台任务按批次 push/set_row_data，不重复构造完整快照。
     pub buckets: Vec<Vec<Rc<VecModel<SlintWaveformBucket>>>>,
@@ -213,6 +216,7 @@ pub struct WaveformBatch {
     pub(crate) start: usize,
     pub(crate) duration: f32,
     pub(crate) buckets: Vec<SlintWaveformBucket>,
+    pub(crate) completed: bool,
     pub(crate) cancellation: Arc<AtomicBool>,
 }
 
@@ -250,16 +254,33 @@ pub(crate) async fn ui_pump_waveform_batches(
             );
             continue;
         };
-        ui_apply_waveform_batch(&base, batch.start, &batch.buckets);
+        if !batch.buckets.is_empty() {
+            ui_apply_waveform_batch(&base, batch.start, &batch.buckets);
+        }
         {
+            use crate::bridge::types::AudioTrackWaveformStatus;
             let store = store.borrow();
             let audio = &store.ui_models.audio;
             if let Some(model) = audio.track_models.get(batch.video_index)
                 && let Some(mut track) = model.row_data(batch.track_index)
-                && (track.waveform.duration - batch.duration).abs() > f32::EPSILON
             {
-                track.waveform.duration = batch.duration;
-                model.set_row_data(batch.track_index, track);
+                let mut changed = false;
+                if (track.waveform.duration - batch.duration).abs() > f32::EPSILON {
+                    track.waveform.duration = batch.duration;
+                    changed = true;
+                }
+                let target_status = if batch.completed {
+                    AudioTrackWaveformStatus::Completed
+                } else {
+                    AudioTrackWaveformStatus::Processing
+                };
+                if track.waveform_status != target_status {
+                    track.waveform_status = target_status;
+                    changed = true;
+                }
+                if changed {
+                    model.set_row_data(batch.track_index, track);
+                }
             }
         }
         // 重算上报过且同视频同音轨的视图列模型，并裁剪失效 Area。

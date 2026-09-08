@@ -40,7 +40,7 @@ pub(crate) mod waveform;
 
 #[cfg(test)]
 #[path = "tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 pub use sink::{SlintWGPUSink, WgpuHandles};
 
@@ -215,6 +215,12 @@ pub(crate) fn teardown(store: &mut AppStore) {
     let sessions = std::mem::take(&mut store.state_mut().video_sessions);
     store.state_mut().audio_track_indices.clear();
     store.state_mut().audio_tracks.clear();
+    store.ui_models.audio.tracks.set_vec(Vec::new());
+    store.ui_models.audio.track_models.clear();
+    store.ui_models.audio.playback_tracks.set_vec(Vec::new());
+    store.ui_models.audio.buckets.clear();
+    store.ui_models.audio.views.clear();
+    store.ui_models.audio.columns.clear();
     // 音频分支位于会话管线内（同源同钟），置 Null 时随会话一并释放，无需单独处理。
     for session in sessions {
         stop_session_parts(&session.pipeline, session.wgpu_sink);

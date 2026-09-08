@@ -1,8 +1,9 @@
 import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
+import { ContextMenu, MenuItem } from "../widgets/context_menu.slint";
 import { TimeRuler, VerticalGrid } from "./graph_editor/ruler.slint";
 import { SlintAudioTrack, SlintKey, SlintWaveformBucket } from "../core/types.slint";
-import { AnimationState, VideoState } from "../bridge/state.slint";
+import { AnimationState, AudioState, VideoState } from "../bridge/state.slint";
 import { VideoCallbacks, AudioCallbacks } from "../bridge/callbacks.slint";
 import { AudioTrackPanel } from "./audio_track_panel.slint";
 import { AudioTrackSidebar } from "./audio_track_sidebar.slint";
@@ -148,6 +149,14 @@ export component AudioWaveformArea inherits Rectangle {
         ? AnimationState.current-time
         : root.has-outside-time ? root.outside-time : root.actual-time;
 
+    private property <int> playback-track-index: root.video-index >= 0
+        && root.video-index < AudioState.playback-tracks.length
+        ? AudioState.playback-tracks[root.video-index] : -1;
+    private property <bool> menu-open: false;
+    private property <int> menu-track-index: -1;
+    private property <length> menu-x: 0px;
+    private property <length> menu-y: 0px;
+
     background: Theme.data.animation-editor.canvas-background;
 
     AudioTrackPanel {
@@ -157,10 +166,17 @@ export component AudioWaveformArea inherits Rectangle {
         height: root.height;
         tracks: root.tracks;
         current-track: root.track-index;
+        playback-track: root.playback-track-index;
         header-height: root.ruler-height;
         track-pressed(index) => {
             root.track-selected(index);
-            AudioCallbacks.select-audio-track(root.video-index, index);
+        }
+        track-context-menu(index, mx, my) => {
+            root.track-selected(index);
+            root.menu-track-index = index;
+            root.menu-x = mx;
+            root.menu-y = my;
+            root.menu-open = true;
         }
     }
 
@@ -282,6 +298,33 @@ export component AudioWaveformArea inherits Rectangle {
         open <=> root.sidebar-open;
         tracks: root.tracks;
         current-track: root.track-index;
+    }
+
+    // 右键菜单打开时的背景点击层：点菜单外任意处关闭
+    if root.menu-open: TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.menu-open = false;
+            }
+        }
+    }
+
+    // 音轨右键上下文菜单
+    if root.menu-open: ContextMenu {
+        open <=> root.menu-open;
+        menu-x: root.menu-x;
+        menu-y: root.menu-y;
+        container-width: root.width;
+        container-height: root.height;
+        clamp-position: true;
+        MenuItem {
+            text: root.menu-track-index == root.playback-track-index ? "已是当前播放音轨" : "设置为当前播放音轨";
+            enabled: root.menu-track-index != root.playback-track-index;
+            menu-open <=> root.menu-open;
+            activated => {
+                AudioCallbacks.select-audio-track(root.video-index, root.menu-track-index);
+            }
+        }
     }
 
     changed video-index => { root.has-outside-time = false; }

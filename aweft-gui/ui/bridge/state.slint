@@ -51,6 +51,8 @@ export global AudioState {
     // 每个视频会话的音频轨（外层下标 = 视频下标；内层 = 该容器内的音轨）。
     // 与 VideoState.time-bars 平行，不再嵌在时间条行内。
     in property <[[SlintAudioTrack]]> audio-tracks: [];
+    // 每个视频会话当前选中的播放音轨下标（-1 = 未选/静音）
+    in property <[int]> playback-tracks: [];
 }
 
 // 通用"文本编辑遮罩"状态：内嵌输入框（字符串常量等）聚焦时，

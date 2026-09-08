@@ -201,7 +201,11 @@ pub(super) fn media_seek_video_session(session: &mut VideoSession, secs: f64) {
         .at_eos
         .store(false, std::sync::atomic::Ordering::Release);
     session.last_frame_seeked = false;
+    let was_playing = session.playing;
     gst_seek_pipeline_accurate(&session.pipeline, secs);
+    if was_playing {
+        gst_set_video_session_state(session, gstreamer::State::Playing);
+    }
 }
 
 pub(super) fn media_repeated_last_frame_seek(

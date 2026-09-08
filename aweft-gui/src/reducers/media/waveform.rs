@@ -70,6 +70,7 @@ fn run_waveform_job(job: WaveformJob) {
                         rms: bucket.rms,
                     })
                     .collect::<Vec<_>>(),
+                completed: false,
                 cancellation: job.cancellation.clone(),
             };
             // 四秒级合批已将事件数压低到与媒体时长成线性的较小规模。无界通道
@@ -90,12 +91,24 @@ fn run_waveform_job(job: WaveformJob) {
         return;
     }
     match result {
-        Ok((buckets, duration)) => log::info!(
-            "音频波形提取完成: video={}, track={}, duration={duration:.3}s, buckets={}",
-            job.video_index,
-            job.track_index,
-            buckets.len(),
-        ),
+        Ok((buckets, duration)) => {
+            log::info!(
+                "音频波形提取完成: video={}, track={}, duration={duration:.3}s, buckets={}",
+                job.video_index,
+                job.track_index,
+                buckets.len(),
+            );
+            let done_batch = WaveformBatch {
+                video_index: job.video_index,
+                track_index: job.track_index,
+                start: usize::MAX,
+                duration: duration as f32,
+                buckets: Vec::new(),
+                completed: true,
+                cancellation: job.cancellation.clone(),
+            };
+            let _ = job.ui_sender.unbounded_send(done_batch);
+        }
         Err(error) => log::warn!(
             "音频波形提取失败 ({}, track={}, stream-id={}): {error:#}",
             job.uri,

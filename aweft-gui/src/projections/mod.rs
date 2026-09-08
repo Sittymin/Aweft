@@ -12,7 +12,7 @@ use crate::depsgraph::{
 mod animation;
 mod audio;
 
-pub use audio::ui_project_video_waveform_view;
+pub use audio::{ui_project_video_audio_track, ui_project_video_waveform_view};
 mod node_graph;
 mod screen;
 mod sequence;
@@ -73,6 +73,13 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                 handles: &[TagKind::VideoMute],
                 depends_on: &[OperationCode::VideoStructure],
                 exec: ui_project_video_mute,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoAudioTrack,
+                handles: &[TagKind::VideoAudioTrack],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_audio_track,
             },
             Operation {
                 id: OperationId::new(),

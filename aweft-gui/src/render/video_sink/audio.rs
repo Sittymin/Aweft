@@ -30,23 +30,23 @@ pub(crate) const AUDIO_VOLUME_NAME: &str = "audio-volume";
 /// 不会创建 autoaudiosink（避免 headless 无音频设备时卡住整条视频管线）。
 #[derive(Clone)]
 pub(crate) struct SessionAudio {
-    inner: Arc<Mutex<SessionAudioInner>>,
+    pub(crate) inner: Arc<Mutex<SessionAudioInner>>,
 }
 
-struct SessionAudioInner {
-    pipeline: gstreamer::Pipeline,
+pub(crate) struct SessionAudioInner {
+    pub(crate) pipeline: gstreamer::Pipeline,
     // selector 上按音轨出现顺序排列的 stream-id（默认取首个）。
-    order: Vec<String>,
+    pub(crate) order: Vec<String>,
     // stream-id → input-selector 的 sink pad（parsebin audio pad 到达时建立）。
-    selector_pads: HashMap<String, gstreamer::Pad>,
-    selector: Option<Element>,
-    decodebin: Option<Element>,
-    tail_queue: Option<Element>,
-    volume: Option<Element>,
-    active_stream: Option<String>,
+    pub(crate) selector_pads: HashMap<String, gstreamer::Pad>,
+    pub(crate) selector: Option<Element>,
+    pub(crate) decodebin: Option<Element>,
+    pub(crate) tail_queue: Option<Element>,
+    pub(crate) volume: Option<Element>,
+    pub(crate) active_stream: Option<String>,
     // reducer 在 parsebin 尚未暴露该音轨前发起的选流请求，pad 到达或 no-more-pads 时落地。
-    pending_stream: Option<String>,
-    chain_ready: bool,
+    pub(crate) pending_stream: Option<String>,
+    pub(crate) chain_ready: bool,
 }
 
 /// 为会话管线装配音频分支路由。parsebin 的音频 elementary pad 逐个到达时，
@@ -172,7 +172,13 @@ impl SessionAudioInner {
         if self.chain_ready {
             return Some(());
         }
+        // input-selector 默认 sync-streams=true，会在非活动输入 pad 上按时钟/活动流时间
+        // 同步等待而不立即丢弃数据。同一解复用器（如 matroskademux）串行推送各流时，
+        // 非活动音轨 pad 会反压卡住解复用器线程，导致视频数据流无法送达视频解码器，
+        // 整条管线在暂停预滚动（Preroll）期挂起（表现为多音轨视频无画面且无法播放）。
+        // 置为 false 让非活动音轨的数据立即丢弃，解复用器畅通推进。
         let selector = gstreamer::ElementFactory::make("input-selector")
+            .property("sync-streams", false)
             .build()
             .context("创建 input-selector 失败（coreelements 缺失？）")
             .ok()?;

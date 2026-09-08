@@ -1,4 +1,4 @@
-import { SlintAudioTrack } from "../core/types.slint";
+import { SlintAudioTrack, AudioTrackWaveformStatus } from "../core/types.slint";
 import { Theme } from "../theme/index.slint";
 
 // 音频波形左侧音轨面板。条目只依赖 VideoTimeBar 的通用媒体信息，
@@ -6,9 +6,11 @@ import { Theme } from "../theme/index.slint";
 export component AudioTrackPanel inherits Rectangle {
     in property <[SlintAudioTrack]> tracks;
     in property <int> current-track: -1;
+    in property <int> playback-track: -1;
     in property <length> header-height: Theme.data.animation-editor.ruler-height;
     in property <length> row-height: Theme.data.animation-editor.track-row-height;
     callback track-pressed(index: int);
+    callback track-context-menu(index: int, x: length, y: length);
 
     private property <float> pan-y: 0.0;
 
@@ -57,7 +59,17 @@ export component AudioTrackPanel inherits Rectangle {
             : Theme.data.animation-editor.channel-row-background;
 
         TouchArea {
-            clicked => { root.track-pressed(i); }
+            pointer-event(event) => {
+                if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                    root.track-pressed(i);
+                } else if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                    root.track-context-menu(
+                        i,
+                        self.mouse-x,
+                        root.header-height + i * root.row-height + root.pan-y * 1px + self.mouse-y,
+                    );
+                }
+            }
         }
 
         HorizontalLayout {
@@ -68,7 +80,18 @@ export component AudioTrackPanel inherits Rectangle {
                 width: 7px;
                 height: 7px;
                 border-radius: 4px;
-                background: Theme.data.animation-editor.strip-active;
+                // 状态优先级：
+                // 1. 当前播放（最高显示优先级）：亮青色 (#00e5ff)
+                // 2. 波形处理中：橙黄色 (#ff8000)
+                // 3. 波形处理完成：已就绪绿色 (#57b67a)
+                // 4. 波形未处理完成：暗灰色 (#6b7280)
+                background: (i == root.playback-track)
+                    ? #00e5ff
+                    : (bar.waveform-status == AudioTrackWaveformStatus.processing
+                        ? #ff8000
+                        : (bar.waveform-status == AudioTrackWaveformStatus.completed
+                            ? Theme.data.animation-editor.strip-active
+                            : #6b7280));
                 y: (parent.height - self.height) / 2;
             }
             Text {

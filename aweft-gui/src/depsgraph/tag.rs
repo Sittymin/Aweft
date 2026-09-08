@@ -343,6 +343,11 @@ pub enum Tag {
     VideoPositionChanged { indices: Vec<usize> },
     /// 单个视频静音状态变化。
     VideoMuteChanged { index: usize },
+    /// 视频会话播放音轨变化。
+    VideoAudioTrackChanged {
+        video_index: usize,
+        track_index: usize,
+    },
     /// 视频会话时间变化（seek 或非实时状态同步）。
     /// sync_timeline=false 表示用户正在主动 Seek：仅刷新视频实际时间，不以钳制后的
     /// 会话时间覆盖动画时间轴；播放时钟仍通过实时出口以实际位置接管时间轴。
@@ -435,6 +440,8 @@ pub enum TagKind {
     VideoPosition,
     /// 视频：静音变化。
     VideoMute,
+    /// 视频：播放音轨变化。
+    VideoAudioTrack,
     /// 视频：时间变化。
     VideoTime,
     /// 视频：播放状态变化。
@@ -506,6 +513,8 @@ pub enum OperationCode {
     VideoPosition,
     /// 视频静音投影。
     VideoMute,
+    /// 视频播放音轨投影。
+    VideoAudioTrack,
     /// 视频时间条与活跃时间投影。
     VideoTime,
     /// 视频播放状态投影。
@@ -568,6 +577,7 @@ impl Tag {
             | Tag::VideoMainChanged
             | Tag::VideoPositionChanged { .. }
             | Tag::VideoMuteChanged { .. }
+            | Tag::VideoAudioTrackChanged { .. }
             | Tag::VideoTimeChanged { .. }
             | Tag::VideoClockTick
             | Tag::VideoWaveformViewChanged { .. }
@@ -641,6 +651,7 @@ impl Tag {
             Tag::VideoMainChanged => TagKind::VideoMain,
             Tag::VideoPositionChanged { .. } => TagKind::VideoPosition,
             Tag::VideoMuteChanged { .. } => TagKind::VideoMute,
+            Tag::VideoAudioTrackChanged { .. } => TagKind::VideoAudioTrack,
             Tag::VideoTimeChanged { .. } => TagKind::VideoTime,
             Tag::VideoClockTick => TagKind::VideoTick,
             Tag::VideoWaveformViewChanged { .. } => TagKind::VideoWaveformView,

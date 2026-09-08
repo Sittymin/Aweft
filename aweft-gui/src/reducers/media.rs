@@ -64,7 +64,10 @@ impl AppStore {
                 track_index,
             }) => {
                 media_select_audio_track(self, video_index, track_index)?;
-                Ok(Vec::new())
+                Ok(vec![Tag::VideoAudioTrackChanged {
+                    video_index,
+                    track_index,
+                }])
             }
             MediaAction::Video(VideoAction::Select { index, modifier }) => {
                 if let Some(index) = index
@@ -412,12 +415,16 @@ fn media_select_audio_track(
         "切换实时播放音轨: video={video_index}, track={track_index}, stream-id={stream_id}"
     );
 
-    // 新音轨从当前时间对齐。媒体刚追加时管线尚在暂停预滚动，音轨 pad 可能尚未
-    // 暴露；此时不做 flush-seek（首播由 transport 的播放路径负责），只对已建链
-    // 的会话重新对齐。
+    // 新音轨切换：input-selector 在切换 active-pad 后会在下一次推送或 seek 时重定段。
+    // 在暂停状态下绝对不能立即触发 flush-seek：input-selector 尚未完成新流的 pad 协商，
+    // 立即 flush 会冲掉在途事件导致 autoaudiosink 卡在 ASYNC，进而拖死整条管线（播放按钮无法继续）。
+    // 暂停态下音频本不发声，保留目标音轨设置即可；后续点击播放或用户手动 seek 会自然对齐。
+    // 播放中则通过 seek 让新音轨从当前时间继续，并确保管线状态恢复为 Playing。
     if applied_now {
         let session = &mut store.state_mut().video_sessions[video_index];
-        media_seek_video_session(session, session.current_time);
+        if session.playing {
+            media_seek_video_session(session, session.current_time);
+        }
         if let Some(audio) = session.audio.as_ref() {
             audio.set_muted(session.muted);
         }

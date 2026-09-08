@@ -461,7 +461,7 @@ fn test_video_caps_are_derived_from_format_capabilities() {
 }
 
 /// headless wgpu 设备（Vulkan，无 surface）
-fn headless_wgpu() -> (wgpu::Instance, wgpu::Device, wgpu::Queue) {
+pub(crate) fn headless_wgpu() -> (wgpu::Instance, wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -2396,7 +2396,7 @@ fn generated_av_test_media() -> Option<&'static Path> {
     CACHE
         .get_or_init(|| {
             gst_init();
-            let out = std::env::temp_dir().join("aweft_generated_av_v1.mkv");
+            let out = std::env::temp_dir().join("aweft_generated_av_v2.mkv");
             if out.is_file() {
                 return Some(out);
             }
@@ -2450,7 +2450,7 @@ fn generated_av_test_media() -> Option<&'static Path> {
             let mux_video = mux.request_pad_simple("video_%u")?;
             video_queue.static_pad("src")?.link(&mux_video).ok()?;
 
-            // 音频分支：audiotestsrc → capsfilter → audioconvert → flacenc → queue → mux。
+            // 音频分支 1：audiotestsrc → capsfilter → audioconvert → flacenc → queue → mux。
             let audio_src = gstreamer::ElementFactory::make("audiotestsrc")
                 .property_from_str("wave", "sine")
                 .property("freq", 440.0f64)
@@ -2493,6 +2493,49 @@ fn generated_av_test_media() -> Option<&'static Path> {
             let mux_audio = mux.request_pad_simple("audio_%u")?;
             audio_queue.static_pad("src")?.link(&mux_audio).ok()?;
 
+            // 音频分支 2（多音轨验证）：用于检验 input-selector 在非活动音轨上的丢包逻辑
+            let audio_src2 = gstreamer::ElementFactory::make("audiotestsrc")
+                .property_from_str("wave", "sine")
+                .property("freq", 880.0f64)
+                .property("num-buffers", 16i32)
+                .build()
+                .ok()?;
+            let audio_caps2 = gstreamer::ElementFactory::make("capsfilter")
+                .property(
+                    "caps",
+                    gstreamer::Caps::builder("audio/x-raw")
+                        .field("rate", 8_000i32)
+                        .field("channels", 1i32)
+                        .field("format", "S16LE")
+                        .build(),
+                )
+                .build()
+                .ok()?;
+            let audio_convert2 = gstreamer::ElementFactory::make("audioconvert")
+                .build()
+                .ok()?;
+            let audio_enc2 = gstreamer::ElementFactory::make("flacenc").build().ok()?;
+            let audio_queue2 = gstreamer::ElementFactory::make("queue").build().ok()?;
+            pipeline
+                .add_many([
+                    &audio_src2,
+                    &audio_caps2,
+                    &audio_convert2,
+                    &audio_enc2,
+                    &audio_queue2,
+                ])
+                .ok()?;
+            gstreamer::Element::link_many([
+                &audio_src2,
+                &audio_caps2,
+                &audio_convert2,
+                &audio_enc2,
+                &audio_queue2,
+            ])
+            .ok()?;
+            let mux_audio2 = mux.request_pad_simple("audio_%u")?;
+            audio_queue2.static_pad("src")?.link(&mux_audio2).ok()?;
+
             let bus = pipeline.bus()?;
             pipeline.set_state(gstreamer::State::Playing).ok()?;
             let message = bus.timed_pop_filtered(
@@ -2512,11 +2555,9 @@ fn generated_av_test_media() -> Option<&'static Path> {
         .as_deref()
 }
 
-/// 回归：会话管线（含音轨媒体）必须能完成暂停预滚动并进入 Playing，音频 pad
-/// 必须真正接进 input-selector（音频侧独占路由），管线里恰好一个音频尾段且
-/// volume 命名为 audio-volume。曾因 parsebin 视频路由处理器抢先给音频 pad 接
-/// fakesink，导致 selector 永远收不到音轨、autoaudiosink 无输入把整条管线拖在
-/// preroll——表现为「无法播放 + Failed to seek」。
+/// 回归：会话管线（含多音轨媒体）必须能完成暂停预滚动并进入 Playing，音频 pad
+/// 必须真正接进 input-selector（音频侧独占路由），多音轨同时到达时非活动流不得阻断
+/// 解复用器推进，管线里恰好一个音频尾段且 volume 命名为 audio-volume。
 #[test]
 fn session_pipeline_with_audio_prerolls_and_seeks() {
     use gstreamer::prelude::*;
@@ -2538,13 +2579,13 @@ fn session_pipeline_with_audio_prerolls_and_seeks() {
 
     // 音频 pad 在 parsebin 逐个暴露，等待 selector 收齐。
     let deadline = Instant::now() + Duration::from_secs(8);
-    while session_audio.attached_stream_count() < 1 && Instant::now() < deadline {
+    while session_audio.attached_stream_count() < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
         session_audio.attached_stream_count(),
-        1,
-        "音频 pad 必须被 audio 分支独占接进 input-selector（不应被视频侧抢走）"
+        2,
+        "多音轨必须全部接入 input-selector"
     );
 
     // 管线内必须恰好一个音频尾段，且 volume 命名 audio-volume。
@@ -2595,3 +2636,137 @@ fn pump_until(mut condition: impl FnMut() -> bool, seconds: u64) -> bool {
     }
     condition()
 }
+
+#[test]
+fn test_switch_audio_track_in_paused_and_play() {
+    use gstreamer::prelude::*;
+    let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    gst_init();
+    // Use real autoaudiosink!
+    unsafe { std::env::remove_var("AWEFT_AUDIO_SINK") };
+
+    let path = std::path::Path::new("/mnt/CT1000MX500SSD1/[LittleBakas! x ANK-Raws&LKSUB x JYFanSub] 君の名は。 [BD 3840x2160 HEVC FLAC]/[LittleBakas! x ANK-Raws&LKSUB x JYFanSub] 君の名は。 [BD 3840x2160 HEVC-yuv444p10 FLACx4 PGSx4 Chap].mkv");
+    if !path.exists() {
+        return;
+    }
+    let uri = url::Url::from_file_path(path).unwrap().to_string();
+    let (pipeline, _sink_element, mut wgpu_sink, session_audio) =
+        build_decode_pipeline_with_dmabuf(&uri, true, true).expect("搭建会话管线失败");
+
+    let (instance, device, queue) = headless_wgpu();
+    let _keep = &instance;
+    let bus = pipeline.bus().expect("bus");
+    let (bus_sender, _bus_receiver) = futures::channel::mpsc::unbounded::<gstreamer::Message>();
+    wgpu_sink
+        .connect(
+            (
+                std::sync::Arc::new(instance),
+                std::sync::Arc::new(device),
+                std::sync::Arc::new(queue),
+            ),
+            &bus,
+            bus_sender,
+            Box::new(|| {}),
+        )
+        .expect("连接 GPU 输出失败");
+
+    pipeline.set_state(gstreamer::State::Paused).expect("Paused");
+
+    // Wait for pipeline to finish prerolling and enter Paused!
+    let (state_res, cur, pend) = pipeline.state(Some(gstreamer::ClockTime::from_seconds(5)));
+    println!("Pipeline state after initial preroll wait: cur={:?}, pend={:?}, res={:?}", cur, pend, state_res);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session_audio.attached_stream_count() < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Add buffer probes on key pads to see what flows through after the seek!
+    for elem_name in &["matroskademux0", "inputselector0", "decodebin0", "appsink0", "autoaudiosink0"] {
+        if let Some(elem) = pipeline.by_name(elem_name) {
+            for pad in elem.pads() {
+                let p_name = format!("{}:{}", elem_name, pad.name());
+                pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_pad, info| {
+                    if let Some(buf) = info.buffer() {
+                        println!("--> ENTER BUFFER on {}: pts={:?}", p_name, buf.pts());
+                    }
+                    gstreamer::PadProbeReturn::Ok
+                });
+                let p_name2 = format!("{}:{}", elem_name, pad.name());
+                pad.add_probe(gstreamer::PadProbeType::BUFFER | gstreamer::PadProbeType::PUSH, move |_pad, info| {
+                    if let Some(buf) = info.buffer() {
+                        println!("<-- LEAVE BUFFER on {}: pts={:?}", p_name2, buf.pts());
+                    }
+                    gstreamer::PadProbeReturn::Ok
+                });
+            }
+        }
+    }
+
+    println!("Attached count: {}", session_audio.attached_stream_count());
+
+    let guard = session_audio.inner.lock().unwrap();
+    let target_stream = guard.order[1].clone();
+    drop(guard);
+
+    println!("Switching to stream: {}", target_stream);
+    let switched = session_audio.select_stream(&target_stream);
+    println!("switched: {}", switched);
+
+    // Watch bus for errors/warnings/element messages
+    let bus_clone = bus.clone();
+    std::thread::spawn(move || {
+        while let Some(msg) = bus_clone.pop() {
+            use gstreamer::MessageView;
+            match msg.view() {
+                MessageView::Error(err) => {
+                    eprintln!("BUS ERROR from {:?}: {:?}", msg.src().map(|s| s.path_string()), err.error());
+                    eprintln!("Debug: {:?}", err.debug());
+                }
+                MessageView::Warning(warn) => {
+                    eprintln!("BUS WARNING from {:?}: {:?}", msg.src().map(|s| s.path_string()), warn.error());
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let (state_res, cur, pend) = pipeline.state(Some(gstreamer::ClockTime::ZERO));
+    println!("Pipeline state right before seek: cur={:?}, pend={:?}, res={:?}", cur, pend, state_res);
+
+    println!("Calling seek_simple at 10.0s...");
+    let seek_ok = pipeline.seek_simple(
+        gstreamer::SeekFlags::FLUSH | gstreamer::SeekFlags::ACCURATE,
+        gstreamer::ClockTime::from_seconds(10),
+    );
+    println!("seek_ok: {:?}", seek_ok);
+
+    println!("Setting state to Playing...");
+    let play_res = pipeline.set_state(gstreamer::State::Playing);
+    println!("play_res: {:?}", play_res);
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let pos = pipeline.query_position::<gstreamer::ClockTime>();
+    println!("Position after 500ms: {:?}", pos);
+
+    if let Some(autoaudiosink) = pipeline.by_name("autoaudiosink0").and_then(|e| e.dynamic_cast::<gstreamer::Bin>().ok()) {
+        for child in autoaudiosink.iterate_elements().into_iter().flatten() {
+            let (res, current, pending) = child.state(Some(gstreamer::ClockTime::ZERO));
+            println!("   Child of autoaudiosink: {} current={:?} pending={:?} res={:?}", child.name(), current, pending, res);
+        }
+    }
+
+    let played = pump_until(
+        || {
+            let p = pipeline.query_position::<gstreamer::ClockTime>();
+            println!("query_position in pump_until: {:?}", p);
+            p.is_some_and(|pos| pos > gstreamer::ClockTime::from_mseconds(10200))
+        },
+        3,
+    );
+    println!("Played: {}", played);
+    let _ = pipeline.set_state(gstreamer::State::Null);
+    assert!(played, "切换音轨后未能继续播放！");
+}
+
+

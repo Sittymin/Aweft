@@ -54,6 +54,25 @@ pub fn ui_project_audio_structure(store: &mut AppStore, tags: &[Tag]) {
     }
 }
 
+/// 播放音轨变化：更新对应视频的播放音轨下标。
+pub fn ui_project_video_audio_track(store: &mut AppStore, tags: &[Tag]) {
+    for tag in tags {
+        let Tag::VideoAudioTrackChanged {
+            video_index,
+            track_index,
+        } = tag
+        else {
+            continue;
+        };
+        let audio = &mut store.ui_models.audio;
+        if *video_index < audio.playback_tracks.row_count() {
+            audio
+                .playback_tracks
+                .set_row_data(*video_index, *track_index as i32);
+        }
+    }
+}
+
 fn ui_append_audio_models(store: &mut AppStore, index: usize) {
     let tracks = store
         .state()
@@ -61,6 +80,14 @@ fn ui_append_audio_models(store: &mut AppStore, index: usize) {
         .get(index)
         .cloned()
         .unwrap_or_default();
+    let playback_track = store
+        .state()
+        .audio_track_indices
+        .get(index)
+        .copied()
+        .flatten()
+        .map(|idx| idx as i32)
+        .unwrap_or(-1);
     let audio = &mut store.ui_models.audio;
     if audio.tracks.row_count() != index {
         log::error!(
@@ -73,6 +100,7 @@ fn ui_append_audio_models(store: &mut AppStore, index: usize) {
     let model = Rc::new(VecModel::from(track_rows));
     audio.track_models.push(Rc::clone(&model));
     audio.tracks.push(slint::ModelRc::from(model));
+    audio.playback_tracks.push(playback_track);
     audio.buckets.push(buckets);
 }
 
@@ -83,6 +111,14 @@ fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
         .get(index)
         .cloned()
         .unwrap_or_default();
+    let playback_track = store
+        .state()
+        .audio_track_indices
+        .get(index)
+        .copied()
+        .flatten()
+        .map(|idx| idx as i32)
+        .unwrap_or(-1);
     let (track_rows, buckets) = ui_build_audio_track_models(&tracks);
     let audio = &mut store.ui_models.audio;
     let model = Rc::new(VecModel::from(track_rows));
@@ -91,6 +127,9 @@ fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
     }
     if index < audio.tracks.row_count() {
         audio.tracks.set_row_data(index, slint::ModelRc::from(model));
+    }
+    if index < audio.playback_tracks.row_count() {
+        audio.playback_tracks.set_row_data(index, playback_track);
     }
     if let Some(slot) = audio.buckets.get_mut(index) {
         *slot = buckets;
@@ -127,6 +166,7 @@ fn ui_build_audio_track_models(
             encoder: track.encoder.clone().into(),
             encoded_by: track.encoded_by.clone().into(),
             waveform: SlintAudioWaveform { duration: 0.0 },
+            waveform_status: crate::bridge::types::AudioTrackWaveformStatus::Pending,
         });
         bases.push(base);
     }

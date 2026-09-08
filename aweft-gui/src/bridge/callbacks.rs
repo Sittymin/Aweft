@@ -567,11 +567,14 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
 /// 波形批次属于实时渲染增量例外，直接行级更新持久 VecModel（见
 /// `docs/architecture/video-playback.md`），不走 reducer/depsgraph。
 fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
-    // 一次性绑定 Rust 持有的音轨模型到 AudioState 全局（共享 inner，后续自动通知）
+    // 一次性绑定 Rust 持有的音轨模型与播放音轨状态到 AudioState 全局（共享 inner，后续自动通知）
     {
         let s = store.borrow();
         let astate = instance.global::<crate::bridge::types::AudioState>();
         astate.set_audio_tracks(slint::ModelRc::from(s.ui_models.audio.tracks.clone()));
+        astate.set_playback_tracks(slint::ModelRc::from(
+            s.ui_models.audio.playback_tracks.clone(),
+        ));
     }
 
     // 波形后台 worker 经通道发批次，pump 任务在 UI 线程写模型（见
@@ -624,6 +627,30 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                 slint::ModelRc::from(model)
             },
         );
+    }
+
+    // 切换当前播放音轨
+    {
+        use crate::actions::media::{MediaAction, VideoAction};
+        use crate::actions::Action;
+        use crate::bridge::types::AudioCallbacks;
+        let s = Rc::clone(&store);
+        let weak = instance.as_weak();
+        instance
+            .global::<AudioCallbacks>()
+            .on_select_audio_track(move |video_index, track_index| {
+                if video_index < 0 || track_index < 0 {
+                    return;
+                }
+                dispatch_and_render(
+                    &s,
+                    Action::Media(MediaAction::Video(VideoAction::SelectAudioTrack {
+                        video_index: video_index as usize,
+                        track_index: track_index as usize,
+                    })),
+                    &weak,
+                );
+            });
     }
 }
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {

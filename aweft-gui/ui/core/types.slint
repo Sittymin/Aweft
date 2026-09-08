@@ -35,6 +35,12 @@ export struct SlintAudioWaveform {
     duration: float,
 }
 
+export enum AudioTrackWaveformStatus {
+    pending,
+    processing,
+    completed,
+}
+
 export struct SlintAudioTrack {
     stream-id: string,
     label: string,
@@ -55,6 +61,7 @@ export struct SlintAudioTrack {
     encoder: string,
     encoded-by: string,
     waveform: SlintAudioWaveform,
+    waveform-status: AudioTrackWaveformStatus,
 }
 
 // 节点图类型：样式图（node_graph）与应用图（application_graph）
