@@ -69,7 +69,11 @@ pub fn op_nla_track_properties(store: &mut AppStore, tags: &[Tag]) {
     if tracks.is_empty() {
         return;
     }
-    store.ui_models.animation.nla.apply_track_properties(&tracks);
+    store
+        .ui_models
+        .animation
+        .nla
+        .apply_track_properties(&tracks);
 }
 
 /// NLA：轨道结构新增→就地 row_added（追加轨道行与片断 inner，不重建存量）。

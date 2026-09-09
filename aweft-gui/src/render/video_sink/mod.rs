@@ -28,11 +28,13 @@
 //! WGSL 转色」就是本机硬件上的最优形态。能力探针见
 //! `tests::test_dmabuf_rgba_ab24_import_spike`，驱动升级后可复验。
 
+pub(crate) mod audio;
 pub(crate) mod convert;
 pub(crate) mod dmabuf;
 pub(crate) mod frame;
 pub(crate) mod pipeline;
 pub(crate) mod sink;
+pub(crate) mod waveform;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -41,19 +43,15 @@ mod tests;
 pub use sink::{SlintWGPUSink, WgpuHandles};
 
 use crate::store::AppStore;
+use crate::store::state::VideoSession;
 use anyhow::Result;
 use gstreamer::prelude::*;
 use slint::ComponentHandle as _;
 
-type VideoSessionParts = (
-    Option<gstreamer::Pipeline>,
-    Option<gstreamer::Element>,
-    Option<sink::SlintWGPUSink>,
-);
-
-/// 初始化视频输出：搭建管线（硬解按 rank 择优，VA 在位走 dmabuf 零拷贝）→
-/// 连接 GPU 输出 → 启动播放。
-pub(crate) fn initialize(store: &mut AppStore, uri: &str) -> Result<()> {
+/// 构建并连接一个视频会话（管线 + sink + GPU 输出 + 启动播放）。
+/// 失败时完整回滚（已连接的 sink/管线全部释放），且**不修改 store 状态**——
+/// 由 reducer 决定是追加会话还是原地替换（替换在连接成功后才拆旧会话）。
+pub(crate) fn build_session(store: &mut AppStore, uri: &str) -> Result<VideoSession> {
     // P010（10bit）平面需要 R16Unorm/Rg16Unorm 纹理，设备未启用
     // TEXTURE_FORMAT_16BIT_NORM 时必须从 caps 排除（否则纹理创建 panic）
     let ten_bit = store
@@ -78,51 +76,66 @@ pub(crate) fn initialize(store: &mut AppStore, uri: &str) -> Result<()> {
                 .features()
                 .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF)
         });
-    let (pipeline, sink_element, wgpu_sink) =
+    let (pipeline, sink_element, wgpu_sink, session_audio) =
         pipeline::build_decode_pipeline_with_dmabuf(uri, ten_bit, dmabuf)?;
 
-    // 先提交候选会话，连接失败时完整回滚，避免留下半初始化状态。
-    let old_session = {
-        let state = store.state_mut();
-        let old = (
-            state.video_pipeline.take(),
-            state.video_sink.take(),
-            state.wgpu_sink.take(),
-        );
-        state.video_pipeline = Some(pipeline);
-        state.video_sink = Some(sink_element);
-        state.wgpu_sink = Some(wgpu_sink);
-        old
-    };
-
-    if let Err(error) = connect_video_to_wgpu_from_store(store) {
-        stop_video_session(store);
-        let state = store.state_mut();
-        (state.video_pipeline, state.video_sink, state.wgpu_sink) = old_session;
+    // 先完整连接候选会话；连接失败时回滚，避免留下半初始化状态。
+    let mut wgpu_sink = wgpu_sink;
+    let at_eos = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let playback_dirty = std::sync::Arc::clone(&store.state().video_playback_dirty);
+    if let Err(error) = connect_pipeline_to_wgpu(
+        store,
+        &pipeline,
+        &mut wgpu_sink,
+        std::sync::Arc::clone(&at_eos),
+        playback_dirty,
+    ) {
+        stop_session_parts(&pipeline, &sink_element, wgpu_sink);
         return Err(error);
     }
+    let duration = gst_query_pipeline_duration_secs(&pipeline);
 
-    // 新会话已成功启动，旧管线现在才安全地释放。
-    stop_video_parts(old_session);
-    Ok(())
+    Ok(VideoSession {
+        uri: uri.to_string(),
+        pipeline,
+        sink_element,
+        wgpu_sink,
+        audio: Some(session_audio),
+        position_x: 0.0,
+        position_y: 0.0,
+        current_time: 0.0,
+        duration,
+        muted: false,
+        playing: false,
+        at_eos,
+        last_frame_seeked: false,
+    })
+}
+
+/// 查询媒体管线已发布的总时长（秒）。暂停态预滚动完成前可能暂时不可用，
+/// 调用方应在首个 preroll/sample 到达后重试，而不是把缺失值固化为 0。
+pub(crate) fn gst_query_pipeline_duration_secs(pipeline: &gstreamer::Pipeline) -> Option<f64> {
+    let duration = pipeline.query_duration::<gstreamer::ClockTime>()?;
+    let secs = duration.nseconds() as f64 / 1_000_000_000.0;
+    (secs.is_finite() && secs > 0.0).then_some(secs)
 }
 
 /// 连接 WGPU 输出并启动播放（帧到达 → 请求 Slint 重绘）。
 /// 把管线、GPU 句柄、总线消息与"帧到达通知"接线，随后置 Playing。
-pub(crate) fn connect_video_to_wgpu_from_store(store: &mut AppStore) -> Result<()> {
+fn connect_pipeline_to_wgpu(
+    store: &AppStore,
+    pipeline: &gstreamer::Pipeline,
+    wgpu_sink: &mut sink::SlintWGPUSink,
+    at_eos: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    playback_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<()> {
     use anyhow::Context as _;
     use futures::StreamExt;
     use futures::channel::mpsc;
 
-    let Some(pipeline) = store.state().video_pipeline.clone() else {
-        anyhow::bail!("Pipeline 未初始化");
-    };
     let Some(handles) = store.state().video_wgpu.clone() else {
         anyhow::bail!("WGPU 设备未缓存（渲染器尚未初始化）");
     };
-    if store.state().wgpu_sink.is_none() {
-        anyhow::bail!("视频 Sink 未初始化");
-    }
 
     let bus = pipeline.bus().context("无法获取 GStreamer Bus")?;
     let (bus_sender, mut bus_receiver) = mpsc::unbounded::<gstreamer::Message>();
@@ -131,23 +144,18 @@ pub(crate) fn connect_video_to_wgpu_from_store(store: &mut AppStore) -> Result<(
     let Some(weak_instance) = store.main_window.clone() else {
         anyhow::bail!("主窗口未初始化");
     };
-    let next_frame_notifier = Box::new(move || {
+    let bus_window = weak_instance.clone();
+    let next_frame_notifier: Box<dyn Fn() + Send + Sync> = Box::new(move || {
         let _ = weak_instance.upgrade_in_event_loop(|instance| {
             // slint::Window 原生支持请求重绘（跨线程安全入口已在 upgrade 内）
             instance.window().request_redraw();
         });
     });
 
-    store
-        .state_mut()
-        .wgpu_sink
-        .as_mut()
-        .expect("视频 Sink 已在前置检查后被移除")
-        .connect(handles, &bus, bus_sender, next_frame_notifier)?;
-
+    wgpu_sink.connect(handles, &bus, bus_sender, next_frame_notifier)?;
     pipeline
-        .set_state(gstreamer::State::Playing)
-        .context("启动播放失败")?;
+        .set_state(gstreamer::State::Paused)
+        .context("启动（暂停态预滚动）失败")?;
 
     if let Err(error) = slint::spawn_local(async move {
         while let Some(msg) = bus_receiver.next().await {
@@ -155,7 +163,11 @@ pub(crate) fn connect_video_to_wgpu_from_store(store: &mut AppStore) -> Result<(
             match msg.view() {
                 MessageView::Eos(..) => {
                     log::info!("视频播放结束");
-                    break;
+                    at_eos.store(true, std::sync::atomic::Ordering::Release);
+                    playback_dirty.store(true, std::sync::atomic::Ordering::Release);
+                    let _ = bus_window.upgrade_in_event_loop(|instance| {
+                        instance.window().request_redraw();
+                    });
                 }
                 MessageView::Error(err) => {
                     log::error!(
@@ -181,27 +193,32 @@ pub(crate) fn connect_video_to_wgpu_from_store(store: &mut AppStore) -> Result<(
     Ok(())
 }
 
-fn stop_video_parts((pipeline, _sink_element, mut wgpu_sink): VideoSessionParts) {
-    if let Some(pipeline) = pipeline {
-        if let Err(error) = pipeline.set_state(gstreamer::State::Null) {
-            log::warn!("停止旧视频管线失败: {error}");
-        }
+/// 停止单个会话的管线与 sink（替换/回滚时复用）。
+pub(crate) fn stop_session_parts(
+    pipeline: &gstreamer::Pipeline,
+    _sink_element: &gstreamer::Element,
+    mut wgpu_sink: sink::SlintWGPUSink,
+) {
+    if let Err(error) = pipeline.set_state(gstreamer::State::Null) {
+        log::warn!("停止视频管线失败: {error}");
     }
-    if let Some(sink) = wgpu_sink.as_mut() {
-        sink.teardown();
-    }
+    wgpu_sink.teardown();
 }
 
-fn stop_video_session(store: &mut AppStore) {
-    let state = store.state_mut();
-    let session = (
-        state.video_pipeline.take(),
-        state.video_sink.take(),
-        state.wgpu_sink.take(),
-    );
-    stop_video_parts(session);
-}
-
+/// 释放全部视频会话（退出前统一调用）。
 pub(crate) fn teardown(store: &mut AppStore) {
-    stop_video_session(store);
+    for cancellation in std::mem::take(&mut store.state_mut().waveform_cancellations) {
+        cancellation.store(true, std::sync::atomic::Ordering::Release);
+    }
+    store.state_mut().waveform_ui_sender.take();
+    let sessions = std::mem::take(&mut store.state_mut().video_sessions);
+    store.state_mut().audio_track_indices.clear();
+    store.state_mut().audio_tracks.clear();
+    for session in sessions {
+        stop_session_parts(&session.pipeline, &session.sink_element, session.wgpu_sink);
+    }
+    store.state_mut().main_video = None;
+    store.state_mut().selected_videos.clear();
+    store.state_mut().video_playing = false;
+    store.state_mut().video_seek_session = None;
 }

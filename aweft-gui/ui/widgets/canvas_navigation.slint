@@ -46,6 +46,9 @@ export component CanvasNavigation inherits TouchArea {
     callback background-pressed(modifier: SlintSelectionModifier);
     // 拖动中右键取消（与字幕行时间拖动取消一致）
     callback cancel-pressed();
+    // 右键按下（非 marquee 拖动中）：画布局部像素坐标。视口/节点图等消费方据此
+    // 弹上下文菜单；曲线/摄影表/NLA/时间线不绑定则无副作用。
+    callback context-pressed(x: float, y: float);
     // 视图缩放变化（滚轮）：编辑器据此重算刻度步长（放大细化坐标轴）
     callback view-changed();
 
@@ -136,6 +139,8 @@ export component CanvasNavigation inherits TouchArea {
                 root.marquee-pressing = false;
                 root.marquee-active = false;
                 return EventResult.accept;
+            } else {
+                root.context-pressed(self.mouse-x / 1px, self.mouse-y / 1px);
             }
         } else if (event.kind == PointerEventKind.move && root.panning) {
             // pan-start-world 为拖动开始时的固定世界坐标，更新会导致反馈回路

@@ -1,0 +1,26 @@
+// 多视频控制时间条 —— 画布层竖线（纯渲染，不拦截事件）。
+// 每个视频会话在时间轴上一条独立的彩色竖线：
+//  - 颜色 = 该视频彩虹色（与曲线编辑器通道同款调色板）；选中视频更亮
+//  - 主视频加粗（无选中时的 seek 目标）
+//  - 竖线居中于时间点，与 TimeRuler 内嵌的时间条竖线（ruler.slint）对齐
+// 标尺层的控制柄（点击选中/拖拽 seek）已内嵌进 TimeRuler（见 ruler.slint），
+// 此处只负责画布内贯穿整列的彩色时间线。
+import { VideoState } from "../bridge/state.slint";
+
+export component VideoTimeBarLines inherits Rectangle {
+    in property <float> view-lo;
+    in property <float> view-hi;
+    in property <float> zoom-x;
+    in property <float> pan-x;
+
+    clip: true;
+
+    for b[i] in VideoState.time-bars: Rectangle {
+        x: (b.time * root.zoom-x * 1px + root.pan-x * 1px) - self.width / 2;
+        y: 0px;
+        width: b.is-main ? 3px : 2px;
+        height: 100%;
+        background: b.color;
+        opacity: b.selected ? 1.0 : 0.55;
+    }
+}

@@ -5,6 +5,7 @@ use crate::bridge::types::{
     SlintSelectionModifier,
 };
 use crate::depsgraph::{HandleLoc, Tag};
+use crate::store::utils::rainbow::rainbow_color;
 use aweft_model::animation::{
     Action as ModelAction, Keyframe as Mk, PropertyPath, action::ActionCurve, fcurve::FCurve,
 };
@@ -860,7 +861,7 @@ fn curve_color_mode_switches_auto_rainbow_and_user() {
     assert_eq!(ch.color_mode, SlintColorMode::AutoRainbow);
     assert_eq!(ch.user_color, user);
     assert_ne!(ch.color, user);
-    assert_eq!(ch.color, GraphEditorState::rainbow_color(0));
+    assert_eq!(ch.color, rainbow_color(0));
 
     // 切到用户设置：显示色恢复为用户色
     let tags = st.set_curve_color_mode(0, SlintColorMode::User);
@@ -877,7 +878,7 @@ fn curve_color_mode_switches_auto_rainbow_and_user() {
     project(&mut st, tags);
     let ch = st.channels.row_data(0).unwrap();
     assert_eq!(ch.color_mode, SlintColorMode::AutoRainbow);
-    assert_eq!(ch.color, GraphEditorState::rainbow_color(0));
+    assert_eq!(ch.color, rainbow_color(0));
 }
 
 #[test]

@@ -71,6 +71,7 @@ fn run_waveform_job(job: WaveformJob) {
                     })
                     .collect::<Vec<_>>(),
                 cancellation: job.cancellation.clone(),
+                completed: false,
             };
             // 四秒级合批已将事件数压低到与媒体时长成线性的较小规模。无界通道
             // 发送不阻塞：UI 线程的 pump 任务负责写模型，解码线程不等待 Area
@@ -90,12 +91,24 @@ fn run_waveform_job(job: WaveformJob) {
         return;
     }
     match result {
-        Ok((buckets, duration)) => log::info!(
-            "音频波形提取完成: video={}, track={}, duration={duration:.3}s, buckets={}",
-            job.video_index,
-            job.track_index,
-            buckets.len(),
-        ),
+        Ok((buckets, duration)) => {
+            log::info!(
+                "音频波形提取完成: video={}, track={}, duration={duration:.3}s, buckets={}",
+                job.video_index,
+                job.track_index,
+                buckets.len(),
+            );
+            let finish_batch = WaveformBatch {
+                video_index: job.video_index,
+                track_index: job.track_index,
+                start: 0,
+                duration,
+                buckets: Vec::new(),
+                cancellation: job.cancellation.clone(),
+                completed: true,
+            };
+            let _ = job.ui_sender.unbounded_send(finish_batch);
+        }
         Err(error) => log::warn!(
             "音频波形提取失败 ({}, track={}, stream-id={}): {error:#}",
             job.uri,

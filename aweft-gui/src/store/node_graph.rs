@@ -4,9 +4,8 @@
 //! （节点位置、模型下标顺序）并生成 Slint 的节点/连线视图模型。
 //! 端口命中、连线重连等"遍历"逻辑原先在 Slint 内硬编码逐槽位展开，现统一在此用循环实现。
 //!
-//! 接入 main 的架构决策（A2）：图操作**自洽**（改 model + sync 视图模型），
-//! 不走 `Action → dispatch → reducer → tag → depsgraph 投影`（无跨组件联动）。
-//! 直接调用 AppStore 方法；结构变更后打 `Tag::NodeGraphChanged` 为未来联动留口。
+//! 图操作走 `Action → dispatch → reducer → Tag::NodeGraph → depsgraph projection`；
+//! 本模块提供 model 操作、编辑上下文与派生视图模型的局部更新原语。
 
 use std::{
     collections::{HashMap, HashSet},

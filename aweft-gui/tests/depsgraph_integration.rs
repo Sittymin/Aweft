@@ -12,8 +12,8 @@ use std::rc::Rc;
 
 use aweft_gui::actions::Action;
 use aweft_gui::actions::area::AreaAction;
-use aweft_gui::actions::sequence::SequenceAction;
 use aweft_gui::actions::screen::ScreenAction;
+use aweft_gui::actions::sequence::SequenceAction;
 use aweft_gui::bridge::slint_area_key_to_key;
 use aweft_gui::bridge::types::{MainWindow, SplitPreviewOverlayData};
 use aweft_gui::screen::area::ScrAreaKey;
@@ -911,11 +911,13 @@ fn animation_dispatch_projects_derived_models() {
 
     // 按下关键帧 (通道 0, 关键帧 1)：reducer 改数据 → Selection tag → 投影同步选中
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::KeyframePressed {
-            curve: 0,
-            key: 1,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::KeyframePressed {
+                curve: 0,
+                key: 1,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let ce = &store.ui_models().animation.graph;
@@ -928,13 +930,15 @@ fn animation_dispatch_projects_derived_models() {
 
     // 拖拽关键帧：Keyframes tag → 投影重建段/手柄/汇总
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::KeyframeDragged {
-            curve: 0,
-            key: 1,
-            delta_time: 1.0,
-            delta_value: -5.0,
-            mode: SlintKeyframeDragMode::Move,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::KeyframeDragged {
+                curve: 0,
+                key: 1,
+                delta_time: 1.0,
+                delta_value: -5.0,
+                mode: SlintKeyframeDragMode::Move,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let ce = &store.ui_models().animation.graph;
@@ -945,14 +949,21 @@ fn animation_dispatch_projects_derived_models() {
 
     // 松开：写回 model（reducer）+ 折叠选中 → 投影同步
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::KeyframeReleased {
-            curve: 0,
-            key: 1,
-            moved: true,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::KeyframeReleased {
+                curve: 0,
+                key: 1,
+                moved: true,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
-    let id = store.ui_models().animation.graph.current_action_id().unwrap();
+    let id = store
+        .ui_models()
+        .animation
+        .graph
+        .current_action_id()
+        .unwrap();
     let action = store
         .state()
         .project
@@ -982,9 +993,11 @@ fn graph_search_filters_channels_and_canvas() {
     use aweft_gui::actions::animation::{AnimationAction, graph::GraphAction};
 
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::GraphSearchChanged {
-            text: "font".to_string(),
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::GraphSearchChanged {
+                text: "font".to_string(),
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
 
@@ -1001,9 +1014,11 @@ fn graph_search_filters_channels_and_canvas() {
 
     // 空串恢复全部
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::GraphSearchChanged {
-            text: String::new(),
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::GraphSearchChanged {
+                text: String::new(),
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     let ce = &store.ui_models().animation.graph;
@@ -1095,7 +1110,10 @@ fn timeline_block_drag_preview_commit_cancel() {
     {
         let s = store.borrow();
         let row = all_rows(&s).row_data(0).unwrap();
-        assert_eq!(row.start_sec, -4.0, "开始时间允许为负（不钳制，预览基于 Domain 原值）");
+        assert_eq!(
+            row.start_sec, -4.0,
+            "开始时间允许为负（不钳制，预览基于 Domain 原值）"
+        );
         assert_eq!(row.end_sec, -2.0);
     }
 

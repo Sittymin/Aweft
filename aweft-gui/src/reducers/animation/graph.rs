@@ -137,10 +137,18 @@ impl crate::store::AppStore {
                 ChannelToggleEditable { curve } => ce.toggle_channel_editable(curve),
                 SetCurrentTime { time } => {
                     ce.current_time = time as f64;
-                    // 编辑器是时间权威：拖动播放头同步驱动视频到同一时刻
-                    // （无管线时忽略；播放中 seek 后位置查询自然从新位置继续）
-                    crate::reducers::media::seek_to_secs(&self.state, time as f64);
-                    vec![Tag::GraphScalarsChanged]
+                    let sync_timeline =
+                        crate::reducers::media::media_active_video_drives_timeline(self);
+                    // 编辑器是时间权威：拖动播放头同步驱动当前选中（无则主）视频
+                    // 到同一时刻（无视频时忽略；播放中 seek 后位置查询自然从新位置继续）
+                    let mut tags = vec![Tag::GraphScalarsChanged];
+                    if let Some(index) = self.seek_target(time as f64) {
+                        tags.push(Tag::VideoTimeChanged {
+                            indices: vec![index],
+                            sync_timeline,
+                        });
+                    }
+                    tags
                 }
                 ViewChanged { zoom_x, zoom_y } => ce.set_view(zoom_x, zoom_y),
                 ActionSelected { index } => {
@@ -179,7 +187,9 @@ impl crate::store::AppStore {
             return self.ui_models.animation.graph.reset_action();
         }
         let Some(id) = self
-            .ui_models.animation.graph
+            .ui_models
+            .animation
+            .graph
             .actions
             .get(index as usize)
             .map(|a| a.id)
@@ -196,7 +206,9 @@ impl crate::store::AppStore {
         else {
             return Vec::new();
         };
-        self.ui_models.animation.graph
+        self.ui_models
+            .animation
+            .graph
             .load_action(index as usize, action)
     }
 
@@ -236,5 +248,16 @@ impl crate::store::AppStore {
         state.set_current_channel(ce.current_channel as i32);
         state.set_selected_keyframes(ce.selected_keyframe_count() as i32);
         state.set_selected_interpolation(ce.selected_interpolation_state());
+    }
+
+    /// 实时播放时钟只同步 current-time，避免每帧重复失效动作、通道和选择标量。
+    pub(crate) fn sync_animation_current_time(&mut self) {
+        let Some(weak) = &self.animation_state else {
+            return;
+        };
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        state.set_current_time(self.ui_models.animation.graph.current_time as f32);
     }
 }

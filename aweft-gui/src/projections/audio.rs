@@ -9,36 +9,9 @@ use std::rc::Rc;
 
 use slint::{Model as _, VecModel};
 
-use crate::bridge::types::{SlintAudioTrack, SlintAudioWaveform};
+use crate::bridge::types::{AudioTrackWaveformStatus, SlintAudioTrack, SlintAudioWaveform};
 use crate::depsgraph::Tag;
 use crate::store::AppStore;
-
-/// 波形视图上报：某 Area 的可视窗口变化，同步其持久列模型（数量局部增删、
-/// 行值原地更新，模型标识恒定，Slint 侧不重建槽位）。
-pub fn ui_project_video_waveform_view(store: &mut AppStore, tags: &[Tag]) {
-    use crate::store::audio::AreaWaveformView;
-    for tag in tags {
-        let Tag::VideoWaveformViewChanged {
-            area,
-            video_index,
-            track_index,
-            bucket_ms,
-            first,
-            count,
-        } = tag
-        else {
-            continue;
-        };
-        let view = AreaWaveformView {
-            video_index: *video_index,
-            track_index: *track_index,
-            bucket_ms: *bucket_ms,
-            first: *first,
-            count: *count,
-        };
-        crate::store::audio::ui_sync_waveform_columns(&mut store.ui_models.audio, *area, view);
-    }
-}
 
 /// 会话结构变化：追加时只 push 新行；替换时保留桶模型槽位并重建对应音轨行。
 pub fn ui_project_audio_structure(store: &mut AppStore, tags: &[Tag]) {
@@ -50,6 +23,26 @@ pub fn ui_project_audio_structure(store: &mut AppStore, tags: &[Tag]) {
             ui_append_audio_models(store, *index);
         } else {
             ui_reset_audio_waveform(store, *index);
+        }
+    }
+}
+
+/// 同步当前播放音轨下标模型到 Slint
+pub fn ui_project_video_audio_track(store: &mut AppStore, _tags: &[Tag]) {
+    let indices: Vec<i32> = store
+        .state()
+        .audio_track_indices
+        .iter()
+        .map(|idx| idx.map(|i| i as i32).unwrap_or(-1))
+        .collect();
+    let model = &store.ui_models.audio.playback_tracks;
+    if model.row_count() != indices.len() {
+        model.set_vec(indices);
+    } else {
+        for (i, &idx) in indices.iter().enumerate() {
+            if model.row_data(i) != Some(idx) {
+                model.set_row_data(i, idx);
+            }
         }
     }
 }
@@ -127,6 +120,7 @@ fn ui_build_audio_track_models(
             encoder: track.encoder.clone().into(),
             encoded_by: track.encoded_by.clone().into(),
             waveform: SlintAudioWaveform { duration: 0.0 },
+            waveform_status: AudioTrackWaveformStatus::Unprocessed,
         });
         bases.push(base);
     }

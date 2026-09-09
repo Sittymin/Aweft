@@ -15,6 +15,8 @@ pub struct AppStore {
     pub(crate) overlay_state: Option<slint::Weak<crate::bridge::types::OverlayState<'static>>>,
     /// AnimationState global 弱引用：动画投影经此同步标量/重新绑定过滤视图到 Slint。
     pub(crate) animation_state: Option<slint::Weak<crate::bridge::types::AnimationState<'static>>>,
+    /// VideoState global 弱引用：视频投影经此同步选中、主视频和播放标量到 Slint。
+    pub(crate) video_state: Option<slint::Weak<crate::bridge::types::VideoState<'static>>>,
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,
     pub(crate) clipboard: Clipboard,
@@ -34,12 +36,16 @@ impl AppStore {
         let animation_state = main_window
             .global::<crate::bridge::types::AnimationState>()
             .as_weak();
+        let video_state = main_window
+            .global::<crate::bridge::types::VideoState>()
+            .as_weak();
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
             ui_models: UiModels::new(),
             depsgraph,
             overlay_state: Some(overlay_state),
             animation_state: Some(animation_state),
+            video_state: Some(video_state),
             main_window: Some(main_window.as_weak()),
             clipboard: Clipboard::new(),
         }

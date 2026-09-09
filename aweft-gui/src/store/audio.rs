@@ -48,6 +48,8 @@ pub struct AudioUiState {
     pub views: HashMap<ScrAreaKey, AreaWaveformView>,
     /// 各波形 Area 的持久列模型（与上报同键，Slint 绑定恒等，行级增量更新）。
     pub columns: HashMap<ScrAreaKey, Rc<VecModel<SlintWaveformBucket>>>,
+    /// 各视频会话当前播放音轨下标模型（与 Slint AudioState.playback-tracks 共享 inner）。
+    pub playback_tracks: Rc<VecModel<i32>>,
 }
 
 /// 将后台波形批次原地写入基础模型，尽量把连续追加合并成一次 Slint
@@ -214,6 +216,7 @@ pub struct WaveformBatch {
     pub(crate) duration: f32,
     pub(crate) buckets: Vec<SlintWaveformBucket>,
     pub(crate) cancellation: Arc<AtomicBool>,
+    pub(crate) completed: bool,
 }
 
 /// 波形批次的 UI 线程 pump 任务（`bridge` 建通道并 `spawn_local` 启动）。
@@ -256,10 +259,24 @@ pub(crate) async fn ui_pump_waveform_batches(
             let audio = &store.ui_models.audio;
             if let Some(model) = audio.track_models.get(batch.video_index)
                 && let Some(mut track) = model.row_data(batch.track_index)
-                && (track.waveform.duration - batch.duration).abs() > f32::EPSILON
             {
-                track.waveform.duration = batch.duration;
-                model.set_row_data(batch.track_index, track);
+                let mut changed = false;
+                if (track.waveform.duration - batch.duration).abs() > f32::EPSILON {
+                    track.waveform.duration = batch.duration;
+                    changed = true;
+                }
+                let target_status = if batch.completed {
+                    crate::bridge::types::AudioTrackWaveformStatus::Completed
+                } else {
+                    crate::bridge::types::AudioTrackWaveformStatus::Processing
+                };
+                if track.waveform_status != target_status {
+                    track.waveform_status = target_status;
+                    changed = true;
+                }
+                if changed {
+                    model.set_row_data(batch.track_index, track);
+                }
             }
         }
         // 重算上报过且同视频同音轨的视图列模型，并裁剪失效 Area。

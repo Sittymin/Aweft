@@ -1,0 +1,46 @@
+// 时间线标题栏：通用 AreaHeader + 中区播放/暂停按钮（图标随 VideoState.playing 切换）。
+// 播放/暂停作用于全部视频会话（无视频时按钮禁用）。
+import { SlintKey, SlintAreaType } from "../../core/types.slint";
+import { AreaHeader } from "../area_header.slint";
+import { VideoCallbacks } from "../../bridge/callbacks.slint";
+import { VideoState } from "../../bridge/state.slint";
+import { Mixins } from "../../theme/mixins.slint";
+import { Theme } from "../../theme/index.slint";
+
+export component TimelineToolbar inherits Rectangle {
+    in property <SlintKey> area-key;
+    in property <SlintAreaType> area-type;
+
+    AreaHeader {
+        width: 100%;
+        height: 100%;
+        area-key: root.area-key;
+        area-type: root.area-type;
+
+        // 中区内容（@children）：播放/暂停按钮（无视频时不可点击）
+        Rectangle {
+            height: Theme.data.area-type-switcher.height;
+            width: Theme.data.area-type-switcher.height;
+            border-radius: Theme.data.area-type-switcher.border-radius;
+            background: play-area.has-hover && play-area.enabled
+                ? Mixins.popup-item.highlight-color
+                : transparent;
+            play-area := TouchArea {
+                enabled: VideoState.video-frames.length > 0;
+                clicked => {
+                    VideoCallbacks.toggle-playback();
+                }
+                Image {
+                    source: VideoState.playing
+                        ? @image-url("../../assets/icons/pause.svg")
+                        : @image-url("../../assets/icons/play_arrow.svg");
+                    width: Theme.data.area-type-switcher.popup-icon-size;
+                    height: Theme.data.area-type-switcher.popup-icon-size;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    opacity: play-area.enabled ? 1.0 : 0.35;
+                }
+            }
+        }
+    }
+}

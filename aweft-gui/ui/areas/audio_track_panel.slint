@@ -1,4 +1,4 @@
-import { SlintAudioTrack } from "../core/types.slint";
+import { SlintAudioTrack, AudioTrackWaveformStatus } from "../core/types.slint";
 import { Theme } from "../theme/index.slint";
 
 // 音频波形左侧音轨面板。条目只依赖 VideoTimeBar 的通用媒体信息，
@@ -6,9 +6,11 @@ import { Theme } from "../theme/index.slint";
 export component AudioTrackPanel inherits Rectangle {
     in property <[SlintAudioTrack]> tracks;
     in property <int> current-track: -1;
+    in property <int> playback-track: -1;
     in property <length> header-height: Theme.data.animation-editor.ruler-height;
     in property <length> row-height: Theme.data.animation-editor.track-row-height;
-    callback track-pressed(index: int);
+    callback track-selected(index: int);
+    callback track-context-menu(index: int, mouse-x: length, mouse-y: length);
 
     private property <float> pan-y: 0.0;
 
@@ -57,7 +59,15 @@ export component AudioTrackPanel inherits Rectangle {
             : Theme.data.animation-editor.channel-row-background;
 
         TouchArea {
-            clicked => { root.track-pressed(i); }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    if (event.button == PointerEventButton.left) {
+                        root.track-selected(i);
+                    } else if (event.button == PointerEventButton.right) {
+                        root.track-context-menu(i, parent.x + self.mouse-x, parent.y + self.mouse-y);
+                    }
+                }
+            }
         }
 
         HorizontalLayout {
@@ -68,7 +78,13 @@ export component AudioTrackPanel inherits Rectangle {
                 width: 7px;
                 height: 7px;
                 border-radius: 4px;
-                background: Theme.data.animation-editor.strip-active;
+                background: i == root.playback-track
+                    ? #00e5ff
+                    : (bar.waveform-status == AudioTrackWaveformStatus.processing
+                        ? #ff8000
+                        : (bar.waveform-status == AudioTrackWaveformStatus.completed
+                            ? Theme.data.animation-editor.strip-active
+                            : #6b7280));
                 y: (parent.height - self.height) / 2;
             }
             Text {

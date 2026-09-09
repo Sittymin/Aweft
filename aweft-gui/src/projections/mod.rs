@@ -10,23 +10,94 @@ use crate::depsgraph::{
 };
 
 mod animation;
-mod sequence;
+mod audio;
 mod node_graph;
 mod screen;
+mod sequence;
+mod video;
 
 pub use animation::{
     op_graph_channel, op_graph_drag_ended, op_graph_keyframes, op_graph_scalars,
     op_graph_selection, op_graph_structure, op_nla_position, op_nla_selection,
     op_nla_strip_structure, op_nla_structure, op_nla_track_added, op_nla_track_properties,
 };
-pub use sequence::{op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode};
 pub use node_graph::{
     op_node_graph_chain, op_node_graph_links, op_node_graph_socket, op_node_graph_structure,
 };
 pub use screen::{op_screen_layout, op_screen_overlays};
+pub use sequence::{
+    op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode,
+};
+pub use video::{
+    ui_project_video_mute, ui_project_video_playback, ui_project_video_position,
+    ui_project_video_selection, ui_project_video_structure, ui_project_video_time,
+};
+pub(crate) use video::{
+    ui_sync_active_video_time_realtime, ui_sync_video_playback_scalar,
+    ui_update_video_time_bar_duration, ui_update_video_time_bar_value,
+};
 
 /// 注册所有投影组件到依赖图。在 `AppStore` 初始化时调用一次。
 pub fn register_all(depsgraph: &mut Depsgraph) {
+    depsgraph.register(Component {
+        id: ComponentId::new(),
+        depends_on: &[DataId::Video],
+        operations: vec![
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoStructure,
+                handles: &[TagKind::VideoStructure],
+                depends_on: &[],
+                exec: ui_project_video_structure,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoPosition,
+                handles: &[TagKind::VideoPosition],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_position,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoSelection,
+                handles: &[TagKind::VideoSelection, TagKind::VideoMain],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_selection,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoMute,
+                handles: &[TagKind::VideoMute],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_mute,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoTime,
+                handles: &[TagKind::VideoTime],
+                depends_on: &[
+                    OperationCode::VideoStructure,
+                    OperationCode::VideoSelection,
+                ],
+                exec: ui_project_video_time,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoPlayback,
+                handles: &[TagKind::VideoPlayback],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: ui_project_video_playback,
+            },
+            Operation {
+                id: OperationId::new(),
+                code: OperationCode::VideoAudioTrack,
+                handles: &[TagKind::VideoAudioTrack, TagKind::VideoStructure],
+                depends_on: &[OperationCode::VideoStructure],
+                exec: audio::ui_project_video_audio_track,
+            },
+        ],
+    });
+
     depsgraph.register(Component {
         id: ComponentId::new(),
         depends_on: &[DataId::Sequence, DataId::Selection],
@@ -156,7 +227,7 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                     TagKind::GraphChannel,
                     TagKind::GraphScalars,
                 ],
-                depends_on: &[],
+                depends_on: &[OperationCode::VideoTime],
                 exec: op_graph_scalars,
             },
             // —— NLA ——

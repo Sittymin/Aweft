@@ -164,7 +164,8 @@ fn try_vapostproc(requested_caps: &gstreamer::Caps) -> Option<(Element, gstreame
 /// uridecodebin ─ video → queue ! vapostproc ! capsfilter ! appsink
 ///              │            （GPU 444p10→P010/NV12；dmabuf 零拷贝或 sysmem 下载；
 ///              │             无 VA 退 autovideoconvert CPU 转换）
-///              └ audio → queue ! audioconvert ! autoaudiosink
+///              └ audio → queue ! audioconvert ! volume ! autoaudiosink
+///                                   （无音频输出设备时改接 fakesink）
 /// ```
 /// vapostproc rank 为 0 不会被 autoplug，必须显式添加：它在 GPU 上完成
 /// 444p10→YU12/P010 转换与 CSC（CPU 端 videoconvert 在 4K 下极昂贵）。
@@ -173,16 +174,24 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     uri: &str,
     ten_bit: bool,
     dmabuf: bool,
-) -> anyhow::Result<(gstreamer::Pipeline, Element, SlintWGPUSink)> {
+) -> anyhow::Result<(
+    gstreamer::Pipeline,
+    Element,
+    SlintWGPUSink,
+    super::audio::SessionAudio,
+)> {
     use gstreamer::prelude::*;
 
     let pipeline = gstreamer::Pipeline::new();
-    let decoder = gstreamer::ElementFactory::make("uridecodebin")
+    let decoder = gstreamer::ElementFactory::make("uridecodebin3")
         .name("video-decoder")
         .property("uri", uri)
         .build()
-        .context("创建 uridecodebin 失败（gst-plugins-base 缺失？）")?;
+        .context("创建 uridecodebin3 失败（gst-plugins-base 缺失？）")?;
     pipeline.add(&decoder)?;
+
+    // 创建会话音频控制句柄
+    let session_audio = super::audio::SessionAudio::new(pipeline.clone());
 
     // vapostproc rank 为 0 不会被 autoplug，必须显式添加：它在 GPU 上完成
     // 444p10→P010/NV12 转换与 CSC（CPU 端 videoconvert 在 4K 下极昂贵）。
@@ -209,47 +218,114 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     gstreamer::Element::link_many([&video_queue, &video_convert, &capsfilter, &sink_element])?;
 
     // 音频分支惰性创建：源确实带音频（pad_added 出现 audio pad）时才把
-    // queue ! audioconvert ! autoaudiosink 加入管线。若构建期就无条件加进管线，
-    // 无音频素材的音频分支虽不链接，却仍会随管线状态传播被拉进 PAUSED——
-    // 在无音频设备的 headless 环境 autoaudiosink 卡在 Ready→Paused，整条管线
-    // 无法进入 PLAYING，视频分支也不出帧。
+    // queue ! audioconvert ! volume ! autoaudiosink 加入管线。
     let video_entry = video_queue.clone();
     let pipeline_for_audio = pipeline.clone();
     let audio_state = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let session_audio_for_pad = session_audio.clone();
+
     decoder.connect_pad_added(move |_decoder, pad| {
+        let pad_name = pad.name();
+        let stream_id = pad.stream_id().map(|s| s.to_string());
         let kind = classify_pad(pad);
-        let entry = match kind {
-            PadMediaKind::Video => Some(video_entry.clone()),
+
+        match kind {
+            PadMediaKind::Video => {
+                if let Some(sid) = stream_id {
+                    session_audio_for_pad.set_video_stream_id(sid);
+                }
+                link_pad_by_media_type(pad, &video_entry);
+            }
             PadMediaKind::Audio => {
                 let mut guard = audio_state.lock().unwrap_or_else(|e| e.into_inner());
                 if guard.is_none() {
-                    *guard = build_audio_branch(&pipeline_for_audio);
+                    let (entry, vol) = build_audio_branch(&pipeline_for_audio);
+                    if let Some(vol) = vol {
+                        session_audio_for_pad.set_volume_element(vol);
+                    }
+                    *guard = entry;
                 }
-                guard.clone()
+                if let Some(ref entry) = *guard {
+                    link_pad_by_media_type(pad, entry);
+                }
             }
-            PadMediaKind::Other => None,
-        };
-        if let Some(entry) = entry {
-            link_pad_by_media_type(pad, &entry);
+            PadMediaKind::Other => {}
         }
     });
 
-    Ok((pipeline, sink_element, wgpu_sink))
+    Ok((pipeline, sink_element, wgpu_sink, session_audio))
 }
 
-/// 惰性创建音频分支 `queue ! audioconvert ! autoaudiosink` 并加入管线，
-/// 返回分支入口（queue）。任一元素创建失败则返回 None（静默禁用音频）。
-fn build_audio_branch(pipeline: &gstreamer::Pipeline) -> Option<Element> {
-    let queue = gstreamer::ElementFactory::make("queue").build().ok()?;
-    let convert = gstreamer::ElementFactory::make("audioconvert")
+/// 系统当前是否存在可出声的音频输出设备（设备类 "Audio/Sink"）。
+///
+/// 判定只能提前做：`autoaudiosink` 在 READY→PAUSED 才真正打开设备，届时无声卡
+/// 或无 PipeWire/Pulse 会话会让整条管线状态切换失败。这里逐个实例化设备提供方
+/// （pipewire/pulse/alsa/oss…）并检查其枚举出的设备类；对应提供方插件缺失时
+/// 同样判为无设备。
+///
+/// 注意不要在提供方层预过滤：`DeviceProviderFactory::has_classesv` 比对的是插件
+/// klass（形如 `Sink/Source/Audio`），传 "Audio/Sink" 恒为 false。提供方实例化
+/// 本身很快，且 `any` 在第一个枚举到输出设备的提供方处短路（本机实测 ~10ms）；
+/// 只有判为无设备时才需要遍历全部提供方（本机 alsadeviceprovider 一家约 230ms，
+/// 合计 ~0.25s）。该耗时发生在 `pad-added` 的流线程上，不影响 UI 线程。
+fn has_audio_output_device() -> bool {
+    gstreamer::DeviceProviderFactory::factories(gstreamer::Rank::NONE)
+        .into_iter()
+        .filter_map(|factory| factory.get())
+        .any(|provider| {
+            provider
+                .devices()
+                .into_iter()
+                .any(|device| device.has_classesv(&["Audio/Sink"]))
+        })
+}
+
+/// 惰性创建音频分支 `queue ! audioconvert ! volume ! (autoaudiosink|fakesink)`
+/// 并加入管线，返回 (分支入口 queue, volume 元素)。
+fn build_audio_branch(pipeline: &gstreamer::Pipeline) -> (Option<Element>, Option<Element>) {
+    use gstreamer::prelude::*;
+    let Ok(queue) = gstreamer::ElementFactory::make("queue").build() else {
+        return (None, None);
+    };
+    let Ok(convert) = gstreamer::ElementFactory::make("audioconvert").build() else {
+        return (None, None);
+    };
+    let Ok(volume) = gstreamer::ElementFactory::make("volume")
+        .name(super::audio::AUDIO_VOLUME_NAME)
         .build()
-        .ok()?;
-    let sink = gstreamer::ElementFactory::make("autoaudiosink")
-        .build()
-        .ok()?;
-    pipeline.add_many([&queue, &convert, &sink]).ok()?;
-    gstreamer::Element::link_many([&queue, &convert, &sink]).ok()?;
-    Some(queue)
+    else {
+        return (None, None);
+    };
+    let has_output_device = has_audio_output_device();
+    if !has_output_device {
+        log::warn!("未检测到音频输出设备，音频分支改用 fakesink（不发声，仅保持时钟同步）");
+    }
+    let Ok(sink) = (if has_output_device {
+        gstreamer::ElementFactory::make("autoaudiosink").build()
+    } else {
+        gstreamer::ElementFactory::make("fakesink")
+            .property("sync", true)
+            .build()
+    }) else {
+        return (None, None);
+    };
+
+    if pipeline
+        .add_many([&queue, &convert, &volume, &sink])
+        .is_err()
+    {
+        return (None, None);
+    }
+    if gstreamer::Element::link_many([&queue, &convert, &volume, &sink]).is_err() {
+        return (None, None);
+    }
+
+    for element in [&queue, &convert, &volume, &sink] {
+        if let Err(error) = element.sync_state_with_parent() {
+            log::warn!("同步动态音频分支状态失败（{}）: {error}", element.name());
+        }
+    }
+    (Some(queue), Some(volume))
 }
 
 /// uridecodebin 源 pad 按当前 caps 的 media type 分类（视频/音频/其他）。
@@ -263,6 +339,13 @@ enum PadMediaKind {
 /// 读取 pad 的当前 caps，用第一个 structure 的 media type 字符串分类。
 fn classify_pad(pad: &gstreamer::Pad) -> PadMediaKind {
     use gstreamer::prelude::*;
+    let name = pad.name();
+    if name.starts_with("video") {
+        return PadMediaKind::Video;
+    }
+    if name.starts_with("audio") {
+        return PadMediaKind::Audio;
+    }
     let caps = pad.current_caps().or_else(|| Some(pad.query_caps(None)));
     let Some(media) = caps.and_then(|caps| caps.structure(0).map(|s| s.name().to_string())) else {
         return PadMediaKind::Other;
@@ -286,7 +369,5 @@ fn link_pad_by_media_type(pad: &gstreamer::Pad, target: &Element) {
     if sink_pad.is_linked() {
         return;
     }
-    if let Err(e) = pad.link(&sink_pad) {
-        log::warn!("链接分支失败: {e}");
-    }
+    let _ = pad.link(&sink_pad);
 }

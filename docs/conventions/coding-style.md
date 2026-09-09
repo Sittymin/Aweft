@@ -8,6 +8,10 @@
 
 **错误处理**：`log::warn!` + 提前 return
 
+**Rust 函数命名与分层**：函数名必须能够直接表明所属层和职责，避免在不同层使用含义模糊的通用名称。媒体 reducer 的会话编排使用 `media_*` 前缀；GStreamer 管线、状态、seek、EOS、时长和音频操作使用 `gst_*` 前缀；渲染回调及帧驱动同步使用 `render_*` 前缀；Slint/UI 模型、标量和时间条同步使用 `ui_*` 前缀。跨模块调用也必须保留该层级前缀，测试和注释中的函数引用同步更新。
+
+示例：`media_apply_video_playback`（媒体 reducer 编排）、`gst_seek_pipeline_accurate`（GStreamer 操作）、`render_sync_video_playback_time`（渲染回调）、`ui_sync_video_time_bars`（UI 模型同步）。
+
 **分支风格**：优先 **卫语句（guard）+ 提前返回** 减少嵌套与认知负担；`if` 嵌套超过 2 层或 `else` 分支仅为 `return`/`continue` 时必须改为 `if !cond { return }`；与已有 `store/animation/graph/marquee.rs`、`store/sequence.rs`、`store/animation/nla/` 的早期返回风格保持一致
 
 **函数长度**：像 `strip_dragged` 这类长函数尽量拆分为通用小函数（非强制，但超过 50 行或含多级嵌套时应拆分）；通用逻辑抽至 `store/utils/{marquee,selection,drag}.rs` 单一文件夹，供曲线/摄影表/时间线/NLA 复用，避免重复实现框选与拖动

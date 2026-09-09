@@ -39,7 +39,16 @@ struct Chart {
 impl Chart {
     fn new(xmin: f64, xmax: f64, ymin: f64, ymax: f64) -> Self {
         let yp = (ymax - ymin).max(1.0) * 0.15;
-        Self { pl: 52.0, pr: 784.0, pt: 14.0, pb: 280.0, xmin, xmax, y0: ymin - yp, y1: ymax + yp }
+        Self {
+            pl: 52.0,
+            pr: 784.0,
+            pt: 14.0,
+            pb: 280.0,
+            xmin,
+            xmax,
+            y0: ymin - yp,
+            y1: ymax + yp,
+        }
     }
     fn sx(&self, x: f64) -> f64 {
         self.pl + (x - self.xmin) / (self.xmax - self.xmin) * (self.pr - self.pl)
@@ -50,7 +59,13 @@ impl Chart {
 }
 
 /// 折线（可选虚线）。
-fn polyline(chart: &Chart, pts: &[(f64, f64)], stroke: &str, width: f64, dash: Option<&str>) -> String {
+fn polyline(
+    chart: &Chart,
+    pts: &[(f64, f64)],
+    stroke: &str,
+    width: f64,
+    dash: Option<&str>,
+) -> String {
     let p: String = pts
         .iter()
         .map(|(x, y)| format!("{:.1},{:.1}", chart.sx(*x), chart.sy(*y)))
@@ -83,8 +98,14 @@ fn vline(chart: &Chart, x: f64, stroke: &str, width: f64, dash: Option<&str>) ->
 
 /// DP 进行中：曲线 + 锁定段（蓝）+ 当前 end（黄）+ 候选段（绿）+ 底部有效性色带。
 fn render_frame(
-    label: &str, end: usize, n: usize, grid_times: &[f64], curve: &[(f64, f64)],
-    valid: &[bool], chosen: Option<usize>, parent_chain: &[usize],
+    label: &str,
+    end: usize,
+    n: usize,
+    grid_times: &[f64],
+    curve: &[(f64, f64)],
+    valid: &[bool],
+    chosen: Option<usize>,
+    parent_chain: &[usize],
 ) -> String {
     use std::fmt::Write as _;
     let (xmin, xmax) = (grid_times[0], grid_times[grid_times.len() - 1]);
@@ -95,7 +116,13 @@ fn render_frame(
     let mut s = String::new();
     let _ = write!(s, "{SVG_HEAD}");
     for i in 0..=4 {
-        s.push_str(&vline(&chart, xmin + (xmax - xmin) * i as f64 / 4.0, "#333", 1.0, None));
+        s.push_str(&vline(
+            &chart,
+            xmin + (xmax - xmin) * i as f64 / 4.0,
+            "#333",
+            1.0,
+            None,
+        ));
     }
     s.push_str(&polyline(&chart, curve, "#eee", 2.0, None));
 
@@ -104,13 +131,17 @@ fn render_frame(
     let mut cur = end;
     while cur > 0 && cur < parent_chain.len() {
         let p = parent_chain[cur];
-        if p == usize::MAX { break; }
+        if p == usize::MAX {
+            break;
+        }
         locked.push((p, cur));
         cur = p;
     }
     for (i, (ps, pe)) in locked.iter().enumerate() {
         let (xs, xe) = (chart.sx(grid_times[*ps]), chart.sx(grid_times[*pe]));
-        if i == 0 && chosen.is_some() { continue; } // 最新段由绿色高亮
+        if i == 0 && chosen.is_some() {
+            continue;
+        } // 最新段由绿色高亮
         let _ = write!(
             s, "<line x1=\"{xs:.1}\" y1=\"{}\" x2=\"{xs:.1}\" y2=\"{}\" stroke=\"#39f\" stroke-width=\"2\" opacity=\"0.7\"/>",
             chart.pt, chart.pb
@@ -129,12 +160,24 @@ fn render_frame(
     let step = (n / 16).max(1);
     let (bar_y, bar_h) = (294.0, 5.0);
     for i in (0..=n).step_by(step) {
-        s.push_str(&vline(&chart, grid_times[i.min(grid_times.len() - 1)], "#444", 1.0, Some("2,4")));
+        s.push_str(&vline(
+            &chart,
+            grid_times[i.min(grid_times.len() - 1)],
+            "#444",
+            1.0,
+            Some("2,4"),
+        ));
     }
     for i in 0..=n.min(grid_times.len() - 1) {
-        if i > end { break; }
+        if i > end {
+            break;
+        }
         let x = chart.sx(grid_times[i]);
-        let c = if i < valid.len() && valid[i] { "#4c4" } else { "#c33" };
+        let c = if i < valid.len() && valid[i] {
+            "#4c4"
+        } else {
+            "#c33"
+        };
         let _ = write!(s, "<line x1=\"{x:.1}\" y1=\"{bar_y}\" x2=\"{x:.1}\" y2=\"{}\" stroke=\"{c}\" stroke-width=\"1.5\"/>", bar_y + bar_h);
     }
 
@@ -171,7 +214,11 @@ fn render_frame(
 
 /// 最终路径的三步动画：亮起边界 → 锁定段 → 完成。
 fn render_final(
-    grid_times: &[f64], curve: &[(f64, f64)], path: &[(usize, usize)], phase: usize, name: &str,
+    grid_times: &[f64],
+    curve: &[(f64, f64)],
+    path: &[(usize, usize)],
+    phase: usize,
+    name: &str,
 ) -> String {
     use std::fmt::Write as _;
     let (xmin, xmax) = (grid_times[0], grid_times[grid_times.len() - 1]);
@@ -183,7 +230,13 @@ fn render_final(
     let mut s = String::new();
     let _ = write!(s, "{SVG_HEAD}");
     for i in 0..=4 {
-        s.push_str(&vline(&chart, xmin + (xmax - xmin) * i as f64 / 4.0, "#333", 1.0, None));
+        s.push_str(&vline(
+            &chart,
+            xmin + (xmax - xmin) * i as f64 / 4.0,
+            "#333",
+            1.0,
+            None,
+        ));
     }
     s.push_str(&polyline(&chart, curve, "#eee", 2.0, None));
 
@@ -210,7 +263,10 @@ fn render_final(
                 let _ = write!(s, "<rect x=\"{xs:.1}\" y=\"{}\" width=\"{:.1}\" height=\"{}\" fill=\"{c}\" opacity=\"0.06\"/>", chart.pt, xe - xs, chart.pb - chart.pt);
                 let _ = write!(s, "<text x=\"{:.1}\" y=\"{}\" fill=\"{c}\" font-size=\"9\" text-anchor=\"middle\">seg {seg_idx}</text>", (xs + xe) / 2.0, chart.pt - 2.0);
             }
-            let _ = write!(s, "<text x=\"10\" y=\"20\" fill=\"#4c4\" font-size=\"13\">Locking segments...</text>");
+            let _ = write!(
+                s,
+                "<text x=\"10\" y=\"20\" fill=\"#4c4\" font-size=\"13\">Locking segments...</text>"
+            );
         }
         _ => {
             // 步 3：终态 — 彩色段 + 段标签 + 段内曲线
@@ -237,29 +293,54 @@ fn render_final(
 /// 四条贝塞尔曲线（linear 不算贝塞尔，因此只有四条）。
 fn bezier_curves() -> Vec<(&'static str, FCurve)> {
     let kf = |time: f64, value: f64, out_t: f64, out_v: f64, in_t: f64, in_v: f64| Keyframe {
-        time, value,
+        time,
+        value,
         interpolation: Interpolation::Bezier {
             handle_out: BezierHandle::new(out_t, out_v),
             handle_in: BezierHandle::new(in_t, in_v),
         },
     };
     vec![
-        ("ease-in-out", FCurve {
-            keyframes: vec![kf(0.0, 0.0, 0.5, 0.2, -0.5, -0.2), kf(1.0, 1.0, 0.5, 0.2, -0.5, -0.2)],
-            ..Default::default()
-        }),
-        ("overshoot", FCurve {
-            keyframes: vec![kf(0.0, 0.0, 0.5, 2.0, 0.0, 0.0), kf(1.0, 1.0, 0.0, 0.0, -0.5, 0.5)],
-            ..Default::default()
-        }),
-        ("ease-out", FCurve {
-            keyframes: vec![kf(0.0, 0.0, 0.1, 1.0, 0.0, 0.0), kf(1.0, 1.0, 0.0, 0.0, -0.9, 0.0)],
-            ..Default::default()
-        }),
-        ("back-out", FCurve {
-            keyframes: vec![kf(0.0, 0.0, 0.68, -0.55, 0.0, 0.0), kf(1.0, 1.0, 0.0, 0.0, -0.73, 0.55)],
-            ..Default::default()
-        }),
+        (
+            "ease-in-out",
+            FCurve {
+                keyframes: vec![
+                    kf(0.0, 0.0, 0.5, 0.2, -0.5, -0.2),
+                    kf(1.0, 1.0, 0.5, 0.2, -0.5, -0.2),
+                ],
+                ..Default::default()
+            },
+        ),
+        (
+            "overshoot",
+            FCurve {
+                keyframes: vec![
+                    kf(0.0, 0.0, 0.5, 2.0, 0.0, 0.0),
+                    kf(1.0, 1.0, 0.0, 0.0, -0.5, 0.5),
+                ],
+                ..Default::default()
+            },
+        ),
+        (
+            "ease-out",
+            FCurve {
+                keyframes: vec![
+                    kf(0.0, 0.0, 0.1, 1.0, 0.0, 0.0),
+                    kf(1.0, 1.0, 0.0, 0.0, -0.9, 0.0),
+                ],
+                ..Default::default()
+            },
+        ),
+        (
+            "back-out",
+            FCurve {
+                keyframes: vec![
+                    kf(0.0, 0.0, 0.68, -0.55, 0.0, 0.0),
+                    kf(1.0, 1.0, 0.0, 0.0, -0.73, 0.55),
+                ],
+                ..Default::default()
+            },
+        ),
     ]
 }
 
@@ -298,7 +379,8 @@ fn handle_client(mut stream: TcpStream, frame: &Arc<Mutex<String>>, done: &Atomi
              .done{{position:fixed;top:1rem;right:1rem;color:#4c4;font-size:1.5rem}}\
              .err{{position:fixed;bottom:1rem;left:1rem;color:#c33;font-size:.8rem}}\
              </style></head><body>{done_banner}<span class=\"err\"></span>\
-             {svg_block}<script>{js}</script></body></html>");
+             {svg_block}<script>{js}</script></body></html>"
+        );
         let _ = stream.write_all(http_ok(&html, "text/html; charset=utf-8").as_bytes());
     } else {
         let _ = stream.write_all(b"HTTP/1.1 404\r\n\r\n");
@@ -352,23 +434,33 @@ fn main() {
             let mut lib = AnimationLibrary::default();
             let aid = ActionId::new();
             lib.insert_action(Action {
-                id: aid, name: (*name).into(), duration: 1.0,
+                id: aid,
+                name: (*name).into(),
+                duration: 1.0,
                 curves: vec![ActionCurve::new(PropertyPath::FontSize, curve.clone())],
             });
             let anim = AnimData {
-                id: AnimDataId::new(), name: "a".into(),
+                id: AnimDataId::new(),
+                name: "a".into(),
                 base_action: None,
                 temporary_edit: false,
                 tracks: vec![NlaTrack {
-                    name: "t".into(), muted: false, solo: false,
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
                     strips: vec![NlaStrip::new_action("s", aid)],
                 }],
             };
             let _ = convert_anim_data(
                 &Default::default(),
                 &mut Cursor::from_style(&Default::default()),
-                &anim, &lib, 1.0,
-                &ConvertOptions { error_tolerance: 0.01, progress_sender: Some(tx.clone()) },
+                &anim,
+                &lib,
+                1.0,
+                &ConvertOptions {
+                    error_tolerance: 0.01,
+                    progress_sender: Some(tx.clone()),
+                },
             );
         }
     });
@@ -382,11 +474,23 @@ fn main() {
         let mut curve_idx = 0usize;
         for event in rx {
             match event {
-                ProgressEvent::ActionStarted { action_id: _, n: dn, grid_times: gt, curve_samples: cs } => {
-                    n = dn; grid_times = gt; curve_samples = cs;
+                ProgressEvent::ActionStarted {
+                    action_id: _,
+                    n: dn,
+                    grid_times: gt,
+                    curve_samples: cs,
+                } => {
+                    n = dn;
+                    grid_times = gt;
+                    curve_samples = cs;
                     curve_idx += 1;
                 }
-                ProgressEvent::DpStep { end, valid, chosen, parent_chain } => {
+                ProgressEvent::DpStep {
+                    end,
+                    valid,
+                    chosen,
+                    parent_chain,
+                } => {
                     // 采样约 1/4 帧（浏览器 33ms 轮询，全量 256 帧既拖慢也看不完），
                     // 再用自适应定速：渲染耗时不足 33ms 就补觉到 ~30fps，
                     // 渲染本身慢（debug）则顺其自然，避免叠加卡顿。
@@ -398,7 +502,13 @@ fn main() {
                     let label = format!("{name}  {curve_idx}/{total}  拟合中");
                     let t0 = std::time::Instant::now();
                     *frame.lock().unwrap() = render_frame(
-                        &label, end, n, &grid_times, &curve_samples, &valid, chosen,
+                        &label,
+                        end,
+                        n,
+                        &grid_times,
+                        &curve_samples,
+                        &valid,
+                        chosen,
                         &parent_chain,
                     );
                     let target = Duration::from_millis(33);
@@ -410,9 +520,8 @@ fn main() {
                 ProgressEvent::SegmentsFound { path } => {
                     let name = render_curves[curve_idx.saturating_sub(1)].0;
                     for phase in 0..3 {
-                        *frame.lock().unwrap() = render_final(
-                            &grid_times, &curve_samples, &path, phase, name,
-                        );
+                        *frame.lock().unwrap() =
+                            render_final(&grid_times, &curve_samples, &path, phase, name);
                         thread::sleep(Duration::from_millis(300));
                     }
                 }

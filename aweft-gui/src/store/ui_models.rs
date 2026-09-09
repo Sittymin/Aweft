@@ -8,8 +8,10 @@ use crate::bridge::types::{
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
 use crate::store::animation::AnimationState;
-use crate::store::sequence::SequenceState;
+use crate::store::audio::AudioUiState;
 use crate::store::node_graph::NodeGraphState;
+use crate::store::sequence::SequenceState;
+use crate::store::video::VideoUiState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
 pub struct UiModels {
@@ -21,6 +23,10 @@ pub struct UiModels {
     /// 动画域聚合状态：曲线/摄影表（graph）+ NLA（nla）共享 DataId::Animation，
     /// 因 Area 表现形式不同保留两组派生状态，TagKind 隔离。
     pub animation: AnimationState,
+    /// 视频域 UI 状态：多视频会话派生到 VideoState 的帧/尺寸/位置/时间条模型
+    pub video: VideoUiState,
+    /// 音频域 UI 状态：各视频音轨行与波形桶模型，派生到 AudioState
+    pub audio: AudioUiState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -37,6 +43,8 @@ impl UiModels {
             style_graph: NodeGraphState::default(),
             app_graph: NodeGraphState::default(),
             animation: AnimationState::default(),
+            video: VideoUiState::default(),
+            audio: AudioUiState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),

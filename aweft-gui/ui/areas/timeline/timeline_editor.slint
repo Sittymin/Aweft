@@ -13,8 +13,9 @@ import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { TimeRuler, VerticalGrid } from "../graph_editor/ruler.slint";
 import { TimelineBlock, TimelineSubBlocks } from "elements.slint";
 import { TimelinePanel } from "timeline_panel.slint";
-import { SequenceCallbacks, AnimationCallbacks } from "../../bridge/callbacks.slint";
-import { AnimationState } from "../../bridge/state.slint";
+import { VideoTimeBarLines } from "../../widgets/video_time_bars.slint";
+import { SequenceCallbacks, AnimationCallbacks, VideoCallbacks } from "../../bridge/callbacks.slint";
+import { AnimationState, VideoState } from "../../bridge/state.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component TimelineEditor inherits Rectangle {
@@ -45,6 +46,21 @@ export component TimelineEditor inherits Rectangle {
     // 可见时间范围（世界坐标）：标尺刻度槽位与画布块视口裁剪共用
     private property <float> view-time-lo: (0px - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
     private property <float> view-time-hi: ((root.width - root.track-list-width) - root.nav-pan-x * 1px) / (root.nav-zoom * 1px);
+
+    // 当前焦点视频：选择集合末项优先，无选择时回落主视频。范围遮罩只读取这一行，
+    // 避免多个视频的范围颜色同时叠加造成画布混乱。
+    private property <int> focus-video-index: VideoState.selected-video >= 0
+        ? VideoState.selected-video
+        : VideoState.main-video;
+    private property <bool> has-focus-video-range: root.focus-video-index >= 0
+        && root.focus-video-index < VideoState.time-bars.length
+        && VideoState.time-bars[root.focus-video-index].duration > 0.0;
+    private property <float> focus-video-duration: root.has-focus-video-range
+        ? VideoState.time-bars[root.focus-video-index].duration
+        : 0.0;
+    private property <color> focus-video-outside-color: root.has-focus-video-range
+        ? VideoState.time-bars[root.focus-video-index].color.darker(0.6).with-alpha(0.32)
+        : transparent;
 
     // 纵向滚动范围：只能滚到 [-(内容高-视口高), 0]，内容不足空间时不动（与摄影表一致）。
     // 第 0 行固定为根级行；展开时为根级行 + 全部可见行，收起时仅根级行。
@@ -191,6 +207,18 @@ export component TimelineEditor inherits Rectangle {
         time-picked(time) => {
             AnimationCallbacks.set-current-time(time);
         }
+        // 多视频控制时间条（内嵌于标尺：点击选中视频、拖拽 seek）
+        video-bars: VideoState.time-bars;
+        active-video-index: root.focus-video-index;
+        video-bar-pressed(index, is-batch) => {
+            VideoCallbacks.time-bar-pressed(index, is-batch);
+        }
+        video-bar-dragged(time) => {
+            VideoCallbacks.time-bar-dragged(time);
+        }
+        video-bar-released(index) => {
+            VideoCallbacks.time-bar-released(index);
+        }
     }
 
     // 主画布
@@ -234,6 +262,26 @@ export component TimelineEditor inherits Rectangle {
             pan-x: root.nav-pan-x;
             line-color: Theme.data.animation-editor.grid-color;
             minor-line-color: Theme.data.animation-editor.grid-minor-color;
+        }
+
+        // 当前焦点视频时长之外的区域：沿用该视频的彩虹色，但加深并半透明叠加。
+        // 与 NLA/Dope Sheet 的范围外遮罩同层级，片段、交互和播放头仍绘制在其上。
+        Rectangle {
+            visible: root.has-focus-video-range;
+            x: 0px;
+            width: max(0px, min(parent.width, root.nav-pan-x * 1px));
+            height: 100%;
+            background: root.focus-video-outside-color;
+        }
+        Rectangle {
+            visible: root.has-focus-video-range;
+            x: max(0px, root.focus-video-duration * root.nav-zoom * 1px
+                + root.nav-pan-x * 1px);
+            width: max(0px, parent.width - max(0px,
+                root.focus-video-duration * root.nav-zoom * 1px
+                    + root.nav-pan-x * 1px));
+            height: 100%;
+            background: root.focus-video-outside-color;
         }
 
         // 根级泳道（第 0 条）：
@@ -346,6 +394,18 @@ export component TimelineEditor inherits Rectangle {
             background: Theme.data.animation-editor.marquee-fill;
             border-width: 1px;
             border-color: Theme.data.animation-editor.marquee-border;
+        }
+
+        // 多视频彩色时间线（置顶绘制在播放头之前，不拦截事件）
+        VideoTimeBarLines {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 100%;
+            view-lo: root.view-time-lo;
+            view-hi: root.view-time-hi;
+            zoom-x: root.nav-zoom;
+            pan-x: root.nav-pan-x;
         }
 
         // 当前时间线（播放头，置顶但不拦截事件）

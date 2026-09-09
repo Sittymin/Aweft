@@ -4,6 +4,7 @@
 
 - **图编辑器（Graph Editor）**：动画曲线编辑器（FCurve 通道/关键帧/手柄），UI 侧 `ui/areas/graph_editor/`
 - **节点图（Node Graph）**：样式图/应用图节点编辑器，UI 侧 `ui/areas/node_graph/`
+- **Rust 函数分层命名**：函数名使用层级前缀明确职责：`media_*` 表示媒体 reducer 编排，`gst_*` 表示 GStreamer 管线操作，`render_*` 表示渲染回调或帧驱动逻辑，`ui_*` 表示 Slint/UI 模型同步。具体规则见 `docs/conventions/coding-style.md`。
 
 每个领域在 `actions → reducers → projections → store` 四层使用同一名字，且四层为
 `src/` 下的同层兄弟目录（见下）。
@@ -21,13 +22,18 @@ src/
 ├── bridge/              # Slint ↔ Rust（callbacks / types / converters）
 ├── clipboard/           # 剪贴板（facade 强类型 API + backend 系统/内存 + kinds 数据种类）
 ├── depsgraph/           # 依赖图调度器（DataId / Component / Operation / Tag，graph.rs 调度实现）
-├── projections/         # depsgraph 投影注册（只读 aweft-model，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph）
+├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video/audio）
 │   └── animation/       # 动画域单 Component（DataId::Animation，Graph+NLA 13 ops，TagKind 隔离）
 │       ├── mod.rs       # 重导出 op_graph_* / op_nla_*，单域注册说明
 │       ├── graph.rs     # 曲线/摄影表 6 ops（GraphStructure/Keyframes/Selection/DragEnded/Channel/Scalars）
 │       └── nla.rs       # NLA 6 ops（NlaStructure/Selection/StripStructure/StripPosition/TrackProperties/TrackAdded）
-├── reducers/            # 按域 reducer（**唯一改动 aweft-model 的入口**，改 `AppState.project` + 返回精确 tag，每域一文件/目录）
-│   ├── area.rs / drag.rs / media.rs / screen.rs   # 纯函数 handle_*（只改 AppState）+ dispatch 包装
+├── reducers/            # 按域 reducer（**唯一改动权威状态的入口**，改 `AppState`/model + 返回精确 tag，每域一文件/目录）
+│   ├── area.rs / drag.rs / screen.rs   # 纯函数 handle_*（只改 AppState）+ dispatch 包装
+│   ├── media.rs         # Media Action 编排、会话生命周期、选择与主视频
+│   ├── media/           # 媒体 reducer 的职责子模块（不直接写 Slint 派生模型）
+│   │   ├── playback.rs  # GStreamer transport / seek / EOS / 播放时钟查询
+│   │   ├── waveform.rs  # 单 worker 波形任务与回调投递
+│   │   └── tests.rs     # 媒体 reducer 回归测试
 │   ├── sequence.rs      # Sequence 域（impl AppStore，改 Sequence + Selection）
 │   ├── node_graph.rs    # NodeGraph 域
 │   └── animation/       # 动画域统一分发（DataId::Animation 单一，Graph/NLA 子路由）
@@ -46,12 +52,15 @@ src/
 ├── screen/              # 屏幕布局（area / edge / vertex / map / primitives + ops/：split/join/move_edge/cleanup）
 ├── store/               # 状态中心：`AppState` 持有 `aweft-model::Project`（唯一真相，reducers 改 / projections 只读）+ 各编辑器状态
 │   ├── app_store.rs     # AppStore：dispatch 总表 + depsgraph 求值 + 访问器（单一数据源）
-│   ├── state.rs         # AppState（持有 aweft-model Project + UI 态）
-│   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen } 汇总
+│   ├── state.rs         # AppState（持有 aweft-model Project + UI 态 + 多视频会话 + 音频发现/播放分支）
+│   ├── ui_models.rs     # UiModels{ animation: AnimationState, sequence_state, style/app_graph, screen, video, audio } 汇总
+│   ├── video.rs         # 视频域 UI 状态（多会话帧/尺寸/位置/时间条 VecModel，驱动 VideoState）
+│   ├── audio.rs         # 音频域 UI 状态（各视频音轨行/1ms 基础桶 VecModel + 可见列现算，驱动 AudioState）
 │   ├── utils/           # 通用工具（单一文件夹，避免重复造轮子）
 │   │   ├── marquee.rs   # 时间/行归一化与 clamp（曲线/摄影表/时间线/NLA 复用）
 │   │   ├── selection.rs # 修饰键语义 is_replacing/is_additive/is_toggling（点选/框选全局复用）
-│   │   └── drag.rs      # 拖动增量校验 is_valid_delta（字幕行/NLA/曲线共用）
+│   │   ├── drag.rs      # 拖动增量校验 is_valid_delta（字幕行/NLA/曲线共用）
+│   │   └── rainbow.rs   # 自动彩虹调色板（曲线编辑器通道色 / 多视频控制时间条共用）
 │   ├── animation/       # 动画域聚合状态（DataId::Animation 单一，因 Area 表现形式不同保留两组派生状态，TagKind 隔离）
 │   │   ├── mod.rs       # AnimationState{ graph: GraphEditorState, nla: NlaEditorState } + 初始化
 │   │   ├── graph/       # 图编辑器（Graph Editor/Dope Sheet）状态：数据层 + 派生层 + 交互/装载/投影实现
@@ -102,7 +111,7 @@ ui/
 ## 数据流（store 是中心，不是链尾）
 
 ```
-actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动 aweft-model 的入口，返回精确 tag）
+actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动权威状态的入口，返回精确 tag）
   → depsgraph（DataId 入口索引 + Relation 闭包 + 拓扑）
   → projections/{域}.rs（只读 aweft-model → 写派生 UI 模型）
         ↕
@@ -110,4 +119,4 @@ actions/{域}.rs（事件入口）→ reducers/{域}.rs（唯一改动 aweft-mod
 ```
 
 四层目录均为 `src/` 同层，深度一致；`store/` 字面即"落点"，不再有层级倒挂。
-改动唯一真相只有 `reducers/` 一条路（例外：启动初始化 `window_manager` / `new_editing_action`）。
+改动唯一真相只有 `reducers/` 一条路（例外：启动初始化 `window_manager` / `new_editing_action`；视频帧、逐帧播放时钟和波形批次属于实时渲染增量例外）。

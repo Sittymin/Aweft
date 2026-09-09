@@ -25,11 +25,13 @@ fn dope_keyframe_drag_moves_only_time_and_commits() {
 
     // 按下 (通道 0, 关键帧 1)（t=3）
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeKeyframePressed {
-            curve: 0,
-            key: 1,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeKeyframePressed {
+                curve: 0,
+                key: 1,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -39,11 +41,13 @@ fn dope_keyframe_drag_moves_only_time_and_commits() {
 
     // 拖拽 dt=1.0：时间 3 → 4，值 66 不变
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeKeyframeDragged {
-            curve: 0,
-            key: 1,
-            delta_time: 1.0,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeKeyframeDragged {
+                curve: 0,
+                key: 1,
+                delta_time: 1.0,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -80,14 +84,21 @@ fn dope_keyframe_drag_moves_only_time_and_commits() {
 
     // 松开（moved=true）：写回 model + DragEnded 整理
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeKeyframeReleased {
-            curve: 0,
-            key: 1,
-            moved: true,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeKeyframeReleased {
+                curve: 0,
+                key: 1,
+                moved: true,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
-    let id = store.ui_models().animation.graph.current_action_id().unwrap();
+    let id = store
+        .ui_models()
+        .animation
+        .graph
+        .current_action_id()
+        .unwrap();
     let action = store
         .state()
         .project
@@ -114,13 +125,15 @@ fn dope_marquee_select_picks_keyframes_in_box() {
     store.create_test_animation_data();
 
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeMarqueeSelect {
-            x_lo: 0.5,
-            x_hi: 2.8,
-            row_lo: 0,
-            row_hi: 1,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeMarqueeSelect {
+                x_lo: 0.5,
+                x_hi: 2.8,
+                row_lo: 0,
+                row_hi: 1,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
 
@@ -166,10 +179,12 @@ fn dope_summary_press_drag_release_moves_all_channels() {
 
     // 按下（普通点击 = 单选该时刻全部）：跨通道全部选上
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeSummaryPressed {
-            index,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeSummaryPressed {
+                index,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -183,10 +198,12 @@ fn dope_summary_press_drag_release_moves_all_channels() {
 
     // 拖拽 dt=0.5：4 个关键帧同步移动到 t=0.5
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeSummaryDragged {
-            index,
-            delta_time: 0.5,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeSummaryDragged {
+                index,
+                delta_time: 0.5,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -208,10 +225,9 @@ fn dope_summary_press_drag_release_moves_all_channels() {
 
     // 松开：汇总条带重算（t=0 空条目移除，t=0.5 条目 count=4）+ 写回 model
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeSummaryReleased {
-            index,
-            moved: true,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeSummaryReleased { index, moved: true },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     {
@@ -232,7 +248,12 @@ fn dope_summary_press_drag_release_moves_all_channels() {
             .expect("松开后应有 t=0.5 汇总条目");
         assert_eq!(sk.count, 4, "t=0.5 条目应聚合 4 个关键帧");
     }
-    let id = store.ui_models().animation.graph.current_action_id().unwrap();
+    let id = store
+        .ui_models()
+        .animation
+        .graph
+        .current_action_id()
+        .unwrap();
     let action = store
         .state()
         .project
@@ -263,24 +284,31 @@ fn dope_marquee_below_rows_selects_nothing() {
 
     // 先选中通道 0 的 t=3 关键帧（后续验证空框替换会清空它）
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeKeyframePressed {
-            curve: 0,
-            key: 1,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeKeyframePressed {
+                curve: 0,
+                key: 1,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
-    assert_eq!(store.ui_models().animation.graph.selected_keyframe_count(), 1);
+    assert_eq!(
+        store.ui_models().animation.graph.selected_keyframe_count(),
+        1
+    );
 
     // 框选行区间 [4, 6]（n=4，完全在行区外），水平范围覆盖全部关键帧
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeMarqueeSelect {
-            x_lo: -1.0,
-            x_hi: 20.0,
-            row_lo: 4,
-            row_hi: 6,
-            modifier: SlintSelectionModifier::None,
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeMarqueeSelect {
+                x_lo: -1.0,
+                x_hi: 20.0,
+                row_lo: 4,
+                row_hi: 6,
+                modifier: SlintSelectionModifier::None,
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
 
@@ -313,9 +341,11 @@ fn dope_search_filters_independently() {
     store.create_test_animation_data();
 
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeSearchChanged {
-            text: "font".to_string(),
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeSearchChanged {
+                text: "font".to_string(),
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
 
@@ -329,9 +359,11 @@ fn dope_search_filters_independently() {
 
     // 空串恢复全部
     store
-        .dispatch(Action::Animation(AnimationAction::Graph(GraphAction::DopeSearchChanged {
-            text: String::new(),
-        })))
+        .dispatch(Action::Animation(AnimationAction::Graph(
+            GraphAction::DopeSearchChanged {
+                text: String::new(),
+            },
+        )))
         .unwrap();
     store.evaluate_depsgraph();
     assert_eq!(
