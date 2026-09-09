@@ -1,6 +1,11 @@
 /target
 /wgpu-hal-29-patch/
 
+# clangd
+compile_flags.txt
+aweft-libass/compile_flags.txt
+.clangd
+
 # 忽略备份文件
 *~
 
