@@ -9,11 +9,9 @@
 //!
 //! ### 音轨切换与流选择
 //! `uridecodebin3` 内部自带 `multiqueue`，所有音轨均有独立缓冲，不会反压阻塞解复用器。
-//! 切换音轨时，通过向管线发送官方标准的 `SelectStreams` 事件：
-//! ```rust
-//! let event = gstreamer::event::SelectStreams::builder(&[&video_id, &audio_id]).build();
-//! pipeline.send_event(event);
-//! ```
+//! 切换音轨时，把要保留的视频 stream-id 与目标音频 stream-id 收进一个 `Vec<&str>`，
+//! 交给 `gstreamer::event::SelectStreams::builder(streams).build()` 构造事件，再用
+//! `Pipeline::send_event` 发给管线（真实调用见 `SessionAudio::select_stream`）。
 //! `decodebin3` 会在内部流线程进行原子无缝切换（Atomic Seamless Switch），无需对管线
 //! 进行带 `FLUSH` 的 Seek，彻底杜绝管道冲刷卡顿、破音或 ASYNC 挂起。
 
