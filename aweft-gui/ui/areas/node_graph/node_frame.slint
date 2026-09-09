@@ -362,13 +362,13 @@ export component NodeFrame inherits Rectangle {
     callback socket-menu-requested(socket-index: int);
     // 内嵌文本输入框提交（字符串常量输出端口）：编辑据此更新端口默认值
     callback socket-input-changed(socket-index: int, text: string);
-    // 内嵌文本输入框聚焦变化：编辑据此设置全窗口编辑遮罩（挖孔定位）
+    // 内嵌文本输入框聚焦变化：编辑据此设置全窗口收起遮罩（挖孔定位）
     callback socket-input-focused(socket-index: int, focused: bool);
     // 端口命中（本地坐标，相对节点左上角；含 ta-overhang 已减后的节点内坐标）：
     // 返回 sockets 组合数组下标，-1 无。由编辑器绑定到 Rust 统一命中（与
     // find_drop_socket 同源，消除 Slint 硬编码端口数上限——C1 修复）。
     callback socket-at(x: length, y: length) -> int;
-    // 编辑遮罩激活镜像（由编辑器绑定 EditOverlayState.active，避免本组件依赖 bridge/state）
+    // 收起遮罩激活镜像（由编辑器绑定 DismissOverlayState.active，避免本组件依赖 bridge/state）
     in property <bool> edit-active-mirror: false;
 
     // 按 view-zoom 缩放后的几何量

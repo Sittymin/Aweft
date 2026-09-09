@@ -2,7 +2,7 @@ import { Theme } from "../theme/index.slint";
 import { CanvasNavigation } from "../widgets/canvas_navigation.slint";
 import { TimeRuler, VerticalGrid } from "./graph_editor/ruler.slint";
 import { SlintAudioTrack, SlintKey, SlintWaveformBucket } from "../core/types.slint";
-import { AnimationState, VideoState, AudioState } from "../bridge/state.slint";
+import { AnimationState, DismissOverlayState, VideoState, AudioState } from "../bridge/state.slint";
 import { VideoCallbacks, AudioCallbacks } from "../bridge/callbacks.slint";
 import { AudioTrackPanel } from "./audio_track_panel.slint";
 import { AudioTrackSidebar } from "./audio_track_sidebar.slint";
@@ -300,12 +300,20 @@ export component AudioWaveformArea inherits Rectangle {
         current-track: root.track-index;
     }
 
-    if root.menu-open: ContextMenu {
+    // 音轨右键菜单：点菜单外任意处收起（MainWindow 顶层 DismissOverlay 按菜单矩形挖孔）
+    ContextMenu {
         open <=> root.menu-open;
         menu-x: root.menu-x;
         menu-y: root.menu-y;
         container-width: root.width;
         container-height: root.height;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
         MenuItem {
             text: "设置为当前播放音轨";
             menu-open <=> root.menu-open;

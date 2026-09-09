@@ -11,6 +11,10 @@
 - 回调链测试走真实 UI 回调入口（`invoke_*`），覆盖回调层的 uuid 解析、时间解析、
   批量分支。
 - 帮助函数构造 Rows → Map 映射模型（仅测试用，实际链路 Rows → Filter → Map）。
+- 纯 UI 交互（不涉及数据层）：测试文件内用 `slint::slint!` 声明最小宿主窗口 + `import` `ui/` 下真实
+  组件，用 `ElementHandle`（`find_by_element_id` 的 id 是 `组件名::元素名`）派发真实点击/拖拽。
+  两个坑：相对路径以 crate 根（`aweft-gui/`）为基，不是测试文件所在目录；`init_no_event_loop()` 下
+  布局与 `if` 分支的实例化要靠 `mock_elapsed_time()` 推进，读几何前先推一帧。
 
 ## 覆盖清单（aweft-gui/tests/）
 
@@ -31,3 +35,9 @@ add-line 时间解析分支、折叠 → FilterModel 过滤、选择路由（单
 显式 depends_on 传播、拓扑序、未注册操作 panic。
 
 **nla_editor_integration.rs**（NLA 交互，dispatch → 投影闭环）：装载派生层与 model 对齐（全局 Action 轨 + 泳道/片断）、拖拽时间钳制与跨轨瞬间移动、松开写回 `AnimData.tracks`、轨道启用/锁定/搜索过滤与“向下插入”（自动建轨）、过滤视图命中映射（`strip_hit_test`+`strip-pick`）、拖拽重排后跨轨两层同步、空白取消选中。
+
+**context_menu_dismiss.rs**（右键菜单“点菜单外收起”契约）：真实 `ContextMenu` + 真实 `DismissOverlay` +
+最小宿主窗口（测试内 `slint::slint!` 直接 import `ui/` 组件，不拉 AppStore），锁定菜单上报的挖孔矩形是
+MainWindow 窗口坐标（`absolute-position`，Area 偏移参与计算）、孔外**右键**按下即收起并自动关菜单
+（`clicked` 只认左键，是当初波形图音轨菜单收不起来的根因）、孔内点击命中菜单项且收起时释放遮罩、
+已收起菜单（`visible: false`）不再吞点击。

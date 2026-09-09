@@ -21,7 +21,7 @@ import { ChannelPanel } from "../../widgets/channel_panel.slint";
 import { VideoTimeBarLines } from "../../widgets/video_time_bars.slint";
 import { RightSidebar } from "sidebar.slint";
 import { AnimationCallbacks, VideoCallbacks } from "../../bridge/callbacks.slint";
-import { EditOverlayState, VideoState } from "../../bridge/state.slint";
+import { DismissOverlayState, VideoState } from "../../bridge/state.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component GraphEditor inherits Rectangle {
@@ -151,15 +151,15 @@ export component GraphEditor inherits Rectangle {
             let max-scroll: float = max(0.0, content - view);
             root.list-pan-y = min(0.0, max(-max-scroll, root.list-pan-y + delta));
         }
-        // 搜索框聚焦：设置全窗口编辑遮罩（挖孔 = 搜索框的窗口坐标）
-        search-active-mirror: EditOverlayState.active;
+        // 搜索框聚焦：设置全窗口收起遮罩（挖孔 = 搜索框的窗口坐标）
+        search-active-mirror: DismissOverlayState.active;
         focus-changed(focused) => {
             if focused {
-                EditOverlayState.active = true;
-                EditOverlayState.hole-x = root.window-x + channel-panel.x + channel-panel.search-box-x;
-                EditOverlayState.hole-y = root.window-y + channel-panel.y + channel-panel.search-box-y;
-                EditOverlayState.hole-width = channel-panel.search-box-width;
-                EditOverlayState.hole-height = channel-panel.search-box-height;
+                DismissOverlayState.active = true;
+                DismissOverlayState.hole-x = root.window-x + channel-panel.x + channel-panel.search-box-x;
+                DismissOverlayState.hole-y = root.window-y + channel-panel.y + channel-panel.search-box-y;
+                DismissOverlayState.hole-width = channel-panel.search-box-width;
+                DismissOverlayState.hole-height = channel-panel.search-box-height;
             }
         }
     }

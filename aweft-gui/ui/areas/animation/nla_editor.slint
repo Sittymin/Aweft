@@ -16,7 +16,7 @@ import { TrackLane, NlaActionKeyframe } from "elements.slint";
 import { NlaPanel } from "nla_panel.slint";
 import { VideoTimeBarLines } from "../../widgets/video_time_bars.slint";
 import { AnimationCallbacks, VideoCallbacks } from "../../bridge/callbacks.slint";
-import { EditOverlayState, VideoState } from "../../bridge/state.slint";
+import { DismissOverlayState, VideoState } from "../../bridge/state.slint";
 import { Theme } from "../../theme/index.slint";
 
 export component NlaEditor inherits Rectangle {
@@ -100,15 +100,15 @@ export component NlaEditor inherits Rectangle {
         scrolled(delta) => {
             root.nav-pan-y = root.scroll-nla-list(delta);
         }
-        // 搜索框聚焦：设置全窗口编辑遮罩（挖孔 = 搜索框的窗口坐标）
-        search-active-mirror: EditOverlayState.active;
+        // 搜索框聚焦：设置全窗口收起遮罩（挖孔 = 搜索框的窗口坐标）
+        search-active-mirror: DismissOverlayState.active;
         focus-changed(focused) => {
             if focused {
-                EditOverlayState.active = true;
-                EditOverlayState.hole-x = root.window-x + nla-panel.x + nla-panel.search-box-x;
-                EditOverlayState.hole-y = root.window-y + nla-panel.y + nla-panel.search-box-y;
-                EditOverlayState.hole-width = nla-panel.search-box-width;
-                EditOverlayState.hole-height = nla-panel.search-box-height;
+                DismissOverlayState.active = true;
+                DismissOverlayState.hole-x = root.window-x + nla-panel.x + nla-panel.search-box-x;
+                DismissOverlayState.hole-y = root.window-y + nla-panel.y + nla-panel.search-box-y;
+                DismissOverlayState.hole-width = nla-panel.search-box-width;
+                DismissOverlayState.hole-height = nla-panel.search-box-height;
             }
         }
     }

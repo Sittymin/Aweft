@@ -14,7 +14,7 @@ import {
     SlintSubtitleRowType,
     SlintSelectionState,
 } from "../../core/types.slint";
-import { SubtitleState } from "../../bridge/state.slint";
+import { DismissOverlayState, SubtitleState } from "../../bridge/state.slint";
 
 export component LineEditor inherits Rectangle {
     // 定义列标题数据
@@ -500,14 +500,7 @@ export component LineEditor inherits Rectangle {
         }
     }
 
-    // 右键菜单（根层统一 ContextMenu）：菜单外点击层关闭
-    if root.context-menu-open: TouchArea {
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down {
-                root.context-menu-open = false;
-            }
-        }
-    }
+    // 右键菜单（根层统一 ContextMenu）：点菜单外任意处收起由 MainWindow 顶层 DismissOverlay 负责
     ContextMenu {
         open <=> root.context-menu-open;
         menu-x: root.context-menu-x;
@@ -515,6 +508,13 @@ export component LineEditor inherits Rectangle {
         container-width: root.width;
         container-height: root.height;
         clamp-position: true;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
 
         // 声明式菜单项：每个动作绑定到具体 MenuItem，无 index 分发
         MenuItem {

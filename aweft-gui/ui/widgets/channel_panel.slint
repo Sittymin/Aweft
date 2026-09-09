@@ -26,9 +26,9 @@ export component ChannelPanel inherits Rectangle {
     callback toggle-editable(index: int);
     callback channel-pressed(index: int, modifier: SlintSelectionModifier);
     callback scrolled(delta: float);
-    // 搜索框聚焦变化（编辑器据此设置全窗口编辑遮罩，挖孔定位）
+    // 搜索框聚焦变化（编辑器据此设置全窗口收起遮罩，挖孔定位）
     callback focus-changed(focused: bool);
-    // 搜索遮罩激活镜像（由编辑器绑定 EditOverlayState.active）
+    // 搜索遮罩激活镜像（由编辑器绑定 DismissOverlayState.active）
     in property <bool> search-active-mirror: false;
 
     // 搜索框在本组件内的位置与大小（供编辑器遮罩据此挖孔；由 EditorSearchBar 上报）

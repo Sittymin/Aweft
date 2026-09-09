@@ -8,7 +8,7 @@ import { ContextMenu, ContextMenuItem, MenuItem } from "../../widgets/context_me
 import { InputBox } from "../../widgets/input_box.slint";
 import { GraphType } from "../../core/types.slint";
 import { NodeGraphCallbacks } from "../../bridge/callbacks.slint";
-import { NodeGraphState, EditOverlayState } from "../../bridge/state.slint";
+import { NodeGraphState, DismissOverlayState } from "../../bridge/state.slint";
 import { Mixins } from "../../theme/mixins.slint";
 import { Theme } from "../../theme/index.slint";
 
@@ -139,7 +139,7 @@ export component NodeGraphEditor inherits Rectangle {
                 root.set-edit-overlay(i, socket-idx);
             }
         }
-        edit-active-mirror: EditOverlayState.active;
+        edit-active-mirror: DismissOverlayState.active;
         press-requested => {
             root.selected-node = i;
         }
@@ -171,17 +171,8 @@ export component NodeGraphEditor inherits Rectangle {
         dragging: true;
     }
 
-    // 菜单打开时的背景点击层：点菜单外任意处关闭
-    if root.menu-open: TouchArea {
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down {
-                root.menu-open = false;
-                root.actor-input-open = false;
-            }
-        }
-    }
-
     // 自定义右键菜单：声明式 MenuItem（每项自带 activated）。
+    // 点菜单外任意处收起由 MainWindow 顶层 DismissOverlay 负责（见 widgets/dismiss_overlay.slint）。
     // 每模式一个 `if` + ContextMenu：Slint 的 if 降级为"布尔模型 for"，
     // 条件为 false 时 Repeater 长度 0——非当前模式的菜单及其 for 完全不实例化，
     // 只有当前模式菜单打开时才实例化菜单项。故当前形态即"只实例化打开菜单的项"。
@@ -197,6 +188,13 @@ export component NodeGraphEditor inherits Rectangle {
         menu-y: root.menu-screen-y;
         container-width: root.width;
         container-height: root.height;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
         clamp-position: true;
         for item[i] in root.menu-items: MenuItem {
             text: item.text;
@@ -217,6 +215,13 @@ export component NodeGraphEditor inherits Rectangle {
         menu-y: root.menu-screen-y;
         container-width: root.width;
         container-height: root.height;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
         clamp-position: true;
         MenuItem {
             text: "删除当前节点";
@@ -235,6 +240,13 @@ export component NodeGraphEditor inherits Rectangle {
         menu-y: root.menu-screen-y;
         container-width: root.width;
         container-height: root.height;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
         clamp-position: false;
         for item[i] in NodeGraphState.style-chain-items: MenuItem {
             text: item.text;
@@ -253,6 +265,13 @@ export component NodeGraphEditor inherits Rectangle {
         menu-y: root.menu-screen-y;
         container-width: root.width;
         container-height: root.height;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
         clamp-position: false;
         for item[i] in root.nodes[root.socket-menu-node].sockets[root.socket-menu-idx].menu-items: MenuItem {
             text: item.text;
@@ -291,6 +310,9 @@ export component NodeGraphEditor inherits Rectangle {
         font-size: Theme.data.node-editor.node-socket-font-size;
         text-color: Theme.data.node-editor.node-text;
         placeholder-color: Theme.data.node-editor.node-muted-text;
+        // 遮罩收起（点菜单外）→ clear-focus → 下面已有的 lost-focus 复位
+        search-overlay: true;
+        active-mirror: DismissOverlayState.active;
         accepted(text) => {
             root.menu-open = false;
             root.actor-input-open = false;
@@ -369,18 +391,18 @@ export component NodeGraphEditor inherits Rectangle {
         actor-input-open = true;
     }
 
-    // 内嵌文本输入框聚焦：计算输入框的 MainWindow 窗口坐标，激活全窗口编辑遮罩（挖孔）。
+    // 内嵌文本输入框聚焦：计算输入框的 MainWindow 窗口坐标，激活全窗口收起遮罩（挖孔）。
     function set-edit-overlay(node-id: int, socket-idx: int) {
         let n = root.nodes[node-id];
         let s = n.sockets[socket-idx];
         let menu: length = n.menu-label != "" ? Theme.data.node-editor.node-socket-row-height : 0px;
-        EditOverlayState.hole-x = root.window-x + n.x * nav.zoom + nav.pan-x + 6px * nav.zoom;
-        EditOverlayState.hole-y = root.window-y + n.y * nav.zoom + nav.pan-y
+        DismissOverlayState.hole-x = root.window-x + n.x * nav.zoom + nav.pan-x + 6px * nav.zoom;
+        DismissOverlayState.hole-y = root.window-y + n.y * nav.zoom + nav.pan-y
             + (Theme.data.node-editor.node-header-height + menu + s.row * Theme.data.node-editor.node-socket-row-height) * nav.zoom
             + 4px * nav.zoom;
-        EditOverlayState.hole-width = (Theme.data.node-editor.node-width - Theme.data.node-editor.socket-size - 12px) * nav.zoom;
-        EditOverlayState.hole-height = (Theme.data.node-editor.node-socket-row-height - 8px) * nav.zoom;
-        EditOverlayState.active = true;
+        DismissOverlayState.hole-width = (Theme.data.node-editor.node-width - Theme.data.node-editor.socket-size - 12px) * nav.zoom;
+        DismissOverlayState.hole-height = (Theme.data.node-editor.node-socket-row-height - 8px) * nav.zoom;
+        DismissOverlayState.active = true;
     }
 
     // ---- 端口拖拽瞬态（图操作在松开时交给 Rust） ----

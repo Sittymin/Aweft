@@ -11,7 +11,7 @@ import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { TickLabels } from "../graph_editor/ruler.slint";
 import { Theme } from "../../theme/index.slint";
-import { VideoState } from "../../bridge/state.slint";
+import { DismissOverlayState, VideoState } from "../../bridge/state.slint";
 import { VideoCallbacks } from "../../bridge/callbacks.slint";
 
 export component VideoPlayer inherits Rectangle {
@@ -310,23 +310,23 @@ export component VideoPlayer inherits Rectangle {
         }
     }
 
-    // 右键菜单打开时的背景点击层：点菜单外任意处关闭
-    if root.menu-open: TouchArea {
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down {
-                root.menu-open = false;
-            }
-        }
-    }
-
-    // 视频右键菜单：非主视频可设为主视频；所有视频可切换静音/更换视频
-    if root.menu-open: ContextMenu {
+    // 视频右键菜单：非主视频可设为主视频；所有视频可切换静音/更换视频。
+    // 常驻实例（visible 由 open 控制）：菜单收起时才触发 overlay-hidden 释放遮罩。
+    // 点菜单外任意处收起由 MainWindow 顶层 DismissOverlay 负责。
+    ContextMenu {
         open <=> root.menu-open;
         menu-x: root.menu-x;
         menu-y: root.menu-y;
         container-width: root.width;
         container-height: root.height;
         clamp-position: true;
+        overlay-active: DismissOverlayState.active;
+        overlay-shown(rect) => {
+            DismissOverlayState.show(rect);
+        }
+        overlay-hidden() => {
+            DismissOverlayState.hide();
+        }
         if root.menu-video-index != VideoState.main-video: MenuItem {
             text: "设为主视频";
             menu-open <=> root.menu-open;

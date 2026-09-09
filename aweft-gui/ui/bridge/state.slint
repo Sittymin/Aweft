@@ -8,7 +8,7 @@ import {
     SlintVideoTimeBar,
 } from "../core/types.slint";
 import { GraphLink, GraphNode } from "../areas/node_graph/node_frame.slint";
-import { ContextMenuItem } from "../widgets/context_menu.slint";
+import { ContextMenuItem, MenuRect } from "../widgets/context_menu.slint";
 import {
     SlintFCurveChannel,
     SlintCurveSegment,
@@ -55,15 +55,30 @@ export global AudioState {
     in property <[int]> playback-tracks: [];
 }
 
-// 通用"文本编辑遮罩"状态：内嵌输入框（字符串常量等）聚焦时，
-// MainWindow 顶层显示差集遮罩（挖去输入框窗口区域），点击输入框外任意处取消输入。
-// 坐标均为相对 MainWindow 的逻辑坐标。
-export global EditOverlayState {
+// 通用「点击孔外即收起」遮罩状态：MainWindow 顶层挂一份差集遮罩（见
+// widgets/dismiss_overlay.slint），挖去浮层自身占用的窗口矩形，点击其余任意处即收起。
+// 当前两类使用方：内嵌输入框聚焦（搜索框、节点图改名框）与右键/下拉菜单打开。
+// 同一时刻只有一个使用方持有它；坐标均为相对 MainWindow 的逻辑坐标。
+export global DismissOverlayState {
     in-out property <bool> active: false;
     in-out property <length> hole-x: 0px;
     in-out property <length> hole-y: 0px;
     in-out property <length> hole-width: 0px;
     in-out property <length> hole-height: 0px;
+
+    // 以 rect 挖孔并显示遮罩
+    public function show(rect: MenuRect) {
+        hole-x = rect.x;
+        hole-y = rect.y;
+        hole-width = rect.width;
+        hole-height = rect.height;
+        active = true;
+    }
+
+    // 收起遮罩：使用方消失时必须调用，否则遮罩一直盖住整个窗口
+    public function hide() {
+        active = false;
+    }
 }
 
 export global SubtitleState {

@@ -2,15 +2,27 @@
 // 声明式 API（对齐 Slint 原生 Menu/MenuItem 的体验）：
 //   ContextMenu {
 //       open <=> root.menu-open;
+//       overlay-active: DismissOverlayState.active;                // 三个接线见下方组件注释
+//       overlay-shown(rect) => { DismissOverlayState.show(rect); }
+//       overlay-hidden() => { DismissOverlayState.hide(); }
 //       MenuItem { text: "删除"; activated => { ... } }        // 每项自带回调，无 index 分发
 //       for item[i] in 数据列表: MenuItem {                     // 数据列表同样声明式
 //           selected: i == 当前选中;
 //           activated => { ...具体动作(i) }
 //       }
 //   }
-// ContextMenu 只负责容器（定位/夹取/边框/背景点击层）；菜单项由调用方通过 @children
-// 注入 MenuItem。点击关闭由 MenuItem 内部的 menu-open 两向绑定驱动（keep-open 除外）。
+// ContextMenu 只负责容器（定位/夹取/边框）；菜单项由调用方通过 @children 注入 MenuItem。
+// 点中菜单项即关闭由 MenuItem 内部的 menu-open 两向绑定驱动（keep-open 除外）；
+// 点菜单外任意处收起由调用方接线的 DismissOverlayState + MainWindow 顶层遮罩负责。
 import { Mixins } from "../theme/mixins.slint";
+
+// 浮层在 MainWindow 窗口坐标系里占用的矩形：右键菜单据此向调用方上报遮罩挖孔位置。
+export struct MenuRect {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
 
 // 数据驱动的菜单项（用于下拉/链切换等按数据列表渲染的场景，如 Dropdown/ChainSwitcher）。
 export struct ContextMenuItem {
@@ -104,7 +116,10 @@ export component MenuItem inherits Rectangle {
 }
 
 // 菜单容器：以组件根定位在容器坐标系内，内部含菜单项（@children）、边框与阴影；
-// 位置会夹在容器内，避免出界。背景点击层由调用方在编辑器里提供（与菜单同级）。
+// 位置会夹在容器内，避免出界。点菜单外任意处收起由 MainWindow 顶层那一份 DismissOverlay
+// 负责（见 widgets/dismiss_overlay.slint）：每个使用 ContextMenu 的地方都必须把
+// overlay-active 与 overlay-shown/overlay-hidden 接到 DismissOverlayState，否则菜单
+// 只在点中菜单项时关闭。
 export component ContextMenu inherits Rectangle {
     // 菜单左上角位置（容器本地屏幕坐标）
     in property <length> menu-x: 0px;
@@ -124,6 +139,52 @@ export component ContextMenu inherits Rectangle {
 
     // 固定菜单宽度（配合容器夹取时稳定）
     private property <length> menu-width: 180px;
+
+    // ---- 「点菜单外任意处收起」联动 ----
+    // 遮罩本体是 MainWindow 顶层那一份 DismissOverlay（点孔外把它置 false）。本组件
+    // 不 import bridge/state.slint：state.slint 已 import 本文件的 ContextMenuItem，
+    // 反向 import 会成环，故与 input_box.slint 的 active-mirror 同法由调用方接线。
+    in property <bool> overlay-active: false;
+    // 菜单矩形就绪或变化：调用方据此挖孔并激活遮罩
+    callback overlay-shown(rect: MenuRect);
+    // 菜单收起：调用方必须释放遮罩，否则遮罩会一直盖住整个窗口
+    callback overlay-hidden();
+
+    // 内建只读属性 absolute-position 即元素相对 MainWindow 原点的逻辑坐标，
+    // 免去把窗口偏移逐层透传到使用方。
+    private property <MenuRect> window-rect: {
+        x: root.absolute-position.x,
+        y: root.absolute-position.y,
+        width: root.width,
+        height: root.height,
+    };
+
+    changed overlay-active => {
+        if !root.overlay-active {
+            root.open = false;
+        }
+    }
+    changed open => {
+        if root.open {
+            root.request-overlay();
+        } else {
+            root.overlay-hidden();
+        }
+    }
+    // 创建时 open 已为 true 不会触发 changed，故 init 试一次；此时布局尚未完成
+    // （宽高为 0）会被跳过，随后 window-rect 变化再补上真实孔位。
+    init => {
+        root.request-overlay();
+    }
+    changed window-rect => {
+        root.request-overlay();
+    }
+
+    function request-overlay() {
+        if root.open && root.width > 0px && root.height > 0px {
+            root.overlay-shown(root.window-rect);
+        }
+    }
 
     visible: root.open;
     x: clamp-position ? min(menu-x, max(0px, container-width - self.width)) : menu-x;

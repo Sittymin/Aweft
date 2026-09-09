@@ -61,7 +61,7 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
   路径，`dv=0`）、`dope_marquee_select`（时间范围 × 行区间，行 → Rust 映射真实通道）、
   `dope_summary_pressed/dragged/released`（汇总条带跨通道同步拖拽）
 - 搜索独立：`dope_search` 只过滤 `dope_filter`（FilterModel），与 `graph_filter` 互不干扰；
-  搜索框聚焦走全窗口编辑遮罩（EditOverlayState 挖孔定位）
+  搜索框聚焦走全窗口收起遮罩（`DismissOverlayState` 挖孔定位，右键菜单共用同一条）
 - 汇总条带交互路径（`summary.rs`）：按下即写回通道选中（汇总标记独立于 channels 嵌套循环，
   按下期间更新安全）；拖拽返回 `GraphKeyframesChanged{dragged_summary}`，投影就地更新
   被拖标记 time（不 insert/remove，保住 grab）；松开返回 `GraphSelectionChanged`（现有

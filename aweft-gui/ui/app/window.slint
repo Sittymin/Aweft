@@ -20,7 +20,7 @@ import {
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
-import { VideoState, AudioState, SubtitleState, OverlayState, NodeGraphState, EditOverlayState, AnimationState } from "../bridge/state.slint";
+import { VideoState, AudioState, SubtitleState, OverlayState, NodeGraphState, DismissOverlayState, AnimationState } from "../bridge/state.slint";
 import {
     DragCallbacks,
     AreaCallbacks,
@@ -39,7 +39,7 @@ export {
     SubtitleState,
     OverlayState,
     NodeGraphState,
-    EditOverlayState,
+    DismissOverlayState,
     AnimationState,
     DragCallbacks,
     AreaCallbacks,
@@ -84,14 +84,15 @@ export component MainWindow inherits Window {
         datas: OverlayState.close-area-overlay-datas;
     }
 
-    // 编辑遮罩（节点图内嵌输入框聚焦时）：挖去输入框区域，点击其余处取消输入
-    if EditOverlayState.active: DismissOverlay {
-        hole-x: EditOverlayState.hole-x;
-        hole-y: EditOverlayState.hole-y;
-        hole-width: EditOverlayState.hole-width;
-        hole-height: EditOverlayState.hole-height;
+    // 收起遮罩（内嵌输入框聚焦 / 右键菜单打开时）：挖去浮层自身占用的区域，
+    // 点其余任意处即收起（输入框失焦、菜单关闭由各自联动完成）
+    if DismissOverlayState.active: DismissOverlay {
+        hole-x: DismissOverlayState.hole-x;
+        hole-y: DismissOverlayState.hole-y;
+        hole-width: DismissOverlayState.hole-width;
+        hole-height: DismissOverlayState.hole-height;
         dismissed => {
-            EditOverlayState.active = false;
+            DismissOverlayState.active = false;
         }
     }
 
