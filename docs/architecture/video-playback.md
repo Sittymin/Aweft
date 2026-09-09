@@ -33,6 +33,13 @@ fourcc/modifier，并过滤渲染器没有对应平面布局的格式；其余�
 DMA-BUF 错当成普通系统内存读取。
 `AWEFT_SWAP_UV=1` 仅用于调试 U/V 顺序。
 
+appsink 的 `propose_allocation` 回调（`sink.rs` 的 `build_gst_appsink_callbacks`）必须在管线进入协商之前
+安装，即先 `SlintWGPUSink::connect` 再 `set_state`：DMABuf 的 VideoMeta 请求发生在 vapostproc 的
+`decide_allocation`（协商阶段），错过这次查询时 vapostproc 会以 `not-negotiated` 停流，此后拉帧恒为空。
+自行组装 appsink 的测试入口同受这条时序约束；绕过 `connect` 直接调 `dmabuf_planes` 的渲染入口还需自备
+申请了 `VULKAN_EXTERNAL_MEMORY_DMA_BUF` 的设备与 `DmabufImporter`（见 `tests.rs` 的
+`render_decoded_frame_with_skip`）。
+
 `video_sink/sink.rs` 负责 appsink、最新帧槽位与渲染资源生命周期，`frame.rs`
 负责帧上传/导入和 YUV 转换，`dmabuf.rs` 只负责 DMA-BUF 平面导入。
 `video_sink/tests.rs` 覆盖着色器布局和真实管线入口。

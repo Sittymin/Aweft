@@ -1468,19 +1468,27 @@ fn render_decoded_frame_with_skip(
     // sync=true：纯视频无音频时钟，让 appsink 按系统时钟实时节奏消费，避免
     // 全速解码灌满 VA 表面池后卡死（本机 headless 实测约 20 帧后停）。
     sink_element.set_property("sync", true);
-    pipeline.set_state(gstreamer::State::Playing).ok()?;
-    let (_instance, device, queue) = headless_wgpu();
-    let device = std::sync::Arc::new(device);
-    let queue = std::sync::Arc::new(queue);
     let _bus = pipeline.bus();
     // 不设 new_sample 回调（notifier=None），避免回调抢先 pull 走样本；
     // 我们直接 try_pull_sample 拉帧。
     let appsink = sink_element.clone().dynamic_cast::<AppSink>().ok()?;
+    // 回调必须在置 Playing 之前安装：vapostproc 的 DMABuf decide_allocation 发生在
+    // 协商阶段，靠这里的 propose_allocation 请求 VideoMeta。晚装会错过这次查询，
+    // vapostproc 报「DMABuf caps negotiated without the mandatory support of VideoMeta」
+    // 并以 not-negotiated 停流，本函数取不到任何帧（同 `dmabuf_optin_inner` 的注释）。
     appsink.set_callbacks(SlintWGPUSink::build_gst_appsink_callbacks(
         Default::default(),
         Default::default(),
         None,
     ));
+    pipeline.set_state(gstreamer::State::Playing).ok()?;
+    // 本函数绕开 connect 直接调用 dmabuf_planes，因此需要自备申请了
+    // VULKAN_EXTERNAL_MEMORY_DMA_BUF 的设备与 DmabufImporter；缺一时协商到
+    // DMA_DRM 的帧必然导入失败。
+    let (_instance, device, queue) = headless_wgpu_dmabuf().unwrap_or_else(headless_wgpu);
+    sink.dmabuf = DmabufImporter::try_new(&device);
+    let device = std::sync::Arc::new(device);
+    let queue = std::sync::Arc::new(queue);
 
     let pull = || -> Option<gstreamer::Sample> {
         let deadline = Instant::now() + Duration::from_secs(45);
@@ -1781,6 +1789,16 @@ fn test_soft_vs_hard_decode_frame_compare() {
     gst_init();
     let uri = uri.to_string();
 
+    // 硬解那一路显式请求 DMABuf（本测试比较的正是零拷贝硬解与软解）。本机 wgpu
+    // 设备申请不到 VULKAN_EXTERNAL_MEMORY_DMA_BUF 时，协商到 DMA_DRM 的帧无法渲染；
+    // 那属于设备能力缺失而非渲染缺陷，因此先探测一次能力，不具备时跳过本测试。
+    let dmabuf_usable = headless_wgpu_dmabuf()
+        .is_some_and(|(_instance, device, _queue)| DmabufImporter::try_new(&device).is_some());
+    if !dmabuf_usable {
+        eprintln!("跳过：本机 wgpu 设备不支持 DMABuf 导入，硬解零拷贝路径不可测");
+        return;
+    }
+
     let Some((soft, w, h)) = our_render_frame(&uri, true) else {
         panic!("软件解码渲染失败");
     };
@@ -1826,12 +1844,15 @@ fn test_soft_vs_hard_decode_frame_compare() {
     );
 }
 
-/// NV12（8bit sysmem）真实路径像素校验：ten_bit=false（wgpu 设备无
-/// TEXTURE_FORMAT_16BIT_NORM）时直播协商 {NV12}，而此前所有像素级对比
-/// （软/硬对比、realpath）都走 P010——真实 vapostproc NV12 帧从未与参考
-/// 对比过。若它损坏而 P010 正确，即锁定直播条纹来源：NV12 路径的 buffer
-/// 实际行距（VideoMeta，分配器对齐）与 caps 紧凑行距不一致。条纹能量
-/// 断言：干净帧实测 ≈0.3，逐行错位的条纹会高一个数量级以上。
+/// NV12（8bit 系统内存上传路径）像素校验：其余像素级对比里 sysmem 只覆盖到
+/// I420/YV12/Y410（`test_yu12_sysmem_vs_gst_reference` 等），NV12 的 sysmem
+/// 上传路径此前从未与参考对比过；DMA_DRM NV12 零拷贝那一路由
+/// `test_soft_vs_hard_decode_frame_compare` 的硬解分支覆盖。本用例第三参数传
+/// `false` 才对应名字里的 sysmem：那条路径按 VideoInfo 的紧凑行距切平面
+/// （VideoMeta 只在协商到 DMABuf 时才请求，见
+/// `SlintWGPUSink::build_gst_appsink_callbacks` 的 propose_allocation），行距或
+/// 平面偏移算错就表现为横向条纹。条纹能量断言用相对判据：参考帧本身含稳定的
+/// 横向细节，只要求上传路径不显著放大它。
 #[test]
 fn test_nv12_sysmem_vs_gst_reference() {
     let _g = crate::GST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -1847,7 +1868,7 @@ fn test_nv12_sysmem_vs_gst_reference() {
     let uri = uri.to_string();
     set_decode_ranks(false);
     let (pipeline, sink_element, sink, _audio) =
-        build_decode_pipeline_with_dmabuf(&uri, false, true).expect("搭建 NV12 管线失败");
+        build_decode_pipeline_with_dmabuf(&uri, false, false).expect("搭建 NV12 管线失败");
     let Some((nv12, w, h)) = render_decoded_frame(pipeline, sink_element, sink) else {
         panic!("NV12 渲染失败");
     };
@@ -1867,13 +1888,13 @@ fn test_nv12_sysmem_vs_gst_reference() {
         diff < 40.0,
         "NV12 路径渲染损坏（diff={diff:.2}）；检查 /tmp/aweft_nv12.ppm"
     );
-    // 参考帧本身包含稳定的横向细节（当前素材约为 5.7），不能用绝对
-    // 的“接近零”阈值；只要求上传路径不要显著放大参考帧的条纹能量。
+    // 参考帧本身包含稳定的横向细节（videotestsrc 生成素材实测 2.95），不能用
+    // 绝对的“接近零”阈值；只要求上传路径不要显著放大参考帧的条纹能量。
     assert!(
         e_nv12 <= e_ref + 1.0,
         "NV12 路径放大了横向条纹（能量={e_nv12:.2}，参考={e_ref:.2}）；检查 /tmp/aweft_nv12.ppm"
     );
-    eprintln!("✅ NV12 sysmem 路径（含 VideoMeta 行距修正）像素级正确。");
+    eprintln!("✅ NV12 sysmem 上传路径（按 VideoInfo 紧凑行距切平面）像素级正确。");
 }
 
 /// 逐通道均值（0..255），用于定位偏差来源（U/V 反序→R/B 互异；亮度范围错→三通道同偏）。
