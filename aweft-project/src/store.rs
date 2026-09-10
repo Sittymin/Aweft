@@ -1,23 +1,40 @@
 use anyhow::{bail, Context, Result};
 use aweft_model::ids::ItemId;
 use aweft_model::project::Project;
-use aweft_model::sequence::{Sequence, ItemContent};
+use aweft_model::sequence::{ItemContent, Sequence};
 use chrono::TimeDelta;
 use std::path::Path;
 
 use crate::document::{AweftDocument, AWEFT_DOCUMENT_FORMAT};
 use crate::receipt::{EventTimeChanged, MutationKind, MutationReceipt, Origin};
+use crate::subscriber::SubscriberRef;
+
+/// 一次广播最多推进的轮数。订阅者在通知里写回会再进队列，下一轮继续投；
+/// 超过这个轮数按成环处理：丢弃剩余回执并记一条告警，不再进订阅者回调。
+pub const MAX_BROADCAST_ROUNDS: usize = 8;
+
+/// [`ProjectStore::begin_batch`] 的凭据。只有它能把批量作用域结束掉，
+/// 因此一处 `begin_batch` 配一处 `end_batch`，不会串台。
+#[derive(Debug)]
+pub struct BatchToken {
+    _priv: (),
+}
 
 /// 工程文档的唯一所有者。
 /// 图形界面、命令行、插件、协作四方只持有对本存储的借用，
 /// 所有已建模的写入经本存储单一入口。
 ///
-/// 每次写入在 `pending` 里留一条回执（写日志），由持有者在一轮交互结束时用
-/// [`ProjectStore::take_pending`] 取走并分发。回执不在写入瞬间同步回调：
-/// 插件运行时会在收到通知后继续写本存储，同步回调等于在借用可变期间再次写入。
+/// 写入即广播：每次写入在 [`ProjectStore::record`] 里落成回执后立刻交给订阅者，
+/// 分发规则（谁能收到、收到几条、什么时候收尾）全在这里，使用方不需要记得 pump。
+/// 批量作用域（[`ProjectStore::begin_batch`]）把一段写入合成一次广播：
+/// 一次拖动改 N 行应当只通知订阅者一次。
 pub struct ProjectStore {
     doc: AweftDocument,
+    /// 尚未广播出去的回执。广播循环按轮取空它，订阅者写回的新回执排在后面。
     pending: Vec<MutationReceipt>,
+    subscribers: Vec<SubscriberRef>,
+    /// >0 时广播推迟：批量作用域或广播循环自身持有。
+    hold: usize,
     dirty: bool,
 }
 
@@ -26,6 +43,8 @@ impl ProjectStore {
         Self {
             doc,
             pending: Vec::new(),
+            subscribers: Vec::new(),
+            hold: 0,
             dirty: false,
         }
     }
@@ -45,7 +64,7 @@ impl ProjectStore {
     }
 
     /// 可变访问 `Project`（库表、样式层、字幕结构）。
-    /// 与 [`Self::sequence_mut`] 同一限制：这类写入尚无 `MutationKind`，不进写日志。
+    /// 与 [`Self::sequence_mut`] 同一限制：这类写入尚无 `MutationKind`，不产生回执。
     pub fn project_mut(&mut self) -> &mut Project {
         &mut self.doc.project
     }
@@ -56,7 +75,7 @@ impl ProjectStore {
 
     /// 直接改结构的时间线入口：只用于尚未建模为 `MutationKind` 的写入
     /// （增删行、层级、折叠、文本）。时间写入必须走本存储的 `set_*` / `adjust_*`，
-    /// 否则插件与协作拿不到回执。
+    /// 否则订阅者收不到这次变更。
     pub fn sequence_mut(&mut self) -> &mut Sequence {
         self.doc.project.sequence_mut()
     }
@@ -66,14 +85,67 @@ impl ProjectStore {
         self.dirty
     }
 
-    /// 取走并清空写日志。调用方在一轮交互结束时取一次，逐条分发。
-    pub fn take_pending(&mut self) -> Vec<MutationReceipt> {
-        std::mem::take(&mut self.pending)
+    /// 注册订阅者。回调里对 `store` 的写入由本存储继续分发，因此订阅者之间
+    /// 不需要彼此知道对方存在。
+    pub fn subscribe(&mut self, subscriber: SubscriberRef) {
+        self.subscribers.push(subscriber);
+    }
+
+    /// 开始一个批量作用域：其间所有写入只排队，到 [`Self::end_batch`] 才一次广播。
+    pub fn begin_batch(&mut self) -> BatchToken {
+        self.hold += 1;
+        BatchToken { _priv: () }
+    }
+
+    /// 结束批量作用域，并广播其间攒下的回执。
+    pub fn end_batch(&mut self, _token: BatchToken) {
+        self.hold -= 1;
+        self.broadcast();
     }
 
     fn record(&mut self, receipt: MutationReceipt) {
         self.dirty = true;
         self.pending.push(receipt);
+        self.broadcast();
+    }
+
+    /// 把排队的回执按轮投给订阅者。订阅者在通知里写回的回执排进下一轮，
+    /// 所以本函数只在栈顶跑一次：循环期间 `hold` 非零，写入方的嵌套调用直接返回。
+    fn broadcast(&mut self) {
+        if self.hold > 0 || self.pending.is_empty() {
+            return;
+        }
+        self.hold += 1;
+        // 取走注册表：回调要以 &mut self 写回真相，注册表不能同时被借用。
+        let mut subs = std::mem::take(&mut self.subscribers);
+        let mut rounds = 0;
+        while !self.pending.is_empty() {
+            rounds += 1;
+            if rounds > MAX_BROADCAST_ROUNDS {
+                log::warn!(
+                    "变更广播达到 {MAX_BROADCAST_ROUNDS} 轮上限，丢弃剩余 {} 条回执",
+                    self.pending.len()
+                );
+                self.pending.clear();
+                break;
+            }
+            let batch = std::mem::take(&mut self.pending);
+            for sub in &subs {
+                let origin = sub.origin();
+                let mine: Vec<MutationReceipt> = batch
+                    .iter()
+                    .filter(|receipt| receipt.origin != origin)
+                    .cloned()
+                    .collect();
+                if !mine.is_empty() {
+                    sub.on_mutations(self, &mine);
+                }
+            }
+        }
+        // 广播期间新注册的订阅者进的是空列表，合并回来再放回。
+        subs.append(&mut self.subscribers);
+        self.subscribers = subs;
+        self.hold -= 1;
     }
 
     /// 读某行的起止时间（毫秒）。
@@ -132,7 +204,11 @@ impl ProjectStore {
     ) -> Result<TimeDelta> {
         let before = self.event_times_ms(id)?;
         let delta = TimeDelta::milliseconds(target_ms - before.0);
-        let time = self.doc.project.sequence_mut().adjust_event_time(id, true, delta)?;
+        let time = self
+            .doc
+            .project
+            .sequence_mut()
+            .adjust_event_time(id, true, delta)?;
         self.record_time_write(origin, id, before)?;
         Ok(time)
     }
@@ -275,7 +351,10 @@ impl ProjectStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::subscriber::MutationSubscriber;
     use aweft_model::sequence::{EventData, ItemLocation};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     fn event_data(start_ms: i64, end_ms: i64) -> EventData {
         EventData {
@@ -309,50 +388,196 @@ mod tests {
         }
     }
 
+    /// 只记账的订阅者。它的 `origin` 既给自己写入打来源标记，
+    /// 也决定它收不到哪种回执（回声过滤按值比对）。
+    struct Recorder {
+        origin: Origin,
+        batches: RefCell<Vec<Vec<MutationReceipt>>>,
+    }
+
+    impl Recorder {
+        fn new(origin: Origin) -> Rc<Self> {
+            Rc::new(Self {
+                origin,
+                batches: RefCell::new(Vec::new()),
+            })
+        }
+
+        fn receipts(&self) -> Vec<MutationReceipt> {
+            self.batches.borrow().iter().flatten().cloned().collect()
+        }
+
+        fn calls(&self) -> usize {
+            self.batches.borrow().len()
+        }
+    }
+
+    impl MutationSubscriber for Recorder {
+        fn origin(&self) -> Origin {
+            self.origin.clone()
+        }
+
+        fn on_mutations(&self, _store: &mut ProjectStore, mutations: &[MutationReceipt]) {
+            self.batches.borrow_mut().push(mutations.to_vec());
+        }
+    }
+
+    /// 收到通知就把某行整体后移 100ms 的订阅者，用于测链式投递与轮数上限。
+    struct Writer {
+        origin: Origin,
+        target: ItemId,
+        steps: Cell<usize>,
+        calls: Cell<usize>,
+    }
+
+    impl Writer {
+        fn new(origin: Origin, target: ItemId, steps: usize) -> Rc<Self> {
+            Rc::new(Self {
+                origin,
+                target,
+                steps: Cell::new(steps),
+                calls: Cell::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.get()
+        }
+    }
+
+    impl MutationSubscriber for Writer {
+        fn origin(&self) -> Origin {
+            self.origin.clone()
+        }
+
+        fn on_mutations(&self, store: &mut ProjectStore, mutations: &[MutationReceipt]) {
+            self.calls.set(self.calls.get() + 1);
+            if mutations.is_empty() || self.steps.get() == 0 {
+                return;
+            }
+            self.steps.set(self.steps.get() - 1);
+            if let Ok((start, end)) = store.event_times_ms(self.target) {
+                let shifted = store.set_event_times_ms(
+                    self.origin.clone(),
+                    self.target,
+                    start + 100,
+                    end + 100,
+                );
+                assert!(shifted.is_ok(), "订阅者写回应当成功");
+            }
+        }
+    }
+
     #[test]
-    fn write_lands_in_pending_log_with_new_times() {
+    fn write_broadcasts_before_the_write_returns() {
         let (mut store, ids) = store_with_events(&[(1000, 3000)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
         store
             .set_event_start_ms(Origin::LocalGui, ids[0], 1500)
             .expect("写入失败");
-        let pending = store.take_pending();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].origin, Origin::LocalGui);
-        assert_eq!(time_of(&pending[0]), (1500, 3000));
-        assert!(store.take_pending().is_empty(), "取走后队列应当清空");
+        // 没有人 pump：回执在 set 返回前就已投出，带的是写入后的成对值。
+        let receipts = rec.receipts();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].origin, Origin::LocalGui);
+        assert_eq!(time_of(&receipts[0]), (1500, 3000));
         assert!(store.is_dirty());
     }
 
     #[test]
-    fn set_start_clamps_at_end_time() {
+    fn writers_never_hear_their_own_writes() {
         let (mut store, ids) = store_with_events(&[(1000, 3000)]);
-        let time = store
-            .set_event_start_ms(Origin::LocalGui, ids[0], 5000)
-            .expect("写入失败");
-        assert_eq!(time, TimeDelta::milliseconds(3000));
-        assert_eq!(time_of(&store.take_pending()[0]), (3000, 3000));
+        let rec = Recorder::new(Origin::Plugin("p".into()));
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
+        store
+            .set_event_start_ms(Origin::Plugin("p".into()), ids[0], 1500)
+            .expect("自己写失败");
+        assert_eq!(rec.calls(), 0, "回声不该投回写入者自己");
+        store
+            .set_event_start_ms(Origin::LocalGui, ids[0], 1600)
+            .expect("外部写失败");
+        assert_eq!(rec.receipts().len(), 1, "别人的写入要收到");
     }
 
     #[test]
-    fn clamped_noop_leaves_no_receipt() {
+    fn batch_scope_coalesces_writes_into_one_callback() {
+        let (mut store, ids) = store_with_events(&[(1000, 3000), (5000, 6000)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
+        let batch = store.begin_batch();
+        store
+            .set_event_start_ms(Origin::LocalGui, ids[0], 1200)
+            .expect("写第一行失败");
+        store
+            .set_event_start_ms(Origin::LocalGui, ids[1], 5200)
+            .expect("写第二行失败");
+        assert_eq!(rec.calls(), 0, "批量作用域期间不广播");
+        store.end_batch(batch);
+        assert_eq!(rec.calls(), 1, "一次批量只通知一次");
+        assert_eq!(rec.receipts().len(), 2);
+    }
+
+    #[test]
+    fn subscriber_write_back_reaches_the_others() {
+        let (mut store, ids) = store_with_events(&[(1000, 2000)]);
+        // recorder 与写入方同源，因此按回声过滤收不到那次外部写入，只收写回。
+        let rec = Recorder::new(Origin::LocalGui);
+        let writer = Writer::new(Origin::Plugin("w".into()), ids[0], 1);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
+        store.subscribe(Rc::clone(&writer) as SubscriberRef);
+        store
+            .set_event_start_ms(Origin::LocalGui, ids[0], 1500)
+            .expect("写入失败");
+        // 同一次广播里继续排轮：writer 写回的那一行要在下一轮才投给 recorder。
+        assert_eq!(writer.calls(), 1);
+        let receipts = rec.receipts();
+        assert_eq!(receipts.len(), 1, "recorder 只该收到 writer 的写回");
+        assert_eq!(receipts[0].origin, Origin::Plugin("w".into()));
+        assert_eq!(time_of(&receipts[0]), (1600, 2100));
+    }
+
+    #[test]
+    fn runaway_pingpong_is_cut_at_round_cap() {
+        let (mut store, ids) = store_with_events(&[(1000, 2000)]);
+        let a = Writer::new(Origin::Plugin("a".into()), ids[0], usize::MAX);
+        let b = Writer::new(Origin::Plugin("b".into()), ids[0], usize::MAX);
+        store.subscribe(Rc::clone(&a) as SubscriberRef);
+        store.subscribe(Rc::clone(&b) as SubscriberRef);
+        store
+            .set_event_start_ms(Origin::LocalGui, ids[0], 1500)
+            .expect("写入失败");
+        // 两个订阅者互相触发、永不定止：按轮上限切断，不递归、不 panic。
+        assert_eq!(
+            a.calls() + b.calls(),
+            MAX_BROADCAST_ROUNDS * 2,
+            "每个订阅者每轮各一次，共 {MAX_BROADCAST_ROUNDS} 轮"
+        );
+    }
+
+    #[test]
+    fn clamped_noop_does_not_broadcast() {
         let (mut store, ids) = store_with_events(&[(1000, 3000)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
         store
             .set_event_start_ms(Origin::LocalGui, ids[0], 5000)
             .expect("写入失败");
-        assert_eq!(store.take_pending().len(), 1);
-        // 行已是 3000–3000，再要更远的开始时间被钳成同一个值：不该打扰插件
+        assert_eq!(time_of(&rec.receipts()[0]), (3000, 3000), "钳制到结束时间");
+        // 行已是 3000–3000，再要更远的开始时间被钳成同一个值：不该打扰订阅者
         store
             .set_event_start_ms(Origin::LocalGui, ids[0], 6000)
             .expect("写入失败");
-        assert!(store.take_pending().is_empty(), "钳制后值未变不应记回执");
+        assert_eq!(rec.calls(), 1, "钳制后值未变不应再广播");
     }
 
     #[test]
-    fn adjust_and_fuzzy_also_record() {
+    fn adjust_and_fuzzy_also_broadcast() {
         let (mut store, ids) = store_with_events(&[(1000, 2000), (5000, 6000)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
         store
             .adjust_event_time(
-                Origin::LocalCli,
+                Origin::LocalGui,
                 ids[0],
                 true,
                 TimeDelta::milliseconds(1000),
@@ -361,49 +586,53 @@ mod tests {
         store
             .set_event_time_fuzzy(Origin::LocalGui, ids[1], false, "0:00:07.50")
             .expect("输入失败");
-        let pending = store.take_pending();
-        assert_eq!(pending.len(), 2);
-        assert_eq!(time_of(&pending[0]), (2000, 2000));
-        assert_eq!(time_of(&pending[1]), (5000, 7500));
+        let receipts = rec.receipts();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(time_of(&receipts[0]), (2000, 2000));
+        assert_eq!(time_of(&receipts[1]), (5000, 7500));
     }
 
     #[test]
     fn pair_write_survives_short_row_and_skips_noop() {
         let (mut store, ids) = store_with_events(&[(1000, 1200)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
         store
             .set_event_times_ms(Origin::Plugin("p".into()), ids[0], 2000, 2200)
             .expect("成对写入失败");
-        assert_eq!(store.event_times_ms(ids[0]).expect("读回失败"), (2000, 2200));
-        assert_eq!(time_of(&store.take_pending()[0]), (2000, 2200));
+        assert_eq!(
+            store.event_times_ms(ids[0]).expect("读回失败"),
+            (2000, 2200)
+        );
+        assert_eq!(time_of(&rec.receipts()[0]), (2000, 2200));
 
         store
             .set_event_times_ms(Origin::Plugin("p".into()), ids[0], 2000, 2200)
             .expect("重复写入失败");
-        assert!(store.take_pending().is_empty(), "值没变不应记回执");
+        assert_eq!(rec.receipts().len(), 1, "值没变不应记回执");
     }
 
     #[test]
     fn shift_moves_both_ends_without_clamping() {
         let (mut store, ids) = store_with_events(&[(500, 900)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
         let (start, end) = store
             .shift_event_times(Origin::LocalGui, ids[0], TimeDelta::milliseconds(-1000))
             .expect("平移失败");
         assert_eq!(
             (start, end),
-            (
-                TimeDelta::milliseconds(-500),
-                TimeDelta::milliseconds(-100)
-            ),
+            (TimeDelta::milliseconds(-500), TimeDelta::milliseconds(-100)),
             "整体平移不受钳制"
         );
-        let pending = store.take_pending();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(time_of(&pending[0]), (-500, -100));
+        let receipts = rec.receipts();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(time_of(&receipts[0]), (-500, -100));
 
         store
             .shift_event_times(Origin::LocalGui, ids[0], TimeDelta::zero())
             .expect("零位移调用失败");
-        assert!(store.take_pending().is_empty(), "零位移不应记回执");
+        assert_eq!(rec.receipts().len(), 1, "零位移不应记回执");
     }
 
     #[test]
