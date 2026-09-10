@@ -1,6 +1,6 @@
 use crate::actions::Action;
 use crate::clipboard::Clipboard;
-use crate::depsgraph::Depsgraph;
+use crate::depsgraph::{Depsgraph, Tag};
 use crate::store::state::AppState;
 use crate::store::ui_models::UiModels;
 use anyhow::Result;
@@ -20,9 +20,11 @@ pub struct AppStore {
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,
     pub(crate) clipboard: Clipboard,
-    /// 插件桥：启动期从目录装载插件、把存储的写日志投给 Guest、持有插件窗口。
+    /// 插件桥：启动期从目录装载插件并注册订阅者、持有插件窗口。
     /// 装载不到插件时它是一个空管理器，主流程照常运行。
     pub(crate) plugin_bridge: crate::plugin_bridge::PluginBridge,
+    /// 外来写入的排队句柄：`project_watch` 的订阅者往里放，`dispatch` 收尾时取走换 tag。
+    pub(crate) refresh_queue: crate::store::project_watch::RefreshQueue,
 }
 
 impl AppStore {
@@ -42,7 +44,10 @@ impl AppStore {
         let video_state = main_window
             .global::<crate::bridge::types::VideoState>()
             .as_weak();
-        let plugin_bridge = crate::plugin_bridge::PluginBridge::load();
+        // 订阅者注册要借用工程存储，所以状态先建好、再登记接入方。
+        let mut state = AppState::new(&main_window.window(), theme_settings);
+        let refresh_queue = crate::store::project_watch::register(&mut state.project);
+        let plugin_bridge = crate::plugin_bridge::PluginBridge::load(&mut state.project);
         // 装载只发生在启动期：插件名字写给 UI，按钮列表由装载结果驱动。
         let plugin_titles: Vec<slint::SharedString> = plugin_bridge
             .titles()
@@ -53,7 +58,7 @@ impl AppStore {
             .global::<crate::bridge::types::PluginState>()
             .set_plugin_titles(slint::ModelRc::from(plugin_titles.as_slice()));
         Self {
-            state: AppState::new(&main_window.window(), theme_settings),
+            state,
             ui_models: UiModels::new(),
             depsgraph,
             overlay_state: Some(overlay_state),
@@ -62,26 +67,48 @@ impl AppStore {
             main_window: Some(main_window.as_weak()),
             clipboard: Clipboard::new(),
             plugin_bridge,
+            refresh_queue,
         }
     }
 
     /// 分发 Action：修改数据并向依赖图打 tag。
     pub fn dispatch(&mut self, action: Action) -> Result<()> {
-        let tags = match action {
-            Action::Screen(screen_action) => self.dispatch_screen(screen_action)?,
-            Action::Drag(drag_action) => self.dispatch_drag(drag_action)?,
-            Action::Area(area_action) => self.dispatch_area(area_action)?,
-            Action::Media(act) => self.dispatch_media(act)?,
-            Action::Sequence(act) => self.dispatch_sequence(act)?,
-            Action::NodeGraph(act) => self.dispatch_node_graph(act)?,
-            Action::Animation(act) => self.dispatch_animation(act)?,
-        };
-        for tag in tags {
+        // 一次交互可能改多行：批量作用域把其间的写入合成一次广播。
+        let batch = self.state.project.begin_batch();
+        let outcome = self.dispatch_action(action);
+        // 无论成败都要收口：`hold` 落不回零，之后的写入就永远不再通知订阅者。
+        self.state.project.end_batch(batch);
+        // 报错前已落进真相的写入同样要刷出来，所以队列先于判错处理。
+        self.apply_refresh_queue();
+        for tag in outcome? {
             self.depsgraph.tag(tag);
         }
-        // 本轮写日志投给插件；插件写回的行继续投递，产生的刷新 tag 一并挂上。
-        self.pump_plugins();
         Ok(())
+    }
+
+    fn dispatch_action(&mut self, action: Action) -> Result<Vec<Tag>> {
+        match action {
+            Action::Screen(screen_action) => self.dispatch_screen(screen_action),
+            Action::Drag(drag_action) => self.dispatch_drag(drag_action),
+            Action::Area(area_action) => self.dispatch_area(area_action),
+            Action::Media(act) => self.dispatch_media(act),
+            Action::Sequence(act) => self.dispatch_sequence(act),
+            Action::NodeGraph(act) => self.dispatch_node_graph(act),
+            Action::Animation(act) => self.dispatch_animation(act),
+        }
+    }
+
+    /// 把排队的外来写入（插件、命令行…）换成刷新 tag，并回填插件窗口状态行。
+    /// 界面自己的写入不在此列：那些 tag 由 reducer 当场打。
+    pub(crate) fn apply_refresh_queue(&mut self) {
+        let receipts = self.refresh_queue.take();
+        if receipts.is_empty() {
+            return;
+        }
+        for tag in crate::store::project_watch::refresh_tags(self, &receipts) {
+            self.depsgraph.tag(tag);
+        }
+        self.plugin_bridge.sync_all_windows();
     }
 
     /// 把已挂起的依赖图标记应用到 UI 投影。

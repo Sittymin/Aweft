@@ -1,14 +1,15 @@
-//! 插件闭环的无头集成测试：装载真实插件目录 → GUI 写入 → 写日志投递 →
-//! 命令写回真相 → 视图刷新。主程序侧不出现任何插件专属的文本或功能硬编码。
+//! 插件闭环的无头集成测试：装载真实插件目录 → 界面写入经广播直达 Guest →
+//! 命令写回真相 → 广播回界面刷进行模型。主程序侧不出现任何插件专属的文本或功能硬编码。
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use aweft_gui::actions::Action;
 use aweft_gui::actions::sequence::SequenceAction;
+use aweft_gui::actions::Action;
 use aweft_gui::bridge::types::MainWindow;
 use aweft_gui::store::AppStore;
 use aweft_model::sequence::{EventData, ItemContent, ItemLocation};
+use slint::{Model, ModelRc};
 
 fn event_data(start_ms: i64, end_ms: i64) -> EventData {
     EventData {
@@ -84,6 +85,27 @@ fn status_line(store: &AppStore, line: usize) -> String {
         .unwrap_or_default()
 }
 
+/// 未过滤的映射行模型（Rows → Map）：投影刷新后的显示值。
+fn all_rows(store: &AppStore) -> ModelRc<aweft_gui::bridge::types::SlintSubtitleRow> {
+    let rows_model: Rc<aweft_gui::store::sequence_rows_model::SequenceRowsModel> =
+        Rc::new(store.ui_models().sequence_state.rows_model().clone());
+    let mapper = rows_model.mapper();
+    let mapped = slint::MapModel::new(rows_model, move |data| mapper.map(&data));
+    ModelRc::new(mapped)
+}
+
+/// 投影出的各行开始时间（排序后），用来验证刷新真的走到了 UI 模型。
+fn projected_starts(store: &AppStore) -> Vec<String> {
+    let rows = all_rows(store);
+    let mut starts: Vec<String> = (0..rows.row_count())
+        .filter_map(|index| rows.row_data(index))
+        .filter(|row| row.row_type != aweft_gui::bridge::types::SlintSubtitleRowType::GroupHeader)
+        .map(|row| row.start_time.to_string())
+        .collect();
+    starts.sort();
+    starts
+}
+
 #[test]
 fn plugins_load_from_directory_with_guest_described_commands() {
     let (_instance, store) = setup();
@@ -116,7 +138,7 @@ fn gui_time_edit_reaches_subscribed_plugin() {
             .unwrap();
         store_mut.evaluate_depsgraph();
     }
-    // 无需任何 GUI 侧通知代码：写日志经 dispatch 末尾的投递直达 Guest。
+    // 无需任何 GUI 侧通知代码：写入返回前存储就把回执广播给了订阅的插件。
     assert_eq!(
         status_line(&store.borrow(), 2),
         "最近通知：第 0 行 00:00:01.500 ~ 00:00:02.000"
@@ -132,6 +154,12 @@ fn command_writes_through_the_store_and_refreshes_rows() {
         .expect("命令执行失败");
     // 命令写的是同一个真相存储：全部行 +1s。
     assert_eq!(event_starts(&store.borrow()), vec![2000, 4000]);
+    // 写入经广播进了界面的刷新队列，投影出的行也跟着变了（不是只改了数据）。
+    assert_eq!(
+        projected_starts(&store.borrow()),
+        vec!["0:00:02.00", "0:00:04.00"],
+        "插件写入应刷进 UI 行模型"
+    );
     assert_eq!(status_line(&store.borrow(), 1), "已平移 2 行 +1s");
     // 插件自己的写入不回投给自己：状态行 2 仍是空。
     assert_eq!(status_line(&store.borrow(), 2), "");

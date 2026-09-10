@@ -207,8 +207,8 @@ impl crate::store::AppStore {
     ///
     /// 设计目标：本函数只做 Domain 修改，并向依赖图打 tag；UI 投影更新交给
     /// `Depsgraph` 的投影重算（Sequence 投影依赖 `Sequence` / `Selection` 数据域）。
-    /// 时间写入一律经 `ProjectStore` 的方法（在写日志里留回执，一轮结束后由
-    /// `AppStore::pump_plugins` 投给插件）；结构、层级与文本尚无 `MutationKind`，
+    /// 时间写入一律经 `ProjectStore` 的方法（写入即广播，`dispatch` 的批量作用域把
+    /// 一次交互合成一次通知）；结构、层级与文本尚无 `MutationKind`，
     /// 仍直接改 `sequence_mut()`。
     pub(crate) fn dispatch_sequence(&mut self, action: SequenceAction) -> Result<Vec<Tag>> {
         match action {
