@@ -32,6 +32,8 @@ url = "2.5.8"
 futures = "0.3.33"
 aweft-libass = { path = "../aweft-libass" }
 aweft-model = { path = "../aweft-model" }
+aweft-project = { path = "../aweft-project" }
+aweft-plugins = { path = "../aweft-plugins" }
 bytemuck = "1.25.2"
 uuid = { version = "1.24.0", features = [
     "v4",

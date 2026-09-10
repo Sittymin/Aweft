@@ -1373,7 +1373,7 @@ impl AppStore {
                 } = self;
                 let editor = &mut ui_models.style_graph;
                 let id = *editor.style_order.get(editor.current_chain)?;
-                let graph = state.project.library.node_graphs.get_mut(&id)?;
+                let graph = state.project.project_mut().library.node_graphs.get_mut(&id)?;
                 Some(f(editor, GraphEditorAccess::Style(graph)))
             }
             NodeGraphKind::App => {
@@ -1382,7 +1382,7 @@ impl AppStore {
                 } = self;
                 let editor = &mut ui_models.app_graph;
                 let graph = state
-                    .project
+                    .project.project_mut()
                     .style_layer
                     .graphs
                     .get_mut(editor.current_chain)?;
@@ -1404,7 +1404,7 @@ impl AppStore {
                 } = self;
                 let editor = &ui_models.style_graph;
                 let id = *editor.style_order.get(editor.current_chain)?;
-                let graph = state.project.library.node_graphs.get(&id)?;
+                let graph = state.project.project().library.node_graphs.get(&id)?;
                 Some(f(editor, GraphEditorAccessRo::Style(graph)))
             }
             NodeGraphKind::App => {
@@ -1412,7 +1412,7 @@ impl AppStore {
                     state, ui_models, ..
                 } = self;
                 let editor = &ui_models.app_graph;
-                let graph = state.project.style_layer.graphs.get(editor.current_chain)?;
+                let graph = state.project.project().style_layer.graphs.get(editor.current_chain)?;
                 Some(f(editor, GraphEditorAccessRo::App(graph)))
             }
         }
@@ -1646,7 +1646,7 @@ pub fn create_actor_dispatch(
     }
     use aweft_model::ids::ActorId;
     use aweft_model::library::Actor;
-    store.state_mut().project.library.insert_actor(Actor {
+    store.state_mut().project.project_mut().library.insert_actor(Actor {
         id: ActorId::new(),
         name: name.clone(),
     });
@@ -1670,10 +1670,10 @@ pub fn set_socket_text_default_dispatch(
 pub fn new_chain_dispatch(store: &mut AppStore, graph_type: NodeGraphKind) -> usize {
     match graph_type {
         NodeGraphKind::Style => {
-            let n = store.state.project.library.node_graphs.len() + 1;
+            let n = store.state.project.project().library.node_graphs.len() + 1;
             let graph = new_style_chain(format!("样式链 {n}"));
             let id = graph.id;
-            store.state.project.library.node_graphs.insert(id, graph);
+            store.state.project.project_mut().library.node_graphs.insert(id, graph);
             // 目标下标 = 新链在"按名排序"列表中的位置（model 派生，与投影 style_order 一致）
             style_chain_position(store, id).unwrap_or(0)
         }
@@ -1682,26 +1682,26 @@ pub fn new_chain_dispatch(store: &mut AppStore, graph_type: NodeGraphKind) -> us
             let style_ref = match first_style_chain_id(store) {
                 Some(id) => Some(id),
                 None => {
-                    let n = store.state.project.library.node_graphs.len() + 1;
+                    let n = store.state.project.project().library.node_graphs.len() + 1;
                     let graph = new_style_chain(format!("样式链 {n}"));
                     let id = graph.id;
-                    store.state.project.library.node_graphs.insert(id, graph);
+                    store.state.project.project_mut().library.node_graphs.insert(id, graph);
                     Some(id)
                 }
             };
-            let n = store.state.project.style_layer.graphs.len() + 1;
+            let n = store.state.project.project().style_layer.graphs.len() + 1;
             // 默认角色：按名排序的第一个 actor（model 派生，不读 UI）
             let first_actor = store
                 .state
-                .project
+                .project.project()
                 .library
                 .actors
                 .values()
                 .map(|a| a.name.clone())
                 .min();
             let graph = new_app_chain(format!("应用链 {n}"), style_ref, first_actor.as_deref());
-            store.state.project.style_layer.graphs.push(graph);
-            store.state.project.style_layer.graphs.len() - 1
+            store.state.project.project_mut().style_layer.graphs.push(graph);
+            store.state.project.project().style_layer.graphs.len() - 1
         }
     }
 }
@@ -1710,7 +1710,7 @@ pub fn new_chain_dispatch(store: &mut AppStore, graph_type: NodeGraphKind) -> us
 fn first_style_chain_id(store: &AppStore) -> Option<NodeGraphId> {
     store
         .state
-        .project
+        .project.project()
         .library
         .node_graphs
         .values()
@@ -1722,7 +1722,7 @@ fn first_style_chain_id(store: &AppStore) -> Option<NodeGraphId> {
 fn style_chain_position(store: &AppStore, id: NodeGraphId) -> Option<usize> {
     let mut pairs: Vec<(NodeGraphId, String)> = store
         .state
-        .project
+        .project.project()
         .library
         .node_graphs
         .iter()
@@ -1755,7 +1755,7 @@ impl AppStore {
             state, ui_models, ..
         } = self;
         let mut pairs: Vec<(NodeGraphId, String)> = state
-            .project
+            .project.project()
             .library
             .node_graphs
             .iter()
@@ -1788,7 +1788,7 @@ impl AppStore {
             state, ui_models, ..
         } = self;
         let items: Vec<ContextMenuItem> = state
-            .project
+            .project.project()
             .style_layer
             .graphs
             .iter()
@@ -1806,7 +1806,7 @@ impl AppStore {
     pub fn refresh_actors(&mut self) {
         let mut names: Vec<String> = self
             .state
-            .project
+            .project.project()
             .library
             .actors
             .values()

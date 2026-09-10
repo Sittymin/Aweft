@@ -6,7 +6,7 @@ use crate::screen::edge::ScrEdgeKey;
 use crate::screen::map::ScrAreaMap;
 use crate::screen::primitives::{Adjacency, Rcti};
 use crate::screen::vertex::ScrVertKey;
-use aweft_model::project::Project;
+use aweft_project::{AweftDocument, ProjectStore};
 use slint::PhysicalSize;
 use std::sync::atomic::AtomicBool;
 
@@ -113,8 +113,10 @@ pub struct VideoSeekSession {
 
 /// 应用状态和逻辑的唯一管理者
 pub struct AppState {
-    // 单一持久化数据源
-    pub project: Project,
+    /// 单一持久化数据源：工程存储（写日志的唯一出口）。
+    /// 时间类写入必须走 `ProjectStore` 的 `set_*`/`adjust_*`/`shift_*`，
+    /// 直接改 `project_mut()` 里的值不会留回执，插件与协作方看不到这次变更。
+    pub project: ProjectStore,
 
     pub screen_map: ScrAreaMap,
     pub theme_settings: ThemeSettings,
@@ -157,7 +159,7 @@ impl AppState {
     /// 构造函数，接收预先创建的 ThemeSettings
     pub fn new(window: &slint::Window, theme_settings: ThemeSettings) -> Self {
         Self {
-            project: Project::new(),
+            project: ProjectStore::new(AweftDocument::new()),
             screen_map: ScrAreaMap::new(),
             theme_settings,
             window_size: window.size(),

@@ -101,7 +101,7 @@ fn dope_keyframe_drag_moves_only_time_and_commits() {
         .unwrap();
     let action = store
         .state()
-        .project
+        .project.project()
         .library
         .animation_library
         .actions
@@ -256,7 +256,7 @@ fn dope_summary_press_drag_release_moves_all_channels() {
         .unwrap();
     let action = store
         .state()
-        .project
+        .project.project()
         .library
         .animation_library
         .actions

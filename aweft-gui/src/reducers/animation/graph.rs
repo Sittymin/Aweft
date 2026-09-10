@@ -169,7 +169,7 @@ impl crate::store::AppStore {
         };
         let Some(action) = self
             .state
-            .project
+            .project.project_mut()
             .library
             .animation_library
             .actions
@@ -198,7 +198,7 @@ impl crate::store::AppStore {
         };
         let Some(action) = self
             .state
-            .project
+            .project.project()
             .library
             .animation_library
             .actions

@@ -20,6 +20,9 @@ pub struct AppStore {
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,
     pub(crate) clipboard: Clipboard,
+    /// 插件桥：启动期从目录装载插件、把存储的写日志投给 Guest、持有插件窗口。
+    /// 装载不到插件时它是一个空管理器，主流程照常运行。
+    pub(crate) plugin_bridge: crate::plugin_bridge::PluginBridge,
 }
 
 impl AppStore {
@@ -39,6 +42,16 @@ impl AppStore {
         let video_state = main_window
             .global::<crate::bridge::types::VideoState>()
             .as_weak();
+        let plugin_bridge = crate::plugin_bridge::PluginBridge::load();
+        // 装载只发生在启动期：插件名字写给 UI，按钮列表由装载结果驱动。
+        let plugin_titles: Vec<slint::SharedString> = plugin_bridge
+            .titles()
+            .into_iter()
+            .map(slint::SharedString::from)
+            .collect();
+        main_window
+            .global::<crate::bridge::types::PluginState>()
+            .set_plugin_titles(slint::ModelRc::from(plugin_titles.as_slice()));
         Self {
             state: AppState::new(&main_window.window(), theme_settings),
             ui_models: UiModels::new(),
@@ -48,6 +61,7 @@ impl AppStore {
             video_state: Some(video_state),
             main_window: Some(main_window.as_weak()),
             clipboard: Clipboard::new(),
+            plugin_bridge,
         }
     }
 
@@ -65,6 +79,8 @@ impl AppStore {
         for tag in tags {
             self.depsgraph.tag(tag);
         }
+        // 本轮写日志投给插件；插件写回的行继续投递，产生的刷新 tag 一并挂上。
+        self.pump_plugins();
         Ok(())
     }
 
@@ -114,7 +130,7 @@ impl AppStore {
     ) -> slint::ModelRc<crate::bridge::types::SlintSubtitleRow> {
         self.ui_models
             .sequence_state
-            .initialize_rows(&self.state.project);
+            .initialize_rows(self.state.project.sequence());
         self.ui_models.sequence_state.init_filter_model()
     }
 }

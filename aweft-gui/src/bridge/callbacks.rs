@@ -2,7 +2,7 @@ use crate::actions::sequence::SequenceAction;
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, MainWindow, NodeGraphCallbacks,
-    SequenceCallbacks, VideoCallbacks,
+    PluginCallbacks, SequenceCallbacks, VideoCallbacks,
 };
 
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
@@ -39,6 +39,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_nla_callbacks(instance, Rc::clone(&store));
     setup_video_callbacks(instance, Rc::clone(&store));
     setup_audio_callbacks(instance, Rc::clone(&store));
+    setup_plugin_callbacks(instance, Rc::clone(&store));
 }
 
 /// 设置视口回调：打开/追加/更换视频走系统文件对话框（rfd xdg-portal，异步不阻塞 UI）。
@@ -1321,6 +1322,17 @@ fn dispatch_and_render(
 
     // 2. 依赖图求值：只重算受影响投影
     store_mut.evaluate_depsgraph();
+}
+
+/// 设置插件回调：行编辑器工具条上的每个按钮对应一个已装载插件，
+/// 参数是 `PluginState.plugin-titles` 的下标，Rust 侧按下标取插件 id 开窗。
+fn setup_plugin_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let s = Rc::clone(&store);
+    instance
+        .global::<PluginCallbacks>()
+        .on_open_plugin_panel(move |index| {
+            crate::plugin_bridge::open_plugin_window_at(&s, index);
+        });
 }
 
 /// 设置动画编辑器（曲线编辑器）回调：全部交互走 `Action::Animation` → dispatch → tag → 投影。

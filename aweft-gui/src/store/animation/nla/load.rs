@@ -217,7 +217,7 @@ impl crate::store::AppStore {
         anim_data.tracks = vec![t1, t2, t3];
         let anim_data_id = self
             .state
-            .project
+            .project.project_mut()
             .library
             .animation_library
             .insert_anim_data(anim_data);

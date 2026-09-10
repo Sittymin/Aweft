@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use aweft_model::ids::ItemId;
 use aweft_model::sequence::ItemContent;
+use aweft_project::Origin;
 use chrono::TimeDelta;
 use slint::Model;
 
@@ -21,7 +22,7 @@ impl crate::store::AppStore {
     }
 
     /// 计算某个 item 的祖先分组链（叶子到根）。用于聚合传播。
-    fn ancestor_chain(&self, item_id: ItemId) -> Vec<ItemId> {
+    pub(crate) fn ancestor_chain(&self, item_id: ItemId) -> Vec<ItemId> {
         let mut chain = Vec::new();
         let mut cur = Some(item_id);
         while let Some(id) = cur {
@@ -38,7 +39,12 @@ impl crate::store::AppStore {
     }
 
     /// 构造单个时间码变化的 tag（带祖先链聚合传播）。
-    fn event_timecode_tag(&self, event_id: ItemId, is_start_time: bool, time: TimeDelta) -> Tag {
+    pub(crate) fn event_timecode_tag(
+        &self,
+        event_id: ItemId,
+        is_start_time: bool,
+        time: TimeDelta,
+    ) -> Tag {
         Tag::EventTimecodeChanged {
             event_id,
             is_start_time,
@@ -77,7 +83,7 @@ impl crate::store::AppStore {
         let mut event_ids = self
             .ui_models
             .sequence_state
-            .get_selected_events(&self.state.project);
+            .get_selected_events(self.state.project.sequence());
         // 确保当前 event_id 也在列表中（同时也避免重复）
         event_ids.insert(event_id);
         event_ids
@@ -100,7 +106,7 @@ impl crate::store::AppStore {
         let mut ids: Vec<ItemId> = self
             .ui_models
             .sequence_state
-            .get_selected_events(&self.state.project)
+            .get_selected_events(self.state.project.sequence())
             .into_iter()
             .collect();
         ids.sort_by_key(|id| id.0);
@@ -132,18 +138,16 @@ impl crate::store::AppStore {
     }
 
     /// 提交整体平移（写 Domain）：语义同 [`Self::preview_block_move`]。
+    /// 经 `ProjectStore` 的不钳制平移入口，回执进写日志投给插件。
     fn apply_block_move(
         &mut self,
         event_id: ItemId,
         delta: TimeDelta,
     ) -> Option<(TimeDelta, TimeDelta)> {
-        let item = self.sequence_mut().get_mut(event_id)?;
-        let ItemContent::Event(e) = &mut item.content else {
-            return None;
-        };
-        e.start_time += delta;
-        e.end_time += delta;
-        Some((e.start_time, e.end_time))
+        self.state
+            .project
+            .shift_event_times(Origin::LocalGui, event_id, delta)
+            .ok()
     }
 
     /// 构造选中变化的 tag（affected = 祖先链 + 自身）。
@@ -186,11 +190,26 @@ impl crate::store::AppStore {
             None
         }
     }
-    // 处理 Sequence 相关 Action。
-    //
-    // 设计目标：本函数只做 Domain（`project.sequence`）修改，并向依赖图打 tag；
-    // UI 投影更新交给 `Depsgraph` 的投影重算（Sequence 投影依赖
-    // `Sequence` / `Selection` 数据域）。
+
+    /// GUI 侧时间增减的唯一入口：经 `ProjectStore` 写入，回执进写日志投给插件。
+    fn adjust_time(
+        &mut self,
+        event_id: ItemId,
+        is_start_time: bool,
+        delta: TimeDelta,
+    ) -> Result<TimeDelta> {
+        self.state
+            .project
+            .adjust_event_time(Origin::LocalGui, event_id, is_start_time, delta)
+    }
+
+    /// 处理 Sequence 相关 Action。
+    ///
+    /// 设计目标：本函数只做 Domain 修改，并向依赖图打 tag；UI 投影更新交给
+    /// `Depsgraph` 的投影重算（Sequence 投影依赖 `Sequence` / `Selection` 数据域）。
+    /// 时间写入一律经 `ProjectStore` 的方法（在写日志里留回执，一轮结束后由
+    /// `AppStore::pump_plugins` 投给插件）；结构、层级与文本尚无 `MutationKind`，
+    /// 仍直接改 `sequence_mut()`。
     pub(crate) fn dispatch_sequence(&mut self, action: SequenceAction) -> Result<Vec<Tag>> {
         match action {
             SequenceAction::ToggleGroupCollapsed { group_id } => {
@@ -211,9 +230,12 @@ impl crate::store::AppStore {
                 text,
                 is_start_time,
             } => {
-                let time_result =
-                    self.sequence_mut()
-                        .set_event_time_fuzzy(event_id, is_start_time, &text);
+                let time_result = self.state.project.set_event_time_fuzzy(
+                    Origin::LocalGui,
+                    event_id,
+                    is_start_time,
+                    &text,
+                );
                 if let Ok(time) = time_result {
                     return Ok(vec![self.event_timecode_tag(event_id, is_start_time, time)]);
                 }
@@ -227,16 +249,14 @@ impl crate::store::AppStore {
                 if is_batch {
                     Ok(self
                         .batch_timecode_tag(event_id, is_start_time, |s, id| {
-                            s.sequence_mut()
-                                .adjust_event_time(id, is_start_time, TimeDelta::seconds(1))
+                            s.adjust_time(id, is_start_time, TimeDelta::seconds(1))
                                 .ok()
                         })
                         .map(|t| vec![t])
                         .unwrap_or_default())
                 } else {
                     let time = self
-                        .sequence_mut()
-                        .adjust_event_time(event_id, is_start_time, TimeDelta::seconds(1))
+                        .adjust_time(event_id, is_start_time, TimeDelta::seconds(1))
                         .ok();
                     Ok(time
                         .map(|t| vec![self.event_timecode_tag(event_id, is_start_time, t)])
@@ -251,16 +271,14 @@ impl crate::store::AppStore {
                 if is_batch {
                     Ok(self
                         .batch_timecode_tag(event_id, is_start_time, |s, id| {
-                            s.sequence_mut()
-                                .adjust_event_time(id, is_start_time, TimeDelta::seconds(-1))
+                            s.adjust_time(id, is_start_time, TimeDelta::seconds(-1))
                                 .ok()
                         })
                         .map(|t| vec![t])
                         .unwrap_or_default())
                 } else {
                     let time = self
-                        .sequence_mut()
-                        .adjust_event_time(event_id, is_start_time, TimeDelta::seconds(-1))
+                        .adjust_time(event_id, is_start_time, TimeDelta::seconds(-1))
                         .ok();
                     Ok(time
                         .map(|t| vec![self.event_timecode_tag(event_id, is_start_time, t)])
@@ -338,16 +356,14 @@ impl crate::store::AppStore {
                 if is_batch {
                     Ok(self
                         .batch_timecode_tag(event_id, is_start_time, |s, id| {
-                            s.sequence_mut()
-                                .adjust_event_time(id, is_start_time, delta)
+                            s.adjust_time(id, is_start_time, delta)
                                 .ok()
                         })
                         .map(|t| vec![t])
                         .unwrap_or_default())
                 } else {
                     let result =
-                        self.sequence_mut()
-                            .adjust_event_time(event_id, is_start_time, delta);
+                        self.adjust_time(event_id, is_start_time, delta);
                     match result {
                         Ok(time) => {
                             Ok(vec![self.event_timecode_tag(event_id, is_start_time, time)])

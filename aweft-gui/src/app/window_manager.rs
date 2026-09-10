@@ -112,7 +112,7 @@ impl AppWindowManager {
             {
                 // 先创建数据
                 let state = store_mut.state_mut();
-                create_test_subtitle_data(&mut state.project);
+                create_test_subtitle_data(state.project.project_mut());
             }
             // 然后初始化 SequenceState（使用 UiModels 持有的模型）
             let filter = store_mut.rebuild_sequence_models();

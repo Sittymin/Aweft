@@ -17,7 +17,7 @@ impl crate::store::AppStore {
     pub(crate) fn current_anim_data(&self) -> Option<&AnimData> {
         let id = self.ui_models.animation.nla.anim_data_id?;
         self.state
-            .project
+            .project.project()
             .library
             .animation_library
             .anim_datas
@@ -28,7 +28,7 @@ impl crate::store::AppStore {
     pub(crate) fn current_anim_data_mut(&mut self) -> Option<&mut AnimData> {
         let id = self.ui_models.animation.nla.anim_data_id?;
         self.state
-            .project
+            .project.project_mut()
             .library
             .animation_library
             .anim_datas
@@ -107,7 +107,7 @@ impl crate::store::AppStore {
         };
         let Some(anim_data) = self
             .state
-            .project
+            .project.project_mut()
             .library
             .animation_library
             .anim_datas
@@ -130,7 +130,7 @@ impl crate::store::AppStore {
             .map(|id| {
                 let has_data = self
                     .state
-                    .project
+                    .project.project()
                     .library
                     .animation_library
                     .actions
