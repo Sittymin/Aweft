@@ -27,8 +27,11 @@ Guest 写回的是同一个存储，因此继续投递直到日志为空（上�
 **Q3「`test-guest.wat` 真的是用户要写的东西吗？」——不是，已删。**
 示例/测试插件现在是普通 Rust crate（`plugins/test-plugin/guest`）依赖 `aweft-plugin-sdk`，
 `build.sh` 用 `cargo build --target wasm32-unknown-unknown` 产出 `guest.wasm`。
-Python 路线查过并否决：rustpython-wasm 依赖 `getrandom`/JS 侧运行时，宿主是纯 wasmi
-而没有 JS 引擎，且 CPython 级 Guest 的体积与启动成本对一个"改两行时间"的示例是本末倒置。
+Python 路线本轮不做，准确的理由分两层：官方那条 wasm 产物路线走 `wasm-bindgen`，`.wasm` 的
+import 指向 JS 侧胶水，纯 wasmi 宿主（没有 JS 引擎）在实例化阶段就满足不了这些 import；
+可行的替代是自己做一个内嵌 RustPython 的 cdylib 壳、导出本 ABI、编到 `wasm32-wasip1`，
+宿主侧再挂 wasmi 自带的 WASI preview1 支持（`wasmi_wasi`）——这条路未实测，
+且每个 Python 插件要背上解释器体积与 VM 启动成本。示例插件的职责是把 ABI 讲清楚，故选 Rust SDK。
 
 ## 现在的形态
 
