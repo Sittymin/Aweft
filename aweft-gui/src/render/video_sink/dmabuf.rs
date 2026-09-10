@@ -474,12 +474,6 @@ impl DmabufImporter {
         self.cache.len()
     }
 
-    /// 实测的池循环长度（测试用）：稳态下 ≈ VA surface 池大小。
-    #[cfg(test)]
-    pub(crate) fn measured_reuse_gap(&self) -> u64 {
-        self.max_reuse_gap
-    }
-
     /// 清空导入缓存：VA surface 池重建（分辨率/格式切换等重协商）后旧 fd 失效、
     /// 新池分配新 buffer，旧池的 VkImage 立即无用。此刻显式释放所有陈旧条目。
     /// 同时防御内核复用 fd 号导致的 `FrameKey` 伪命中。顺带重置池循环测量，

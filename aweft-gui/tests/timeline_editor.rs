@@ -127,6 +127,7 @@ fn timeline_blocks_follow_visible_rows() {
     // 测试后端整个进程只能初始化一次，所有场景放同一个测试里。
     init_integration_test_with_system_time();
 
+    // 块尾 quit + 块外 run 是这些断言被执行的前提，缺一则异步块永不轮询。
     slint::spawn_local(async move {
         let app = Harness::new().unwrap();
 
@@ -256,5 +257,9 @@ fn timeline_blocks_follow_visible_rows() {
             16,
             "不同 depth 时文本紧贴组缩进（右移 16px），得 group={x0} event={x1}"
         );
-    });
+
+        slint::quit_event_loop().unwrap();
+    })
+    .unwrap();
+    slint::run_event_loop().unwrap();
 }

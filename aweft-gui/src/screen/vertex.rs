@@ -26,7 +26,6 @@ pub enum VertPosition {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::screen::map::ScrAreaMap;
 
     #[test]

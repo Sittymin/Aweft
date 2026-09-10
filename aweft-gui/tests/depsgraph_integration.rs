@@ -33,8 +33,6 @@ fn all_rows(store: &AppStore) -> ModelRc<aweft_gui::bridge::types::SlintSubtitle
 }
 
 #[test]
-#[test]
-#[test]
 fn screen_init_creates_three_areas() {
     i_slint_backend_testing::init_no_event_loop();
     let instance = MainWindow::new().unwrap();
@@ -265,7 +263,6 @@ fn screen_resize_updates_geometry_locally() {
 }
 
 #[test]
-#[test]
 fn single_op_updates_only_affected_row() {
     // 验证最小化：dispatch 一行时间码，只有该行被更新，其他行数据不变。
     i_slint_backend_testing::init_no_event_loop();
@@ -285,7 +282,7 @@ fn single_op_updates_only_affected_row() {
     }
     let (id1, id2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let id1 = sequence
             .create_event(
                 EventData {
@@ -312,7 +309,6 @@ fn single_op_updates_only_affected_row() {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (id1, id2)
     };
@@ -427,7 +423,6 @@ fn join_keeps_edge_touch_and_area_actionzone() {
         (key, area.geometry_rect(&state.screen_map.verts))
     };
     let mid_x = (area_rect.xmin + area_rect.xmax) / 2;
-    let mid_y = (area_rect.ymin + area_rect.ymax) / 2;
     {
         let mut store_mut = store.borrow_mut();
         store_mut.state_mut().current_drag_operation =
@@ -904,7 +899,6 @@ fn animation_dispatch_projects_derived_models() {
     let instance = MainWindow::new().unwrap();
     let mut store = AppStore::new(&instance);
     store.create_test_animation_data();
-    let ce = &mut store.ui_models_mut().animation.graph;
 
     use aweft_gui::actions::animation::{AnimationAction, graph::GraphAction};
     use aweft_gui::bridge::types::{SlintKeyframeDragMode, SlintSelectionModifier};
@@ -1048,7 +1042,7 @@ fn timeline_block_drag_preview_commit_cancel() {
     }
     let id: ItemId = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let event_id = sequence
             .create_event(
                 EventData {
@@ -1062,7 +1056,6 @@ fn timeline_block_drag_preview_commit_cancel() {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         event_id
     };
@@ -1200,7 +1193,7 @@ fn timeline_block_drag_moves_selection_group() {
     }
     let (id1, id2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let e1 = sequence
             .create_event(
                 EventData {
@@ -1227,7 +1220,6 @@ fn timeline_block_drag_moves_selection_group() {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (e1, e2)
     };
@@ -1353,7 +1345,7 @@ fn marquee_select_skips_group_header() {
     }
     let (gid, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .create_group(
                 GroupData {
@@ -1391,7 +1383,6 @@ fn marquee_select_skips_group_header() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, e1, e2)
     };
@@ -1469,7 +1460,7 @@ fn timeline_group_header_drag_moves_subtree() {
     // 结构：G { G1 { e1 }, e2 }
     let (gid, g1id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .create_group(
                 GroupData {
@@ -1518,7 +1509,6 @@ fn timeline_group_header_drag_moves_subtree() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, g1id, e1, e2)
     };
@@ -1624,7 +1614,7 @@ fn timeline_drag_moves_selection_with_group_headers() {
     // 结构：G { G1 { e1 }, e2 } + 组外独立 e3
     let (gid, g1id, e1, e2, e3) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .create_group(
                 GroupData {
@@ -1686,7 +1676,6 @@ fn timeline_drag_moves_selection_with_group_headers() {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, g1id, e1, e2, e3)
     };

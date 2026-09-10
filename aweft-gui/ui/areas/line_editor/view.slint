@@ -76,30 +76,30 @@ export component LineEditor inherits Rectangle {
         // 行的内容坐标（在完整列表中的位置）
         let row_content_y = -(idx * row_height);
         // 行的视口坐标（相对于视口顶部的可视位置）
-        let row_vis_y = row_content_y - list-view.viewport-y;
+        let row_vis_y = row_content_y - list-view.content-y;
 
         // === 上边缘处理 ===
         if abs(row_vis_y) < margin && idx > 0 {
             // 向上留一行
-            list-view.viewport-y += margin - abs(row_vis_y);
+            list-view.content-y += margin - abs(row_vis_y);
         }
         // 行未完全可见
         else if row_vis_y > 0px {
             // 第一行无需留边距，保证可见即可
-            list-view.viewport-y += row_vis_y;
+            list-view.content-y += row_vis_y;
         }
 
         // 调整后重新计算视口坐标
-        let row_vis_y2 = row_content_y - list-view.viewport-y;
+        let row_vis_y2 = row_content_y - list-view.content-y;
 
         // === 下边缘处理 ===
         // 行坐标 此行高度 预留边缘间隔
         if abs(row_vis_y2 - row_height - margin) > list-view.visible-height && idx + 1 < SubtitleState.rows.length {
             // 向下留一行空白
-            list-view.viewport-y -= abs(row_vis_y2 - row_height - margin) - list-view.visible-height;
+            list-view.content-y -= abs(row_vis_y2 - row_height - margin) - list-view.visible-height;
         } else if abs(row_vis_y2 - row_height) > list-view.visible-height {
             // 最后一行无需留边距
-            list-view.viewport-y -= abs(row_vis_y2 - row_height) - list-view.visible-height;
+            list-view.content-y -= abs(row_vis_y2 - row_height) - list-view.visible-height;
         }
     }
 
@@ -176,10 +176,10 @@ export component LineEditor inherits Rectangle {
                             // 记录被右键的行并换算菜单坐标（行内坐标 → LineEditor 根坐标）
                             root.context-menu-row = idx;
                             root.context-menu-is-group = row.row-type == SlintSubtitleRowType.GroupHeader;
-                            // ListView 在 TableHeader 之下；行在视口内纵坐标 = idx*行高 - viewport-y
+                            // ListView 在 TableHeader 之下；行在视口内纵坐标 = idx*行高 - content-y
                             root.context-menu-x = self.mouse-x;
                             root.context-menu-y = Theme.data.line-editor.header-height
-                                + (idx * root.row-height - list-view.viewport-y) + self.mouse-y;
+                                + (idx * root.row-height - list-view.content-y) + self.mouse-y;
                             root.context-menu-open = true;
                         }
                     }

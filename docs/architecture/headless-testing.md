@@ -13,8 +13,11 @@
 - 帮助函数构造 Rows → Map 映射模型（仅测试用，实际链路 Rows → Filter → Map）。
 - 纯 UI 交互（不涉及数据层）：测试文件内用 `slint::slint!` 声明最小宿主窗口 + `import` `ui/` 下真实
   组件，用 `ElementHandle`（`find_by_element_id` 的 id 是 `组件名::元素名`）派发真实点击/拖拽。
-  两个坑：相对路径以 crate 根（`aweft-gui/`）为基，不是测试文件所在目录；`init_no_event_loop()` 下
-  布局与 `if` 分支的实例化要靠 `mock_elapsed_time()` 推进，读几何前先推一帧。
+  三个坑：相对路径以 crate 根（`aweft-gui/`）为基，不是测试文件所在目录；`init_no_event_loop()` 下
+  布局与 `if` 分支的实例化要靠 `mock_elapsed_time()` 推进，读几何前先推一帧；断言写在
+  `slint::spawn_local` 异步块里时，必须由异步块末尾 `quit_event_loop()` 加块外
+  `run_event_loop()` 驱动，否则异步块从不被轮询，断言静默不执行而测试恒绿（该函数返回
+  `Result`，丢弃它会报 `unused_must_use`，是这类空转测试唯一的可见信号）。
 
 ## 覆盖清单（aweft-gui/tests/）
 

@@ -14,7 +14,7 @@ use aweft_gui::actions::{Action, node_graph::NodeGraphAction};
 use aweft_gui::bridge::types::MainWindow;
 use aweft_model::node_graph::NodeGraphKind;
 use i_slint_backend_testing::init_no_event_loop;
-use slint::{ComponentHandle, Model};
+use slint::Model;
 
 /// 构造 MainWindow + 初始化编辑器（含绑定 NodeGraphState 全局）。
 fn setup() -> (MainWindow, Rc<RefCell<aweft_gui::store::AppStore>>) {

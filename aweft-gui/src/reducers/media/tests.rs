@@ -249,20 +249,6 @@ fn tiny_test_video() -> Option<std::path::PathBuf> {
     if out.is_file() { Some(out) } else { None }
 }
 
-/// 轮询直到 `cond` 为真或超时（毫秒）。用于等管线推进到 EOS / 重启后出帧。
-fn wait_until<F: Fn() -> bool>(timeout_ms: u64, cond: F) -> bool {
-    let step = std::time::Duration::from_millis(20);
-    let mut elapsed = 0u64;
-    while elapsed < timeout_ms {
-        if cond() {
-            return true;
-        }
-        std::thread::sleep(step);
-        elapsed += 20;
-    }
-    cond()
-}
-
 /// 直接读取 appsink，供不安装生产回调的测试使用。
 fn pump_appsink(element: &gstreamer::Element) -> bool {
     if let Some(appsink) = element.clone().dynamic_cast::<AppSink>().ok() {
@@ -313,7 +299,7 @@ fn play_restarts_from_eos_after_open() {
     let mut store = crate::store::AppStore::new(&instance);
 
     // 直接搭一条真实解码管线（与 build_session 同源，但本测试不连 WGPU sink）。
-    let (pipeline, sink_element, mut wgpu_sink, audio) =
+    let (pipeline, sink_element, wgpu_sink, _audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(
             &url::Url::from_file_path(&video).unwrap().to_string(),
             false,
@@ -426,7 +412,7 @@ fn play_controls_selected_video_sessions_and_defaults_to_main() {
         p.set_state(gstreamer::State::Playing).expect("启动失败");
         (p, s, w, a)
     };
-    let (p0, s0, mut w0, a0) = build();
+    let (p0, s0, w0, a0) = build();
     let (p1, s1, w1, a1) = build();
 
     // 让 0 号先播放一会儿以推进位置（背压下必须泵帧推进）
@@ -601,7 +587,7 @@ fn resume_continues_from_paused_position() {
     let instance = crate::bridge::types::MainWindow::new().unwrap();
     let mut store = crate::store::AppStore::new(&instance);
 
-    let (pipeline, sink_element, mut wgpu_sink, audio) =
+    let (pipeline, sink_element, wgpu_sink, audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
             .expect("搭建解码管线失败");
     pipeline
@@ -736,7 +722,7 @@ fn toggle_playback_at_end_restarts_from_start() {
     let instance = crate::bridge::types::MainWindow::new().unwrap();
     let mut store = crate::store::AppStore::new(&instance);
 
-    let (pipeline, sink_element, mut wgpu_sink, audio) =
+    let (pipeline, sink_element, wgpu_sink, audio) =
         crate::render::video_sink::pipeline::build_decode_pipeline_with_dmabuf(&uri, false, false)
             .expect("搭建解码管线失败");
     pipeline

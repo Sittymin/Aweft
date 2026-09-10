@@ -1,44 +1,7 @@
 use super::{NlaEditorState, NlaStripData};
-use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
 use crate::depsgraph::Tag;
-use aweft_model::{animation::strip::NlaStrip, ids::ActionId};
-use slint::{ModelRc, SharedString};
 
 impl NlaEditorState {
-    /// 测试夹具：追加一个轨道（含片断）并初始化派生模型。
-    /// 生产路径必须通过 reducer + Tag + depsgraph 投影完成结构同步。
-    #[cfg(test)]
-    pub fn push_track(
-        &mut self,
-        name: impl Into<SharedString>,
-        strips: Vec<SlintNlaStrip>,
-        is_action: bool,
-    ) {
-        let idx = self.track_view.len();
-        self.track_view.push(SlintNlaTrack {
-            name: name.into(),
-            enabled: true,
-            locked: false,
-            strips: ModelRc::default(),
-            is_action,
-            has_data: false,
-            orig_index: idx as i32,
-        });
-        let entries = strips
-            .into_iter()
-            .map(|view| {
-                let model = NlaStrip::new_action(view.name.to_string(), ActionId::default());
-                NlaStripData {
-                    id: self.allocate_strip_id(),
-                    view,
-                    model,
-                }
-            })
-            .collect();
-        self.editing_strips.push(entries);
-        self.apply_structure();
-    }
-
     /// 找第一条可编辑且能容纳 [start, end]（不与任何片断重叠）的轨道。
     /// 排除全局 Action 轨（is_action，只读）与锁定轨。
     pub fn find_fit_track(&self, start: f32, end: f32) -> Option<usize> {
@@ -103,5 +66,48 @@ impl NlaEditorState {
             .get(target)
             .map(|t| !t.is_action && !t.locked)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
+#[cfg(test)]
+use aweft_model::{animation::strip::NlaStrip, ids::ActionId};
+#[cfg(test)]
+use slint::{ModelRc, SharedString};
+
+#[cfg(test)]
+impl NlaEditorState {
+    /// 测试夹具：追加一个轨道（含片断）并初始化派生模型。
+    /// 生产路径必须通过 reducer + Tag + depsgraph 投影完成结构同步。
+    pub fn push_track(
+        &mut self,
+        name: impl Into<SharedString>,
+        strips: Vec<SlintNlaStrip>,
+        is_action: bool,
+    ) {
+        let idx = self.track_view.len();
+        self.track_view.push(SlintNlaTrack {
+            name: name.into(),
+            enabled: true,
+            locked: false,
+            strips: ModelRc::default(),
+            is_action,
+            has_data: false,
+            orig_index: idx as i32,
+        });
+        let entries = strips
+            .into_iter()
+            .map(|view| {
+                let model = NlaStrip::new_action(view.name.to_string(), ActionId::default());
+                NlaStripData {
+                    id: self.allocate_strip_id(),
+                    view,
+                    model,
+                }
+            })
+            .collect();
+        self.editing_strips.push(entries);
+        self.apply_structure();
     }
 }

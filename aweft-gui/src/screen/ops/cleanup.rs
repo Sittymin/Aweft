@@ -230,13 +230,13 @@ mod tests {
 
         // 由于add_edge_to_geometry会检查重复，我们需要直接插入重复边来测试清理功能
         // 手动创建两条相同的边
-        let edge1 = screen_map.edges.insert(crate::screen::edge::ScrEdge {
+        screen_map.edges.insert(crate::screen::edge::ScrEdge {
             v1,
             v2,
             border: false,
             flag: 0,
         });
-        let edge2 = screen_map.edges.insert(crate::screen::edge::ScrEdge {
+        screen_map.edges.insert(crate::screen::edge::ScrEdge {
             v1,
             v2,
             border: false,
@@ -267,7 +267,7 @@ mod tests {
         // 创建区域
         let mut area = ScrArea::new(v1, v2, v3, v4, AreaType::Empty, true, false, false);
         area.calculate_totrct_and_size(&screen_map.verts, &ui_settings);
-        let area_key = screen_map.areas.insert(area);
+        screen_map.areas.insert(area);
 
         // 创建区域使用的边
         screen_map.add_edge_to_geometry(v1, v2);

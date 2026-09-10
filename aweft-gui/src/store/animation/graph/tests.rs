@@ -205,10 +205,7 @@ fn action_selection_switches_curves() {
 
 #[test]
 fn load_action_preserves_model_bezier_handles() {
-    use aweft_model::animation::{
-        Action as ModelAction, BezierHandle, Interpolation as ModelInterp, Keyframe as Mk,
-        action::ActionCurve, fcurve::FCurve,
-    };
+    use aweft_model::animation::BezierHandle;
 
     let k0 = Mk::bezier(
         0.0,

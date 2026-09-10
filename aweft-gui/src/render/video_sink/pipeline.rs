@@ -225,7 +225,6 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     let session_audio_for_pad = session_audio.clone();
 
     decoder.connect_pad_added(move |_decoder, pad| {
-        let pad_name = pad.name();
         let stream_id = pad.stream_id().map(|s| s.to_string());
         let kind = classify_pad(pad);
 

@@ -53,7 +53,7 @@ fn setup() -> (Rc<RefCell<AppStore>>, MainWindow) {
     // 注入测试字幕数据
     {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         sequence
             .create_event(
                 EventData {
@@ -67,7 +67,6 @@ fn setup() -> (Rc<RefCell<AppStore>>, MainWindow) {
                 ItemLocation::Root(0),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
     }
 
@@ -146,7 +145,7 @@ fn ui_toggle_group_collapsed_via_callback() {
     let anchor = first_event_id(&store);
     let group_id = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
@@ -163,7 +162,6 @@ fn ui_toggle_group_collapsed_via_callback() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         group_id
     };
@@ -188,7 +186,6 @@ fn ui_toggle_group_collapsed_via_callback() {
 }
 
 #[test]
-#[test]
 fn ui_select_toggle_keeps_multi_selection() {
     // 验证 toggle 语义：先单选 e1，再 toggle e2，两行都应被选中。
     // 若投影把 SelectRow(ctrl) 误降级为 select_single，则 e1 会被取消选中。
@@ -198,7 +195,7 @@ fn ui_select_toggle_keeps_multi_selection() {
     // 注入第二个事件
     let e2 = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let id = sequence
             .create_event(
                 EventData {
@@ -212,7 +209,6 @@ fn ui_select_toggle_keeps_multi_selection() {
                 ItemLocation::Root(1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         id
     };
@@ -291,7 +287,7 @@ fn ui_ungroup_via_callback() {
     let anchor = first_event_id(&store);
     let (group_id, child_id) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
@@ -308,7 +304,6 @@ fn ui_ungroup_via_callback() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (group_id, child_id)
     };
@@ -352,7 +347,7 @@ fn ui_timecode_input_reaggregates_group_header() {
     // 添加分组 + 子事件（初始 500-900ms）
     let (group_id, child_id) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let anchor = sequence.root_items[0];
         let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
@@ -370,7 +365,6 @@ fn ui_timecode_input_reaggregates_group_header() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (group_id, child_id)
     };
@@ -423,7 +417,7 @@ fn ui_collapse_group_hides_children_in_filter_model() {
     let anchor = first_event_id(&store);
     let (group_id, child_id) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let group_id = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
@@ -440,7 +434,6 @@ fn ui_collapse_group_hides_children_in_filter_model() {
                 ItemLocation::InGroup(group_id, 0),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (group_id, child_id)
     };
@@ -499,7 +492,7 @@ fn ui_select_events_updates_group_header_selected_state() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .insert_group_after(anchor, "测试组".into())
             .unwrap();
@@ -529,7 +522,6 @@ fn ui_select_events_updates_group_header_selected_state() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
@@ -602,7 +594,7 @@ fn ui_copy_cut_paste_delete_chain() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .insert_group_after(anchor, "复制组".into())
             .unwrap();
@@ -632,7 +624,6 @@ fn ui_copy_cut_paste_delete_chain() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
@@ -757,7 +748,7 @@ fn ui_add_group_and_batch_timecode() {
     // 批量时间码：建两个子事件，is_batch 批量改（在回调层解析）
     let (e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let id1 = sequence
             .create_event(
                 EventData {
@@ -784,7 +775,6 @@ fn ui_add_group_and_batch_timecode() {
                 ItemLocation::InGroup(group_id, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (id1, id2)
     };
@@ -843,7 +833,7 @@ fn ui_drag_timecode_preview_shows_override_then_commit() {
     // preview：start 从 0 拖到 +500ms（delta_x 累计，reducer 用 sequence 原值 + delta）
     instance
         .global::<SequenceCallbacks>()
-        .invoke_drag_timecode_preview(event_id.to_string().into(), true, 50.0.into(), false);
+        .invoke_drag_timecode_preview(event_id.to_string().into(), true, 50.0_f32.into(), false);
     {
         let s = store.borrow();
         let rows = all_rows(&s);
@@ -876,7 +866,7 @@ fn ui_drag_timecode_preview_shows_override_then_commit() {
     // commit：同 delta，sequence 持久化 + 预览清除
     instance
         .global::<SequenceCallbacks>()
-        .invoke_drag_timecode_commit(event_id.to_string().into(), true, 50.0.into(), false);
+        .invoke_drag_timecode_commit(event_id.to_string().into(), true, 50.0_f32.into(), false);
     {
         let s = store.borrow();
         let sequence = s.state().project.sequence();
@@ -907,7 +897,7 @@ fn ui_select_range_marks_group_header_indirectly_selected() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .insert_group_after(anchor, "范围组".into())
             .unwrap();
@@ -937,7 +927,6 @@ fn ui_select_range_marks_group_header_indirectly_selected() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
@@ -986,7 +975,7 @@ fn ui_reselect_single_refreshes_group_header_state() {
     let anchor = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence
             .insert_group_after(anchor, "刷新组".into())
             .unwrap();
@@ -1016,7 +1005,6 @@ fn ui_reselect_single_refreshes_group_header_state() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };
@@ -1083,7 +1071,7 @@ fn ui_select_outside_group_refreshes_group_header() {
     let outside = first_event_id(&store);
     let (group_id, e1, e2) = {
         let mut store_mut = store.borrow_mut();
-        let mut sequence = store_mut.state_mut().project.sequence_mut();
+        let sequence = store_mut.state_mut().project.sequence_mut();
         let gid = sequence.insert_group_after(outside, "组".into()).unwrap();
         let id1 = sequence
             .create_event(
@@ -1111,7 +1099,6 @@ fn ui_select_outside_group_refreshes_group_header() {
                 ItemLocation::InGroup(gid, 1),
             )
             .unwrap();
-        drop(sequence);
         store_mut.rebuild_sequence_models();
         (gid, id1, id2)
     };

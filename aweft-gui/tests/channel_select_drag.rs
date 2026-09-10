@@ -7,7 +7,7 @@
 
 use i_slint_backend_testing::{ElementHandle, init_integration_test_with_system_time};
 use slint::platform::PointerEventButton;
-use slint::{ComponentHandle, LogicalPosition, Model, ModelRc, VecModel};
+use slint::{LogicalPosition, Model, ModelRc, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -109,7 +109,7 @@ fn outer_channel_selected_update_on_press_interrupts_drag() {
             app.on_dragged(move |i, dt| {
                 dts.borrow_mut().push(dt);
                 // 复刻 keyframe_dragged：只更新内层关键帧模型（marker 位置随之移动）
-                let mut ch = channels.row_data(i as usize).unwrap();
+                let ch = channels.row_data(i as usize).unwrap();
                 let mut kf = ch.keyframes.row_data(0).unwrap();
                 kf.time += dt;
                 ch.keyframes.set_row_data(0, kf);
@@ -125,7 +125,7 @@ fn outer_channel_selected_update_on_press_interrupts_drag() {
             let channels = channels.clone();
             app.on_make_selected(move |i| {
                 for c in 0..channels.row_count() {
-                    let mut ch = channels.row_data(c).unwrap();
+                    let ch = channels.row_data(c).unwrap();
                     for k in 0..ch.keyframes.row_count() {
                         let mut kf = ch.keyframes.row_data(k).unwrap();
                         if kf.selected {
