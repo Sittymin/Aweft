@@ -1,0 +1,8 @@
+{
+  "id": "test-plugin",
+  "name": "示例插件",
+  "version": "0.1.0",
+  "guest": "guest.wasm",
+  "panel": "panel.slint",
+  "permissions": { "network": false, "fs_read": false, "fs_write": false }
+}

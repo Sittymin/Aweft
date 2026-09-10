@@ -1,0 +1,11 @@
+[package]
+name = "aweft-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aweft-model = { path = "../aweft-model" }
+anyhow = "1.0.104"
+chrono = "0.4.45"
+serde = "1.0.229"
+serde_json = "1.0.151"

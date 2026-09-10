@@ -1,0 +1,23 @@
+[package]
+name = "test-plugin-guest"
+version = "0.1.0"
+edition = "2021"
+description = "Aweft 示例插件的 Guest：读字幕行时间、平移全部行、订阅时间变更"
+publish = false
+
+# 独立 workspace 根：本 crate 只编到 wasm32-unknown-unknown，
+# 不参与主工程的宿主构建（主仓库 Cargo.toml 里 exclude 了 plugins）。
+[workspace]
+
+[lib]
+name = "test_plugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+aweft-plugin-sdk = { path = "../../../aweft-plugin-sdk" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+# 插件里 panic 直接陷阱，由宿主按调用失败处理；不带 wasm 异常表。
+panic = "abort"

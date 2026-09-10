@@ -6,7 +6,11 @@ edition = "2021"
 [workspace]
 members = [
     "aweft-gui", "aweft-ass", "aweft-collab", "aweft-convert", "aweft-libass", "aweft-model",
+    "aweft-plugin-sdk", "aweft-project", "aweft-plugins",
 ]
+# 示例插件是独立 crate（自带 [workspace] 表，编到 wasm32-unknown-unknown），
+# 不参与主工程的宿主构建。
+exclude = ["plugins"]
 
 [dependencies]
 aweft-ass = { path = "aweft-ass" }

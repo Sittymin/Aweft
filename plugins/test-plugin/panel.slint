@@ -1,0 +1,24 @@
+import { Button, VerticalBox } from "std-widgets.slint";
+
+// 示例插件的面板：宿主只按通用约定填三样东西——
+// command-labels（来自插件描述 JSON）、status-lines（插件自己写）、
+// command-clicked（参数是命令编号）。主程序不为具体功能写任何控件。
+export component PluginPanel inherits Window {
+    in property <[string]> command-labels;
+    in property <[string]> status-lines;
+    callback command-clicked(int);
+
+    title: "示例插件";
+    min-width: 300px;
+    min-height: 260px;
+
+    VerticalBox {
+        for label[index] in command-labels: Button {
+            text: label;
+            clicked => { root.command-clicked(index); }
+        }
+        for line in status-lines: Text {
+            text: line;
+        }
+    }
+}
