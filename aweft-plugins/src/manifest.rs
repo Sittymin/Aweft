@@ -5,12 +5,19 @@ use std::path::{Path, PathBuf};
 /// 插件目录里的清单文件名。`PluginManager::load_dir` 按这个文件名认插件目录。
 pub const MANIFEST_FILE: &str = "aweft-plugin.json";
 
-/// 插件能力开关。首版示例插件全关，仅做占位，后续按来源逐项检查。
+/// 插件能力申请。宿主只链接申请过的入口：清单没写的字段一律 `false`（少写=少给）。
+///
+/// 规则是"改了真相才要申请"：读行数与起止时间、写自己的状态行与日志不必申请，
+/// 未授予 `project_write` 时宿主根本不链接 `set_event_*_ms`，插件 import 它就在装载期失败。
+/// `network`/`fs_read`/`fs_write` 仍是申报项——宿主还没有这三类进口，先不假装已经管住了。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Permissions {
     pub network: bool,
     pub fs_read: bool,
     pub fs_write: bool,
+    /// 允许写回工程真相（字幕行起止时间）。
+    pub project_write: bool,
 }
 
 /// 插件清单：静态声明插件身份、构件位置与能力申请。
@@ -70,7 +77,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_declares_only_file_locations() {
+    fn manifest_declares_file_locations_and_permissions() {
         let manifest = PluginManifest::from_json(
             r#"{ "id":"p","name":"P","version":"1.0","guest":"g.wasm","panel":"p.slint",
                  "permissions":{"network":false,"fs_read":false,"fs_write":true} }"#,
@@ -81,5 +88,13 @@ mod tests {
         assert_eq!(manifest.panel_path(Path::new("/plugins/p")), PathBuf::from("/plugins/p/p.slint"));
         assert!(manifest.permissions.fs_write);
         assert!(!manifest.permissions.network);
+        // 少写=少给：清单里没申请的字段一律按不授予处理。
+        assert!(!manifest.permissions.project_write);
+        let granted = PluginManifest::from_json(
+            r#"{ "id":"p","name":"P","version":"1.0","guest":"g.wasm","panel":"p.slint",
+                 "permissions":{"project_write":true} }"#,
+        )
+        .expect("清单解析失败");
+        assert!(granted.permissions.project_write);
     }
 }

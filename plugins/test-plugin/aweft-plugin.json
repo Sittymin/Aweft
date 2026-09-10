@@ -4,5 +4,5 @@
   "version": "0.1.0",
   "guest": "guest.wasm",
   "panel": "panel.slint",
-  "permissions": { "network": false, "fs_read": false, "fs_write": false }
+  "permissions": { "network": false, "fs_read": false, "fs_write": false, "project_write": true }
 }

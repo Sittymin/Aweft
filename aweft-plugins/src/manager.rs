@@ -139,7 +139,7 @@ impl PluginManager {
         }
         let wasm_bytes = manifest.read_guest(dir)?;
         let guest = Rc::new(RefCell::new(
-            GuestPlugin::load(&wasm_bytes)
+            GuestPlugin::load(&wasm_bytes, &manifest.permissions)
                 .with_context(|| format!("插件 Guest 装载失败：{}", manifest.id))?,
         ));
 

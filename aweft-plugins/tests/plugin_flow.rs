@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use aweft_model::ids::ItemId;
 use aweft_model::sequence::{EventData, ItemLocation};
-use aweft_plugins::PluginManager;
+use aweft_plugins::{PluginManager, MANIFEST_FILE};
 use aweft_project::{
     AweftDocument, MutationReceipt, MutationSubscriber, Origin, ProjectStore, SubscriberRef,
 };
@@ -151,6 +151,56 @@ fn unknown_plugin_dir_is_reported_not_panicked() {
         0
     );
     assert!(manager.is_empty());
+}
+
+/// 搭一个临时插件目录：清单用给定文本，字节码照抄示例插件。
+/// 除清单外一切相同，两边的装载结果差异就只能来自清单。
+fn temp_plugin_dir(name: &str, manifest: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("临时插件目录创建失败");
+    std::fs::write(dir.join(MANIFEST_FILE), manifest).expect("临时清单写入失败");
+    std::fs::copy(plugin_dir().join("guest.wasm"), dir.join("guest.wasm"))
+        .expect("Guest 字节码复制失败");
+    dir
+}
+
+/// 只改 `project_write` 一项的清单文本。
+fn manifest_granting(project_write: bool) -> String {
+    format!(
+        r#"{{"id":"tmp","name":"临时","version":"0.1.0","guest":"guest.wasm","panel":"panel.slint",
+            "permissions":{{"network":false,"fs_read":false,"fs_write":false,"project_write":{project_write}}}}}"#
+    )
+}
+
+#[test]
+fn write_import_without_grant_is_rejected_at_load() {
+    let dir = temp_plugin_dir("aweft_plugin_write_denied", &manifest_granting(false));
+    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut manager = PluginManager::new();
+    // 示例插件的 Guest import 了 set_event_*_ms，即它确实要改真相。
+    let err = manager
+        .load_dir(&dir, &mut store)
+        .expect_err("未申请 project_write 的写插件应被拒绝装载");
+    // 报错要点名缺的那项权限，含糊的"实例化失败"帮不上插件作者。
+    assert!(
+        format!("{err:?}").contains("project_write"),
+        "报错未指明缺的权限：{err:?}"
+    );
+    assert!(manager.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn same_guest_loads_once_project_write_is_granted() {
+    let dir = temp_plugin_dir("aweft_plugin_write_granted", &manifest_granting(true));
+    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut manager = PluginManager::new();
+    manager
+        .load_dir(&dir, &mut store)
+        .expect("授予 project_write 后同一份字节码应能装载");
+    assert_eq!(manager.plugins().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -7,6 +7,8 @@
 > 2026-09-11 决定：示例插件改用 Rust SDK + 提交预编译 `guest.wasm`；GUI 的数据真相改为持有 `ProjectStore`。
 > 2026-09-11 决定（同日二改）：变更分发从"持有者泵写日志"下沉进 `ProjectStore`——写入即广播，
 > 界面与插件一样注册成订阅者，谁都不再记得要 pump。
+> 2026-09-11 决定（同日三改）：清单的权限申请从"申报项"变成"闸门"——宿主按
+> `permissions.project_write` 装配 linker，没批的写入口根本不链接，插件 import 它就在装载期被指名拒绝。
 
 ## 三个问题的结论
 
@@ -43,12 +45,22 @@ import 指向 JS 侧胶水，纯 wasmi 宿主（没有 JS 引擎）在实例化�
 宿主侧再挂 wasmi 自带的 WASI preview1 支持（`wasmi_wasi`）——这条路未实测，
 且每个 Python 插件要背上解释器体积与 VM 启动成本。示例插件的职责是把 ABI 讲清楚，故选 Rust SDK。
 
+**Q4「订阅分类是不是就相当于是权限系统了？」——一半是，写能力不能靠自述。**
+"声明监听什么 → 才收得到"这一半成立且零成本：声明与实现同在 Guest 一处，漏写只会少刷面板，
+不会越权，所以订阅表留在描述 JSON。但"插件自己声明能改真相"不成立——描述 JSON 是插件自己写的，
+拿它当授权依据等于让被管制的一方自己批条子。因此写入口由清单（人可读、审阅时看得见、可与来源策略挂钩）授予。
+两个更"自动"的方案都否了：
+① 按描述 JSON 的声明装配 linker——描述要先调用导出才读得到，而调用导出本身要求 linker 已装配完，
+先有鸡还是先有蛋；② 读 wasm 自定义段拿声明——实例化前确实读得到，但 `wasm-opt` 之类的工具会剥掉未知段，
+插件作者一次优化就把权限声明弄丢了。故选清单授权，规则是"改了真相才要申请"：
+读行数/起止时间、写自己的状态行与日志（都进不了真相）不必申请，`set_event_*_ms` 要 `project_write`。
+
 ## 现在的形态
 
 ### 目录与装载
 ```
 plugins/<id>/
-  aweft-plugin.json   # 身份 + 构件位置 + 权限申请（不声明功能）
+  aweft-plugin.json   # 身份 + 构件位置 + 权限闸门（不声明功能）
   guest.wasm          # 逻辑（提交预编译夹具）
   panel.slint         # 自带窗口片段（单根组件）
 ```
@@ -61,8 +73,12 @@ plugins/<id>/
 导出：`aweft_describe_ptr`/`aweft_describe_len`（描述 JSON
 `{"abi":1,"commands":["计算最早时间","全部后移 1s"],"events":["time_changed"]}`）、
 `aweft_on_command(i32) -> i32`、可选 `aweft_on_event_time(i32, i64, i64)`。
-导入 `aweft` 模块：`event_count`、`event_start_ms`、`event_end_ms`、`set_event_start_ms`、
-`set_event_end_ms`、`set_status_line(line,ptr,len)`、`log_text(ptr,len)`。
+导入 `aweft` 模块，宿主按清单授权装配 linker，分三组：
+读（`event_count`、`event_start_ms`、`event_end_ms`）与插件自己的输出
+（`set_status_line(line,ptr,len)`、`log_text(ptr,len)`）总是链接——它们进不了真相；
+写真相（`set_event_start_ms`、`set_event_end_ms`）只在 `permissions.project_write` 为真时链接，
+未授予却 import 时 `check_grants` 在实例化前先报错并指名缺哪项权限
+（不先查的话只会得到一条含糊的"实例化失败：找不到 import"）。
 数字句柄 = `ProjectStore::ordered_event_ids()` 的下标（按开始时间排序，每次进入 Guest 前重建快照）。
 **显示文本一律由插件自己组装**：旧的 `command_result_kind`/`command_format` 模板机制删除，
 宿主不做格式化与模板替换。命令编号未声明即拒绝执行。
@@ -87,8 +103,10 @@ plugins/<id>/
 `Origin::Plugin(id)` 的写入不再回投给该插件自己，`Origin::LocalGui` 的写入不回流界面刷新队列。
 
 ### 插件侧（aweft-plugins）
-`PluginManager::load_dir(dir, store)` 读清单 → 装载 Guest → 校验描述声明的导出 →
-编译面板 → 声明了 `time_changed` 的插件注册成存储订阅者。`GuestPlugin` 是成员内部类型
+`PluginManager::load_dir(dir, store)` 读清单 → 校验清单授权 → 装载 Guest → 校验描述声明的导出 →
+编译面板 → 声明了 `time_changed` 的插件注册成存储订阅者。目前只有 `project_write` 是真闸门，
+`network`/`fs_read`/`fs_write` 还没有对应的宿主进口，属申报项（不假装已经管住了）。
+`GuestPlugin` 是成员内部类型
 （`pub(crate)`），对外只有 `PluginManager`/`LoadedPlugin`/面板与 ABI 常量。
 Guest 的读写一律先 `sync_from_store` 建行快照、调用结束后 `take_dirty_rows` 写回，
 **对 `Rc<RefCell<GuestPlugin>>` 的借用绝不跨过对存储的写入**：写入会同步广播，
@@ -109,17 +127,20 @@ reducer 的时间写入统一经存储并标 `Origin::LocalGui`（`adjust_time` 
 ## 要干什么（已完成打钩）
 
 - [x] `aweft-project`：文档结构 + 唯一所有权存储 + 写日志回执 + 订阅者注册表与广播 + 工程文件读写（JSON，`format` 版本门）。
-- [x] `aweft-plugins`：清单解析 + 目录装载 + wasmi 运行时 + 自描述 ABI + 装载时注册订阅者 + 通用面板窗口。
+- [x] `aweft-plugins`：清单解析 + 目录装载 + wasmi 运行时 + 自描述 ABI + 按清单授权装配宿主函数 +
+      装载时注册订阅者 + 通用面板窗口。
 - [x] `aweft-plugin-sdk`：Guest 侧 `plugin! { commands, on_time_changed }` 声明宏与 `Api` 封装。
 - [x] 示例插件 `plugins/test-plugin`（Rust Guest + panel.slint + 清单，`guest.wasm` 提交为夹具）。
 - [x] GUI 接线：持有 `ProjectStore`、界面自己注册成订阅者、`dispatch` 用批量作用域包住一轮交互、
       命令路由、按装载结果生成按钮。
 - [x] 集成测试：`aweft-project` 存储内测试 11 项（广播时机、回声过滤、批量合并、写回触达第三方、
-      轮数上限）、`aweft-plugins/tests/plugin_flow.rs` 8 项（真实装载 `plugins/test-plugin`，
-      含"一次命令只通知一次"）、`aweft-gui/tests/plugin_window.rs` 6 项
+      轮数上限）、`aweft-plugins/tests/plugin_flow.rs` 10 项（真实装载 `plugins/test-plugin`，
+      含"一次命令只通知一次"与权限闸门的拒/放一对：同一份字节码，只改清单的 `project_write`）、
+      `aweft-gui/tests/plugin_window.rs` 6 项
       （含"插件写入刷进 UI 行模型"的投影断言）。
 - [ ] CLI 子命令（本轮砍掉：CLI 尚无工程文件开/存流程，无落点）。
-- [ ] 后续（不在本轮）：结构/层级/文本写入尚无 `MutationKind`（因此不进广播，插件与界面都看不到）；
+- [ ] 后续（不在本轮）：读侧暂不设闸（未授予任何权限的插件仍可读全部行）——目前字幕行不算敏感数据，
+      若以后要挡，同样按清单授权装配 linker 即可；结构/层级/文本写入尚无 `MutationKind`（因此不进广播，插件与界面都看不到）；
       撤销栈策略；`dirty`/保存提示接 UI；远端合流（`aweft-collab`）；多语言 SDK（C/Python）再评估。
 
 ## 本轮删除的死代码（可点名否决）
@@ -135,13 +156,16 @@ reducer 的时间写入统一经存储并标 `Origin::LocalGui`（`adjust_time` 
 `ProjectStore::shift_all_events_ms`（SDK 用成对写入即可，无调用方）、`receipt::Subscriber`、
 `pump_plugins`、`receipt_tags`。
 
-## 验证结果（2026-09-11，广播下沉后复测）
+## 验证结果（2026-09-11，权限闸门后复测）
 
-- `nix develop --command cargo test -p aweft-project -p aweft-plugins -p aweft-gui`：
-  `aweft-project` 11、`aweft-plugins` 1+8、`aweft-plugin-sdk` 2、
+- `nix develop --command cargo test -p aweft-project -p aweft-plugins -p aweft-plugin-sdk -p aweft-gui`：
+  `aweft-project` 11、`aweft-plugins` 1+10、`aweft-plugin-sdk` 2、
   `aweft-gui` 197（lib）+ 依赖图/行编辑器/时间线/NLA/DopeSheet/节点图/插件窗口共 60 项集成，全绿。
 - `cargo check --workspace --all-targets`：本轮改动的三个 crate 零告警
   （`aweft-ass`、`src/cli.rs` 的告警是既有噪声）。clippy 仍被 `aweft-libass` 的构建挡住，故用 check+test 验证。
+- 权限闸门只测了"要写的插件"一侧：示例字节码 import 了 `set_event_*_ms`，拒/放两态都成立。
+  "只读不必申请"这一半没有对应夹具（没有第二份只 import 读函数的 `guest.wasm`），
+  目前由 linker 的分组保证，未实测。
 - 真机点按未验证：插件按钮与独立窗口需要跑起来确认（无头后端只证明不 panic）。
   `plugin_window.rs` 的"插件写入刷进 UI 行模型"断言覆盖到了投影这一层，但仍是无头路径。
 

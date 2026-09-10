@@ -5,9 +5,15 @@ use serde::Deserialize;
 use wasmi::{Caller, Engine, Extern, Instance, Linker, Memory, Module, Store};
 
 use crate::ctx::{HostCtx, RowSnap};
+use crate::manifest::Permissions;
 
 /// Guest 导入的宿主模块名，与 `aweft_plugin_sdk` 的 `#[link]` 模块名一致。
 pub const HOST_MODULE: &str = "aweft";
+
+/// 受清单 `permissions.project_write` 管制的宿主函数。
+/// 未授予时宿主根本不链接它们：插件想改真相必须在装载期就被看见，
+/// 而不是运行期某条命令里悄悄改掉。
+const WRITE_HOST_FUNCS: [&str; 2] = ["set_event_start_ms", "set_event_end_ms"];
 
 /// 描述 JSON 的 `abi` 字段必须等于此值，否则整个插件拒绝装载。
 pub const ABI_VERSION: u32 = 1;
@@ -71,14 +77,18 @@ impl GuestPlugin {
     }
 
     /// 从 WASM 字节码装载插件并读出描述。
+    /// 宿主入口按清单授予装配：未申请 `project_write` 的插件根本没有写真相的入口，
+    /// 它 import 了就在装载期失败（见 `check_grants`）。
     /// 描述要求的导出（`aweft_on_command`、订阅时的 `aweft_on_event_time`）
-    /// 缺失时在这里就报错，运行期不再检查。
-    pub fn load(wasm_bytes: &[u8]) -> Result<Self> {
+    /// 缺失时也在这里报错，运行期不再检查。
+    pub fn load(wasm_bytes: &[u8], permissions: &Permissions) -> Result<Self> {
         let engine = Engine::default();
         let mut store = Store::new(&engine, HostCtx::default());
         let module = Module::new(&engine, wasm_bytes).context("插件 WASM 模块解析失败")?;
+        check_grants(&module, permissions)?;
         let mut linker = Linker::<HostCtx>::new(&engine);
 
+        // 读真相：不改任何数据，不必申请。
         linker
             .func_wrap(HOST_MODULE, "event_count", |caller: Caller<HostCtx>| {
                 caller.data().row_count() as i32
@@ -102,24 +112,8 @@ impl GuestPlugin {
                 },
             )
             .context("宿主函数 event_end_ms 注册失败")?;
-        linker
-            .func_wrap(
-                HOST_MODULE,
-                "set_event_start_ms",
-                |mut caller: Caller<HostCtx>, handle: i32, ms: i64| -> i32 {
-                    i32::from(!caller.data_mut().set_row_start(handle, ms))
-                },
-            )
-            .context("宿主函数 set_event_start_ms 注册失败")?;
-        linker
-            .func_wrap(
-                HOST_MODULE,
-                "set_event_end_ms",
-                |mut caller: Caller<HostCtx>, handle: i32, ms: i64| -> i32 {
-                    i32::from(!caller.data_mut().set_row_end(handle, ms))
-                },
-            )
-            .context("宿主函数 set_event_end_ms 注册失败")?;
+
+        // 输出：只写插件自己的面板状态行与诊断日志，进不了真相。
         linker
             .func_wrap(
                 HOST_MODULE,
@@ -148,6 +142,29 @@ impl GuestPlugin {
                 },
             )
             .context("宿主函数 log_text 注册失败")?;
+
+        // 写真相：清单申请过才链接。没链接时实例化会因找不到 import 而失败，
+        // 那条失败由上面的 check_grants 提前变成指名道姓的报错。
+        if permissions.project_write {
+            linker
+                .func_wrap(
+                    HOST_MODULE,
+                    "set_event_start_ms",
+                    |mut caller: Caller<HostCtx>, handle: i32, ms: i64| -> i32 {
+                        i32::from(!caller.data_mut().set_row_start(handle, ms))
+                    },
+                )
+                .context("宿主函数 set_event_start_ms 注册失败")?;
+            linker
+                .func_wrap(
+                    HOST_MODULE,
+                    "set_event_end_ms",
+                    |mut caller: Caller<HostCtx>, handle: i32, ms: i64| -> i32 {
+                        i32::from(!caller.data_mut().set_row_end(handle, ms))
+                    },
+                )
+                .context("宿主函数 set_event_end_ms 注册失败")?;
+        }
 
         let instance = linker
             .instantiate_and_start(&mut store, &module)
@@ -223,6 +240,27 @@ impl GuestPlugin {
             .get_typed_func::<i32, i32>(&self.store, "aweft_on_command")
             .context("插件声明了命令但缺少导出 aweft_on_command")
     }
+}
+
+/// 清单没批的写能力，插件 import 了就不给装载。
+/// 只查本宿主模块的 import：其余模块（如 WASI）找不到自然由实例化报错。
+/// 少了这一步，未授权的插件只会得到一条"实例化失败：找不到 import"，
+/// 看不出是自己没申请权限。
+fn check_grants(module: &Module, permissions: &Permissions) -> Result<()> {
+    if permissions.project_write {
+        return Ok(());
+    }
+    for import in module.imports() {
+        if import.module() != HOST_MODULE || !WRITE_HOST_FUNCS.contains(&import.name()) {
+            continue;
+        }
+        bail!(
+            "插件 import 了未申请的宿主函数 {}::{}：写真相需要清单 permissions 里的 project_write",
+            import.module(),
+            import.name()
+        );
+    }
+    Ok(())
 }
 
 /// 读取 Guest 线性内存里的一段 UTF-8，供宿主函数在调用内使用。
