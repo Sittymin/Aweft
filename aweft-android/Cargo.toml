@@ -1,0 +1,33 @@
+[package]
+name = "aweft-android"
+version = "0.1.0"
+edition = "2021"
+
+# Android 打包专用包：xbuild 在本目录执行，把这个 cdylib 装进 APK，
+# 入口是 src/lib.rs 的 android_main。桌面构建不受影响
+#（根包的 bin 照旧，aweft-gui 照旧是库）。
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aweft-gui = { path = "../aweft-gui" }
+anyhow = "1.0.104"
+log = "0.4.33"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# 与 aweft-gui 同版本同特性集，cargo 合并成同一份；静态插件要在 gst_init 之后
+# 才登记（gst_plugin_register_static 对未初始化有 g_return_val_if_fail），
+# 所以 init 由本包做，见 src/gst_plugins.rs。
+gstreamer = "0.25"
+# androidmedia 要按符号名找我们要的 Application ClassLoader，取的过程是
+# getClassLoader() + NewGlobalRef 两次 JNI 调用，见 src/gst_plugins.rs。
+# 版本与 android-activity 0.6.1 锁的 0.22.4 一致，cargo 合并成同一份，不额外进包。
+jni = "0.22"
+# 与 aweft-gui 同 rev，cargo 会合并成同一份 slint；target 门控保证桌面构建
+# 不受影响（桌面下 slint 依赖根本不存在，本包是空壳）。
+# 与 aweft-gui 的 Android 特性集保持一致（winit 后端排除在外，原因见那边注释）。
+slint = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d", features = [
+    "backend-android-activity-06",
+    "unstable-wgpu-30",
+] }
+

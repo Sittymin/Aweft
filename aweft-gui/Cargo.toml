@@ -9,13 +9,7 @@ bitflags = "2.13.1"
 # crates.io，故以 git 依赖固定到当前 commit。直接用 wgpu 30 原生
 # `vulkan::Device::texture_from_dmabuf_fd` 替代自建的 ash 绕过补丁
 #（wgpu-hal-29-patch 已移除）。
-slint = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d", features = [
-    "backend-winit",
-    "renderer-femtovg-wgpu",
-    "unstable-winit-030",
-    "unstable-wgpu-30",
-    "live-preview",
-] }
+# slint 按目标拆两套特性（见下方两个 target 段），此处不直接依赖。
 # wgpu 一律经 slint 重导出使用（slint::wgpu_30::wgpu），不直接依赖，版本由 slint 统一
 slotmap = "1.1.1"
 tokio = { version = "1.53.1", features = ["full"] }
@@ -41,11 +35,51 @@ uuid = { version = "1.24.0", features = [
 chrono = "0.4.45"
 serde = "1.0.229"
 serde_json = "1.0.151"
-arboard = "3.6.1"
+
+# 桌面：winit 事件循环 + femtovg-wgpu 渲染 + 热预览。
+[target.'cfg(not(target_os = "android"))'.dependencies]
+slint = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d", features = [
+    "backend-winit",
+    "renderer-femtovg-wgpu",
+    "unstable-winit-030",
+    "unstable-wgpu-30",
+    "live-preview",
+] }
 # 文件对话框：Linux 走 xdg-desktop-portal（纯 DBus，无需 gtk3 系统库）；
 # async-std 后端自带执行器，future 可直接在 slint::spawn_local 中 await
-# （tokio 后端则要求 tokio reactor 上下文）
+# （tokio 后端则要求 tokio reactor 上下文）。
+# Android 没有 rfd 后端（该包源码无 android 分支），只给非 Android 目标启用，
+# Android 走 file_picker 模块里的 MediaStore 原生实现。
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+# arboard 的 platform 模块在 Android 目标为空（见台账），整个包只给桌面编。
+arboard = "3.6.1"
+
+# Android：activity 后端 + Skia（后端自带）+ wgpu 离屏 API。
+# winit 后端必须彻底排除在外：选择器在该目标上不依赖它（selector/Cargo.toml:98），
+# 弱特性转发全部落空，包会以零特性参与编译并命中上游的 compile_error；
+# 特性只能加不能减，所以这里另起一套（同包同 rev，按目标求值，互不污染）。
+# unstable-wgpu-30 保留：视频/字幕的离屏计算经 slint::wgpu_30 拿 wgpu API。
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d", features = [
+    "backend-android-activity-06",
+    "unstable-wgpu-30",
+    # slint-build 生成的窗口代码硬引用 sp::live_preview（关不掉，build.rs 无开关），
+    # 库侧必须开，否则 generated window.rs 编不过；手机上无预览器连接时惰性无害。
+    "live-preview",
+] }
+# wgpu 离屏 API（slint::wgpu_30 只是重导出，特性要自己加）：桌面经
+# femtovg-wgpu 间接打开了 wgsl，Android 特性集里没它，着色器模块编不过。
+# 版本与 slint 锁的 rev 实际用的 30.0.0 严格对齐（slint 升级改版本时这里同步改，
+# 否则 resolve 冲突会直接报错，不会静默）。
+wgpu = { version = "=30.0.0", default-features = false, features = ["wgsl"] }
+# JNI 调用 MediaStore/ContentResolver，走原生媒体库。版本选 0.21 而不用 0.22：
+# android-activity 0.6 内部用的 0.22 与本包无共享状态，各自包一层原始 JVM 指针
+# 互不干扰；0.21 的经典 API（AttachGuard、JObject::from、get_string）一次写对，
+# 0.22 的 JObject→String 转换在 registry 源码里没找到直达写法。
+jni = "0.21"
+# 全局 JVM/Activity 指针：android_main 里初始化一次（见 aweft-android），
+# file_picker 在任意线程取用。
+ndk-context = "0.1"
 
 
 [build-dependencies]
