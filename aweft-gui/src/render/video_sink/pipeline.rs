@@ -164,8 +164,9 @@ fn try_vapostproc(requested_caps: &gstreamer::Caps) -> Option<(Element, gstreame
 /// uridecodebin ─ video → queue ! vapostproc ! capsfilter ! appsink
 ///              │            （GPU 444p10→P010/NV12；dmabuf 零拷贝或 sysmem 下载；
 ///              │             无 VA 退 autovideoconvert CPU 转换）
-///              └ audio → queue ! audioconvert ! volume ! autoaudiosink
-///                                   （无音频输出设备时改接 fakesink）
+///              └ audio → queue ! audioconvert ! volume ! AUDIO_SINK_FACTORY
+///                                   （桌面 autoaudiosink，Android openslessink；
+///                                    探测不到输出时改接 fakesink）
 /// ```
 /// vapostproc rank 为 0 不会被 autoplug，必须显式添加：它在 GPU 上完成
 /// 444p10→YU12/P010 转换与 CSC（CPU 端 videoconvert 在 4K 下极昂贵）。
@@ -236,9 +237,12 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
                 link_pad_by_media_type(pad, &video_entry);
             }
             PadMediaKind::Audio => {
+                // 与「音频分支已建」配成一对：只有前者说明 uridecodebin 没把音频流
+                // 解出来，只有后者说明解出来了但分支元素缺失。
+                log::debug!("音频 pad 到达：{}", pad.name());
                 let mut guard = audio_state.lock().unwrap_or_else(|e| e.into_inner());
                 if guard.is_none() {
-                    let (entry, vol) = build_audio_branch(&pipeline_for_audio);
+                    let (entry, vol) = build_audio_branch(&pipeline_for_audio, pad);
                     if let Some(vol) = vol {
                         session_audio_for_pad.set_volume_element(vol);
                     }
@@ -255,7 +259,7 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
     Ok((pipeline, sink_element, wgpu_sink, session_audio))
 }
 
-/// 系统当前是否存在可出声的音频输出设备（设备类 "Audio/Sink"）。
+/// 系统当前是否存在可出声的音频输出（设备类 "Audio/Sink"）。
 ///
 /// 判定只能提前做：`autoaudiosink` 在 READY→PAUSED 才真正打开设备，届时无声卡
 /// 或无 PipeWire/Pulse 会话会让整条管线状态切换失败。这里逐个实例化设备提供方
@@ -267,7 +271,8 @@ pub(crate) fn build_decode_pipeline_with_dmabuf(
 /// 本身很快，且 `any` 在第一个枚举到输出设备的提供方处短路（本机实测 ~10ms）；
 /// 只有判为无设备时才需要遍历全部提供方（本机 alsadeviceprovider 一家约 230ms，
 /// 合计 ~0.25s）。该耗时发生在 `pad-added` 的流线程上，不影响 UI 线程。
-fn has_audio_output_device() -> bool {
+#[cfg(not(target_os = "android"))]
+fn has_audio_output() -> bool {
     gstreamer::DeviceProviderFactory::factories(gstreamer::Rank::NONE)
         .into_iter()
         .filter_map(|factory| factory.get())
@@ -279,51 +284,89 @@ fn has_audio_output_device() -> bool {
         })
 }
 
-/// 惰性创建音频分支 `queue ! audioconvert ! volume ! (autoaudiosink|fakesink)`
-/// 并加入管线，返回 (分支入口 queue, volume 元素)。
-fn build_audio_branch(pipeline: &gstreamer::Pipeline) -> (Option<Element>, Option<Element>) {
+/// 有音频输出时，分支末端用的 sink 元素名。
+///
+/// Android 上不能用 `autoaudiosink`：它属于 `autodetect` 插件，靠设备提供方枚举
+/// 设备来挑 sink，而我们链进来的插件没有任何 `DeviceProviderFactory`，它永远选不出
+/// 设备。`openslessink` 直接开 OpenSL ES 的默认输出混音，不经过设备枚举这一层。
+#[cfg(target_os = "android")]
+const AUDIO_SINK_FACTORY: &str = "openslessink";
+
+#[cfg(not(target_os = "android"))]
+const AUDIO_SINK_FACTORY: &str = "autoaudiosink";
+
+/// Android 上能否出声。
+///
+/// 上面那套设备提供方探测在这里用不了：链进来的插件一个都不注册
+/// `DeviceProviderFactory`，恒为 false。所以这里探测的是 [`AUDIO_SINK_FACTORY`]
+/// 这个元素在不在注册表里——它的归档没链上时确实无声，不能无条件当作有。
+#[cfg(target_os = "android")]
+fn has_audio_output() -> bool {
+    gstreamer::ElementFactory::find(AUDIO_SINK_FACTORY).is_some()
+}
+
+/// 惰性创建音频分支 `queue ! audioconvert ! volume ! (AUDIO_SINK_FACTORY|fakesink)`
+/// 并接入 `src_pad`，返回 (分支入口 queue, volume 元素)。
+///
+/// 顺序：分支内部互链 → 把 `src_pad` 链到分支入口 → 最后才同步状态。这是
+/// `pad-added` 里动态加分支的惯例顺序（先接上再放行）。装机实测换序前后现象一致，
+/// 它不是那次无声的成因，别把它当成修复。
+///
+/// 每个失败落点都要在日志里点名原因：这条分支建不起来的全部表现只是"画面正常但
+/// 完全无声"，静默返回过一次让整轮排查无从下手。
+fn build_audio_branch(
+    pipeline: &gstreamer::Pipeline,
+    src_pad: &gstreamer::Pad,
+) -> (Option<Element>, Option<Element>) {
     use gstreamer::prelude::*;
     let Ok(queue) = gstreamer::ElementFactory::make("queue").build() else {
+        log::warn!("音频分支未建立：注册表里没有 queue 元素");
         return (None, None);
     };
     let Ok(convert) = gstreamer::ElementFactory::make("audioconvert").build() else {
+        log::warn!("音频分支未建立：注册表里没有 audioconvert 元素");
         return (None, None);
     };
     let Ok(volume) = gstreamer::ElementFactory::make("volume")
         .name(super::audio::AUDIO_VOLUME_NAME)
         .build()
     else {
+        log::warn!("音频分支未建立：注册表里没有 volume 元素");
         return (None, None);
     };
-    let has_output_device = has_audio_output_device();
-    if !has_output_device {
-        log::warn!("未检测到音频输出设备，音频分支改用 fakesink（不发声，仅保持时钟同步）");
-    }
-    let Ok(sink) = (if has_output_device {
-        gstreamer::ElementFactory::make("autoaudiosink").build()
+    let has_output = has_audio_output();
+    let sink_name = if has_output {
+        AUDIO_SINK_FACTORY
     } else {
-        gstreamer::ElementFactory::make("fakesink")
-            .property("sync", true)
-            .build()
+        log::warn!("没有可用的音频输出，音频分支改用 fakesink（不发声，仅保持时钟同步）");
+        "fakesink"
+    };
+    let sink_builder = gstreamer::ElementFactory::make(sink_name);
+    let Ok(sink) = (if has_output {
+        sink_builder.build()
+    } else {
+        sink_builder.property("sync", true).build()
     }) else {
+        log::warn!("音频分支未建立：注册表里没有 {sink_name} 元素");
         return (None, None);
     };
 
-    if pipeline
-        .add_many([&queue, &convert, &volume, &sink])
-        .is_err()
-    {
+    if let Err(error) = pipeline.add_many([&queue, &convert, &volume, &sink]) {
+        log::warn!("音频分支未建立：加入管线失败 {error}");
         return (None, None);
     }
-    if gstreamer::Element::link_many([&queue, &convert, &volume, &sink]).is_err() {
+    if let Err(error) = gstreamer::Element::link_many([&queue, &convert, &volume, &sink]) {
+        log::warn!("音频分支未建立：元素互链失败 {error}");
         return (None, None);
     }
+    link_pad_by_media_type(src_pad, &queue);
 
     for element in [&queue, &convert, &volume, &sink] {
         if let Err(error) = element.sync_state_with_parent() {
             log::warn!("同步动态音频分支状态失败（{}）: {error}", element.name());
         }
     }
+    log::debug!("音频分支已建：sink = {sink_name}");
     (Some(queue), Some(volume))
 }
 
@@ -363,10 +406,13 @@ fn link_pad_by_media_type(pad: &gstreamer::Pad, target: &Element) {
     use gstreamer::prelude::*;
 
     let Some(sink_pad) = target.static_pad("sink") else {
+        log::warn!("分支入口 {} 没有 sink pad，无法接入", target.name());
         return;
     };
     if sink_pad.is_linked() {
         return;
     }
-    let _ = pad.link(&sink_pad);
+    if let Err(error) = pad.link(&sink_pad) {
+        log::warn!("{} 链接 {}.sink 失败: {error}", pad.name(), target.name());
+    }
 }
