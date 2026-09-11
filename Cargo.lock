@@ -775,6 +775,7 @@ dependencies = [
  "aweft-model",
  "aweft-project",
  "chrono",
+ "futures",
  "i-slint-core",
  "log",
  "serde",

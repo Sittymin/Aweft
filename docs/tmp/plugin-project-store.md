@@ -9,6 +9,11 @@
 > 界面与插件一样注册成订阅者，谁都不再记得要 pump。
 > 2026-09-11 决定（同日三改）：清单的权限申请从"申报项"变成"闸门"——宿主按
 > `permissions.project_write` 装配 linker，没批的写入口根本不链接，插件 import 它就在装载期被指名拒绝。
+> 2026-09-11 决定（同日四改）：Guest 搬上每插件一个的 worker 线程——命令分发只快照与发送，
+> 产出经事件通道回来，`set_status_line` 在调用中途直发 `Progress`（执行中刷新面板）。
+> `aweft-plugins` 与界面框架解耦：pump 归各客户端（GUI 只是其中之一，`spawn_local` 任务；
+> 测试/命令行同步 drain）。"写入返回前通知送达"作废，代之以"写入返回时 job 已发出"。
+> 忙时点击由插件作者按 `command-busy` 自行置灰，宿主只 backstop 拒绝，不排队。
 
 ## 三个问题的结论
 
@@ -71,11 +76,17 @@ plugins/<id>/
 
 ### Guest ABI v1
 导出：`aweft_describe_ptr`/`aweft_describe_len`（描述 JSON
-`{"abi":1,"commands":["计算最早时间","全部后移 1s"],"events":["time_changed"]}`）、
+`{"abi":1,"commands":["计算最早时间","全部后移 1s","全部前移 10s（延迟 10s）"],"events":["time_changed"]}`）、
 `aweft_on_command(i32) -> i32`、可选 `aweft_on_event_time(i32, i64, i64)`。
 导入 `aweft` 模块，宿主按清单授权装配 linker，分三组：
 读（`event_count`、`event_start_ms`、`event_end_ms`）与插件自己的输出
 （`set_status_line(line,ptr,len)`、`log_text(ptr,len)`）总是链接——它们进不了真相；
+工具（时间双原语：`now_ms() -> i64` 进程启动起的单调毫秒，只增不减不对应墙钟；
+`sleep_ms(ms)` 阻塞 worker 线程等待，UI 线程照常转）同样常链接：
+wasm32-unknown-unknown 的 Guest 没有时钟（`std::time` 是直接 panic 的桩），
+时间只能是宿主授予的 capability——`now_ms` 负责"算"（deadline 写法不漂移），
+`sleep_ms` 负责"等"（分段等保证刷新率与超调上界），光给一个都做不出倒计时；
+busy-loop 既烧 CPU、时序又无从换算；
 写真相（`set_event_start_ms`、`set_event_end_ms`）只在 `permissions.project_write` 为真时链接，
 未授予却 import 时 `check_grants` 在实例化前先报错并指名缺哪项权限
 （不先查的话只会得到一条含糊的"实例化失败：找不到 import"）。
@@ -83,16 +94,19 @@ plugins/<id>/
 **显示文本一律由插件自己组装**：旧的 `command_result_kind`/`command_format` 模板机制删除，
 宿主不做格式化与模板替换。命令编号未声明即拒绝执行。
 
-### 面板通用契约（宿主与片段之间只有三项）
+### 面板通用契约（宿主与片段之间只有四项，`command-busy` 可选）
 `in property <[string]> command-labels`、`in property <[string]> status-lines`、
-`callback command-clicked(int)`。片段自己决定这些值渲染成什么控件。
+`callback command-clicked(int)`，另有可选的 `in property <bool> command-busy`。
+片段自己决定这些值渲染成什么控件；busy 态由插件作者自行消费（置灰按钮），
+宿主漏进来的点击只会得到"正忙"拒绝，不排队。
 解释器组件无法嵌进编译期 Slint 树（`create_embedded` 是 internal 特性，`FactoryContext`
 外部造不出；复查 master 9933161 结论不变），因此只能独立开窗；Overlay 盖窗方案亦已否决
 （Wayland 下应用无法自定位窗口）。
 
 ### 真相侧（aweft-project）
 `ProjectStore` 是文档唯一所有者，时间写入的单一入口：`set_event_start_ms`、
-`set_event_end_ms`、`set_event_times_ms`（成对写，先结束后开始以避开钳制截断）、
+`set_event_end_ms`、`set_event_times_ms`（成对写，按移动方向自己选顺序：
+开始往早走先写开始、往晚走先写结束，合法成对目标在任一方向都不误触发钳制；固定"先结束"在负向平移时会把目标截断，示例插件命令 2 抓到过这个 bug）、
 `set_event_time_fuzzy`、`adjust_event_time`（含钳制）、`shift_event_times`
 （整体平移，不钳制，允许开始时间为负）。`record_time_write` 比对写入前后的成对值，
 **钳制后值未变就不记回执**，插件不会为一次无效写入收到通知。

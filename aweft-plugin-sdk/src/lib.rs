@@ -34,6 +34,8 @@ extern "C" {
     fn set_event_end_ms(handle: i32, ms: i64) -> i32;
     fn set_status_line(line: i32, ptr: *const u8, len: i32);
     fn log_text(ptr: *const u8, len: i32);
+    fn now_ms() -> i64;
+    fn sleep_ms(ms: i64);
 }
 
 /// 一条命令：按钮文本与处理函数。命令编号就是它在 `COMMANDS` 里的下标。
@@ -107,6 +109,20 @@ impl Api {
     /// 写一行宿主日志（诊断用，不显示给用户）。
     pub fn log(&self, message: &str) {
         unsafe { log_text(message.as_ptr(), message.len() as i32) }
+    }
+
+    /// 睡眠 `ms` 毫秒（负数按 0 处理）。实现是宿主侧 worker 线程的阻塞等待，
+    /// UI 线程不受影响；配合 `now_ms` + `set_status` 可做倒计时、进度条之类的长任务。
+    /// 睡多久 worker 就被占多久：极长的睡眠会拖住该插件后续的命令与通知。
+    pub fn sleep_ms(&self, ms: i64) {
+        unsafe { sleep_ms(ms) }
+    }
+
+    /// 单调时钟（毫秒，自宿主进程启动起）。只增不减，不对应墙钟、不受校时回拨影响。
+    /// wasm32-unknown-unknown 的 Guest 自己没有时钟（`std::time` 是直接 panic 的桩），
+    /// 看时间只能问宿主要；`sleep_ms` 负责"等"，这个负责"算"，两者配合才有倒计时。
+    pub fn now_ms(&self) -> i64 {
+        unsafe { now_ms() }
     }
 }
 

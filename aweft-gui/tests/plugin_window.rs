@@ -85,6 +85,22 @@ fn status_line(store: &AppStore, line: usize) -> String {
         .unwrap_or_default()
 }
 
+/// pump 到条件成立（带超时）：worker 回事件要几毫秒，单次 drain 可能扑空。
+/// 真机上是 `spawn_local` 的 pump 事件驱动等待，这里用轮询等价。
+fn drain_until(store: &Rc<RefCell<AppStore>>, mut cond: impl FnMut(&AppStore) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if cond(&store.borrow()) {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("等待插件事件超时");
+        }
+        store.borrow_mut().drain_plugin_events();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 /// 未过滤的映射行模型（Rows → Map）：投影刷新后的显示值。
 fn all_rows(store: &AppStore) -> ModelRc<aweft_gui::bridge::types::SlintSubtitleRow> {
     let rows_model: Rc<aweft_gui::store::sequence_rows_model::SequenceRowsModel> =
@@ -118,7 +134,10 @@ fn plugins_load_from_directory_with_guest_described_commands() {
         .expect("插件目录里的示例插件未装载");
     // 命令标签来自 Guest 自描述，主程序不硬编码。
     assert_eq!(plugin.title, "示例插件");
-    assert_eq!(plugin.commands, ["计算最早时间", "全部后移 1s"]);
+    assert_eq!(
+        plugin.commands,
+        ["计算最早时间", "全部后移 1s", "全部前移 10s（延迟 10s）"]
+    );
     assert!(plugin.panel().is_some(), "插件自带面板应可用");
 }
 
@@ -138,20 +157,24 @@ fn gui_time_edit_reaches_subscribed_plugin() {
             .unwrap();
         store_mut.evaluate_depsgraph();
     }
-    // 无需任何 GUI 侧通知代码：写入返回前存储就把回执广播给了订阅的插件。
-    assert_eq!(
-        status_line(&store.borrow(), 2),
-        "最近通知：第 0 行 00:00:01.500 ~ 00:00:02.000"
-    );
+    // 无事件循环时手动 pump（真机上是 spawn_local 的 pump 在做同一件事）：
+    // 写入返回时通知 job 刚发出，drain 后 Guest 才处理完。
+    drain_until(&store, |store| {
+        status_line(store, 2) == "最近通知：第 0 行 00:00:01.500 ~ 00:00:02.000"
+    });
 }
 
 #[test]
 fn command_writes_through_the_store_and_refreshes_rows() {
     let (_instance, store) = setup();
+    // 分发只发送不等跑完，drain 后 worker 的产出才落真相。
     store
         .borrow_mut()
         .run_plugin_command("test-plugin", 1)
-        .expect("命令执行失败");
+        .expect("命令分发失败");
+    drain_until(&store, |store| {
+        event_starts(store) == vec![2000, 4000]
+    });
     // 命令写的是同一个真相存储：全部行 +1s。
     assert_eq!(event_starts(&store.borrow()), vec![2000, 4000]);
     // 写入经广播进了界面的刷新队列，投影出的行也跟着变了（不是只改了数据）。
@@ -171,8 +194,10 @@ fn guest_side_computation_reads_current_rows() {
     store
         .borrow_mut()
         .run_plugin_command("test-plugin", 0)
-        .expect("命令执行失败");
-    assert_eq!(status_line(&store.borrow(), 0), "最早：00:00:01.000");
+        .expect("命令分发失败");
+    drain_until(&store, |store| {
+        status_line(store, 0) == "最早：00:00:01.000"
+    });
 }
 
 #[test]
@@ -184,6 +209,30 @@ fn undeclared_command_is_rejected() {
         .expect_err("未声明的命令编号应被拒绝");
     assert!(format!("{error:?}").contains("未声明命令"));
     assert_eq!(event_starts(&store.borrow()), vec![1000, 3000]);
+}
+
+#[test]
+fn second_command_while_busy_is_rejected() {
+    let (_instance, store) = setup();
+    store
+        .borrow_mut()
+        .run_plugin_command("test-plugin", 0)
+        .expect("第一条命令分发失败");
+    // 上一条没跑完就再点：宿主 backstop 直接拒绝（面板侧由插件作者置灰）。
+    // busy 标志是分发时同步置位的，不需要等 worker。
+    let error = store
+        .borrow_mut()
+        .run_plugin_command("test-plugin", 0)
+        .expect_err("忙时第二条命令应被拒绝");
+    assert!(format!("{error:?}").contains("正忙"));
+    drain_until(&store, |store| {
+        !store.plugin_manager().is_busy("test-plugin")
+    });
+    // 出清后又能跑了。
+    store
+        .borrow_mut()
+        .run_plugin_command("test-plugin", 0)
+        .expect("出清后应能再跑");
 }
 
 #[test]

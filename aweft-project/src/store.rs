@@ -233,9 +233,13 @@ impl ProjectStore {
     }
 
     /// 同时设置某行起止时间（毫秒），供一次写回一行的整对值。
-    /// 顺序必须先结束、后开始：`Sequence::adjust_event_time` 用另一端的当前值做
-    /// 钳制，先写开始会把「时长小于平移量」的行截断（例如 1000–1200 平移 1s）。
-    /// 两端都没变时不记回执。
+    /// 写入顺序按移动方向选：`Sequence::adjust_event_time` 用另一端的*当前*值做
+    /// 钳制，顺序错了会把合法的成对目标误截断——旧代码固定"先结束"，
+    /// 负向平移（30000–31000 写 20000–21000）会被截成 20000–30000。
+    /// 规则：开始往早走（或不动）时先写开始——新开始恒不大于旧结束；
+    /// 开始往晚走时先写结束——合法目标必有 new_end ≥ new_start > 旧开始。
+    /// 合法成对目标在任一方向都不触发钳制；目标本身非法（开始晚于结束）时
+    /// 第二笔照常被钳制。两端都没变时不记回执。
     pub fn set_event_times_ms(
         &mut self,
         origin: Origin,
@@ -244,19 +248,32 @@ impl ProjectStore {
         end_ms: i64,
     ) -> Result<()> {
         let (current_start, current_end) = self.event_times_ms(id)?;
-        if end_ms != current_end {
-            self.doc.project.sequence_mut().adjust_event_time(
-                id,
-                false,
-                TimeDelta::milliseconds(end_ms - current_end),
-            )?;
-        }
-        if start_ms != current_start {
-            self.doc.project.sequence_mut().adjust_event_time(
-                id,
-                true,
-                TimeDelta::milliseconds(start_ms - current_start),
-            )?;
+        let write_start = |store: &mut Self| -> Result<()> {
+            if start_ms != current_start {
+                store.doc.project.sequence_mut().adjust_event_time(
+                    id,
+                    true,
+                    TimeDelta::milliseconds(start_ms - current_start),
+                )?;
+            }
+            Ok(())
+        };
+        let write_end = |store: &mut Self| -> Result<()> {
+            if end_ms != current_end {
+                store.doc.project.sequence_mut().adjust_event_time(
+                    id,
+                    false,
+                    TimeDelta::milliseconds(end_ms - current_end),
+                )?;
+            }
+            Ok(())
+        };
+        if start_ms <= current_start {
+            write_start(self)?;
+            write_end(self)?;
+        } else {
+            write_end(self)?;
+            write_start(self)?;
         }
         self.record_time_write(origin, id, (current_start, current_end))?;
         Ok(())
@@ -610,6 +627,24 @@ mod tests {
             .set_event_times_ms(Origin::Plugin("p".into()), ids[0], 2000, 2200)
             .expect("重复写入失败");
         assert_eq!(rec.receipts().len(), 1, "值没变不应记回执");
+    }
+
+    #[test]
+    fn pair_write_backward_is_not_clamped_by_stale_start() {
+        // 旧实现固定"先结束"：30000–31000 写 20000–21000 时，
+        // 结束 31000→21000 先撞上还是旧值的开始 30000，被截成 20000–30000。
+        // 方向选序后合法成对目标在任一方向都不触发钳制。
+        let (mut store, ids) = store_with_events(&[(30_000, 31_000)]);
+        let rec = Recorder::new(Origin::LocalCli);
+        store.subscribe(Rc::clone(&rec) as SubscriberRef);
+        store
+            .set_event_times_ms(Origin::Plugin("p".into()), ids[0], 20_000, 21_000)
+            .expect("成对写入失败");
+        assert_eq!(
+            store.event_times_ms(ids[0]).expect("读回失败"),
+            (20_000, 21_000)
+        );
+        assert_eq!(time_of(&rec.receipts()[0]), (20_000, 21_000));
     }
 
     #[test]

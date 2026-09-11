@@ -1,20 +1,30 @@
 use aweft_model::ids::ItemId;
 use aweft_project::ProjectStore;
+use futures::channel::mpsc::UnboundedSender;
 
-/// Guest 可见的一行快照。句柄 = 本向量下标，宿主与 Guest 按
-/// `ProjectStore::ordered_event_ids` 的确定性顺序对齐。
-#[derive(Debug, Clone)]
-pub(crate) struct RowSnap {
-    pub id: ItemId,
-    pub start_ms: i64,
-    pub end_ms: i64,
-}
+use crate::worker::{PluginEvent, RowSnap, WorkerEvent};
 
 /// wasmi `Store` 携带的宿主上下文。
 ///
 /// Guest 的读写一律落在本快照上，不碰工程存储：一来 Guest 能立刻读到自己刚写的值，
 /// 二来写回真相发生在 Guest 调用结束、插件借用释放之后——存储会在写入时广播给
 /// 其它订阅者，而其中可能又是本插件，借用未释放就会撞成嵌套借用。
+/// 从存储重建行快照（纯读，可在任意线程为 worker 打包调用）。
+/// 调用方语义与旧 `sync_from_store` 一致：快照替换后上一批未写回的脏行即丢弃。
+pub(crate) fn snapshot_rows(store: &ProjectStore) -> Vec<RowSnap> {
+    let mut rows = Vec::new();
+    for id in store.ordered_event_ids() {
+        if let Ok((start_ms, end_ms)) = store.event_times_ms(id) {
+            rows.push(RowSnap {
+                id,
+                start_ms,
+                end_ms,
+            });
+        }
+    }
+    rows
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct HostCtx {
     pub rows: Vec<RowSnap>,
@@ -22,21 +32,28 @@ pub(crate) struct HostCtx {
     pub dirty: Vec<ItemId>,
     pub status_lines: Vec<String>,
     pub log_lines: Vec<String>,
+    /// 进度直发通道：`set_status_line`/`log_text` 宿主函数在 Guest 调用中途
+    /// 直接经此发送 `Progress`，不等调用返回。发送端是 `Send`，故本类型仍是
+    /// `Send`，整个 `Store<HostCtx>` 可搬到 worker 线程。
+    /// 通道由装载方（`PluginWorker::spawn`）在搬运前装好；测试里直接调宿主
+    /// 函数时为 `None`，此时只写本地缓存。
+    pub plugin_id: String,
+    pub event_sink: Option<UnboundedSender<PluginEvent>>,
 }
 
 impl HostCtx {
-    /// 从存储重建行快照。每次调用 Guest 导出前执行一次；未写回的脏行会随之丢弃，
-    /// 所以调用方要先 `take_dirty_rows` 把上一批写回。
-    pub fn sync_from_store(&mut self, store: &ProjectStore) {
-        self.rows.clear();
-        for id in store.ordered_event_ids() {
-            if let Ok((start_ms, end_ms)) = store.event_times_ms(id) {
-                self.rows.push(RowSnap {
-                    id,
-                    start_ms,
-                    end_ms,
-                });
-            }
+    /// 把本次 `set_status_line`/`log_text` 的产出实时发给客户端。
+    /// 跑在 worker 线程的 Guest 调用中途；无界发送不阻塞，接收端已关闭则丢弃。
+    pub fn emit_progress(&self) {
+        let Some(sink) = self.event_sink.clone() else {
+            return;
+        };
+        let event = WorkerEvent::Progress {
+            status_lines: self.status_lines.clone(),
+            log_lines: self.log_lines.clone(),
+        };
+        if sink.unbounded_send((self.plugin_id.clone(), event)).is_err() {
+            log::warn!("插件事件通道已关闭，进度丢弃（{}）", self.plugin_id);
         }
     }
 

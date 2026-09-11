@@ -7,11 +7,14 @@ use slint_interpreter::{
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-/// 面板必须提供的属性与回调名。宿主与插件片段之间只有这三项约定，
+/// 面板必须提供的属性与回调名。宿主与插件片段之间只有这几项约定，
 /// 宿主不知道任何具体功能，插件面板自己决定这些值渲染成什么控件。
+/// `command-busy` 是可选的第 4 项：老面板没有它也能工作（此处 best-effort，
+/// 属性缺失就忽略）；新面板用它置灰按钮——忙时点不点得由插件作者自己决定。
 pub const COMMAND_LABELS_PROP: &str = "command-labels";
 pub const STATUS_LINES_PROP: &str = "status-lines";
 pub const COMMAND_CLICKED_CALLBACK: &str = "command-clicked";
+pub const COMMAND_BUSY_PROP: &str = "command-busy";
 
 fn result_to_definition(result: &CompilationResult) -> Result<ComponentDefinition> {
     if result.has_errors() {
@@ -102,6 +105,14 @@ impl PluginWindow {
         let _ = self
             .instance
             .set_property(STATUS_LINES_PROP, string_list_value(lines));
+    }
+
+    /// 设置面板忙态（命令执行中）。老面板没有该属性时静默忽略，
+    /// 因此宿主侧升级不强制插件作者改面板。
+    pub fn set_busy(&self, busy: bool) {
+        let _ = self
+            .instance
+            .set_property(COMMAND_BUSY_PROP, Value::Bool(busy));
     }
 
     /// 用户关掉窗口后为 false：图形界面据此决定重新显示还是新建。

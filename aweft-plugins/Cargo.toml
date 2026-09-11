@@ -11,6 +11,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 log = "0.4.33"
 wasmi = "2.0.0"
+# worker → 客户端的事件通道（与主工程波形 pump 同款；本成员不持有接收端，
+# pump 归各客户端自己：图形界面用 spawn_local，命令行/测试用 try_next 轮询）。
+futures = "0.3"
 # Slint 运行时解析：与主工程同 git rev，保证版本一致。
 # 上游 master 的 slint-build/slint 以同一 rev 固定，此处跟随。
 slint-interpreter = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d" }

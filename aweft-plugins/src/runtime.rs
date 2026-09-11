@@ -1,11 +1,12 @@
 use anyhow::{bail, Context, Result};
 use aweft_model::ids::ItemId;
-use aweft_project::ProjectStore;
+use futures::channel::mpsc::UnboundedSender;
 use serde::Deserialize;
 use wasmi::{Caller, Engine, Extern, Instance, Linker, Memory, Module, Store};
 
-use crate::ctx::{HostCtx, RowSnap};
+use crate::ctx::HostCtx;
 use crate::manifest::Permissions;
+use crate::worker::{PluginEvent, RowSnap, WorkerEvent};
 
 /// Guest 导入的宿主模块名，与 `aweft_plugin_sdk` 的 `#[link]` 模块名一致。
 pub const HOST_MODULE: &str = "aweft";
@@ -71,11 +72,6 @@ impl GuestPlugin {
         self.store.data().status_lines.clone()
     }
 
-    /// Guest 经 `log_text` 写出的诊断行。
-    pub fn log_lines(&self) -> Vec<String> {
-        self.store.data().log_lines.clone()
-    }
-
     /// 从 WASM 字节码装载插件并读出描述。
     /// 宿主入口按清单授予装配：未申请 `project_write` 的插件根本没有写真相的入口，
     /// 它 import 了就在装载期失败（见 `check_grants`）。
@@ -113,7 +109,26 @@ impl GuestPlugin {
             )
             .context("宿主函数 event_end_ms 注册失败")?;
 
+        // 工具：时间双原语，不进真相，无需申请。
+        // 时钟：进程启动起的单调毫秒（`Instant` 差值，不受墙钟校时回拨影响）。
+        linker
+            .func_wrap(HOST_MODULE, "now_ms", |_: Caller<HostCtx>| -> i64 {
+                mono_ms()
+            })
+            .context("宿主函数 now_ms 注册失败")?;
+        // 睡眠：阻塞的是 worker 线程，UI 线程照常转；极长的睡眠会拖住该插件
+        // 后续的命令与通知（v1 无抢占，失控 Guest 的强杀是后续加固的事）。
+        linker
+            .func_wrap(HOST_MODULE, "sleep_ms", |_: Caller<HostCtx>, ms: i64| {
+                let ms = ms.max(0) as u64;
+                if ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+            })
+            .context("宿主函数 sleep_ms 注册失败")?;
         // 输出：只写插件自己的面板状态行与诊断日志，进不了真相。
+        // 每次写完实时发 `Progress`：worker 线程的 Guest 调用中途面板就能刷新，
+        // 不必等调用返回（`emit_progress` 内是无界发送，不阻塞 Guest）。
         linker
             .func_wrap(
                 HOST_MODULE,
@@ -127,6 +142,7 @@ impl GuestPlugin {
                         }
                     };
                     caller.data_mut().set_status_line(line, text);
+                    caller.data().emit_progress();
                 },
             )
             .context("宿主函数 set_status_line 注册失败")?;
@@ -134,11 +150,14 @@ impl GuestPlugin {
             .func_wrap(
                 HOST_MODULE,
                 "log_text",
-                |mut caller: Caller<HostCtx>, ptr: i32, len: i32| match read_caller_str(
-                    &caller, ptr, len,
-                ) {
-                    Ok(text) => caller.data_mut().log_lines.push(text),
-                    Err(e) => log::warn!("插件日志读取失败：{e:?}"),
+                |mut caller: Caller<HostCtx>, ptr: i32, len: i32| {
+                    match read_caller_str(&caller, ptr, len) {
+                        Ok(text) => {
+                            caller.data_mut().log_lines.push(text);
+                            caller.data().emit_progress();
+                        }
+                        Err(e) => log::warn!("插件日志读取失败：{e:?}"),
+                    }
                 },
             )
             .context("宿主函数 log_text 注册失败")?;
@@ -187,9 +206,34 @@ impl GuestPlugin {
         Ok(plugin)
     }
 
-    /// 从存储重建行快照。每次进入 Guest 前调一次。
-    pub fn sync_from_store(&mut self, store: &ProjectStore) {
-        self.store.data_mut().sync_from_store(store);
+    /// 装好事件直发通道（`PluginWorker::spawn` 在把本实例搬上 worker 线程前调一次）。
+    pub(crate) fn set_event_sink(
+        &mut self,
+        plugin_id: String,
+        sink: UnboundedSender<PluginEvent>,
+    ) {
+        let ctx = self.store.data_mut();
+        ctx.plugin_id = plugin_id;
+        ctx.event_sink = Some(sink);
+    }
+
+    /// 装入调用方打包好的行快照（worker 侧替代 `sync_from_store` 的入口）。
+    /// 脏标记随之清空：上一批未写回的脏行即丢弃，调用方须先 `take_dirty_rows`。
+    pub(crate) fn install_snapshot(&mut self, rows: Vec<RowSnap>) {
+        let ctx = self.store.data_mut();
+        ctx.rows = rows;
+        ctx.dirty.clear();
+    }
+
+    /// 经直发通道发出一个事件。接收端已关闭时返回 `Err`，调用方据此结束 worker。
+    pub(crate) fn emit(&self, event: WorkerEvent) -> Result<()> {
+        let ctx = self.store.data();
+        let Some(sink) = ctx.event_sink.clone() else {
+            return Ok(());
+        };
+        sink.unbounded_send((ctx.plugin_id.clone(), event))
+            .map_err(|_| anyhow::anyhow!("插件事件通道已关闭（{}）", ctx.plugin_id))?;
+        Ok(())
     }
 
     /// 行 id → Guest 句柄（快照下标）。按 `ordered_event_ids` 的顺序编号。
@@ -240,6 +284,15 @@ impl GuestPlugin {
             .get_typed_func::<i32, i32>(&self.store, "aweft_on_command")
             .context("插件声明了命令但缺少导出 aweft_on_command")
     }
+}
+
+/// 宿主进程启动起的单调毫秒，供 `now_ms` 宿主函数。`Instant` 差值只增不减，
+/// 与墙钟无关；Guest 侧 `std::time` 不可用，这是它唯一能看到的时间。
+fn mono_ms() -> i64 {
+    static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    BASE.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as i64
 }
 
 /// 清单没批的写能力，插件 import 了就不给装载。
@@ -309,4 +362,16 @@ fn call_export(store: &mut Store<HostCtx>, instance: &Instance, name: &str) -> R
         .with_context(|| format!("缺少导出 {name}"))?;
     func.call(&mut *store, ())
         .with_context(|| format!("导出 {name} 调用失败"))
+}
+
+#[cfg(test)]
+mod tests {
+    /// `GuestPlugin` 必须能搬上 worker 线程：`Store<HostCtx>` 的 `Send` 来自
+    /// wasmi 内部的显式实现 + `HostCtx` 全是 owned 数据（含事件发送端）。
+    /// 若某天 `HostCtx` 里混进 `!Send` 的东西，这里先炸而不是在 `spawn` 处。
+    #[test]
+    fn guest_plugin_is_send_for_worker_threads() {
+        fn assert_send<T: Send>() {}
+        assert_send::<super::GuestPlugin>();
+    }
 }
