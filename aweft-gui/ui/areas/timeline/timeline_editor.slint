@@ -137,13 +137,16 @@ export component TimelineEditor inherits Rectangle {
                 let r: SlintSubtitleRow = root.rows[row];
                 root.drag-item-id = r.item-id;
                 root.block-dragging = true;
+                // 下面两处实参取 root.drag-item-id 而不是再读一次 r.item-id：
+                // 同一函数内一个 string 字段被先用（赋值给属性，生成码按移动处理）
+                // 再借用，普通（非 live-preview）生成器会报 E0382。
                 if r.row-type == SlintSubtitleRowType.GroupHeader {
                     // 组头：选中即展开子树为直接选中（select_single），
                     // 拖动等价于移动组内全部片段
-                    SequenceCallbacks.select-row(r.item-id, SlintSelectionModifier.none);
+                    SequenceCallbacks.select-row(root.drag-item-id, SlintSelectionModifier.none);
                 } else if r.selected == SlintSelectionState.Unselected {
                     // 事件：已在选中集内则保留现有多选（整体移动），否则单选该行
-                    SequenceCallbacks.select-row(r.item-id, SlintSelectionModifier.none);
+                    SequenceCallbacks.select-row(root.drag-item-id, SlintSelectionModifier.none);
                 }
             }
             if !root.block-dragging {

@@ -232,3 +232,11 @@ export global PluginCallbacks {
     // 行编辑器工具条上的插件按钮：参数是 PluginState.plugin-titles 的下标。
     callback open-plugin-panel(index: int);
 }
+
+// 媒体选择器回调（仅 Android 用，见 MediaPickerState）。
+export global MediaPickerCallbacks {
+    // 点选第 index 行
+    callback pick-media(index: int);
+    // 取消（点遮罩或取消按钮）
+    callback cancel-media();
+}

@@ -25,6 +25,10 @@ pub struct AppStore {
     pub(crate) plugin_bridge: crate::plugin_bridge::PluginBridge,
     /// 外来写入的排队句柄：`project_watch` 的订阅者往里放，`dispatch` 收尾时取走换 tag。
     pub(crate) refresh_queue: crate::store::project_watch::RefreshQueue,
+    /// Android 媒体选择对话框的一次等待：查库后填入，选择/取消回调取走。
+    /// 桌面走 rfd 用不到，字段本身只在 Android 编译。
+    #[cfg(target_os = "android")]
+    pub(crate) pending_media_pick: Option<crate::file_picker::android::PendingPick>,
 }
 
 impl AppStore {
@@ -68,6 +72,8 @@ impl AppStore {
             clipboard: Clipboard::new(),
             plugin_bridge,
             refresh_queue,
+            #[cfg(target_os = "android")]
+            pending_media_pick: None,
         }
     }
 

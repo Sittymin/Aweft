@@ -3,6 +3,7 @@ pub mod app;
 pub mod bridge;
 pub mod clipboard;
 pub mod depsgraph;
+pub mod file_picker;
 pub mod plugin_bridge;
 pub mod projections;
 pub mod reducers;

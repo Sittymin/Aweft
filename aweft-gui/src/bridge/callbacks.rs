@@ -4,12 +4,19 @@ use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, MainWindow, NodeGraphCallbacks,
     PluginCallbacks, SequenceCallbacks, VideoCallbacks,
 };
+// 媒体选择弹层的回调只在 Android 装配（见 setup_media_picker_callbacks）。
+#[cfg(target_os = "android")]
+use crate::bridge::types::MediaPickerCallbacks;
 
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
 use aweft_model::ids::ItemId;
 use log::warn;
+// winit 事件只在桌面后端存在：Android 特性集里 winit 后端被彻底排除
+//（见 aweft-gui/Cargo.toml），slint::winit_030 模块在该目标上不存在。
+#[cfg(not(target_os = "android"))]
 use slint::winit_030::winit::{self, event::WindowEvent};
+#[cfg(not(target_os = "android"))]
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use slint::{ComponentHandle, Model, RenderingState};
 use std::{cell::RefCell, rc::Rc};
@@ -18,6 +25,7 @@ use std::{cell::RefCell, rc::Rc};
 pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_area_type_callback(instance, Rc::clone(&store));
     setup_rendering_notifier_callback(instance, Rc::clone(&store));
+    #[cfg(not(target_os = "android"))]
     setup_winit_window_event_callback(instance, Rc::clone(&store));
     setup_actionzone_drag_callback(instance, Rc::clone(&store));
     setup_actionzone_drag_end_callback(instance, Rc::clone(&store));
@@ -40,6 +48,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_video_callbacks(instance, Rc::clone(&store));
     setup_audio_callbacks(instance, Rc::clone(&store));
     setup_plugin_callbacks(instance, Rc::clone(&store));
+    setup_media_picker_callbacks(instance, Rc::clone(&store));
 }
 
 /// 设置视口回调：打开/追加/更换视频走系统文件对话框（rfd xdg-portal，异步不阻塞 UI）。
@@ -59,23 +68,22 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         vstate.set_time_bars(slint::ModelRc::from(s.ui_models.video.time_bars.clone()));
     }
 
-    // 打开/追加视频（首个自动成为主视频）：系统文件对话框（异步不阻塞 UI）
+    // 打开/追加视频（首个自动成为主视频）：系统文件对话框（异步不阻塞 UI）。
+    // Android 没有 rfd，走 MediaStore 查库 + Slint 自绘弹层（见 file_picker::android）。
     {
         let weak = instance.as_weak();
         let s = Rc::clone(&store);
+        #[cfg(not(target_os = "android"))]
         instance.global::<VideoCallbacks>().on_open_video(move || {
-            let future = rfd::AsyncFileDialog::new()
-                .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
-                .pick_file();
+            let future = crate::file_picker::pick_video_file();
             let weak = weak.clone();
             let store = Rc::clone(&s);
             let _ = slint::spawn_local(async move {
                 // 用户取消选择
-                let Some(file) = future.await else {
+                let Some(path) = future.await else {
                     return;
                 };
                 // 本地路径 → file URI（playbin 需要 URI）
-                let path = file.path().to_path_buf();
                 let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
                     log::warn!("打开视频：路径无法转换为 URI：{}", path.display());
                     return;
@@ -88,6 +96,16 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                     &weak,
                 );
             });
+        });
+        #[cfg(target_os = "android")]
+        instance.global::<VideoCallbacks>().on_open_video(move || {
+            let weak = weak.clone();
+            let store = Rc::clone(&s);
+            let _ = slint::spawn_local(crate::file_picker::android::run_android_picker(
+                weak,
+                store,
+                crate::file_picker::android::PickKind::Append,
+            ));
         });
     }
 
@@ -248,22 +266,33 @@ fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     }
 
     // 右键任意视频"更换视频"：重新选择文件原地替换
+    // （Android 分支同上，选完按原下标 Replace，见 file_picker::android）。
     {
         let weak = instance.as_weak();
         let s = Rc::clone(&store);
+        #[cfg(target_os = "android")]
         instance
             .global::<VideoCallbacks>()
             .on_replace_video(move |index| {
-                let future = rfd::AsyncFileDialog::new()
-                    .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
-                    .pick_file();
+                let weak = weak.clone();
+                let store = Rc::clone(&s);
+                let _ = slint::spawn_local(crate::file_picker::android::run_android_picker(
+                    weak,
+                    store,
+                    crate::file_picker::android::PickKind::Replace(index.max(0) as usize),
+                ));
+            });
+        #[cfg(not(target_os = "android"))]
+        instance
+            .global::<VideoCallbacks>()
+            .on_replace_video(move |index| {
+                let future = crate::file_picker::pick_video_file();
                 let weak = weak.clone();
                 let store = Rc::clone(&s);
                 let _ = slint::spawn_local(async move {
-                    let Some(file) = future.await else {
+                    let Some(path) = future.await else {
                         return;
                     };
-                    let path = file.path().to_path_buf();
                     let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
                         log::warn!("更换视频：路径无法转换为 URI：{}", path.display());
                         return;
@@ -745,9 +774,34 @@ fn handle_rendering_setup(
 ) {
     log::info!("窗口初始化完成",);
     let windows_size = instance.window().size();
+    // 现读一份 theme：store 里那份是建窗时读的，Android 上那一刻 scale_factor
+    // 还是 1.0，真值要到本回调才有。
+    let theme = crate::bridge::types::ThemeSettings::from_main_window(instance);
+    let scale_factor = theme.get_scale_factor();
+    // Slint 的 safe-area-insets 是逻辑像素，顶点坐标系是物理像素，走 theme 换算。
+    let inset = {
+        let px = |logical: f32| theme.to_physical_px(f64::from(logical)).round().max(0.0) as u32;
+        crate::screen::primitives::Insets {
+            left: px(instance.get_safe_inset_left()),
+            top: px(instance.get_safe_inset_top()),
+            right: px(instance.get_safe_inset_right()),
+            bottom: px(instance.get_safe_inset_bottom()),
+        }
+    };
+    log::info!(
+        "窗口 {}x{}@{scale_factor:.2}，安全区（物理像素）左{} 上{} 右{} 下{}",
+        windows_size.width,
+        windows_size.height,
+        inset.left,
+        inset.top,
+        inset.right,
+        inset.bottom
+    );
     let action = Action::Screen(crate::actions::screen::ScreenAction::InitializeLayout {
         width: windows_size.width,
         height: windows_size.height,
+        scale_factor,
+        inset,
     });
     dispatch_and_render(store, action, &instance.as_weak());
 
@@ -770,6 +824,34 @@ fn handle_rendering_setup(
     }
 }
 
+/// 媒体选择弹层的选择/取消（仅 Android）：取走 AppStore 里的等待，
+/// 把下标（或取消）发回给 run_android_picker 的 oneshot。弹层收起由
+/// run_android_picker 在收到回执后统一做，这里只管送信。
+#[cfg(target_os = "android")]
+fn setup_media_picker_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
+    let s = Rc::clone(&store);
+    instance
+        .global::<MediaPickerCallbacks>()
+        .on_pick_media(move |index| {
+            if let Some(pending) = s.borrow_mut().pending_media_pick.take() {
+                let _ = pending.reply.send(Some(index.max(0) as usize));
+            }
+        });
+    let s = Rc::clone(&store);
+    instance
+        .global::<MediaPickerCallbacks>()
+        .on_cancel_media(move || {
+            if let Some(pending) = s.borrow_mut().pending_media_pick.take() {
+                let _ = pending.reply.send(None);
+            }
+        });
+}
+
+/// 空实现：桌面没有媒体选择弹层（走 rfd），保持 setup_callbacks 调用点无分叉。
+#[cfg(not(target_os = "android"))]
+fn setup_media_picker_callbacks(_instance: &MainWindow, _store: Rc<RefCell<AppStore>>) {}
+
+#[cfg(not(target_os = "android"))]
 fn setup_winit_window_event_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let window = instance.window();
     let weak_instance = instance.as_weak();
@@ -810,6 +892,7 @@ fn setup_winit_window_event_callback(instance: &MainWindow, store: Rc<RefCell<Ap
     });
 }
 
+#[cfg(not(target_os = "android"))]
 fn handle_resized(
     instance: &MainWindow,
     store: &Rc<RefCell<AppStore>>,
@@ -825,6 +908,7 @@ fn handle_resized(
     dispatch_and_render(store, action, &instance.as_weak());
 }
 
+#[cfg(not(target_os = "android"))]
 fn handle_scale_factor_changed(
     instance: &MainWindow,
     store: &Rc<RefCell<AppStore>>,
@@ -1307,7 +1391,7 @@ fn setup_sequence_ungroup_callbacks(instance: &MainWindow, store: Rc<RefCell<App
 /// 统一的 dispatch 和渲染逻辑。
 ///
 /// reducer 修改数据并向依赖图打 tag；`evaluate_depsgraph` 只重算受影响的投影。
-fn dispatch_and_render(
+ pub(crate) fn dispatch_and_render(
     store: &Rc<RefCell<AppStore>>,
     action: Action,
     _weak_instance: &slint::Weak<MainWindow>,

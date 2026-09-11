@@ -20,25 +20,26 @@ pub struct ScrAreaMap {
 impl ScrAreaMap {
     pub fn create_three_area_layout(
         &mut self,
-        width: &u32,
-        height: &u32,
+        rect: &Rcti,
         theme_settings: &ThemeSettings,
     ) -> Vec<ScrAreaKey> {
+        let (xmin, xmax) = (rect.xmin, rect.xmax);
+        let (ymin, ymax) = (rect.ymin, rect.ymax);
         // 计算分割点
-        let mid_x = width / 2; // 水平中点
-        let mid_y = height / 2; // 垂直中点
+        let mid_x = (xmin + xmax) / 2; // 水平中点
+        let mid_y = (ymin + ymax) / 2; // 垂直中点
 
         // 创建6个顶点（Slint坐标系，左上角原点）
         // 外围4个顶点
-        let v_top_left = self.create_vertex(0, 0); // 左上角
-        let v_top_right = self.create_vertex(width - 1, 0); // 右上角
-        let v_bottom_right = self.create_vertex(width - 1, height - 1); // 右下角
-        let v_bottom_left = self.create_vertex(0, height - 1); // 左下角
+        let v_top_left = self.create_vertex(xmin, ymin); // 左上角
+        let v_top_right = self.create_vertex(xmax, ymin); // 右上角
+        let v_bottom_right = self.create_vertex(xmax, ymax); // 右下角
+        let v_bottom_left = self.create_vertex(xmin, ymax); // 左下角
 
         // 内部2个顶点（只需要这两个！）
-        let v_mid_top = self.create_vertex(mid_x, 0); // 上边中点
-        let v_left_middle = self.create_vertex(0, mid_y); // 左边中点
-        let v_right_middle = self.create_vertex(width - 1, mid_y); // 右边中点
+        let v_mid_top = self.create_vertex(mid_x, ymin); // 上边中点
+        let v_left_middle = self.create_vertex(xmin, mid_y); // 左边中点
+        let v_right_middle = self.create_vertex(xmax, mid_y); // 右边中点
         let v_mid_middle = self.create_vertex(mid_x, mid_y); // 中心点
 
         // 创建边
