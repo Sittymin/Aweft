@@ -99,9 +99,24 @@ busy-loop 既烧 CPU、时序又无从换算；
 `callback command-clicked(int)`，另有可选的 `in property <bool> command-busy`。
 片段自己决定这些值渲染成什么控件；busy 态由插件作者自行消费（置灰按钮），
 宿主漏进来的点击只会得到"正忙"拒绝，不排队。
-解释器组件无法嵌进编译期 Slint 树（`create_embedded` 是 internal 特性，`FactoryContext`
-外部造不出；复查 master 9933161 结论不变），因此只能独立开窗；Overlay 盖窗方案亦已否决
-（Wayland 下应用无法自定位窗口）。
+
+装载路线（2026-09-12 按 pin 的 slint rev `5e097e2` 逐条核实，订正此前"无法嵌入"的结论）：
+嵌入这条路本来就只差一个入口。`FactoryContext` 是公开的且字段全 pub
+（`internal/core/component_factory.rs:14`），`ComponentFactory::new` 公开并在
+`api/rs/slint/lib.rs:221` 重导出，内建 `ComponentContainer` 带
+`in property <component-factory> component-factory`（`internal/compiler/builtins.slint:487`），
+解释器的 `ComponentInstance` 也已实现 `ComponentHandle`。缺的只是把 `FactoryContext`
+递进解释器组件那一步：`ComponentDefinition::create_embedded`
+（`internal/interpreter/api.rs:1194`）挂着 `#[doc(hidden)] #[cfg(feature = "internal")]`，
+它背后的 `create_with_options` 是 `pub(crate)`。所以"嵌不进编译期树"要读成
+"开了 slint-interpreter 的 `internal` 特性就嵌得进"。该特性官方声明零稳定性保证，
+但 rev 已 pin 死在 `aweft-plugins/Cargo.toml:19,23`（`slint-interpreter` 与
+`i-slint-core` 两份都是），风险是冻结的而不是会漂移的。
+桌面继续用独立开窗（多窗是正常体验，不动）；Android 必须换到嵌入路线：
+`internal/backends/android-activity/lib.rs:106` 的 `create_window_adapter` 恒返回
+`Ok(self.window.clone())`，每个 `slint::Window` 都是那块唯一的 NativeActivity 表面，
+`definition.create()` + `.show()` 拿不到第二个窗口，只会和主界面抢同一块。
+Overlay 盖窗方案仍否决（Wayland 下应用无法自定位窗口）。
 
 ### 真相侧（aweft-project）
 `ProjectStore` 是文档唯一所有者，时间写入的单一入口：`set_event_start_ms`、
