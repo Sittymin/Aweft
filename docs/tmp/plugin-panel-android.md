@@ -35,7 +35,10 @@ Android 上插件面板必须嵌进编译期 Slint 树（`ComponentContainer` �
 并且已在 2026-09-13 真机验收（三个场景的日志记在第 13 步末）。
 剩下的只有片 B 的嵌入与设置界面本身。
 
-## 1. 桌面现状（实现）
+**2026-09-13 更新：片 B 已落**（§12）。形态按用户当天的指示收敛成「Area 切换菜单
+另起一列放有 UI 的插件，选中后该 Area 内嵌插件 UI」，行编辑器上那排插件按钮删除。
+
+## 1. 片 B 之前的桌面现状（存档，落地后的形状见 §12）
 
 | 对象 | 出处 | 作用 |
 |---|---|---|
@@ -307,10 +310,16 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
     （最接近的是 `tests/cases/elements/component_container_component.slint:18`
     `in property<component-factory> c1;`）。
     **退路**：`ScrAreaData` 只带 `plugin-id: string`，factory 由 Area 按 id 现取。
-15. `aweft-gui/ui/core/area_type_metadata.slint`：`items`（`:5-15`）从编译期字面量数组
-    改成宿主模型属性，值由 Rust 算（9 个内置项 + 每个有面板的插件一项）；
-    两条硬编码 0..8 下标链（`:18-40`、`:43-65`）整个删掉。
-    消费点是 `ui/widgets/area_type_switcher.slint:33` 与 `:71`，
+    **结果（2026-09-13）**：能编过。`component-factory` 作为 `ScrAreaData` 的字段
+    正常生成 `slint::ComponentFactory`，`cargo check -p aweft-gui` 与
+    `cargo test -p aweft-gui --test plugin_panel` 都过，退路没用上。
+    带它的实际好处见第 21 步末。
+15. ~~`area_type_metadata.slint`：`items` 从编译期字面量数组改成宿主模型属性~~
+    **已按用户指示改道（2026-09-13）**：内置九项**仍是**编译期字面量，
+    两条 0..8 下标链也原样留着；插件另起一列，用同一个菜单项样式，
+    接一条分隔线排在内置项之后（用户原话「不要直接接下面，也不要另起一个按钮样式，
+    直接沿用下拉菜单当中按钮的样式」）。落地写法见 §12 的第 15 步。
+    原计划里的消费点与写点：`ui/widgets/area_type_switcher.slint:33` 与 `:71`，
     唯一写点是 `ui/areas/area_header.slint:38-46` →
     `AreaCallbacks.switch-area-type`（`ui/bridge/callbacks.slint:25-27`）。
 16. `aweft-gui/ui/core/types.slint`：`SlintAreaType`（`:8-25`）加 case `plugin`；
@@ -346,6 +355,10 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
     - 同一插件可在两个 Area 同时打开，`aweft-gui/src/plugin_bridge.rs:24-32` 那个
       以 plugin_id 为键的 `HashMap<String, PluginWindow>` 要改成按 Area 持实例，
       同步时对同插件所有实例扇出。
+      **落地形状（2026-09-13）**：仍然是按 plugin_id 一个 `PanelHandle`
+      （`aweft-plugins/src/ui.rs`），实例不按 Area 存——`PanelHandle` 里是一条
+      `Vec<Weak<ComponentInstance>>`，工厂每次造出实例就登记一个弱句柄，
+      `sync` 时对存活实例扇出、顺手清掉死的。弱句柄不持强引用，Area 销毁即真的释放。
     - 桌面也走嵌入，开窗分支整体删除（Android 上开第二窗本就断，
       `internal/backends/android-activity/lib.rs:106-108` 恒返回同一个 window）。
       删掉的就是 `ui.rs:61-63` 的窗口守卫与 `ui/areas/line_editor/view.slint:140-146`
@@ -355,6 +368,12 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
       的 `PluginPanel inherits Window` 不用改，其中 `title`/`min-width`/`min-height`
       变成无意义。换 factory 即换内容：同文件 `:55-127` 的 `ensure_updated`
       用 `component_tracker` 跟踪 `component_factory`。
+    - **第 14 步带 `plugin-factory` 字段的实际好处**：`ComponentFactory` 的
+      `PartialEq` 比的是 `Rc::ptr_eq`（`internal/core/component_factory.rs:26-28`），
+      而桥里按插件 id 缓存了唯一的 `PanelHandle`，所以投影每次重算写回的工厂
+      指针相等，`component_tracker` 判定"工厂没变"，绝不重建已嵌好的面板。
+      退路（只带 id、Area 现取）做不到这一点：现取要么在投影里回调进 `AppStore`
+      （重入借用），要么每次建新工厂（每次切 Geometry 都重建面板）。
 
 ### 借鉴来源（Blender `v5.2.1`，rev `9e2066aef`，本地检出 `sources/blender`）
 
@@ -374,14 +393,17 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
 
 ## 10. 未验证项与下一步命令
 
-未验证两条，动手时按顺序收：
+原先未验证的两条，2026-09-13 都收了：
 
 1. §4 的副作用：开 `SLINT_ENABLE_EXPERIMENTAL_FEATURES` 会连带把
    `builtin_internal` 里的其它实验元素暴露给宿主窗口（门控在
-   `internal/compiler/lib.rs:442`）。跑一次宿主编译即可确认没有别的变化。
-2. §9 第 14 步：`component-factory` 当结构体字段能不能编过。类型门控过了
-   （`langtype.rs:214-242`），但 Slint 语料里没有用例。失败就走退路：
-   `ScrAreaData` 只带 `plugin-id`。
+   `internal/compiler/lib.rs:442`）。**已收**：宿主窗口带着
+   `ComponentContainer`/`component-factory` 全量重编一次，
+   `cargo check -p aweft-gui` 与 `cargo test -p aweft-gui` 都没有新增诊断或失败。
+   这条只到"没有别的变化"为止——它意味着宿主 `.slint` 里从此能写出
+   `FlexboxLayout` 这类实验元素，编译器不再拦，属于约定而非检查。
+2. §9 第 14 步：`component-factory` 当结构体字段能不能编过。**已收**，
+   见第 14 步末与第 21 步末。
 
 原先的第三条（半条）§9 片 A 的候选顺序没在真机上跑过，已收：2026-09-13 装机
 跑过三个场景，逐条日志见第 13 步末。原来这里的"原子写没有先例"一条也已收：
@@ -419,3 +441,82 @@ nix develop --command cargo test -p aweft-plugins -p aweft-gui
   （`i-slint-core`）；`aweft-gui/Cargo.toml` 的桌面段与 Android 段各自 pin 同一 rev。
 - Android 后端渲染器是 Skia（`docs/tmp/android-port.md` 已验证第 2 条），
   与嵌入路线无冲突：`ComponentContainer` 走的是 item tree，不依赖具体渲染器。
+
+## 12. 片 B 落地记录（2026-09-13）
+
+第 14-21 步落完，桌面与 Android 同一条路：Area 切换菜单里插件自成一列，
+选中即把该 Area 换成 `AreaType::Plugin(id)`，面板嵌在这个 Area 的内容区里。
+没有独立窗口，也没有给插件预留的控件。
+
+### 菜单那一列（第 15 步的改道版）
+
+- `ui/widgets/area_type_switcher.slint`：原来那段四十来行的菜单行标记抽成文件私有的
+  `component MenuItem inherits TouchArea`（外层仍是 TouchArea，每行的几何与命中
+  由它承担，内置项与插件项因此是**同一套样式**）。`IconComboBox` 加
+  `current-plugin-id` 与 `selected-plugin(id)`；弹层里先 `for` 内置九项，
+  有插件时插一条 `Rectangle` 分隔线，再 `for` 插件项。
+  选中态互斥：内置项用 `current-index`，插件项用 `current-plugin-id`，
+  各自清掉对方，标题栏的图标也跟着分两支显示。
+- `ui/core/area_type_metadata.slint`：`items` 与两条下标链一字未改，只加
+  `in property <[PluginAreaItem]> plugin-items: []` 和一个共用的
+  `plugin-icon`（`../assets/icons/build.svg`）。图标只能这么给：
+  `@image-url(...)` 是 `.slint` 字面量，Rust 侧造不出来。
+- `PluginAreaItem { id, name }` 是新 struct；`id` 是回挑 Area 的凭据，
+  `name` 就是插件 title。写点只有一处：`AppStore::new` 里装载完成后
+  把 `panel_areas()`（= 有可用面板的插件）写进全局。
+  `AreaTypeMetadata` 因此得从 `ui/app/window.slint` 的 `export {}` 里带出去，
+  否则 Rust 拿不到这个全局。
+- 点击路由：`ui/areas/area_header.slint` → 新回调
+  `AreaCallbacks.switch-area-type-plugin(area-key, plugin-id)` →
+  `bridge/callbacks.rs` 里 dispatch `AreaAction::SwitchType{ area_type: Plugin(id) }`。
+  内置那条 `switch-area-type` 一字未动。
+
+### Area 与投影（第 16-17 步）
+
+- `AreaType` 加 `Plugin(String)`（载荷就是插件 id），`SlintAreaType` 加 `plugin`。
+  枚举本身不带值，所以 `bridge/types.rs` 的反向分支把
+  `SlintAreaType::Plugin` 映成 `AreaType::Empty`——真正的插件切换只走
+  `switch-area-type-plugin` 这条带 id 的路。
+- `ScrAreaData` 加 `plugin-id` + `plugin-factory`（第 14 步的正路）。
+  `converters::convert_area(s)` 的签名从 `(&AppState)` 改成 `(&AppStore)`：
+  工厂要向桥索取。既有先例是 `converters/edge.rs` 的
+  `recompute_edges_by_indices(store: &AppStore, ...)`。
+- `projections/screen.rs`：`Tag::AreaTypeChanged` 原先只换那个枚举值，
+  现在整行 `convert_area` 重算——插件 Area 的三个字段必须一起换。
+- 桥里的工厂按插件 id 惰性建、只建一次（`panel_factory`）。
+  **建工厂时绝不碰 `AppStore`**：闭包跑在投影途中，那一刻 store 正被可变借用，
+  重入 `borrow_mut` 就是 panic。闭包只读 `PanelHandle` 自持的值快照，
+  命令要到用户点按钮才经 `Weak<RefCell<AppStore>>` 投回去
+  （`attach_store` 在 `window_manager` 里 `AppStore::new` 之后补一次）。
+
+### 删掉的东西（点名，可否决）
+
+`PluginWindow`（含窗口守卫）、`open_plugin_window` / `open_plugin_window_at` /
+`open_window_count` / `sync_window` / `sync_all_windows` / `set_window_busy` /
+`titles` / `plugin_id_at`、`.slint` 侧的 `global PluginState` 与
+`global PluginCallbacks`、`setup_plugin_callbacks`、行编辑器顶部那排插件按钮、
+`UiModels::update_area_type`（整行重算之后没有调用点）。
+测试文件 `aweft-gui/tests/plugin_window.rs` 随之改名 `plugin_panel.rs`。
+
+### 两条隐性约束（无头测试要嵌 UI 时才暴露）
+
+1. **`AppStore::new` 不绑模型**。Rust 侧 VecModel 填好了，窗口还看到空数组——
+   `set_scr_areas` 那一次绑定在 `window_manager` 的真实启动路径里
+   （`app/window_manager.rs:151-159`），无头测试不走那里。
+   不补这一句，测试里"模型行改了"但界面树一个 Area 都没有，
+   `ComponentContainer` 自然不会去向工厂索取实例，看着像嵌入没生效。
+2. **repeater / 条件元素 / `ComponentContainer` 都是懒实例化的**。工厂只在
+   Slint 的实例化遍历（`WindowInner::ensure_tree_instantiated`）里被调用，
+   没有渲染循环就没人跑这一遍。无头测试用
+   `i_slint_backend_testing::mock_elapsed_time(Duration::ZERO)` 推一次
+   （它对每个存活的测试窗口跑一遍实例化）。`_instance.show()` 不需要。
+
+### 验证状态
+
+- 绿：`cargo check -p aweft-gui`、`cargo test -p aweft-plugins -p aweft-gui`
+  全套（含新写的 `panel_lives_in_the_area_not_in_a_separate_window`：
+  切进去建 1 个实例、重复投影不重建、两个 Area 各一个、切走即释放、
+  未知 id 得空工厂且不 panic）。
+- 待跑：`cargo check -p aweft-gui --target aarch64-linux-android`、
+  桌面目视（菜单那一列的样子、面板填满 Area）、真机 `x build` + 装机。
+  出包与装机命令见 `docs/tmp/android-port.md` 的「验证命令备忘」。

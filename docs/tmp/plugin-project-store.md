@@ -67,12 +67,14 @@ import 指向 JS 侧胶水，纯 wasmi 宿主（没有 JS 引擎）在实例化�
 plugins/<id>/
   aweft-plugin.json   # 身份 + 构件位置 + 权限闸门（不声明功能）
   guest.wasm          # 逻辑（提交预编译夹具）
-  panel.slint         # 自带窗口片段（单根组件）
+  panel.slint         # 自带面板片段（单根组件，嵌进宿主的 Area）
 ```
-装载根按存在与否探测：`$PWD/plugins` → `$PWD/../plugins` → 可执行文件同级 `plugins`，
-覆盖"仓库根运行""crate 目录跑测试""打包安装"三种布局。无 env 开关。
+装载根按存在与否探测：设置里的 `plugin_root` → `config_dir()/plugins`
+（Android 即外部数据目录，桌面即 `~/.config/aweft/plugins`）→
+`$PWD/plugins` → `$PWD/../plugins` → 可执行文件同级 `plugins`，
+覆盖"用户装插件""仓库根运行""crate 目录跑测试""打包安装"这几种布局。无 env 开关。
 `load_root` 只扫一层子目录并排序（投递顺序稳定），单个插件失败只记日志；
-面板缺失或编译失败只丢窗口，命令与订阅照常工作。
+面板缺失或编译失败只当"没有 UI"：该插件不进 Area 菜单那一列，命令与订阅照常工作。
 
 ### Guest ABI v1
 导出：`aweft_describe_ptr`/`aweft_describe_len`（描述 JSON
@@ -147,26 +149,28 @@ Guest 的读写一律先 `sync_from_store` 建行快照、调用结束后 `take_
 `SequenceState` 的全部方法参数由 `&Project` 收窄为 `&Sequence`——行编辑器投影只依赖字幕结构。
 reducer 的时间写入统一经存储并标 `Origin::LocalGui`（`adjust_time` 为唯一增减入口，
 `InputTimecode` 走 `set_event_time_fuzzy`，`TimelineBlockDragCommit` 走 `shift_event_times`）；
-预览与取消不写 Domain。行编辑器工具条的插件按钮由 `PluginState.plugin-titles` 重复生成
-（启动期写一次），`open-plugin-panel(index)` 按下标路由，主程序不硬编码任何插件名。
+预览与取消不写 Domain。有面板的插件在 Area 切换菜单里自成一列（启动期由
+`panel_areas()` 写进 `AreaTypeMetadata.plugin-items`），选中即把该 Area 换成
+`AreaType::Plugin(id)`、面板嵌进这个 Area 的内容区，主程序不硬编码任何插件名；
+嵌入路线与落地细节见 `docs/tmp/plugin-panel-android.md` §12。
 `store::project_watch` 是界面自己的订阅者：回调只把回执排进 `RefreshQueue`，
 `AppStore::dispatch` 用 `begin_batch`/`end_batch` 包住一轮交互、随后 `apply_refresh_queue()`
-把队列换成刷新 tag 并回填插件窗口状态行。
+把队列换成刷新 tag 并回填插件面板状态行。
 
 ## 要干什么（已完成打钩）
 
 - [x] `aweft-project`：文档结构 + 唯一所有权存储 + 写日志回执 + 订阅者注册表与广播 + 工程文件读写（JSON，`format` 版本门）。
 - [x] `aweft-plugins`：清单解析 + 目录装载 + wasmi 运行时 + 自描述 ABI + 按清单授权装配宿主函数 +
-      装载时注册订阅者 + 通用面板窗口。
+      装载时注册订阅者 + 可嵌入的面板工厂（`PanelHandle`，交给宿主 `ComponentContainer`）。
 - [x] `aweft-plugin-sdk`：Guest 侧 `plugin! { commands, on_time_changed }` 声明宏与 `Api` 封装。
 - [x] 示例插件 `plugins/test-plugin`（Rust Guest + panel.slint + 清单，`guest.wasm` 提交为夹具）。
 - [x] GUI 接线：持有 `ProjectStore`、界面自己注册成订阅者、`dispatch` 用批量作用域包住一轮交互、
-      命令路由、按装载结果生成按钮。
+      命令路由、有面板的插件进 Area 切换菜单那一列并把面板嵌进该 Area。
 - [x] 集成测试：`aweft-project` 存储内测试 11 项（广播时机、回声过滤、批量合并、写回触达第三方、
       轮数上限）、`aweft-plugins/tests/plugin_flow.rs` 10 项（真实装载 `plugins/test-plugin`，
       含"一次命令只通知一次"与权限闸门的拒/放一对：同一份字节码，只改清单的 `project_write`）、
-      `aweft-gui/tests/plugin_window.rs` 6 项
-      （含"插件写入刷进 UI 行模型"的投影断言）。
+      `aweft-gui/tests/plugin_panel.rs` 7 项（原 `plugin_window.rs` 改名）
+      （含"插件写入刷进 UI 行模型"的投影断言，与"面板嵌在 Area 里、切走即释放"的生命周期断言）。
 - [ ] CLI 子命令（本轮砍掉：CLI 尚无工程文件开/存流程，无落点）。
 - [ ] 后续（不在本轮）：读侧暂不设闸（未授予任何权限的插件仍可读全部行）——目前字幕行不算敏感数据，
       若以后要挡，同样按清单授权装配 linker 即可；结构/层级/文本写入尚无 `MutationKind`（因此不进广播，插件与界面都看不到）；
@@ -189,14 +193,16 @@ reducer 的时间写入统一经存储并标 `Origin::LocalGui`（`adjust_time` 
 
 - `nix develop --command cargo test -p aweft-project -p aweft-plugins -p aweft-plugin-sdk -p aweft-gui`：
   `aweft-project` 11、`aweft-plugins` 1+10、`aweft-plugin-sdk` 2、
-  `aweft-gui` 197（lib）+ 依赖图/行编辑器/时间线/NLA/DopeSheet/节点图/插件窗口共 60 项集成，全绿。
+  `aweft-gui` 197（lib）+ 依赖图/行编辑器/时间线/NLA/DopeSheet/节点图/插件面板共 61 项集成，全绿。
 - `cargo check --workspace --all-targets`：本轮改动的三个 crate 零告警
   （`aweft-ass`、`src/cli.rs` 的告警是既有噪声）。clippy 仍被 `aweft-libass` 的构建挡住，故用 check+test 验证。
 - 权限闸门只测了"要写的插件"一侧：示例字节码 import 了 `set_event_*_ms`，拒/放两态都成立。
   "只读不必申请"这一半没有对应夹具（没有第二份只 import 读函数的 `guest.wasm`），
   目前由 linker 的分组保证，未实测。
-- 真机点按未验证：插件按钮与独立窗口需要跑起来确认（无头后端只证明不 panic）。
-  `plugin_window.rs` 的"插件写入刷进 UI 行模型"断言覆盖到了投影这一层，但仍是无头路径。
+- 真机点按未验证：Area 切换菜单里那一列插件项、以及嵌进 Area 的面板要跑起来确认
+  （无头后端只证明不 panic 且实例确实建了/确实放了）。
+  `plugin_panel.rs` 的"插件写入刷进 UI 行模型"与面板生命周期两条断言覆盖到了
+  投影与实例化这一层，但仍是无头路径。
 
 ## 教训
 
