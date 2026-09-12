@@ -323,7 +323,9 @@
     只在真机上抛 `NoSuchMethodError`（`jni` 的 Debug 还不带消息，见第 29 条那次）。
     本机有免上机的核对办法：拿打包用的那份 `android.jar` 直接 `javap`。
     ```sh
-    javap -p -classpath /tmp/xsdk/platforms/android-35/android.jar android.content.ContentUris
+    # 在仓库根跑；进壳时 shellHook 已把 ~/.cache/x/Android.sdk 指到 flake 的镜像树
+    # （那棵树的 android-35/android.jar 就是 API-34 那份，理由见第 23 条）
+    javap -p -classpath ~/.cache/x/Android.sdk/platforms/android-35/android.jar android.content.ContentUris
     ```
     这条已经抓到一处：`ContentUris.withId(Uri,long)` 不存在，同类里只有
     `withAppendedId(Uri,long)`、`appendId`、`removeId`、`parseId`，签名同为
@@ -398,6 +400,19 @@
     换包名等于换应用身份：MediaStore 授权与 `cache/aweft-pick/` 里的拷贝都重来，
     验证时可用 `adb shell pm grant org.aweft android.permission.READ_MEDIA_VIDEO` 跳过弹框。
 
+38. 插件装载路线已在真机验收（2026-09-13，片 A）。三条落点事实：
+    Android 的配置目录就是 `external_data_path()`，设置文件是
+    `/storage/emulated/0/Android/data/org.aweft/files/aweft-settings.json`；
+    `set_config_dir` 必须早于进程内第一次 `settings()`——那份设置挂在
+    `OnceLock` 上，读盘只发生一次，晚提交的目录不再生效（`aweft-settings/src/lib.rs:63`）；
+    候选根循环会把**每一个存在的**根都装一遍，不是取第一个命中的
+    （`aweft-gui/src/plugin_bridge.rs:44-52`），做归因实验时得把其它根让开。
+    三个场景（默认根、设置指定的根、`format` 比程序新的坏设置）分别打出
+    `从 …/files/plugins 装载了 1 个插件`、`从 …/files/alt-plugins 装载了 1 个插件`、
+    以及一条 `设置读取失败，按出厂值继续` 后照常启动。
+    装机的 APK 由 `flake.nix` 一条链产出（P1.5），壳里没有一个工具来自工程外；
+    逐条日志与验证过程记在 `docs/tmp/plugin-panel-android.md` 第 13 步末。
+
 ## 环境现状（`nix develop` 提供，2026-09-11 进壳实测通过）
 
 `flake.nix` 的 devShell 已收编全部 Android 工具链，不再依赖本机 `~/Android/Sdk`。
@@ -411,13 +426,15 @@ NDK r29（`29.0.14206865`）、JDK 17 headless、Rust 1.97.1（带两套 android
 本机 `~/Android/Sdk`（NDK r30 等）退为备用；模拟器沿用本机的，nix 闭包里没收
 （体积大）；`/home/Sittymin/Android/Key/release-key.jks` 仍是发布签名密钥。
 
-手动件已到位（2026-09-11）：`cargo install` 路径的 xbuild 已装（`~/.cargo/bin/x`，
-git commit `e67b501c`）；GStreamer Android 通用二进制包落在
+xbuild 已不再走本机 `cargo install`（2026-09-13）：`flake.nix` 直接 pin
+git commit `e67b501` 并把它编进闭包，包装件 `xbuildWithNdkClang` 占用 `x` 这个名字，
+所以 `~/.cargo/bin/x` 那份在壳里不可达（本机留着不影响）。
+GStreamer Android 通用二进制包落在
 `sources/gstreamer-android/gstreamer-1.0-android-universal-1.28.7.tar.xz`
 （946.9 MiB），`sha256sum -c 1.28.7.sha256sum` 输出 OK，
 满足 `aweft-gui/Cargo.toml` 的 `v1_24` 下限。
 包内解压只做 `arm64/`（2.0 GiB），另外三个 ABI 未解压：
-`/home/Sittymin/Development` 挂载点余量 15 GiB，全解 6.7 GiB 之后
+当时挂载点余量 15 GiB（2026-09-13 复测为 38 G），全解 6.7 GiB 之后
 不足以支撑 aarch64 的 `target/` 构建产物。
 需要 x86_64 模拟器时再补解 `x86_64/`。
 
@@ -445,7 +462,7 @@ NDK 用闭包里的 r29。
 | 字幕字体 | `aweft-libass/src/renderer.rs:237` | 路线按"已验证"第 13 条定为照上游做法：字体文件随 APK 进 assets，运行时解到应用私有目录，把该目录交给字体提供器（上游形状见 `arm64/share/gst-android/ndk-build/fontconfig/`）；备选是查 libass 有无不经 fontconfig 的提供器 | 待办 |
 | 插件 wasm 打包 | 新增 | `plugins/test-plugin/guest.wasm` 与面板 `.slint` 打进 APK assets（`slint-interpreter` 加载时编译，需要源文件在场）；`wasmi` 从内存字节建模块，不用落盘可执行 | 待办 |
 | flake | `flake.nix` | 完成（2026-09-11）：`androidSdk` 合成件（platform-tools 37.0.1、platform 35、build-tools 35.0.0、NDK r29）、`jdk17_headless`、两套 android target、shellHook 导出 NDK/linker/`CC_<target>`；`accept_license` 与 unfree 只开在本工程 pkgs 实例 | 完成 |
-| 打包 | `aweft-android/manifest.yaml` | 配置落点就是这个文件（不是新增 `android/` 目录），已有 `package: org.aweft`（反向域名对齐 aweft.org，改法与装机核实见"已验证"第 37 条）、`min_sdk_version: 26`、`target_sdk_version: 35`、三项读媒体权限。`x build --platform android --offline --release --arch arm64` 已出包装机（产物 `target/x/release/android/aweft-android.apk`），但**还依赖两处未固化的手工件**：`/tmp/xb-shim` 暴露裸 `clang`/`clang++`（xbuild 把 `CARGO_TARGET_*_LINKER` 设成 `clang`，而 nixpkgs 的 `androidndkPkgs.clang` 只有带三元组前缀的名字，且它设的环境变量优先级高于 `.cargo/config.toml`，只能靠 PATH）；`/tmp/xsdk` 把 API-34 的 `android.jar` 顶到 `platforms/android-35/`（原因见"已验证"第 23 条）。xbuild 能承接的输入只有两处：`generic.runtime_libs`（`xbuild/src/config.rs:410`）与 `android.assets`（`:440`，可给目录、带 `optional` 与 zip 对齐选项）。按"已验证"第 9 条，没有 GStreamer 的 `.so` 要收集，进包的只有字幕字体、插件 `guest.wasm` 与面板 `.slint`；签名指 `Key/release-key.jks` | 部分完成：出包装机跑通，两处手工件与 assets/发布签名待办 |
+| 打包 | `aweft-android/manifest.yaml` | 配置落点就是这个文件（不是新增 `android/` 目录），已有 `package: org.aweft`（反向域名对齐 aweft.org，改法与装机核实见"已验证"第 37 条）、`min_sdk_version: 26`、`target_sdk_version: 35`、三项读媒体权限。`x build --platform android --offline --release --arch arm64` 已出包装机（产物 `target/x/release/android/aweft-android.apk`），原先两处手工件已由 `flake.nix` 接管：裸 `clang`/`clang++` 是**绝对路径 `exec` 的包装脚本**、只注入进 `x` 这一条命令（不能是软链——NDK 的 `aarch64-linux-android26-clang` 本身是 bash 壳，靠 `dirname "$0"` 找真 clang，软链会让它自我递归；也不能全局注入——`buildInputs` 里那个裸名 `clang` 是宿主那份，bindgen/clangd/桌面 libass 都靠它，而 xbuild 的 `use_android_ndk` 会把 linker 一律设成裸名 `clang`，`xbuild/src/cargo/mod.rs:295-298`）；API-34 的 `android.jar` 由一棵镜像树顶到 `platforms/android-35/`（原因见"已验证"第 23 条），`manifest.yaml` 不改。xbuild 能承接的输入只有两处：`generic.runtime_libs`（`xbuild/src/config.rs:410`）与 `android.assets`（`:440`，可给目录、带 `optional` 与 zip 对齐选项）。按"已验证"第 9 条，没有 GStreamer 的 `.so` 要收集，进包的只有字幕字体、插件 `guest.wasm` 与面板 `.slint`；签名指 `Key/release-key.jks` | 部分完成：出包装机跑通，链条已全进 `flake.nix`；assets 与发布签名待办 |
 | 日志 | `aweft-android/src/logging.rs` | 已完成：`android_main` 第一件事就是 `logging::install()`，把 `log` 门面接到 `__android_log_write`（tag `aweft`），后端初始化、建窗、插件登记这几步的失败信息都留在 logcat。看日志用 `adb -s <serial> logcat -d -s aweft` | 完成 |
 
 ## 分阶段推进
@@ -459,12 +476,34 @@ NDK 用闭包里的 r29。
   「打开视频」按钮，日志走到 `窗口初始化完成`，无 panic。
   原计划里"662 MB 未 strip 调试库"的收敛由 `x build --release` 顺带解决
   （产物 `libaweft_android.so` 约 72 MiB，含 20 个插件归档）。
-- P1.5 打包可复现：`/tmp/xb-shim`（裸 `clang`/`clang++`）与 `/tmp/xsdk`
-  （API-34 jar 顶到 android-35 路径）两处手工件固化进 `flake.nix`。
-  候选做法：clang 用 nix 侧 linkFarm 暴露裸名（`androidndkPkgs_29.clang` 本身
-  不行，它的 `bin/` 只有带三元组前缀的名字）；jar 用
-  `platformVersions = [ "34" "35" ]` 配 `manifest.yaml` 里
-  `target_sdk_version: 34`，把替换需求整个消掉。
+- P1.5 打包可复现：**完成**（2026-09-13），三件都进了 `flake.nix`，`target/scratch` 里的
+  手工脚本随之作废。
+  - 裸名 `clang`/`clang++`：`ndkClangShim`/`ndkClangxxShim` 是 **绝对路径 `exec` 的
+    包装脚本**，不是软链，也不是 nix 侧 linkFarm。踩过的坑：NDK 的
+    `aarch64-linux-android26-clang` 本身是个 bash 壳，靠 `dirname "$0"` 找真 clang，
+    软链会让它递归调自己，每层多带一个 `--target=`，实测 15 秒 fork 两千多个
+    bash+clang、吃掉十来 GB，把机器推进 OOM 两次。
+  - jar：`xbuildSdk` 镜像树把 API-34 的 `android.jar` 放到 `platforms/android-35/`
+    路径下（其余条目原样软链回闭包），`manifest.yaml` 的 `target_sdk_version: 35`
+    因此不用降——「改成 34 就把替换需求消掉」那条候选做法是拿 targetSdk 换省事，没取。
+  - `TMPDIR`：这台机器整棵 `/` 是 tmpfs，nix 进壳默认给的 `/tmp/nix-shell.XXXX` 就在
+    内存里，clang 的临时文件全在吃 RAM；shellHook 把它钉到 `~/.cache/aweft/tmp`。
+  - xbuild 本体：不在 nixpkgs 里（by-name 那个 `cargo-xbuild` 是编 core/std 的另一回事），
+    改成 flake pin `rust-mobile/xbuild` 的 `e67b501`——与 `sources/xbuild` 那份阅读检出、
+    与本文件所有 xbuild 行号引用同一份，也是先前真机那份产物的来源。
+    **不用 crates.io 的 0.2.0**（2022-12 最后一次发版）：它没有 `android.assets` 与
+    `generic.runtime_libs` 这两个配置项（承接输入的落点，见上面「打包」行），
+    且 `(Android, Release)` 无条件默认 `.aab`（发布后的 c8efbd8 才收窄到 gradle 路线），
+    同一条 `x build --release` 在它手里拿不到装机用的 `.apk`。
+    代价是上游把 `Cargo.lock` 放进了 `.gitignore`：git pin 不带锁，而 `cargoSetupHook`
+    要求源码树里就有锁（缺了报 `Missing Cargo.lock from src`），所以 flake 把
+    `nix/xbuild.Cargo.lock`（本 rev 用 `cargo generate-lockfile` 生成，479 个包）
+    并进源码树再编。**换 rev 必须重新生成这份锁。**
+    再让 `xbuildWithNdkClang` 这个包装件占用 `x` 这个名字——本机 `~/.cargo/bin/x`
+    从此在壳里不可达，PATH 上没有一样东西来自工程外。
+    **还剩一处外来的**：`GST_ANDROID_PKGCONFIG` 指的 `sources/gstreamer-android/arm64`
+    （官方 universal 包 1.28.7，947 MB 下载件、解出 2.0 G），要收进 flake 得先认下约 3 G
+    的 store 占用。
 - P2 功能补齐：剪贴板 JNI、libass NDK 构建 + fonts.conf、插件面板在 Android 上换装载路线
   （`create()`+`show()` 在这台后端上得不到第二个窗口，要改走 `ComponentContainer`
   + `ComponentFactory::new` 的嵌入路线并开 slint-interpreter 的 `internal` 特性，
@@ -473,6 +512,9 @@ NDK 用闭包里的 r29。
   「`ComponentContainer` 属实验类型，宿主窗口编译前必须设
   `SLINT_ENABLE_EXPERIMENTAL_FEATURES=1`」这一项、assets 打包与读取的落点、
   以及改动清单，另记在 `docs/tmp/plugin-panel-android.md`。
+  2026-09-13 再补：那一条里的**装载路线**已经落完并在真机验收（插件根可配置、
+  Android 默认 `external_data_path()/plugins`、坏设置退回出厂值只留警告），
+  见"已验证"第 38 条；P2 剩下的只有**面板嵌入**（片 B）与设置界面本身。
 - P3 视频硬解与音频：**解码、出帧、出声三项均已跑通**（2026-09-12）。
   `androidmedia` 注册成功，`amcviddec-*` 在真机上解 H.264/HEVC 并输出系统内存，
   经 `autovideoconvert` 的 CPU 转换到 `appsink`，画面渲染出来，见"已验证"第 33、35 条；
@@ -500,18 +542,15 @@ nm --defined-only target/aarch64-linux-android/debug/deps/libaweft_android.so | 
 外面传的值整体丢失（实测见"已验证"第 16 条）。交叉构建的搜索路径只有一条通路：
 `flake.nix` 的 shellHook 导出的 `TARGET_PKG_CONFIG_PATH`。
 
-出包到真机（本轮跑通用的一条链，两处 `/tmp` 手工件待按 P1.5 固化）：
+出包到真机（本轮跑通用的一条链）：
 
 ```sh
-cd aweft-android && nix develop .. --command bash -c \
-  'export PATH=/tmp/xb-shim:$PATH;
-   ln -sfn /tmp/xsdk "$HOME/.cache/x/Android.sdk";   # 必须在 shellHook 之后：进壳时它已被重指到 nix 闭包
-   x build --platform android --offline --release --arch arm64'
+# 进壳即备好一切：TMPDIR 已在磁盘上，裸 clang/clang++ 由 `x` 这个包装件注入，
+# ~/.cache/x/{Android.sdk,Android.ndk} 已由 shellHook 指到 nix 闭包（jar 是镜像树那份）。
+nix develop --command bash -c 'cd aweft-android && x build --platform android --offline --release --arch arm64'
 # 装机前的符号门：每个强未定义符号（含 NOTYPE，只要 GLOBAL）要么在自身 .dynsym，
 # 要么在 DT_NEEDED 列出的库里；只看 NDK 全部 stub 的并集会误判通过。
-nix develop --command bash /tmp/und-check.sh \
-  "$PWD/../target/x/release/android/arm64/cargo/aarch64-linux-android/release/libaweft_android.so" 26
-cd ..   # APK 在仓库根的 target/ 下，不在 aweft-android/ 里（照抄上一行的目录会报 No such file）
+# 这条脚本原来在 /tmp，随 /tmp 一起没了，用到时按上面那句口径重写。
 adb -s <serial> install -r target/x/release/android/aweft-android.apk   # MIUI 上不要用 -g
 adb -s <serial> shell am start -n org.aweft/android.app.NativeActivity
 # 换包名后 MediaStore 授权要重答；联调时先预授可跳过 120 秒轮询弹框

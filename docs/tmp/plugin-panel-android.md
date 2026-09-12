@@ -31,7 +31,8 @@ Android 上插件面板必须嵌进编译期 Slint 树（`ComponentContainer` �
 形态上按「Area Switch 菜单动态增加插件条目 + 空白宿主 Area 由插件 UI 填」做，
 不硬编码任何给插件用的控件，桌面与 Android 统一走嵌入。
 前置的不依赖 GUI 的设置层已经落：新成员 `aweft-settings`（`docs/architecture/settings.md`），
-未来 CLI 读同一份非 GUI 字段；片 A 同步落完，插件根两项新候选排在开发期兜底之前。
+未来 CLI 读同一份非 GUI 字段；片 A 同步落完，插件根两项新候选排在开发期兜底之前，
+并且已在 2026-09-13 真机验收（三个场景的日志记在第 13 步末）。
 剩下的只有片 B 的嵌入与设置界面本身。
 
 ## 1. 桌面现状（实现）
@@ -250,7 +251,7 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
    `cargo check --workspace` 与 `cargo check -p aweft-android --target
    aarch64-linux-android` 均为 0 退出码、新成员零告警。
 
-### 片 A：插件根改为可配置，Android 默认落外部数据目录 —— 已落（2026-09-12）
+### 片 A：插件根改为可配置，Android 默认落外部数据目录 —— 已落（2026-09-12）+ 真机验收（2026-09-13）
 
 10. `aweft-gui/src/plugin_bridge.rs:146-175` `plugin_roots()` 的候选列表前面插了两项：
     `aweft_settings::settings().paths.plugin_root`、`config_dir()/plugins`。
@@ -263,13 +264,38 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
 11. `aweft-plugins` 的装载路径一行不动：`std::fs` 那三处
     （`manifest.rs:45-51`、`:62-65`、`:68-72`）与 `manager.rs:224-248` 的
     `load_root` 全部照旧，因为它们吃的就是目录路径。
-12. 装机验证通道：`adb push <插件目录> /storage/emulated/0/Android/data/org.aweft/files/plugins/`
-    （§8 已实测该路径可写可读）。
+12. 装机验证通道：插件落在 `/storage/emulated/0/Android/data/org.aweft/files/plugins/`
+    （§8 已实测该路径可写可读）。**逐文件 `adb push`，不要推整个目录**：
+    推目录那次它先回 `3 files pushed, 0 skipped`，紧接着 `adb: error: failed to
+    read copy response: EOF`，实际一个字节都没落——目标目录里 `md5sum` 一个都读不出来。
+    出包一条命令，
+    先前两处手工件都已进 `flake.nix`
+    （接管的内容与理由见 `docs/tmp/android-port.md` 的 P1.5）：
+    `nix develop --command bash -c 'cd aweft-android && x build --platform android --offline --release --arch arm64'`。
+    进壳那一步顺带备好的两件东西，记在这里免得再当成新发现：裸名 `clang`/`clang++`
+    非给不可，因为 xbuild 把 `cc` 与 `linker` 都写死成裸名（`xbuild/src/cargo/mod.rs:295-298`），
+    而 NDK 只给带三元组前缀的名字（名字里的 26 是 minSdk，不是 NDK 版本）；
+    `~/.cache/x/Android.sdk` 则是 xbuild 唯一认的死路径，且它从这棵树里只取
+    `platforms/android-<targetSdk>/android.jar` 一个文件（`xbuild/src/lib.rs:622`）。
 13. `plugin_root` 现在只能靠手工写 `<配置目录>/aweft-settings.json` 来设
     （`save_to_dir` 在产品代码里还没有调用点）；设置 UI **不在本片做**，
     等片 B 的 4-5 步把 Area 菜单改成模型之后，"设置"只是菜单里多一条数据。
-    **本片的目录与候选顺序尚未在真机上跑过**——要等下一次 `x build` 装机才能验到，
-    验收点是日志里那条 `从 … 装载了 N 个插件` 打的是哪个目录。
+    **真机验收（2026-09-13）**：装的是 `x build --platform android --offline --release
+    --arch arm64` 那条链的产物（APK 24,174,635 B，内含 01:40 的
+    `libaweft_android.so`），判据点始终是 `plugin_bridge.rs:50` 那条
+    `从 … 装载了 N 个插件` 打的是哪个目录：
+    - 默认根：`files/plugins/test-plugin`（逐文件 push，md5 与仓库件对上）→
+      `从 /storage/emulated/0/Android/data/org.aweft/files/plugins 装载了 1 个插件`。
+    - 设置的根：`files/aweft-settings.json` 写 `{"format":1,"paths":{"plugin_root":"…/files/alt-plugins"}}`，
+      同时把 `files/plugins` 改名让开（`plugin_roots()` 的循环会把**每一个存在的**根都装一遍，
+      不是只取第一个命中的，两个根都留着插件就分不清日志里那条说的是谁）→
+      `从 …/files/alt-plugins 装载了 1 个插件`。
+    - 坏设置：同一份文件把 `format` 改成 999 → 只有一条
+      `W aweft_settings: 设置读取失败，按出厂值继续：设置文件版本 999 比本程序支持的 1 新，拒绝改写…`，
+      进程照常起来（`pidof` 有值），并且因为退回出厂值、`plugin_root` 为空，
+      下一行仍是 `从 …/files/plugins 装载了 1 个插件`。
+    验收后设备已复原：`aweft-settings.json` 与 `alt-plugins/` 删除，
+    `files/plugins/test-plugin` 留着当下一次的试验件。
 
 ### 片 B：插件 UI 嵌进编译期 Area
 
@@ -348,7 +374,7 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
 
 ## 10. 未验证项与下一步命令
 
-未验证两条半，动手时按顺序收：
+未验证两条，动手时按顺序收：
 
 1. §4 的副作用：开 `SLINT_ENABLE_EXPERIMENTAL_FEATURES` 会连带把
    `builtin_internal` 里的其它实验元素暴露给宿主窗口（门控在
@@ -356,14 +382,17 @@ let factory = ComponentFactory::new(move |ctx: FactoryContext| {
 2. §9 第 14 步：`component-factory` 当结构体字段能不能编过。类型门控过了
    （`langtype.rs:214-242`），但 Slint 语料里没有用例。失败就走退路：
    `ScrAreaData` 只带 `plugin-id`。
-3. （半条）§9 片 A 的候选顺序没有在真机上跑过：下一次装机看日志
-   `从 … 装载了 N 个插件` 打的是哪个目录。原来这里的"原子写没有先例"一条已收：
-   `aweft-settings/src/storage.rs:46-78` 落成 temp + `sync_all` + rename，
-   由 `round_trip_keeps_plugin_root` 与 `save_leaves_no_temp_file` 两条测试覆盖。
+
+原先的第三条（半条）§9 片 A 的候选顺序没在真机上跑过，已收：2026-09-13 装机
+跑过三个场景，逐条日志见第 13 步末。原来这里的"原子写没有先例"一条也已收：
+`aweft-settings/src/storage.rs:46-78` 落成 temp + `sync_all` + rename，
+由 `round_trip_keeps_plugin_root` 与 `save_leaves_no_temp_file` 两条测试覆盖。
 
 2026-09-12 跑过并全绿的：`cargo test -p aweft-settings`（11 条）、
 `cargo check --workspace`、`cargo check -p aweft-android --target aarch64-linux-android`。
-**没有跑过 `x build`，也没有装机**，所以 Android 侧只有编译面结论。
+当天没有 `x build`，Android 侧只有编译面结论；这一句到 2026-09-13 已过期——
+出包链全进 `flake.nix` 后装机跑通，片 A 三个场景在真机验收过，
+剩下的真机未知数都在片 B（上面两条 + 嵌入后的渲染与触摸）。
 
 ```sh
 # 设置层
