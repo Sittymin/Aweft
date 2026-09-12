@@ -516,7 +516,29 @@ nix develop --command cargo test -p aweft-plugins -p aweft-gui
 - 绿：`cargo check -p aweft-gui`、`cargo test -p aweft-plugins -p aweft-gui`
   全套（含新写的 `panel_lives_in_the_area_not_in_a_separate_window`：
   切进去建 1 个实例、重复投影不重建、两个 Area 各一个、切走即释放、
-  未知 id 得空工厂且不 panic）。
-- 待跑：`cargo check -p aweft-gui --target aarch64-linux-android`、
-  桌面目视（菜单那一列的样子、面板填满 Area）、真机 `x build` + 装机。
-  出包与装机命令见 `docs/tmp/android-port.md` 的「验证命令备忘」。
+  未知 id 得空工厂且不 panic）、
+  `cargo check -p aweft-gui --target aarch64-linux-android`。
+- 待跑：桌面目视（菜单那一列的样子、面板填满 Area）。
+
+### 真机验收（2026-09-13）
+
+装的是 `x build --platform android --offline --release --arch arm64` 的产物
+（APK 24,199,393 B），插件仍是片 A 留在 `files/plugins/test-plugin` 的那三份，
+md5 与仓库件逐个对上，没有 `aweft-settings.json`（走默认根）。四条判据都成立：
+
+- `从 /storage/emulated/0/Android/data/org.aweft/files/plugins 装载了 1 个插件`。
+- Area 切换菜单里插件**另起一列**：内置九项之后一条分隔线，再一行「示例插件」
+  带一枚扳手图标，行高、内边距、选中底色与上面的内置项一致。
+- 面板嵌在该 Area 的内容位：标题栏在下、三个命令按钮在上，
+  没有第二个窗口、没有铺满整屏。
+- 往返是通的：点「计算最早时间」「全部后移 1s」「全部前移 10s」后，
+  面板里出现对应状态行，同时另一个 Area 的字幕行时间被改成插件写的值。
+
+两条装机测试的坑，记下来免得再当成 bug 查：
+
+- 弹窗在这个 rev 是**画在同一块表面里**的：`internal/core/window.rs:243-248`
+  写明平台不提供 popup window 时「rendered within the window itself」，
+  而全树没有 `fn create_popup_window` 的实现。所以 Area 切换菜单在 Android 可用。
+- `adb shell input tap` 一次发完 down+up，而菜单是 down 时 `show()`、
+  重绘排在 up 之后：手指还按着就截图会看到「菜单没弹出」。
+  等一秒再截就有（本次第一次误判就是这么来的，那次点下去反而选中了已弹出的项）。
