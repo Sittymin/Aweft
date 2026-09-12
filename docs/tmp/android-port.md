@@ -469,6 +469,10 @@ NDK 用闭包里的 r29。
   （`create()`+`show()` 在这台后端上得不到第二个窗口，要改走 `ComponentContainer`
   + `ComponentFactory::new` 的嵌入路线并开 slint-interpreter 的 `internal` 特性，
   依据见 `docs/tmp/plugin-project-store.md` 的"装载路线"段）。文件选择已完成（第 32、34 条）。
+  2026-09-12 补充：该路线的逐项公开性核实、新查出的
+  「`ComponentContainer` 属实验类型，宿主窗口编译前必须设
+  `SLINT_ENABLE_EXPERIMENTAL_FEATURES=1`」这一项、assets 打包与读取的落点、
+  以及改动清单，另记在 `docs/tmp/plugin-panel-android.md`。
 - P3 视频硬解与音频：**解码、出帧、出声三项均已跑通**（2026-09-12）。
   `androidmedia` 注册成功，`amcviddec-*` 在真机上解 H.264/HEVC 并输出系统内存，
   经 `autovideoconvert` 的 CPU 转换到 `appsink`，画面渲染出来，见"已验证"第 33、35 条；
