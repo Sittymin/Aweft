@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use aweft_gui::actions::{Action, node_graph::NodeGraphAction};
 use aweft_gui::bridge::types::MainWindow;
+use aweft_gui::screen::primitives::Insets;
 use aweft_model::node_graph::NodeGraphKind;
 use i_slint_backend_testing::init_no_event_loop;
 use slint::Model;
@@ -66,6 +67,8 @@ fn edge_drag_end_preserves_editor_and_areas() {
             aweft_gui::actions::screen::ScreenAction::InitializeLayout {
                 width: 1600,
                 height: 1200,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             },
         ))
         .unwrap();

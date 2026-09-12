@@ -17,7 +17,7 @@ use aweft_gui::actions::sequence::SequenceAction;
 use aweft_gui::bridge::slint_area_key_to_key;
 use aweft_gui::bridge::types::{MainWindow, SplitPreviewOverlayData};
 use aweft_gui::screen::area::ScrAreaKey;
-use aweft_gui::screen::primitives::Rcti;
+use aweft_gui::screen::primitives::{Insets, Rcti};
 use aweft_gui::store::AppStore;
 use aweft_model::sequence::{EventData, ItemLocation};
 use slint::{ComponentHandle, Model, ModelRc};
@@ -44,6 +44,8 @@ fn screen_init_creates_three_areas() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -76,6 +78,8 @@ fn screen_split_reuses_components() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -140,6 +144,8 @@ fn screen_actionzone_split_uses_precise_increment() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -215,6 +221,8 @@ fn screen_resize_updates_geometry_locally() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -276,6 +284,8 @@ fn single_op_updates_only_affected_row() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -355,6 +365,8 @@ fn drag_end_clears_overlay_preview() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -410,6 +422,8 @@ fn join_keeps_edge_touch_and_area_actionzone() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -573,6 +587,8 @@ fn screen_layout_handles_multiple_tags_same_round() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -711,6 +727,8 @@ fn resize_roundtrip_keeps_vertices_on_window_edge() {
         s.dispatch(Action::Screen(ScreenAction::InitializeLayout {
             width: 1600,
             height: 1200,
+            scale_factor: 2.0,
+            inset: Insets::default(),
         }))
         .unwrap();
         s.evaluate_depsgraph();
@@ -765,6 +783,8 @@ fn edge_move_keeps_single_margin() {
         s.dispatch(Action::Screen(ScreenAction::InitializeLayout {
             width: 1600,
             height: 1200,
+            scale_factor: 2.0,
+            inset: Insets::default(),
         }))
         .unwrap();
         s.evaluate_depsgraph();
@@ -1036,6 +1056,8 @@ fn timeline_block_drag_preview_commit_cancel() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -1187,6 +1209,8 @@ fn timeline_block_drag_moves_selection_group() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -1339,6 +1363,8 @@ fn marquee_select_skips_group_header() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -1453,6 +1479,8 @@ fn timeline_group_header_drag_moves_subtree() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();
@@ -1607,6 +1635,8 @@ fn timeline_drag_moves_selection_with_group_headers() {
             .dispatch(Action::Screen(ScreenAction::InitializeLayout {
                 width: 800,
                 height: 600,
+                scale_factor: 1.0,
+                inset: Insets::default(),
             }))
             .unwrap();
         store_mut.evaluate_depsgraph();

@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 use aweft_gui::bridge::callbacks::setup_callbacks;
 use aweft_gui::bridge::types::{MainWindow, SequenceCallbacks, SlintSelectionModifier};
+use aweft_gui::screen::primitives::Insets;
 use aweft_gui::store::AppStore;
 use aweft_model::sequence::{EventData, ItemContent, ItemLocation};
 use slint::{ComponentHandle, Model, ModelRc};
@@ -44,6 +45,8 @@ fn setup() -> (Rc<RefCell<AppStore>>, MainWindow) {
                 aweft_gui::actions::screen::ScreenAction::InitializeLayout {
                     width: 800,
                     height: 600,
+                    scale_factor: 1.0,
+                    inset: Insets::default(),
                 },
             ))
             .unwrap();
