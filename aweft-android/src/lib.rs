@@ -1,7 +1,8 @@
 //! Android 入口：`android_main` 代替 `main`（要求见 slint 的 android 模块文档）。
 //!
-//! 只做 Android 特有的三件事：装 logcat 日志、交出 JVM/Activity 句柄并初始化
-//! Slint 的 Android 后端、登记 GStreamer 静态插件；之后进与桌面同一套的
+//! 只做 Android 特有的四件事：装 logcat 日志、交出 JVM/Activity 句柄、
+//! 把配置目录定成外部数据目录、初始化 Slint 的 Android 后端，
+//! 以及登记 GStreamer 静态插件；之后进与桌面同一套的
 //! `aweft_gui::create_window`，面板、插件、播放链都不分叉。
 
 #[cfg(target_os = "android")]
@@ -27,6 +28,15 @@ fn android_main(app: slint::android::AndroidApp) {
     // 必须把 Activity 单独递出去。句柄是 global ref，由 `app` 持有，`app` 随后进了
     // Slint 的 platform 全局量、进程内不释放，因此 gui 里存裸指针一直有效。
     aweft_gui::file_picker::android::set_activity(activity);
+    // 配置目录＝外部数据目录（`/storage/emulated/0/Android/data/<包>/files`）：
+    // 归属是应用自己，`adb push` 实测写得进去（见 docs/tmp/plugin-panel-android.md §8），
+    // 设置文件与插件目录都落在它下面。
+    // 必须在 `app` 移走之前取（这个访问器是 `AndroidApp` 的方法），也要早于任何一次
+    // 设置读取——设置层首次访问就缓存，之后再提交目录不再生效。
+    match app.external_data_path() {
+        Some(dir) => aweft_settings::set_config_dir(dir),
+        None => log::warn!("拿不到外部数据目录：设置按出厂值，插件只走默认候选目录"),
+    }
     // 这里不要再调 ndk_context::initialize_android_context：android-activity 的 glue
     // 在把控制权交给 android_main 之前已经初始化过一次（0.6.1 的 init.rs:285），
     // 而 ndk-context 那份初始化内部是 assert!(previous.is_none())，

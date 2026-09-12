@@ -681,6 +681,7 @@ dependencies = [
  "aweft-ass",
  "aweft-convert",
  "aweft-gui",
+ "aweft-settings",
 ]
 
 [[package]]
@@ -689,6 +690,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aweft-gui",
+ "aweft-settings",
  "gstreamer",
  "jni 0.22.4",
  "log",
@@ -741,6 +743,7 @@ dependencies = [
  "aweft-model",
  "aweft-plugins",
  "aweft-project",
+ "aweft-settings",
  "bitflags 2.13.1",
  "bytemuck",
  "chrono",
@@ -831,6 +834,17 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "aweft-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -35,8 +35,9 @@ impl PluginBridge {
     /// 从插件根目录装载插件，并把声明了时间变更订阅的插件注册成 `store` 的订阅者。
     /// 装载失败只记日志：没有插件时主程序照常工作。
     ///
-    /// 候选目录按存在与否探测（当前目录、其父目录、可执行文件同级下的 `plugins`），
-    /// 覆盖"从仓库根跑"、"从 crate 目录跑测试"与"打包安装"三种布局。
+    /// 候选目录按存在与否探测（设置里配的插件根、配置目录下的 `plugins`，再是
+    /// 当前目录、其父目录、可执行文件同级下的 `plugins`），
+    /// 覆盖"用户装机"与"从仓库根跑"、"从 crate 目录跑测试"、"打包安装"这几种布局。
     pub fn load(store: &mut ProjectStore) -> Self {
         let mut manager = PluginManager::new();
         let (event_tx, event_rx) = futures::channel::mpsc::unbounded::<PluginEvent>();
@@ -143,6 +144,9 @@ pub fn start_event_pump(store: &Rc<RefCell<AppStore>>) {
 }
 
 /// 插件根目录候选（去重后按顺序尝试）。
+/// 前两项是"用户装插件的地方"：设置里显式配的根优先，其次是配置目录下的 `plugins`
+///（Android 上配置目录就是外部数据目录，`adb push` 进得去，见
+/// `docs/tmp/plugin-panel-android.md` §8）。后三项是开发期兜底。
 fn plugin_roots() -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut push = |path: PathBuf| {
@@ -150,6 +154,12 @@ fn plugin_roots() -> Vec<PathBuf> {
             roots.push(path);
         }
     };
+    if let Some(root) = aweft_settings::settings().paths.plugin_root.clone() {
+        push(root);
+    }
+    if let Some(dir) = aweft_settings::config_dir() {
+        push(dir.join("plugins"));
+    }
     if let Ok(cwd) = std::env::current_dir() {
         push(cwd.join("plugins"));
         if let Some(parent) = cwd.parent() {

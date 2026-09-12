@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 aweft-gui = { path = "../aweft-gui" }
+aweft-settings = { path = "../aweft-settings" }
 anyhow = "1.0.104"
 log = "0.4.33"
 

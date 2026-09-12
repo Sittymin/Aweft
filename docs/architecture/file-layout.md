@@ -108,6 +108,17 @@ ui/
 └── theme/           # 主题（tokens / mixins / index）
 ```
 
+## `aweft-settings/src/`
+
+```
+src/
+├── lib.rs       # Settings{format, paths}、格式版本戳 AWEFT_SETTINGS_FORMAT、进程内那一份 settings()
+├── location.rs  # 配置目录：AWEFT_USER_CONFIG 覆盖 → platform_config_dir()（Android 返回 None，由入口交）
+└── storage.rs   # 读写：<配置目录>/aweft-settings.json，temp + fsync + rename 原子写，版本门
+```
+
+分层的完整规矩（字段分区、迁移政策、为什么没有撤销）见 `docs/architecture/settings.md`。
+
 ## 数据流（store 是中心，不是链尾）
 
 ```
