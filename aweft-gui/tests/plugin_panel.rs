@@ -1,12 +1,18 @@
 //! 插件闭环的无头集成测试：装载真实插件目录 → 界面写入经广播直达 Guest →
-//! 命令写回真相 → 广播回界面刷进行模型。主程序侧不出现任何插件专属的文本或功能硬编码。
+//! 命令写回真相 → 广播回界面刷进行模型 → 面板作为 Area 内容嵌进界面树。
+//! 主程序侧不出现任何插件专属的文本或功能硬编码。
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use aweft_gui::actions::area::AreaAction;
+use aweft_gui::actions::screen::ScreenAction;
 use aweft_gui::actions::sequence::SequenceAction;
 use aweft_gui::actions::Action;
-use aweft_gui::bridge::types::MainWindow;
+use aweft_gui::bridge::slint_area_key_to_key;
+use aweft_gui::bridge::types::{MainWindow, SlintAreaType};
+use aweft_gui::screen::area::{AreaType, ScrAreaKey};
+use aweft_gui::screen::primitives::Insets;
 use aweft_gui::store::AppStore;
 use aweft_model::sequence::{EventData, ItemContent, ItemLocation};
 use slint::{Model, ModelRc};
@@ -38,6 +44,63 @@ fn setup() -> (MainWindow, Rc<RefCell<AppStore>>) {
         store_mut.rebuild_sequence_models();
     }
     (instance, store)
+}
+
+/// 建好工程数据并把屏幕布局初始化成默认的三块 Area（面板要嵌进 Area，先得有 Area）。
+fn setup_with_areas() -> (MainWindow, Rc<RefCell<AppStore>>, ScrAreaKey) {
+    let (instance, store) = setup();
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Screen(ScreenAction::InitializeLayout {
+                width: 1200,
+                height: 800,
+                scale_factor: 1.0,
+                inset: Insets::default(),
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    let first = area_keys(&store.borrow())[0];
+    // 模型绑定：`AppStore::new` 只填 Rust 侧的 VecModel，把它交给窗口是
+    // `window_manager` 在真实启动路径里做的（无头测试不走那里）。不绑就只有所谓
+    // 的"模型行改了"，界面树里一个 Area 都没有，容器也就不会去向工厂索取面板。
+    instance.set_scr_areas(slint::ModelRc::from(store.borrow().ui_models().scrareas()));
+    (instance, store, first)
+}
+
+fn area_keys(store: &AppStore) -> Vec<ScrAreaKey> {
+    store.state().screen_map.areas.keys().collect()
+}
+
+/// 切 Area 类型并跑到投影：`dispatch` 只打 tag，实例的建与销都在这一步发生。
+fn switch_area(store: &Rc<RefCell<AppStore>>, area_key: ScrAreaKey, area_type: AreaType) {
+    {
+        let mut store_mut = store.borrow_mut();
+        store_mut
+            .dispatch(Action::Area(AreaAction::SwitchType {
+                area_key,
+                area_type,
+            }))
+            .unwrap();
+        store_mut.evaluate_depsgraph();
+    }
+    // 无头测试没有渲染循环，而 repeater / 条件元素 / ComponentContainer 是懒实例化的
+    //（工厂只在 Slint 的实例化遍历里被调用）。推一次 mock 时间把这一遍跑掉，
+    // 否则模型行改了、界面树里却什么也没建。
+    instantiate_ui();
+}
+
+fn instantiate_ui() {
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(0));
+}
+
+fn scrarea_row(store: &AppStore, area_key: ScrAreaKey) -> aweft_gui::bridge::types::ScrAreaData {
+    let areas = store.ui_models().scrareas();
+    (0..areas.row_count())
+        .filter_map(|i| areas.row_data(i))
+        .find(|row| slint_area_key_to_key::<ScrAreaKey>(&row.area_key) == area_key)
+        .expect("Area 应在 UI 模型里有一行")
 }
 
 /// 开始时间等于 `start_ms` 的那一行。
@@ -236,16 +299,39 @@ fn second_command_while_busy_is_rejected() {
 }
 
 #[test]
-fn one_window_per_plugin_reused_and_unknown_rejected() {
-    let (_instance, store) = setup();
-    // 无头后端下 show 可能失败，关键是不 panic 且重复打开不新增窗口。
-    aweft_gui::plugin_bridge::open_plugin_window(&store, "test-plugin");
-    let first = store.borrow().open_window_count();
-    aweft_gui::plugin_bridge::open_plugin_window(&store, "test-plugin");
-    assert_eq!(store.borrow().open_window_count(), first);
-    aweft_gui::plugin_bridge::open_plugin_window(&store, "no-such-plugin");
-    assert_eq!(store.borrow().open_window_count(), first);
-    // 越界下标只记日志。
-    aweft_gui::plugin_bridge::open_plugin_window_at(&store, 99);
-    assert_eq!(store.borrow().open_window_count(), first);
+fn panel_lives_in_the_area_not_in_a_separate_window() {
+    let (_instance, store, area_key) = setup_with_areas();
+    let second_area = area_keys(&store.borrow())[1];
+
+    // 切成插件 Area：这一行带上 id 与非空工厂，容器当场嵌出一个面板实例。
+    switch_area(&store, area_key, AreaType::Plugin("test-plugin".into()));
+    let row = scrarea_row(&store.borrow(), area_key);
+    assert_eq!(row.area_type, SlintAreaType::Plugin);
+    assert_eq!(row.plugin_id, "test-plugin");
+    assert_ne!(row.plugin_factory, slint::ComponentFactory::default());
+    assert_eq!(store.borrow().panel_instance_count("test-plugin"), 1);
+
+    // 再切一次同一插件：工厂克隆后指针相等，Slint 不重建容器里已嵌好的面板。
+    switch_area(&store, area_key, AreaType::Plugin("test-plugin".into()));
+    assert_eq!(store.borrow().panel_instance_count("test-plugin"), 1);
+
+    // 第二个 Area 也指过来（分屏复制同一插件的情形）：一处一个实例。
+    switch_area(&store, second_area, AreaType::Plugin("test-plugin".into()));
+    assert_eq!(store.borrow().panel_instance_count("test-plugin"), 2);
+
+    // 都切走：容器销毁即实例释放，插件 id 与工厂跟着清空。
+    switch_area(&store, area_key, AreaType::LineEditor);
+    switch_area(&store, second_area, AreaType::LineEditor);
+    assert_eq!(store.borrow().panel_instance_count("test-plugin"), 0);
+    let row = scrarea_row(&store.borrow(), area_key);
+    assert_eq!(row.area_type, SlintAreaType::LineEditor);
+    assert_eq!(row.plugin_id, "");
+    assert_eq!(row.plugin_factory, slint::ComponentFactory::default());
+
+    // 没有可用面板的 id：空工厂，嵌不出东西也不 panic。
+    switch_area(&store, area_key, AreaType::Plugin("no-such-plugin".into()));
+    let row = scrarea_row(&store.borrow(), area_key);
+    assert_eq!(row.plugin_id, "no-such-plugin");
+    assert_eq!(row.plugin_factory, slint::ComponentFactory::default());
+    assert_eq!(store.borrow().panel_instance_count("no-such-plugin"), 0);
 }

@@ -1,30 +1,36 @@
-//! GUI 侧插件落点：装载插件、注册订阅者、持有每插件一个窗口、跑事件 pump。
+//! GUI 侧插件落点：装载插件、注册订阅者、持有每插件一个面板工厂、跑事件 pump。
 //!
 //! 编排（发现/装载/校验）内聚在 `aweft_plugins::PluginManager`，通知与回声过滤
 //! 内聚在 `ProjectStore` 的广播，worker 线程与事件类型内聚在 `aweft_plugins`，
 //! 本文件只是其中一个客户端的薄适配层：
 //! 1. 启动期从目录装载插件（给 manager 一个事件发送端，接收端自己留着），
-//!    顺带把声明了订阅的插件注册成工程存储的订阅者，并把插件名字写给 `PluginState`；
-//! 2. 打开并持有插件自带的 Slint 窗口，把窗口按钮路由到 Guest 命令；
+//!    顺带把声明了订阅的插件注册成工程存储的订阅者，并把有面板的插件写给 Area 切换菜单；
+//! 2. 按插件惰性建出面板的 `ComponentFactory` 并缓存，交给 Area 里的
+//!    `ComponentContainer` 嵌入，面板按钮按插件 id 路由回 Guest 命令；
 //! 3. 在 UI 线程 pump worker 事件：落真相 → 换刷新 tag → 同步面板（含 busy）。
 //!
 //! 这里不出现任何具体插件的名字、命令或文案：命令来自 Guest 自描述，
 //! 面板来自插件目录，状态行由插件自己用宿主提供的 `set_status_line` 写出。
 
-use aweft_plugins::{PluginEvent, PluginManager, PluginWindow, WorkerEvent};
+use aweft_plugins::{PanelHandle, PluginEvent, PluginManager, WorkerEvent};
 use aweft_project::ProjectStore;
 use futures::channel::mpsc::UnboundedReceiver;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::store::AppStore;
 
 pub struct PluginBridge {
     manager: PluginManager,
-    /// 已打开的插件窗口（每插件一个；丢弃守卫即关窗）。
-    windows: HashMap<String, PluginWindow>,
+    /// 每插件一个面板工厂，第一次被 Area 要时才建（建工厂要借 `AppStore` 的弱句柄，
+    /// 而那时装载已经完成）。缓存是必需的：`ComponentFactory` 克隆后指针相等，
+    /// Area 投影重算时写回同一个值，Slint 就不会重建容器里已经嵌好的面板。
+    panels: RefCell<HashMap<String, PanelHandle>>,
+    /// 面板上的按钮要投递命令，而命令要过 `AppStore`。`AppStore` 的 `Rc` 在自己的
+    /// 构造期还不存在，所以由 `attach_store` 事后补进来。
+    self_store: RefCell<Weak<RefCell<AppStore>>>,
     /// 事件接收端：`start_event_pump` 取走后为 `None`，之后走异步 pump；
     /// 测试（无事件循环）走 `poll_plugin_events` 同步 drain。
     /// 发送端只在装载时存在（克隆给每个 worker 后即丢弃，通道靠两边持有续命）。
@@ -52,9 +58,15 @@ impl PluginBridge {
         }
         Self {
             manager,
-            windows: HashMap::new(),
+            panels: RefCell::new(HashMap::new()),
+            self_store: RefCell::new(Weak::new()),
             event_rx: Some(event_rx),
         }
+    }
+
+    /// 补上承载本桥的 `AppStore` 句柄（面板命令的路由目标）。
+    pub fn attach_store(&mut self, store: &Rc<RefCell<AppStore>>) {
+        *self.self_store.borrow_mut() = Rc::downgrade(store);
     }
 
     pub fn manager(&self) -> &PluginManager {
@@ -65,44 +77,79 @@ impl PluginBridge {
         &mut self.manager
     }
 
-    /// 装载到的插件名字，顺序与 `plugins()` 一致，下标即 UI 上的按钮序号。
-    pub fn titles(&self) -> Vec<String> {
+    /// 可以成为一个 Area 的插件（即有可用面板），顺序与 `plugins()` 一致。
+    /// 每项是 (插件 id, 展示名)，喂 Area 切换菜单的插件一列。
+    pub fn panel_areas(&self) -> Vec<(String, String)> {
         self.manager
             .plugins()
             .iter()
-            .map(|plugin| plugin.title.clone())
+            .filter(|plugin| plugin.panel().is_some())
+            .map(|plugin| (plugin.id.clone(), plugin.title.clone()))
             .collect()
     }
 
-    fn plugin_id_at(&self, index: usize) -> Option<&str> {
-        self.manager
-            .plugins()
-            .get(index)
-            .map(|plugin| plugin.id.as_str())
+    /// 取某插件面板的嵌入工厂（第一次要时建）。插件不存在或没有可用面板时 `None`。
+    ///
+    /// 只在 Area 投影里调，此时 `AppStore` 正被可变借用——所以这里绝不碰 store：
+    /// 工厂闭包读的是 `PanelHandle` 自持的值快照，命令投递要到用户点击时才借 store。
+    pub fn panel_factory(&self, plugin_id: &str) -> Option<slint::ComponentFactory> {
+        if let Some(handle) = self.panels.borrow().get(plugin_id) {
+            return Some(handle.factory());
+        }
+        let plugin = self.manager.plugin(plugin_id)?;
+        let definition = plugin.panel()?;
+        let handle = PanelHandle::new(
+            definition,
+            &plugin.commands,
+            &plugin.status_lines(),
+            self.manager.is_busy(plugin_id),
+            {
+                let store = self.self_store.borrow().clone();
+                let id = plugin_id.to_string();
+                move |cmd_id| {
+                    let Some(store) = store.upgrade() else {
+                        log::warn!("宿主已释放，插件命令丢弃（{id}:{cmd_id}）");
+                        return;
+                    };
+                    if let Err(e) = store.borrow_mut().run_plugin_command(&id, cmd_id) {
+                        log::warn!("插件命令执行失败（{id}:{cmd_id}）：{e:?}");
+                    }
+                }
+            },
+        );
+        let factory = handle.factory();
+        self.panels
+            .borrow_mut()
+            .insert(plugin_id.to_string(), handle);
+        Some(factory)
     }
 
-    /// 把某插件当前状态行写进它的窗口（没有窗口则什么都不做）。
-    fn sync_window(&mut self, plugin_id: &str) {
+    /// 把 manager 的当前真相（状态行 + busy）推给某插件的所有活动面板实例。
+    /// 没有面板时什么都不做。
+    pub fn sync_panel(&self, plugin_id: &str) {
         let Some(lines) = self.manager.status_lines(plugin_id) else {
             return;
         };
-        if let Some(window) = self.windows.get_mut(plugin_id) {
-            window.set_status_lines(&lines);
+        let busy = self.manager.is_busy(plugin_id);
+        if let Some(handle) = self.panels.borrow().get(plugin_id) {
+            handle.sync(&lines, busy);
         }
     }
 
-    pub(crate) fn sync_all_windows(&mut self) {
-        let ids: Vec<String> = self.windows.keys().cloned().collect();
+    pub(crate) fn sync_all_panels(&self) {
+        let ids: Vec<String> = self.panels.borrow().keys().cloned().collect();
         for id in ids {
-            self.sync_window(&id);
+            self.sync_panel(&id);
         }
     }
 
-    /// 把某插件的 busy 态写进它的窗口（没有窗口则什么都不做）。
-    fn set_window_busy(&mut self, plugin_id: &str, busy: bool) {
-        if let Some(window) = self.windows.get_mut(plugin_id) {
-            window.set_busy(busy);
-        }
+    /// 某插件当前活着的面板实例数（测试断言"切走 Area 即释放面板"用）。
+    pub fn panel_instance_count(&self, plugin_id: &str) -> usize {
+        self.panels
+            .borrow()
+            .get(plugin_id)
+            .map(PanelHandle::live_instances)
+            .unwrap_or(0)
     }
 
     /// 同步 drain 事件通道（无事件循环时的客户端：测试、命令行）。
@@ -193,38 +240,32 @@ impl AppStore {
                 .manager_mut()
                 .run_command(&state.project, plugin_id, cmd_id)?;
         }
-        self.plugin_bridge.set_window_busy(plugin_id, true);
+        self.plugin_bridge.sync_panel(plugin_id);
         Ok(())
     }
 
     /// 落一个 worker 事件：写回真相（存储随即广播）→ 刷新队列换 tag →
-    /// 重算投影 → 同步面板。`busy` 出清时同时清面板 busy 态。
+    /// 重算投影 → 同步面板。忙态出清与状态行更新都在 `sync_panel` 里按真相做。
     pub(crate) fn apply_plugin_event(&mut self, plugin_id: &str, event: WorkerEvent) {
-        let busy_cleared = {
+        {
             let AppStore {
                 plugin_bridge,
                 state,
                 ..
             } = self;
-            match plugin_bridge
+            if let Err(error) = plugin_bridge
                 .manager_mut()
                 .apply_event(&mut state.project, plugin_id, event)
             {
-                Ok(cleared) => cleared,
-                Err(error) => {
-                    log::warn!("插件事件落真相失败（{plugin_id}）：{error:?}");
-                    return;
-                }
+                log::warn!("插件事件落真相失败（{plugin_id}）：{error:?}");
+                return;
             }
-        };
+        }
         // 报错前已落进真相的写入同样要刷出来，所以队列先于判错处理
         //（此处沿用 `dispatch` 的顺序：先队列，后投影）。
         self.apply_refresh_queue();
         self.evaluate_depsgraph();
-        if busy_cleared {
-            self.plugin_bridge.set_window_busy(plugin_id, false);
-        }
-        self.plugin_bridge.sync_window(plugin_id);
+        self.plugin_bridge.sync_panel(plugin_id);
     }
 
     /// 同步 drain 事件通道并逐个落盘（无事件循环时的客户端：测试、命令行）。
@@ -234,73 +275,8 @@ impl AppStore {
         }
     }
 
-    /// 已打开的插件窗口数（测试断言用）。
-    pub fn open_window_count(&self) -> usize {
-        self.plugin_bridge.windows.len()
+    /// 某插件当前嵌入在多少个 Area 里（测试断言用）。
+    pub fn panel_instance_count(&self, plugin_id: &str) -> usize {
+        self.plugin_bridge.panel_instance_count(plugin_id)
     }
-}
-
-/// 打开某插件的窗口（每插件一个；已可见则复用）。
-/// 窗口内容是插件目录自带的 Slint 片段，按钮按命令编号回投给 Guest。
-/// 开窗时按 manager 的 busy 真相同步一次面板 busy 态（命令可能在窗口打开前
-/// 就已经发出，例如测试或其它客户端先点了命令）。
-pub fn open_plugin_window(store: &Rc<RefCell<AppStore>>, plugin_id: &str) {
-    let (definition, labels, lines, busy) = {
-        let borrowed = store.borrow();
-        let bridge = &borrowed.plugin_bridge;
-        if bridge
-            .windows
-            .get(plugin_id)
-            .is_some_and(PluginWindow::is_visible)
-        {
-            return;
-        }
-        let Some(plugin) = bridge.manager().plugin(plugin_id) else {
-            log::warn!("插件未加载，无窗口可开：{plugin_id}");
-            return;
-        };
-        let Some(definition) = plugin.panel().cloned() else {
-            log::warn!("插件 {plugin_id} 没有可用面板（面板缺失或编译失败）");
-            return;
-        };
-        (
-            definition,
-            plugin.commands.clone(),
-            plugin.status_lines(),
-            bridge.manager().is_busy(plugin_id),
-        )
-    };
-    let store_ref = Rc::clone(store);
-    let id = plugin_id.to_string();
-    let window = match PluginWindow::open(&definition, &labels, &lines, move |cmd_id| {
-        if let Err(e) = store_ref.borrow_mut().run_plugin_command(&id, cmd_id) {
-            log::warn!("插件命令执行失败（{id}:{cmd_id}）：{e:?}");
-        }
-    }) {
-        Ok(window) => window,
-        Err(e) => {
-            log::warn!("插件窗口打开失败（{plugin_id}）：{e:?}");
-            return;
-        }
-    };
-    window.set_busy(busy);
-    store
-        .borrow_mut()
-        .plugin_bridge
-        .windows
-        .insert(plugin_id.to_string(), window);
-}
-
-/// 按 UI 按钮下标打开对应插件的窗口（下标来自 `PluginState.plugin-titles`）。
-pub fn open_plugin_window_at(store: &Rc<RefCell<AppStore>>, index: i32) {
-    let Some(plugin_id) = store
-        .borrow()
-        .plugin_bridge
-        .plugin_id_at(index.max(0) as usize)
-        .map(|id| id.to_string())
-    else {
-        log::warn!("插件按钮下标越界：{index}");
-        return;
-    };
-    open_plugin_window(store, &plugin_id);
 }

@@ -2,7 +2,7 @@ use crate::actions::sequence::SequenceAction;
 use crate::actions::{Action, area::AreaAction};
 use crate::bridge::types::{
     AnimationCallbacks, AreaCallbacks, DragCallbacks, MainWindow, NodeGraphCallbacks,
-    PluginCallbacks, SequenceCallbacks, VideoCallbacks,
+    SequenceCallbacks, VideoCallbacks,
 };
 // 媒体选择弹层的回调只在 Android 装配（见 setup_media_picker_callbacks）。
 #[cfg(target_os = "android")]
@@ -47,7 +47,6 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_nla_callbacks(instance, Rc::clone(&store));
     setup_video_callbacks(instance, Rc::clone(&store));
     setup_audio_callbacks(instance, Rc::clone(&store));
-    setup_plugin_callbacks(instance, Rc::clone(&store));
     setup_media_picker_callbacks(instance, Rc::clone(&store));
 }
 
@@ -540,6 +539,7 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
 /// 设置区域类型切换回调 - 使用 Action 模式
 fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
+    let s = Rc::clone(&store);
 
     instance.global::<AreaCallbacks>().on_switch_area_type(
         move |slint_area_key, slint_area_type| {
@@ -553,9 +553,22 @@ fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>)
             });
 
             // 分发 Action 并更新 UI
-            dispatch_and_render(&store, action, &weak_instance);
+            dispatch_and_render(&s, action, &weak_instance);
         },
     );
+
+    // 插件一列：枚举带不出插件 id，交的是 id，落成同一个 SwitchType（同一个 reducer、
+    // 同一个 Tag），面板工厂由 Area 投影按 id 现取。
+    let weak = instance.as_weak();
+    instance
+        .global::<AreaCallbacks>()
+        .on_switch_area_type_plugin(move |slint_area_key, plugin_id| {
+            let action = Action::Area(AreaAction::SwitchType {
+                area_key: slint_area_key_to_key(&slint_area_key),
+                area_type: crate::screen::area::AreaType::Plugin(plugin_id.to_string()),
+            });
+            dispatch_and_render(&store, action, &weak);
+        });
 }
 
 fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -1406,17 +1419,6 @@ fn setup_sequence_ungroup_callbacks(instance: &MainWindow, store: Rc<RefCell<App
 
     // 2. 依赖图求值：只重算受影响投影
     store_mut.evaluate_depsgraph();
-}
-
-/// 设置插件回调：行编辑器工具条上的每个按钮对应一个已装载插件，
-/// 参数是 `PluginState.plugin-titles` 的下标，Rust 侧按下标取插件 id 开窗。
-fn setup_plugin_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
-    let s = Rc::clone(&store);
-    instance
-        .global::<PluginCallbacks>()
-        .on_open_plugin_panel(move |index| {
-            crate::plugin_bridge::open_plugin_window_at(&s, index);
-        });
 }
 
 /// 设置动画编辑器（曲线编辑器）回调：全部交互走 `Action::Animation` → dispatch → tag → 投影。

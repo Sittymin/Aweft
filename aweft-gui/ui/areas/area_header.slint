@@ -21,6 +21,8 @@ export struct AreaHeaderIconAction {
 export component AreaHeader inherits Rectangle {
     in property <SlintKey> area-key;
     in property <SlintAreaType> area-type;
+    // 插件 Area 的插件 id；其余类型为空串
+    in property <string> plugin-id: "";
 
     // 左区 / 右区内容（图标开关按钮）
     in property <[AreaHeaderIconAction]> left-actions: [];
@@ -38,10 +40,14 @@ export component AreaHeader inherits Rectangle {
         IconComboBox {
             y: (parent.height - self.height) / 2;
             current-index: AreaTypeMetadata.area-type-to-index(root.area-type);
+            current-plugin-id: root.plugin-id;
             selected(new-index) => {
                 AreaCallbacks.switch-area-type(
                     root.area-key,
                     AreaTypeMetadata.index-to-area-type(new-index));
+            }
+            selected-plugin(id) => {
+                AreaCallbacks.switch-area-type-plugin(root.area-key, id);
             }
         }
 

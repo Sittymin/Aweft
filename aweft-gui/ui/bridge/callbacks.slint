@@ -24,6 +24,8 @@ export global DragCallbacks {
 
 export global AreaCallbacks {
     callback switch-area-type(area-key: SlintKey, area-type: SlintAreaType);
+    // 切到插件一列的某项：插件不是编译期枚举值，交的是插件 id
+    callback switch-area-type-plugin(area-key: SlintKey, plugin-id: string);
 }
 
 // 视口回调：打开视频等媒体操作（Rust 侧处理）
@@ -224,13 +226,6 @@ export global AnimationCallbacks {
     callback action-selected(index: int);
     // —— 共享：视图缩放变化 —— 更新命中检测容差依据（刻度已 Slint 侧即时计算）
     callback view-changed(zoom-x: float, zoom-y: float);
-}
-
-// 插件回调：每插件独立窗口（运行时解析插件自带 Slint 片段）。
-// 窗口内容由插件作者编写，主程序只负责开窗与回调路由。
-export global PluginCallbacks {
-    // 行编辑器工具条上的插件按钮：参数是 PluginState.plugin-titles 的下标。
-    callback open-plugin-panel(index: int);
 }
 
 // 媒体选择器回调（仅 Android 用，见 MediaPickerState）。

@@ -22,6 +22,9 @@ export enum SlintAreaType {
     nla-editor,
     // 音频波形（当前使用固定分桶的占位采样）
     audio-waveform,
+    // 插件面板：Area 类型本身不区分是哪个插件，插件 id 在 ScrAreaData.plugin-id，
+    // 面板内容由 ScrAreaData.plugin-factory 现取现嵌
+    plugin,
 }
 
 // 单个时间桶的 min/max/rms 包络（Audacity 式三值；空桶/静音段全 0）。
@@ -82,6 +85,14 @@ export struct IconAndText {
     text: string,
 }
 
+// Area 切换菜单里"插件"一列的一项：只有 id 与名字，图标由
+// AreaTypeMetadata.plugin-icon 统一给（`@image-url` 是 .slint 侧的字面量，
+// Rust 造不出 image，也就不必为每一项带一个）。
+export struct PluginAreaItem {
+    id: string,
+    name: string,
+}
+
 export struct ScrAreaData {
     area_key: SlintKey,
     area_type: SlintAreaType,
@@ -90,6 +101,11 @@ export struct ScrAreaData {
     width: length,
     height: length,
     actionzone-side-length: length,
+    // area_type == plugin 时是插件 id，其余类型为空串
+    plugin-id: string,
+    // 面板的组件工厂（按插件 id 缓存，克隆同一份指针相等，投影重算不重建面板）；
+    // 非插件 Area 为默认值（空工厂）
+    plugin-factory: component-factory,
 }
 
 export enum ActionZoneCorner {

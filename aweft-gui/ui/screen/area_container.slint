@@ -30,6 +30,10 @@ export component SlintScrArea inherits Rectangle {
     in property <length> container-width;
     in property <length> container-height;
     in property <length> actionzone-side-length;
+    // 插件 Area：plugin-id 给切换菜单认当前项，plugin-factory 给容器嵌面板。
+    // 工厂按插件 id 缓存在 Rust 侧，克隆同一份指针相等，投影重算不会重建面板。
+    in property <string> plugin-id: "";
+    in property <component-factory> plugin-factory;
 
     // 是否正在编辑链（节点图 Area 状态；切换 Area 类型时复位）
     private property <bool> chain-editing: false;
@@ -88,6 +92,13 @@ export component SlintScrArea inherits Rectangle {
                 root.waveform-video-index = index;
                 root.waveform-track-index = 0;
             }
+        }
+        // 插件 Area 用通用标题栏：不预留任何给插件用的控件，
+        // plugin-id 只让切换菜单认得出当前项
+        if area-type == SlintAreaType.plugin: AreaHeader {
+            area-key: area-key;
+            area-type: area-type;
+            plugin-id: root.plugin-id;
         }
 
         if area-type == SlintAreaType.line-editor: LineEditor { }
@@ -172,6 +183,10 @@ export component SlintScrArea inherits Rectangle {
             track-selected(index) => {
                 root.waveform-track-index = index;
             }
+        }
+        // 插件面板嵌在这里：容器向工厂索取实例，面板自己填满这块区域
+        if area-type == SlintAreaType.plugin: ComponentContainer {
+            component-factory: root.plugin-factory;
         }
     }
 

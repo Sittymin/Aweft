@@ -103,6 +103,8 @@ impl AppWindowManager {
         let instance = MainWindow::new().context("创建 Slint 主窗口失败")?;
         // FIXME: 这里获得的是未初始化的数据
         let store = Rc::new(RefCell::new(AppStore::new(&instance)));
+        // 插件面板的命令要投回 `AppStore`，而它自己的 `Rc` 在构造期还不存在，这里补上。
+        store.borrow_mut().plugin_bridge.attach_store(&store);
         // 插件 worker 事件的 UI 线程 pump：落真相 → 换刷新 tag → 同步面板。
         // 无头测试不调它，改走 `drain_plugin_events` 同步 drain。
         crate::plugin_bridge::start_event_pump(&store);

@@ -28,6 +28,6 @@ pub use manifest::{MANIFEST_FILE, Permissions, PluginManifest};
 pub use runtime::{ABI_VERSION, EVENT_TIME_CHANGED, GuestDescriptor, HOST_MODULE};
 pub use ui::{
     COMMAND_BUSY_PROP, COMMAND_CLICKED_CALLBACK, COMMAND_LABELS_PROP, STATUS_LINES_PROP,
-    PluginWindow, compile_panel, compile_panel_file,
+    PanelHandle, compile_panel, compile_panel_file,
 };
 pub use worker::{PluginEvent, RowSnap, WorkerEvent};

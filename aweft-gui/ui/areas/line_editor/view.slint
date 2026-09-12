@@ -2,20 +2,19 @@
 // 实现内容条目的单选与多选拖动调整顺序
 // 筛选功能（触发方式思考一下）与排序功能
 
-import { ListView, VerticalBox, HorizontalBox, Button } from "std-widgets.slint";
+import { ListView, VerticalBox } from "std-widgets.slint";
 import { TableHeader, TableColumn } from "../../widgets/table_header.slint";
 import { Theme } from "../../theme/index.slint";
 import { TimecodeEditor } from "../../widgets/timecode_editor.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { SlintKey, SlintSelectionModifier } from "../../core/types.slint";
 import { SequenceCallbacks } from "../../bridge/callbacks.slint";
-import { PluginCallbacks } from "../../bridge/callbacks.slint";
 import {
     SlintSubtitleRow,
     SlintSubtitleRowType,
     SlintSelectionState,
 } from "../../core/types.slint";
-import { DismissOverlayState, PluginState, SubtitleState } from "../../bridge/state.slint";
+import { DismissOverlayState, SubtitleState } from "../../bridge/state.slint";
 
 export component LineEditor inherits Rectangle {
     // 定义列标题数据
@@ -136,15 +135,6 @@ export component LineEditor inherits Rectangle {
     }
 
     VerticalBox {
-        // 按钮列表由启动期装载结果驱动（无插件时这一条为空）。
-        plugin-bar := HorizontalBox {
-            alignment: start;
-            for title[index] in PluginState.plugin-titles: Button {
-                text: title;
-                clicked => { PluginCallbacks.open-plugin-panel(index); }
-            }
-        }
-
         TableHeader {
             height: Theme.data.line-editor.header-height;
             columns: root.table-columns;

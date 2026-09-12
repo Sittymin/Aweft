@@ -1,12 +1,68 @@
 import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
-import { IconAndText } from "../core/types.slint";
 import { Theme } from "../theme/index.slint";
+
+// 下拉菜单里的一行：内置 AreaType 项与插件项共用它，插件那一列只是另起一段
+// 并加一条分隔线。外层保持 TouchArea——菜单每行的几何与命中都由它承担。
+// 不 export，即本文件私有。
+component MenuItem inherits TouchArea {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> is-current;
+    callback picked();
+
+    pointer-event(event) => {
+        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+            root.picked();
+        }
+    }
+
+    // 负责视觉表现
+    item-background := Rectangle {
+        background: is-current ? Theme.data.area-type-switcher.popup.item-selected-background
+                               : Theme.data.area-type-switcher.popup.background;
+        border-radius: Theme.data.area-type-switcher.popup.item-border-radius;
+
+        HorizontalLayout {
+            padding-left: Theme.data.area-type-switcher.popup.item-padding-horizontal;
+            padding-right: Theme.data.area-type-switcher.popup.item-padding-horizontal;
+            min-height: Theme.data.area-type-switcher.popup.item-min-height;
+            spacing: Theme.data.area-type-switcher.popup.item-spacing;
+            alignment: start;
+
+            Image {
+                source: icon;
+                width: Theme.data.area-type-switcher.popup.item-icon-size;
+                height: Theme.data.area-type-switcher.popup.item-icon-size;
+                vertical-alignment: center;
+            }
+
+            Text {
+                vertical-alignment: center;
+                text: root.text;
+                color: Theme.data.area-type-switcher.popup.item-text-color;
+            }
+        }
+
+        // 高亮叠加层
+        Rectangle {
+            visible: root.has-hover && !is-current;
+            background: Theme.data.area-type-switcher.popup.highlight-color;
+            border-radius: item-background.border-radius;
+        }
+    }
+}
+
 export component IconComboBox inherits Rectangle {
     in-out property <int> current-index: -1;
+    // 当前 Area 是插件时给出插件 id（内置类型为空串）；插件不参与下标换算，
+    // 有 id 才能判出菜单里哪一项是"当前项"。
+    in-out property <string> current-plugin-id: "";
     in property <image> drop-down-arrow: @image-url("../assets/icons/arrow_drop_down.svg");
 
     // 当选择改变时触发的回调
     callback selected(new-index: int);
+    // 选中插件一列的某项：交插件 id
+    callback selected-plugin(id: string);
 
     width: Theme.data.area-type-switcher.width;
     height: Theme.data.area-type-switcher.height;
@@ -38,6 +94,14 @@ export component IconComboBox inherits Rectangle {
                 height: parent.height;
             }
 
+            // 插件 Area 的图标：插件项统一用一枚图标，按下标取不到
+            if root.current-index < 0 && root.current-plugin-id != "": Image {
+                source: AreaTypeMetadata.plugin-icon;
+                y: (parent.height - self.height) / 2;
+                width: parent.height;
+                height: parent.height;
+            }
+
             // 下箭头图标
             Image {
                 source: root.drop-down-arrow;
@@ -55,11 +119,8 @@ export component IconComboBox inherits Rectangle {
         width: layout.preferred-width;
         height: layout.preferred-height;
 
-        property <color> popup-background: Theme.data.area-type-switcher.popup.background;
-        property <color> highlight-color: Theme.data.area-type-switcher.popup.highlight-color;
-
         Rectangle {
-            background: popup-background;
+            background: Theme.data.area-type-switcher.popup.background;
             border-radius: Theme.data.area-type-switcher.popup.border-radius;
             border-width: Theme.data.area-type-switcher.popup.border-width;
             border-color: Theme.data.area-type-switcher.popup.border-color;
@@ -68,54 +129,37 @@ export component IconComboBox inherits Rectangle {
                 padding: Theme.data.area-type-switcher.popup.padding;
                 spacing: Theme.data.area-type-switcher.popup.spacing;
 
-                for item[i] in AreaTypeMetadata.items: item_touch_area := TouchArea {
-                    pointer-event(event) => {
-                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                            if root.current-index != i {
-                                root.current-index = i;
-                                root.selected(i);
-                            }
-                            // WARN: 不可以提前，不然之后的代码不会执行
-                            popup.close();
+                for item[i] in AreaTypeMetadata.items: MenuItem {
+                    icon: item.icon;
+                    text: item.text;
+                    is-current: i == root.current-index;
+                    picked => {
+                        if root.current-index != i {
+                            root.current-index = i;
+                            root.current-plugin-id = "";
+                            root.selected(i);
                         }
+                        // WARN: 不可以提前，不然之后的代码不会执行
+                        popup.close();
                     }
+                }
 
-                        // 负责视觉表现
-                         
-                        item_background := Rectangle {
-                        background: i == root.current-index ? Theme.data.area-type-switcher.popup.item-selected-background : popup-background;
-                        border-radius: Theme.data.area-type-switcher.popup.item-border-radius;
-
-                        // 内容
-                        
-                            HorizontalLayout {
-                            padding-left: Theme.data.area-type-switcher.popup.item-padding-horizontal;
-                            padding-right: Theme.data.area-type-switcher.popup.item-padding-horizontal;
-                            min-height: Theme.data.area-type-switcher.popup.item-min-height;
-                            spacing: Theme.data.area-type-switcher.popup.item-spacing;
-                            alignment: start;
-
-                            Image {
-                                source: item.icon;
-                                width: Theme.data.area-type-switcher.popup.item-icon-size;
-                                height: Theme.data.area-type-switcher.popup.item-icon-size;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                vertical-alignment: center;
-                                text: item.text;
-                                color: Theme.data.area-type-switcher.popup.item-text-color;
-                            }
+                // 插件另起一列：只在这列非空时画一条分隔线，样式沿用上面的项
+                if AreaTypeMetadata.plugin-items.length > 0: Rectangle {
+                    height: Theme.data.area-type-switcher.popup.border-width;
+                    background: Theme.data.area-type-switcher.popup.border-color;
+                }
+                for item in AreaTypeMetadata.plugin-items: MenuItem {
+                    icon: AreaTypeMetadata.plugin-icon;
+                    text: item.name;
+                    is-current: root.current-plugin-id == item.id;
+                    picked => {
+                        if root.current-plugin-id != item.id {
+                            root.current-index = -1;
+                            root.current-plugin-id = item.id;
+                            root.selected-plugin(item.id);
                         }
-
-                        // 高亮叠加层
-
-                            Rectangle {
-                            visible: item_touch_area.has-hover && i != root.current-index;
-                            background: highlight-color;
-                            border-radius: item_background.border-radius;
-                        }
+                        popup.close();
                     }
                 }
             }

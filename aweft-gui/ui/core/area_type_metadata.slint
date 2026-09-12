@@ -1,4 +1,4 @@
-import { SlintAreaType, IconAndText } from "types.slint";
+import { SlintAreaType, IconAndText, PluginAreaItem } from "types.slint";
 // 注意：icons 路径相对于此文件
 
 export global AreaTypeMetadata {
@@ -13,6 +13,11 @@ export global AreaTypeMetadata {
         { icon: @image-url("../assets/icons/animation.svg"), text: "NLA 编辑器" },
         { icon: @image-url("../assets/icons/animation.svg"), text: "音频波形" },
     ];
+
+    // 插件一列：装载期由 Rust 写入（只含有可用面板的插件）。
+    // 不参与下面两条下标链——插件不是编译期枚举值，选中它交的是 plugin-id。
+    in property <[PluginAreaItem]> plugin-items: [];
+    in property <image> plugin-icon: @image-url("../assets/icons/build.svg");
     
     // 转换函数：AreaType 枚举 -> 数组索引
     pure callback area-type-to-index(SlintAreaType) -> int;

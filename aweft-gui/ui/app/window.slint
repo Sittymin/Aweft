@@ -26,7 +26,6 @@ import {
     DismissOverlayState,
     NodeGraphState,
     OverlayState,
-    PluginState,
     SubtitleState,
     VideoState,
     AudioState,
@@ -40,9 +39,9 @@ import {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
-    PluginCallbacks,
     MediaPickerCallbacks,
 } from "../bridge/callbacks.slint";
+import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
 import { Theme } from "../theme/index.slint";
 
 // 重新导出全局对象，使其在 Rust 侧可见
@@ -54,7 +53,6 @@ export {
     NodeGraphState,
     DismissOverlayState,
     AnimationState,
-    PluginState,
     DragCallbacks,
     AreaCallbacks,
     SequenceCallbacks,
@@ -62,7 +60,7 @@ export {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
-    PluginCallbacks,
+    AreaTypeMetadata,
     MediaPickerState,
     MediaPickerCallbacks,
     Theme
@@ -89,6 +87,8 @@ export component MainWindow inherits Window {
         container-width: scr-area.width;
         container-height: scr-area.height;
         actionzone-side-length: scr-area.actionzone-side-length;
+        plugin-id: scr-area.plugin-id;
+        plugin-factory: scr-area.plugin-factory;
     }
     for scr-edge-touch-areas-display[index] in scr-edge-touch-areas-displays: ScrEdgeDisplay {
         data: scr-edge-touch-areas-display;

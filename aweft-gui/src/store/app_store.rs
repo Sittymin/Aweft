@@ -20,7 +20,7 @@ pub struct AppStore {
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,
     pub(crate) clipboard: Clipboard,
-    /// 插件桥：启动期从目录装载插件并注册订阅者、持有插件窗口。
+    /// 插件桥：启动期从目录装载插件并注册订阅者、按插件缓存面板工厂。
     /// 装载不到插件时它是一个空管理器，主流程照常运行。
     pub(crate) plugin_bridge: crate::plugin_bridge::PluginBridge,
     /// 外来写入的排队句柄：`project_watch` 的订阅者往里放，`dispatch` 收尾时取走换 tag。
@@ -52,15 +52,18 @@ impl AppStore {
         let mut state = AppState::new(&main_window.window(), theme_settings);
         let refresh_queue = crate::store::project_watch::register(&mut state.project);
         let plugin_bridge = crate::plugin_bridge::PluginBridge::load(&mut state.project);
-        // 装载只发生在启动期：插件名字写给 UI，按钮列表由装载结果驱动。
-        let plugin_titles: Vec<slint::SharedString> = plugin_bridge
-            .titles()
+        // 装载只发生在启动期：有可用面板的插件写给 Area 切换菜单的插件一列。
+        let plugin_items: Vec<crate::bridge::types::PluginAreaItem> = plugin_bridge
+            .panel_areas()
             .into_iter()
-            .map(slint::SharedString::from)
+            .map(|(id, name)| crate::bridge::types::PluginAreaItem {
+                id: slint::SharedString::from(id.as_str()),
+                name: slint::SharedString::from(name.as_str()),
+            })
             .collect();
         main_window
-            .global::<crate::bridge::types::PluginState>()
-            .set_plugin_titles(slint::ModelRc::from(plugin_titles.as_slice()));
+            .global::<crate::bridge::types::AreaTypeMetadata>()
+            .set_plugin_items(slint::ModelRc::from(plugin_items.as_slice()));
         Self {
             state,
             ui_models: UiModels::new(),
@@ -104,7 +107,7 @@ impl AppStore {
         }
     }
 
-    /// 把排队的外来写入（插件、命令行…）换成刷新 tag，并回填插件窗口状态行。
+    /// 把排队的外来写入（插件、命令行…）换成刷新 tag，并回填插件面板状态行。
     /// 界面自己的写入不在此列：那些 tag 由 reducer 当场打。
     pub(crate) fn apply_refresh_queue(&mut self) {
         let receipts = self.refresh_queue.take();
@@ -114,7 +117,7 @@ impl AppStore {
         for tag in crate::store::project_watch::refresh_tags(self, &receipts) {
             self.depsgraph.tag(tag);
         }
-        self.plugin_bridge.sync_all_windows();
+        self.plugin_bridge.sync_all_panels();
     }
 
     /// 把已挂起的依赖图标记应用到 UI 投影。

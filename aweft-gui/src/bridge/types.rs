@@ -19,6 +19,8 @@ pub fn rust_area_type_to_slint(area_type: &crate::screen::area::AreaType) -> Sli
         crate::screen::area::AreaType::DopeSheet => SlintAreaType::DopeSheet,
         crate::screen::area::AreaType::NlaEditor => SlintAreaType::NlaEditor,
         crate::screen::area::AreaType::AudioWaveform => SlintAreaType::AudioWaveform,
+        // 插件 id 与面板工厂不在枚举里，另走 ScrAreaData 的 plugin_id / plugin_factory
+        crate::screen::area::AreaType::Plugin(_) => SlintAreaType::Plugin,
         crate::screen::area::AreaType::Properties => SlintAreaType::LineEditor,
     }
 }
@@ -33,6 +35,9 @@ pub fn slint_area_type_to_rust(area_type: &SlintAreaType) -> crate::screen::area
         SlintAreaType::DopeSheet => crate::screen::area::AreaType::DopeSheet,
         SlintAreaType::NlaEditor => crate::screen::area::AreaType::NlaEditor,
         SlintAreaType::AudioWaveform => crate::screen::area::AreaType::AudioWaveform,
+        // 枚举带不出插件 id：切到插件走 switch-area-type-plugin(area-key, plugin-id)，
+        // 这条路径上的值永远是内置类型，走到这里只能退回 Empty。
+        SlintAreaType::Plugin => crate::screen::area::AreaType::Empty,
     }
 }
 
