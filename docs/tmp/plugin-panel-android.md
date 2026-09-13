@@ -23,7 +23,12 @@ Android 上插件面板必须嵌进编译期 Slint 树（`ComponentContainer` �
 `component-factory` 类型属于「实验类型」，默认的内建类型表里被删掉了，所以**必须在
 `aweft-gui/build.rs` 的 `slint_build::compile` 之前设
 `SLINT_ENABLE_EXPERIMENTAL_FEATURES=1`**，否则 `ui/app/window.slint` 里写
-`ComponentContainer` 会直接报未知类型。
+`ComponentContainer` 会直接报未知类型。这份变量只有编译期靠 build.rs 的 `set_var`
+还不够：live-preview（debug）构建的 `.slint` 是运行期当场编译的，那一刻读的是
+**进程环境**，`cargo:rustc-env` 到不了那里——2026-09-13 定案由 flake devShell 出
+运行期这一份；同日 build.rs 另按 cargo 注入的 `PROFILE` 给 release 关掉
+`SLINT_LIVE_PREVIEW`，release 与 Android 同走全量静态编译，建窗不再读任何
+SLINT_* 变量，插件 `.slint` 里无实验类型所以运行期 interpreter 不受影响。
 
 另外插件文件目前在 APK 里根本不存在（§6）。同日定案：**不靠打包解决**——
 运行时用户安装的插件不可能编译进软件。改成插件根可配置，Android 默认落
