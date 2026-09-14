@@ -84,6 +84,8 @@ pub enum CollabEvent {
     /// 本机凭证被换掉（收紧或撤销）。十六进制串直接写进 `ProjectRecord.capability`：
     /// 名册里本机那一条已经更新了，记录里还留着旧的一张会导致重启后写不回任何东西。
     Capability { capability: String },
+    /// 完整快照：初次加入时所有者→空工程。
+    Snapshot { data: Vec<u8>, author: String },
     /// 引擎启动失败，随后线程退出。原因可直接展示。
     Failed { reason: String },
 }
@@ -91,6 +93,7 @@ pub enum CollabEvent {
 /// 界面线程发往引擎的任务。
 enum CollabJob {
     Publish(Vec<PendingEdit>),
+    Snapshot(Vec<u8>),
     /// 本机刚签出一张凭证：发出去通告，同时记进自己的名册。
     Announce(Vec<u8>),
     Shutdown,
@@ -129,6 +132,13 @@ impl CollabEngine {
         self.jobs
             .send(CollabJob::Publish(edits))
             .map_err(|_| anyhow::anyhow!("协作引擎已退出，本次变更不发送"))
+    }
+
+    /// 发送完整快照（初次加入时所有者→空工程的加入者）。
+    pub fn publish_snapshot(&self, data: Vec<u8>) -> Result<()> {
+        self.jobs
+            .send(CollabJob::Snapshot(data))
+            .map_err(|_| anyhow::anyhow!("协作引擎已退出，快照不发送"))
     }
 
     /// 通告一张本机刚签出的凭证（`cap::encode_capability` 的产物）。
@@ -264,6 +274,13 @@ async fn serve(
                             publish(&publisher, message).await;
                         }
                     }
+                    Some(CollabJob::Snapshot(data)) => {
+                        let message = CollabMessage::Snapshot {
+                            data,
+                            capability: roster.own().to_vec(),
+                        };
+                        publish(&publisher, message).await;
+                    }
                     Some(CollabJob::Announce(capability)) => {
                         announce(&mut roster, &publisher, &session.member, capability, events).await;
                     }
@@ -283,10 +300,13 @@ async fn serve(
                         }
                     }
                     StreamEvent::SyncStarted { remote_node_id, .. } => {
+                        log::info!("协作同步开始：对端 {}", remote_node_id.to_hex());
                         report_peers(&mut peers, &remote_node_id, true, events);
                     }
                     StreamEvent::SyncEnded { remote_node_id, .. } => {
-                        report_peers(&mut peers, &remote_node_id, false, events);
+                        log::info!("协作同步结束：对端 {}", remote_node_id.to_hex());
+                        // SyncEnded 只是本轮 Frontier 对账结束，不代表 gossip 网格断开，
+                        // 按原逻辑立刻置 0 会让面板 1→0 抖动，保持连接直到真正断开。
                     }
                     StreamEvent::DecodeFailed { error, .. } => {
                         // 非本协议的消息：流层已丢弃，记一条就够。
@@ -386,6 +406,7 @@ fn receive(
     let capability = match operation.message() {
         CollabMessage::Edit { capability, .. } => capability,
         CollabMessage::Grant { capability } => capability,
+        CollabMessage::Snapshot { capability, .. } => capability,
     };
     let cap = match decode_capability(capability) {
         Ok(cap) => cap,
@@ -425,6 +446,29 @@ fn receive(
                 end_ms: *end_ms,
                 author: hex::encode(author.to_bytes()),
             }))
+        }
+        CollabMessage::Snapshot { data, .. } => {
+            if cap.granted_namespace() != session.namespace.id() {
+                log::warn!("快照不属于本工程命名空间，丢弃");
+                return None;
+            }
+            if let Err(error) = authorize(&session.namespace, &author, &cap, &willow25::prelude::Area::full().path()) {
+                log::warn!("快照写入被拒：{error:?}");
+                return None;
+            }
+            if !roster.is_current(&author, &cap) {
+                log::warn!("快照用的是过期凭证，丢弃");
+                return None;
+            }
+            // 快照要求 All 范围，否则 Track 级成员也能把整库覆盖。
+            if !crate::cap::is_full_area(&cap) {
+                log::warn!("快照凭证不是 All 范围，丢弃");
+                return None;
+            }
+            Some(CollabEvent::Snapshot {
+                data: data.clone(),
+                author: hex::encode(author.to_bytes()),
+            })
         }
         CollabMessage::Grant { .. } => {
             if cap.granted_namespace() != session.namespace.id() {

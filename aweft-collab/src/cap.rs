@@ -315,3 +315,8 @@ pub fn derived_from(shorter: &WriteCapability, longer: &WriteCapability) -> bool
     let (mine, theirs) = (shorter.delegations(), longer.delegations());
     mine.len() < theirs.len() && theirs.starts_with(mine)
 }
+
+/// 凭证是否为 All 范围（全工程）。快照要求 All，否则 Track 级成员也能覆盖整库。
+pub fn is_full_area(cap: &WriteCapability) -> bool {
+    cap.granted_area() == willow25::prelude::Area::full()
+}

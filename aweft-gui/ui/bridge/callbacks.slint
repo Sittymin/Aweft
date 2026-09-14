@@ -235,3 +235,17 @@ export global MediaPickerCallbacks {
     // 取消（点遮罩或取消按钮）
     callback cancel-media();
 }
+
+// 协作面板回调：参数对应 aweft-collab::config 的实际输入。
+export global CollabCallbacks {
+    // 复制本机成员 ID，供会话所有者签发定向邀请
+    callback copy-member-id();
+    // 创建新的协作会话（name 会写入本机会话记录）
+    callback create-session(name: string);
+    // 为指定成员签发并复制邀请
+    callback copy-invite(member-id: string);
+    // 接受邀请加入会话
+    callback accept-invite(invite-code: string);
+    // 离开当前会话
+    callback leave-session();
+}

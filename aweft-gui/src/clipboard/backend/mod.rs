@@ -8,9 +8,10 @@ use anyhow::Result;
 
 pub mod memory;
 
+#[cfg(target_os = "android")]
+pub mod android;
+
 // arboard 在 Android 上没有实现（该包 platform 模块在该目标为空），
-// 系统剪贴板只给非 Android 目标编译，Android 先走内存实现，
-// JNI 调 ClipboardManager 是下一步（见 android-port 台账）。
 #[cfg(not(target_os = "android"))]
 pub mod system;
 
@@ -24,6 +25,10 @@ pub trait ClipboardBackend: Send {
 /// 桌面：尝试系统剪贴板，失败回退到内存（避免崩溃）。
 /// 其他：内存实现。
 pub fn default_backend() -> Box<dyn ClipboardBackend> {
+    #[cfg(target_os = "android")]
+    {
+        return Box::new(android::AndroidBackend);
+    }
     #[cfg(not(target_os = "android"))]
     {
         match system::SystemBackend::new() {
@@ -32,5 +37,6 @@ pub fn default_backend() -> Box<dyn ClipboardBackend> {
         }
     }
 
-    Box::new(memory::InMemoryBackend::default())
+    #[cfg(not(target_os = "android"))]
+    return Box::new(memory::InMemoryBackend::default());
 }

@@ -29,6 +29,12 @@ pub enum CollabMessage {
     /// 通告一张新凭证：既用于「我给某人签了这个范围」，也用于「我的凭证换成这张了」。
     /// 谁能宣布、宣布完名册怎么变，全在 `roster::Roster::apply`。
     Grant { capability: Vec<u8> },
+    /// 完整工程快照：初次加入时所有者把整份 `AweftDocument` 发给空工程的加入者，
+    /// 后者直接替换本地真相（丢失本地进度，见 bridge 注释）。
+    Snapshot {
+        data: Vec<u8>,
+        capability: Vec<u8>,
+    },
 }
 
 /// 一次待发送的本地变更：还没有附上凭证。

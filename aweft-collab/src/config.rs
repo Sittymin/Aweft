@@ -306,6 +306,18 @@ pub fn accept(invite: &str, member: &Member) -> Result<ProjectRecord> {
     Ok(record)
 }
 
+/// 取邀请码中携带的凭证原始字节，供在线签发者立即通告给当前名册。
+///
+/// 邀请文本的封装细节留在配置模块，调用者不需要依赖私有的 [`Invite`] 结构解析。
+pub fn invite_capability(invite: &str) -> Result<Vec<u8>> {
+    let invite: Invite = serde_json::from_slice(&hex_of(invite)?)
+        .context("邀请串无法解析，确认整串复制完整")?;
+    if invite.format != FORMAT {
+        bail!("邀请版本过新，请升级后再试");
+    }
+    hex_of(&invite.capability)
+}
+
 /// 会话记录 + 本机身份 → 引擎启动参数。日志库落在 `collab/db/<命名空间>.sqlite`。
 pub fn session(record: &ProjectRecord, member: &Member) -> Result<Session> {
     let namespace = namespace_of(record)?;

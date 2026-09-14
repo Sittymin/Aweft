@@ -12,6 +12,11 @@ android:
       min_sdk_version: 26
       target_sdk_version: 35
     uses_permission:
+      # 协作需要网络：p2panda/iroh 要开 UDP/TCP 套接字、mDNS 发现，没有它直接起不来。
+      - name: android.permission.INTERNET
+      - name: android.permission.ACCESS_NETWORK_STATE
+      - name: android.permission.ACCESS_WIFI_STATE
+      - name: android.permission.CHANGE_WIFI_MULTICAST_STATE
       # MediaStore 查库：API 33 起读写分离，视频取 VIDEO；
       # 音频轨信息（如以后读）取 AUDIO；32 及以下用旧的外部存储权限。
       - name: android.permission.READ_MEDIA_VIDEO

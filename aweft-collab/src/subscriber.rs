@@ -35,7 +35,7 @@ impl MutationSubscriber for CollabSubscriber {
             let MutationKind::EventTimeChanged(detail) = &receipt.kind;
             let Some((track, row)) = row_location(store, detail.item) else {
                 // 行不在本地工程里：结构增删本版不同步，这一行的变更自然也就无从定位。
-                log::warn!("协作跳过一次时间变更，本地无此行：{}", detail.item);
+                log::warn!("协作跳过一次时间变更，本地无此行：{}（origin={:?}）", detail.item, receipt.origin);
                 continue;
             };
             edits.push(PendingEdit {
@@ -46,8 +46,10 @@ impl MutationSubscriber for CollabSubscriber {
             });
         }
         if edits.is_empty() {
+            log::debug!("协作订阅者：本批无可发送变更（可能全是远端回声或行不在本地）");
             return;
         }
+        log::info!("协作订阅者：发送 {} 条时间变更", edits.len());
         if let Err(error) = self.engine.publish(edits) {
             log::warn!("{error:?}");
         }

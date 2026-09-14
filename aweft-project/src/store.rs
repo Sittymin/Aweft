@@ -91,6 +91,11 @@ impl ProjectStore {
         self.subscribers.push(subscriber);
     }
 
+    /// Remove subscribers owned by a feature that is being disabled.
+    pub fn unsubscribe_origin(&mut self, origin: &Origin) {
+        self.subscribers.retain(|subscriber| subscriber.origin() != *origin);
+    }
+
     /// 开始一个批量作用域：其间所有写入只排队，到 [`Self::end_batch`] 才一次广播。
     pub fn begin_batch(&mut self) -> BatchToken {
         self.hold += 1;

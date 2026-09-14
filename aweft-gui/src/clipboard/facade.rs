@@ -58,6 +58,11 @@ impl Clipboard {
         let _ = self.backend.read_text()?;
         Ok(None)
     }
+
+    /// Copy arbitrary text through the configured system clipboard backend.
+    pub fn write_text(&mut self, text: &str) -> Result<()> {
+        self.backend.write_text(text)
+    }
 }
 
 impl Default for Clipboard {

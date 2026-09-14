@@ -18,3 +18,4 @@ aweft-libass/compile_flags.txt
 /aweft-libass/third_party/android-deps-build/
 
 */proptest-regressions/
+.opencode/

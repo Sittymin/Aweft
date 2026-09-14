@@ -172,16 +172,14 @@ export global MediaPickerState {
     in property <[string]> items: [];
 }
 
-// 协作面板展示状态（UI 先行占位：字段由 Rust 后续接入 aweft-collab 后驱动）。
+// 协作面板展示状态：只展示引擎和本机会话记录能够提供的数据。
 export global CollabUiState {
     // 连接状态文案（如"未连接"/"已连接"）
     in property <string> status-text: "未连接";
-    // 在线成员数（含本机）
+    // 当前连接的远端节点数（不含本机；来源是 CollabEvent::Peers）
     in property <int> peer-count: 0;
     // 当前会话名（"" = 未加入会话）
     in property <string> session-name: "";
     // 本机成员 id（"" = 未初始化）
     in property <string> member-id: "";
-    // 成员 id 列表
-    in property <[string]> members: [];
 }
