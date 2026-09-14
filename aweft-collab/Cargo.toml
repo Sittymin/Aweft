@@ -4,3 +4,31 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+aweft-model = { path = "../aweft-model" }
+aweft-project = { path = "../aweft-project" }
+aweft-settings = { path = "../aweft-settings" }
+anyhow = "1.0.104"
+futures = "0.3"
+hex = "0.4.3"
+log = "0.4.33"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+uuid = { version = "1.24.0", features = [ "serde", "v4" ] }
+# `p2panda` 只用明文主题流（`Node::stream`），不用空间接口：这一版的高层 `Node`
+# 连 `p2panda-spaces`/`p2panda-auth`/`p2panda-encryption` 都不依赖，与「权限只用
+# `Meadowcap`」的定案吻合。反过来，未发布的新版 `Node` 把 `signing_key` 换成了
+# 只能随机生成的 `Credentials`，单一种子方案在它上面反而立不住。
+p2panda = "0.7.1"
+# 协作后台线程自带一个 `current_thread` 运行时；`sync` 给界面→后台的无界通道。
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio-stream = "0.1"
+# `willow25` 只用授权与分组模块（`WriteCapability`/`Area`/`Path`），不用存储模块。
+willow25 = "0.7.9"
+# 凭证的线上编解码在 `willow25` 这一版里是 async trait，但只走内存中的
+# producer/consumer、不会挂起，所以同步上下文用 `pollster` 一次跑完。
+ufotofu = { version = "0.12.6", features = ["alloc"] }
+pollster = "0.4"
+
+[dev-dependencies]
+# 测试夹具要造 `EventData` 的 `TimeDelta` 起止时间。
+chrono = "0.4.45"

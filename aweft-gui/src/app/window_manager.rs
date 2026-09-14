@@ -108,6 +108,9 @@ impl AppWindowManager {
         // 插件 worker 事件的 UI 线程 pump：落真相 → 换刷新 tag → 同步面板。
         // 无头测试不调它，改走 `drain_plugin_events` 同步 drain。
         crate::plugin_bridge::start_event_pump(&store);
+        // 协作事件的 UI 线程 pump：远端变更落真相 → 换刷新 tag → 重算投影。
+        // 未启用协作时它直接返回。
+        crate::collab_bridge::start_event_pump(&store);
         // 初始化节点图编辑器（建链/右键菜单、绑定全局、加载第 0 条链）
         store.borrow_mut().initialize_node_graph_editors(&instance);
         // HACK: 初始化曲线编辑器。视图/属性 Area 未实现、无法 K 帧，暂时直接用测试数据

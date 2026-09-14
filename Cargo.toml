@@ -13,7 +13,9 @@ members = [
 exclude = ["plugins"]
 
 [dependencies]
+anyhow = "1.0.104"
 aweft-ass = { path = "aweft-ass" }
+aweft-collab = { path = "aweft-collab" }
 aweft-convert = {path = "aweft-convert"}
 aweft-gui = { path = "aweft-gui" }
 aweft-settings = { path = "aweft-settings" }

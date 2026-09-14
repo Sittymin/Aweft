@@ -23,6 +23,9 @@ pub struct AppStore {
     /// 插件桥：启动期从目录装载插件并注册订阅者、按插件缓存面板工厂。
     /// 装载不到插件时它是一个空管理器，主流程照常运行。
     pub(crate) plugin_bridge: crate::plugin_bridge::PluginBridge,
+    /// 协作桥：启动期按配置里的活跃会话起后台引擎并注册订阅者。
+    /// 没有活跃会话（首启的正常状态）时它是未启用的空壳，主流程照常运行。
+    pub(crate) collab_bridge: crate::collab_bridge::CollabBridge,
     /// 外来写入的排队句柄：`project_watch` 的订阅者往里放，`dispatch` 收尾时取走换 tag。
     pub(crate) refresh_queue: crate::store::project_watch::RefreshQueue,
     /// Android 媒体选择对话框的一次等待：查库后填入，选择/取消回调取走。
@@ -52,6 +55,7 @@ impl AppStore {
         let mut state = AppState::new(&main_window.window(), theme_settings);
         let refresh_queue = crate::store::project_watch::register(&mut state.project);
         let plugin_bridge = crate::plugin_bridge::PluginBridge::load(&mut state.project);
+        let collab_bridge = crate::collab_bridge::CollabBridge::load(&mut state.project);
         // 装载只发生在启动期：有可用面板的插件写给 Area 切换菜单的插件一列。
         let plugin_items: Vec<crate::bridge::types::PluginAreaItem> = plugin_bridge
             .panel_areas()
@@ -74,6 +78,7 @@ impl AppStore {
             main_window: Some(main_window.as_weak()),
             clipboard: Clipboard::new(),
             plugin_bridge,
+            collab_bridge,
             refresh_queue,
             #[cfg(target_os = "android")]
             pending_media_pick: None,
