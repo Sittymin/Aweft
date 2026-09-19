@@ -6,7 +6,7 @@ use crate::screen::edge::ScrEdgeKey;
 use crate::screen::map::ScrAreaMap;
 use crate::screen::primitives::{Adjacency, Insets, Rcti};
 use crate::screen::vertex::ScrVertKey;
-use aweft_project::{AweftDocument, ProjectStore};
+use aweft_project::{ProjectStore, SavedProject};
 use slint::PhysicalSize;
 use std::sync::atomic::AtomicBool;
 
@@ -162,7 +162,7 @@ impl AppState {
     /// 构造函数，接收预先创建的 ThemeSettings
     pub fn new(window: &slint::Window, theme_settings: ThemeSettings) -> Self {
         Self {
-            project: ProjectStore::new(AweftDocument::new()),
+            project: ProjectStore::new(SavedProject::new()),
             screen_map: ScrAreaMap::new(),
             theme_settings,
             window_size: window.size(),

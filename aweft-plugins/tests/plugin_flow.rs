@@ -18,7 +18,7 @@ use aweft_model::ids::ItemId;
 use aweft_model::sequence::{EventData, ItemLocation};
 use aweft_plugins::{PluginEvent, PluginManager, WorkerEvent, MANIFEST_FILE};
 use aweft_project::{
-    AweftDocument, MutationReceipt, MutationSubscriber, Origin, ProjectStore, SubscriberRef,
+    MutationReceipt, MutationSubscriber, Origin, ProjectStore, SavedProject, SubscriberRef,
 };
 use chrono::TimeDelta;
 use futures::channel::mpsc::{UnboundedReceiver, unbounded};
@@ -47,11 +47,11 @@ fn event_data(start_ms: i64, end_ms: i64) -> EventData {
 }
 
 fn store_with_events(times: &[(i64, i64)]) -> (ProjectStore, Vec<ItemId>) {
-    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut store = ProjectStore::new(SavedProject::new());
     let mut ids = Vec::new();
     for (index, (start, end)) in times.iter().enumerate() {
         let id = store
-            .document_mut()
+            .saved_mut()
             .project
             .sequence_mut()
             .create_event(event_data(*start, *end), ItemLocation::Root(index))
@@ -234,7 +234,7 @@ fn directory_load_reads_commands_and_panel_from_guest() {
 
 #[test]
 fn unknown_plugin_dir_is_reported_not_panicked() {
-    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut store = ProjectStore::new(SavedProject::new());
     let mut manager = PluginManager::new();
     let (tx, _rx) = unbounded::<PluginEvent>();
     assert!(manager
@@ -271,7 +271,7 @@ fn manifest_granting(project_write: bool) -> String {
 #[test]
 fn write_import_without_grant_is_rejected_at_load() {
     let dir = temp_plugin_dir("aweft_plugin_write_denied", &manifest_granting(false));
-    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut store = ProjectStore::new(SavedProject::new());
     let mut manager = PluginManager::new();
     let (tx, _rx) = unbounded::<PluginEvent>();
     // 示例插件的 Guest import 了 set_event_*_ms，即它确实要改真相。
@@ -290,7 +290,7 @@ fn write_import_without_grant_is_rejected_at_load() {
 #[test]
 fn same_guest_loads_once_project_write_is_granted() {
     let dir = temp_plugin_dir("aweft_plugin_write_granted", &manifest_granting(true));
-    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut store = ProjectStore::new(SavedProject::new());
     let mut manager = PluginManager::new();
     let (tx, _rx) = unbounded::<PluginEvent>();
     manager

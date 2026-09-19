@@ -32,9 +32,9 @@ fn android_main(app: slint::android::AndroidApp) {
     // 归属是应用自己，`adb push` 实测写得进去（见 docs/tmp/plugin-panel-android.md §8），
     // 设置文件与插件目录都落在它下面。
     // 必须在 `app` 移走之前取（这个访问器是 `AndroidApp` 的方法），也要早于任何一次
-    // 设置读取——设置层首次访问就缓存，之后再提交目录不再生效。
+    // 设置读取——aweft-storage 里的目录首次定下后不再改变，之后再提交目录不再生效。
     match app.external_data_path() {
-        Some(dir) => aweft_settings::set_config_dir(dir),
+        Some(dir) => aweft_storage::set_config_dir(dir),
         None => log::warn!("拿不到外部数据目录：设置按出厂值，插件只走默认候选目录"),
     }
     // 这里不要再调 ndk_context::initialize_android_context：android-activity 的 glue

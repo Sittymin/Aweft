@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +15,10 @@ pub struct Actor {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectLibrary {
-    pub actors: HashMap<ActorId, Actor>,
+    // 两张表都按 ID 有序：存盘字节的顺序必须每次一致（同 `Sequence::items`）。
+    pub actors: BTreeMap<ActorId, Actor>,
     pub animation_library: AnimationLibrary,
-    pub node_graphs: HashMap<NodeGraphId, NodeGraph>,
+    pub node_graphs: BTreeMap<NodeGraphId, NodeGraph>,
 }
 
 impl ProjectLibrary {

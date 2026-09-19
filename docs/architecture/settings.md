@@ -3,16 +3,15 @@
 ## 定位与依赖方向
 
 下层成员，与 `aweft-model` / `aweft-project` 平级，是本工程唯二不引用 Slint 的成员之一。
-它不依赖任何其它成员；反方向上 `aweft-gui`、根包的命令行入口、`aweft-android` 都依赖它。
+它只依赖 `aweft-storage`；反方向上 `aweft-gui` 与根包的命令行入口依赖它
+（`aweft-android` 只提交配置目录，因此依赖的是 `aweft-storage` 而不是本成员）。
 以后做无头 CLI 时读的是同一份类型，不需要经过界面。
 
-三个文件各管一段：
+落盘的公共规矩不在本成员：配置目录怎么定、原子写、版本门都在 `aweft-storage`，
+全工程只有那一份。本成员只有一个文件：
 
 ```
-aweft-settings/src/
-├── lib.rs       # Settings 类型、格式版本戳、进程内那一份（settings()）
-├── location.rs  # 配置目录怎么定：显式覆盖 → 平台目录
-└── storage.rs   # 读写落盘：原子写、版本门
+aweft-settings/src/lib.rs   # Settings 类型、格式版本戳、进程内那一份（settings()）
 ```
 
 ## 字段分区
@@ -28,32 +27,30 @@ aweft-settings/src/
 
 ## 版本与迁移
 
-`format` 是文件自身的格式版本，做法沿用 `aweft-project/src/document.rs` 的
-`AWEFT_DOCUMENT_FORMAT` 先例。规则：
+`format` 是文件自身的格式版本。`Settings` 实现 `aweft_storage::json::JsonFile`，
+读写走 `read_json_or_default` 与 `write_json`，版本门在那一处统一实施。规则：
 
 - **加字段不 bump**：`Settings` 上挂了容器级 `#[serde(default)]`，旧文件缺的字段自动取默认值。
-- **只有"旧值必须改写才有意义"的改动才 bump**，并在 `storage::load` 里标明的位置按版本顺序
-  补一步。不做 Blender 那套按字段名重建（SDNA），因为设置文件是我们的，不是第三方产的。
+- **只有"旧值必须改写才有意义"的改动才 bump**，并在 `Settings` 的 `JsonFile::migrate` 里
+  按版本顺序补一步。不做 Blender 那套按字段名重建（SDNA），因为设置文件是我们的，不是第三方产的。
 - 读到的 `format` 比本程序支持的新时**直接拒绝**（错误里点名两个版本号与文件路径），
   不猜测也不改写——否则旧程序会把新程序的设置悄悄抹平。
 
 ## 配置目录
 
-优先级只有两级：**显式覆盖 → 调用方交进来的平台目录**。
+目录怎么定是 `aweft-storage` 的 `location` 模块管的，全工程共用一份：显式覆盖（环境变量
+`AWEFT_USER_CONFIG`）优先，其次 `platform_config_dir()` 算出来的平台目录，Android 上返回
+`None`。设置这一侧只关心两件事：
 
-- 显式覆盖是环境变量 `AWEFT_USER_CONFIG`。**它是给用户看的配置入口，不是测试开关**：
-  设置文件自己的位置不能由设置文件里的字段决定，所以这一层必须在进程外留一个口；
-  测试靠直接调 `storage::load(dir)` 传临时目录，不借这个变量。它只覆盖目录，不覆盖单个设置项。
-- 平台目录由 `platform_config_dir()` 算：桌面走 `XDG_CONFIG_HOME`（规范要求自己定，
-  所以相对路径与空值都按未设置处理）→ 回退 `$HOME/.config`，末尾接 `aweft`；
-  **Android 上没有可猜的平台目录**，返回 `None`。
-- 因此目录必须由入口在启动早期提交：桌面 `src/main.rs` 进 `main` 第一件事，
-  Android `aweft-android/src/lib.rs` 在 `slint::android::init(app)` 移走 `app` 之前用
-  `app.external_data_path()`（android-activity 0.6.1 `src/lib.rs:1277`，
+- **谁来提交**：入口在启动早期调一次 `aweft_storage::set_config_dir`。桌面 `src/main.rs`
+  进 `main` 第一件事，Android `aweft-android/src/lib.rs` 在 `slint::android::init(app)`
+  移走 `app` 之前用 `app.external_data_path()`（android-activity 0.6.1 `src/lib.rs:1277`，
   实测为 `/storage/emulated/0/Android/data/<包>/files`，应用自己可写，`adb push` 通）。
+- **时序约束（改动时先看这条）**：`settings()` 首次访问就按当时的配置目录读盘并缓存整个进程，
+  之后再 `set_config_dir` 不再生效。所有入口都必须"先定目录，后读设置"。
 
-**时序约束（改动时先看这条）**：`settings()` 首次访问就按当时的配置目录读盘并缓存整个进程，
-之后再 `set_config_dir` 不再生效。所有入口都必须"先定目录，后读设置"。
+设置文件自己的位置不能由设置文件里的字段决定，所以覆盖只能留在进程外的那个环境变量上；
+它是给用户看的配置入口，不是测试开关——测试直接把目录交给 `save_to_dir` 与 `read_json_or_default`。
 
 ## 读盘失败怎么办
 
@@ -62,16 +59,9 @@ aweft-settings/src/
 
 ## 写盘
 
-`storage::save` 是 temp + rename 原子写：写同目录临时文件 → `write_all` → `sync_all` →
-`rename`，失败路径上删掉临时文件。两处细节都是必需的：
-
-- **`sync_all` 必须在 `rename` 之前**：没刷盘的临时文件被 rename 上去之后，进程被杀或掉电
-  会留下一个 0 字节的设置文件，下次启动就读不到设置了。
-- **临时文件名带进程号**：命令行与界面可能同时在写同一份设置。
-
-这条**没有仓内先例可抄**：`aweft-project/src/store.rs` 的 `save_to_file` 是
-`to_string_pretty` + `fs::write` 直接覆盖，没有 .bak 也没有原子写，且在产品代码里零调用点。
-设置文件损坏会直接影响启动，所以这里必须自带。
+原子写也在 `aweft-storage`：临时文件 → `write_all` → `sync_all` → `rename`，失败路径上删掉
+临时文件，临时名带进程号与进程内序号（命令行与界面可能同时在写同一份文件）。工程文件、
+协作记录与名册用的是同一条路径，规矩只在这一处写。
 
 `save_to_dir` 目前在产品代码里还没有调用点——第一个写入口是设置界面（见
 `docs/tmp/plugin-panel-android.md` §9 片 B 之后），在那之前手工编辑

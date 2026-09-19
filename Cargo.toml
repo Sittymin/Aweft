@@ -6,7 +6,8 @@ edition = "2021"
 [workspace]
 members = [
     "aweft-gui", "aweft-ass", "aweft-collab", "aweft-convert", "aweft-libass", "aweft-model",
-    "aweft-plugin-sdk", "aweft-project", "aweft-plugins", "aweft-settings", "aweft-android",
+    "aweft-plugin-sdk", "aweft-project", "aweft-plugins", "aweft-settings", "aweft-storage",
+    "aweft-android",
 ]
 # 示例插件是独立 crate（自带 [workspace] 表，编到 wasm32-unknown-unknown），
 # 不参与主工程的宿主构建。
@@ -19,3 +20,4 @@ aweft-collab = { path = "aweft-collab" }
 aweft-convert = {path = "aweft-convert"}
 aweft-gui = { path = "aweft-gui" }
 aweft-settings = { path = "aweft-settings" }
+aweft-storage = { path = "aweft-storage" }

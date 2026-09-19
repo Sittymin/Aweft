@@ -108,11 +108,11 @@ fn authorize_accepts_only_the_granted_coordinate() {
 
 #[test]
 fn row_location_falls_back_to_the_root_track() {
-    use aweft_project::{AweftDocument, ProjectStore};
+    use aweft_project::{ProjectStore, SavedProject};
     use aweft_model::sequence::{EventData, ItemLocation};
     use chrono::TimeDelta;
 
-    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut store = ProjectStore::new(SavedProject::new());
     let data = EventData {
         start_time: TimeDelta::milliseconds(0),
         end_time: TimeDelta::milliseconds(100),

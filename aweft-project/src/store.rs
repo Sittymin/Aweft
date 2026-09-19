@@ -5,8 +5,8 @@ use aweft_model::sequence::{ItemContent, Sequence};
 use chrono::TimeDelta;
 use std::path::Path;
 
-use crate::document::{AweftDocument, AWEFT_DOCUMENT_FORMAT};
 use crate::receipt::{EventTimeChanged, MutationKind, MutationReceipt, Origin};
+use crate::saved::SavedProject;
 use crate::subscriber::SubscriberRef;
 
 /// 一次广播最多推进的轮数。订阅者在通知里写回会再进队列，下一轮继续投；
@@ -29,7 +29,7 @@ pub struct BatchToken {
 /// 批量作用域（[`ProjectStore::begin_batch`]）把一段写入合成一次广播：
 /// 一次拖动改 N 行应当只通知订阅者一次。
 pub struct ProjectStore {
-    doc: AweftDocument,
+    saved: SavedProject,
     /// 尚未广播出去的回执。广播循环按轮取空它，订阅者写回的新回执排在后面。
     pending: Vec<MutationReceipt>,
     subscribers: Vec<SubscriberRef>,
@@ -39,9 +39,9 @@ pub struct ProjectStore {
 }
 
 impl ProjectStore {
-    pub fn new(doc: AweftDocument) -> Self {
+    pub fn new(saved: SavedProject) -> Self {
         Self {
-            doc,
+            saved,
             pending: Vec::new(),
             subscribers: Vec::new(),
             hold: 0,
@@ -49,35 +49,36 @@ impl ProjectStore {
         }
     }
 
-    pub fn document(&self) -> &AweftDocument {
-        &self.doc
+    /// 存盘形状（含 `Project`、布局表、媒体表）。写文件与发协作快照都读它。
+    pub fn saved(&self) -> &SavedProject {
+        &self.saved
     }
 
-    /// 可变访问文档：仅初始播种（测试夹具/文件装载）使用。
+    /// 可变访问存盘形状：仅初始播种（测试夹具/文件装载）使用。
     /// 正式写入必须走带回执的方法，否则其它接入方看不到这次变更。
-    pub fn document_mut(&mut self) -> &mut AweftDocument {
-        &mut self.doc
+    pub fn saved_mut(&mut self) -> &mut SavedProject {
+        &mut self.saved
     }
 
     pub fn project(&self) -> &Project {
-        &self.doc.project
+        &self.saved.project
     }
 
     /// 可变访问 `Project`（库表、样式层、字幕结构）。
     /// 与 [`Self::sequence_mut`] 同一限制：这类写入尚无 `MutationKind`，不产生回执。
     pub fn project_mut(&mut self) -> &mut Project {
-        &mut self.doc.project
+        &mut self.saved.project
     }
 
     pub fn sequence(&self) -> &Sequence {
-        self.doc.project.sequence()
+        self.saved.project.sequence()
     }
 
     /// 直接改结构的时间线入口：只用于尚未建模为 `MutationKind` 的写入
     /// （增删行、层级、折叠、文本）。时间写入必须走本存储的 `set_*` / `adjust_*`，
     /// 否则订阅者收不到这次变更。
     pub fn sequence_mut(&mut self) -> &mut Sequence {
-        self.doc.project.sequence_mut()
+        self.saved.project.sequence_mut()
     }
 
     /// 自上次保存后是否有未落盘变更。
@@ -155,7 +156,7 @@ impl ProjectStore {
 
     /// 读某行的起止时间（毫秒）。
     pub fn event_times_ms(&self, id: ItemId) -> Result<(i64, i64)> {
-        let sequence = self.doc.project.sequence();
+        let sequence = self.saved.project.sequence();
         let start = sequence.event_time(id, true)?;
         let end = sequence.event_time(id, false)?;
         Ok((start.num_milliseconds(), end.num_milliseconds()))
@@ -164,7 +165,7 @@ impl ProjectStore {
     /// 确定性顺序的全部事件行 id：先按开始时间，再按 id 字符串。
     /// 插件侧数字句柄按此顺序编号，保证 host 与 guest 对齐。
     pub fn ordered_event_ids(&self) -> Vec<ItemId> {
-        let sequence = self.doc.project.sequence();
+        let sequence = self.saved.project.sequence();
         let mut rows: Vec<(i64, String, ItemId)> = sequence
             .items
             .iter()
@@ -210,7 +211,7 @@ impl ProjectStore {
         let before = self.event_times_ms(id)?;
         let delta = TimeDelta::milliseconds(target_ms - before.0);
         let time = self
-            .doc
+            .saved
             .project
             .sequence_mut()
             .adjust_event_time(id, true, delta)?;
@@ -229,7 +230,7 @@ impl ProjectStore {
         let before = self.event_times_ms(id)?;
         let delta = TimeDelta::milliseconds(target_ms - before.1);
         let time = self
-            .doc
+            .saved
             .project
             .sequence_mut()
             .adjust_event_time(id, false, delta)?;
@@ -255,7 +256,7 @@ impl ProjectStore {
         let (current_start, current_end) = self.event_times_ms(id)?;
         let write_start = |store: &mut Self| -> Result<()> {
             if start_ms != current_start {
-                store.doc.project.sequence_mut().adjust_event_time(
+                store.saved.project.sequence_mut().adjust_event_time(
                     id,
                     true,
                     TimeDelta::milliseconds(start_ms - current_start),
@@ -265,7 +266,7 @@ impl ProjectStore {
         };
         let write_end = |store: &mut Self| -> Result<()> {
             if end_ms != current_end {
-                store.doc.project.sequence_mut().adjust_event_time(
+                store.saved.project.sequence_mut().adjust_event_time(
                     id,
                     false,
                     TimeDelta::milliseconds(end_ms - current_end),
@@ -294,7 +295,7 @@ impl ProjectStore {
     ) -> Result<(TimeDelta, TimeDelta)> {
         let before = self.event_times_ms(id)?;
         let item = self
-            .doc
+            .saved
             .project
             .sequence_mut()
             .get_mut(id)
@@ -319,7 +320,7 @@ impl ProjectStore {
     ) -> Result<TimeDelta> {
         let before = self.event_times_ms(id)?;
         let time = self
-            .doc
+            .saved
             .project
             .sequence_mut()
             .set_event_time_fuzzy(id, is_start_time, text)?;
@@ -337,7 +338,7 @@ impl ProjectStore {
     ) -> Result<TimeDelta> {
         let before = self.event_times_ms(id)?;
         let time = self
-            .doc
+            .saved
             .project
             .sequence_mut()
             .adjust_event_time(id, is_start_time, delta)?;
@@ -345,28 +346,32 @@ impl ProjectStore {
         Ok(time)
     }
 
-    /// 工程文件写盘（JSON 文本）。成功后清除脏标记。
+    /// 工程文件写盘（美化 JSON，人手可改）。成功后清除脏标记。
     pub fn save_to_file(&mut self, path: &Path) -> Result<()> {
-        let text = serde_json::to_string_pretty(&self.doc).context("工程文档转为文本失败")?;
-        std::fs::write(path, text)
-            .with_context(|| format!("工程文件写盘失败：{}", path.display()))?;
+        aweft_storage::write_json(path, &self.saved)?;
         self.dirty = false;
         Ok(())
     }
 
-    /// 工程文件读回。格式版本不匹配时拒绝，不做静默兼容。
+    /// 工程文件读回。版本比本程序新时拒绝改写，比本程序旧时按 `JsonFile::migrate`
+    /// 补写到当前版本；缺字段的旧文件由容器级 `#[serde(default)]` 兜住。
     pub fn load_from_file(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("工程文件读取失败：{}", path.display()))?;
-        let doc: AweftDocument = serde_json::from_str(&text).context("工程文件解析失败")?;
-        if doc.format != AWEFT_DOCUMENT_FORMAT {
-            bail!(
-                "工程文件版本不受支持：文件 format={}，当前支持 format={}",
-                doc.format,
-                AWEFT_DOCUMENT_FORMAT
-            );
-        }
-        Ok(Self::new(doc))
+        let saved: SavedProject = aweft_storage::read_json(path).context("工程文件读不出")?;
+        Ok(Self::new(saved))
+    }
+
+    /// 工程快照的字节：与 [`Self::save_to_file`] 同一份存盘形状，只差在紧凑、不落盘。
+    pub fn encode_snapshot(&self) -> Result<Vec<u8>> {
+        aweft_storage::encode_json(&self.saved)
+    }
+
+    /// 收下对端发来的工程快照，得到一个装着这份真相的新存储；订阅者由调用方挂回去。
+    /// 版本比本程序新、字节读不懂都报错，不猜也不静默覆盖。`source` 只出现在错误里，
+    /// 点名这份快照是谁发来的。
+    pub fn decode_snapshot(bytes: &[u8], source: &str) -> Result<Self> {
+        let saved: SavedProject = aweft_storage::decode_json(bytes, source)
+            .with_context(|| format!("工程快照读不出（来自 {source}）"))?;
+        Ok(Self::new(saved))
     }
 }
 
@@ -390,11 +395,11 @@ mod tests {
     }
 
     fn store_with_events(times: &[(i64, i64)]) -> (ProjectStore, Vec<ItemId>) {
-        let mut store = ProjectStore::new(AweftDocument::new());
+        let mut store = ProjectStore::new(SavedProject::new());
         let mut ids = Vec::new();
         for (index, (start, end)) in times.iter().enumerate() {
             let id = store
-                .doc
+                .saved
                 .project
                 .sequence_mut()
                 .create_event(event_data(*start, *end), ItemLocation::Root(index))
@@ -687,6 +692,22 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// 存盘字节顺序稳定的来源：行池按标识排序遍历，与插入顺序、进程内的哈希种子都无关。
+    #[test]
+    fn rows_serialize_in_id_order() {
+        let (store, mut ids) = store_with_events(&[(100, 200), (300, 400), (500, 600)]);
+        ids.sort();
+        let actual: Vec<ItemId> = store
+            .saved()
+            .project
+            .sequence()
+            .items
+            .keys()
+            .copied()
+            .collect();
+        assert_eq!(actual, ids, "行池必须按标识排序，否则每次写盘的字节都不同");
+    }
+
     #[test]
     fn load_rejects_unknown_format() {
         let path = std::env::temp_dir().join("aweft_project_store_bad.aweft.json");
@@ -697,5 +718,25 @@ mod tests {
         .expect("写测试文件失败");
         assert!(ProjectStore::load_from_file(&path).is_err());
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn snapshot_roundtrip_keeps_rows() {
+        let (store, ids) = store_with_events(&[(1000, 2000)]);
+        let bytes = store.encode_snapshot().expect("快照序列化失败");
+        let loaded = ProjectStore::decode_snapshot(&bytes, "member-1").expect("快照读回失败");
+        let (start, end) = loaded.event_times_ms(ids[0]).expect("快照读回失败");
+        assert_eq!((start, end), (1000, 2000));
+    }
+
+    #[test]
+    fn snapshot_from_a_newer_format_is_rejected() {
+        let bytes = br#"{"format":999}"#;
+        let Err(error) = ProjectStore::decode_snapshot(bytes, "member-9") else {
+            panic!("更新的版本必须被拒");
+        };
+        let message = format!("{error:?}");
+        assert!(message.contains("999"), "错误链里要点名版本：{message}");
+        assert!(message.contains("member-9"), "错误里要点名来源：{message}");
     }
 }

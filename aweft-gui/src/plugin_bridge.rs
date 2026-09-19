@@ -204,7 +204,7 @@ fn plugin_roots() -> Vec<PathBuf> {
     if let Some(root) = aweft_settings::settings().paths.plugin_root.clone() {
         push(root);
     }
-    if let Some(dir) = aweft_settings::config_dir() {
+    if let Some(dir) = aweft_storage::config_dir() {
         push(dir.join("plugins"));
     }
     if let Ok(cwd) = std::env::current_dir() {

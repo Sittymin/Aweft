@@ -7,9 +7,6 @@ use crate::sequence::Sequence;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
-    /// 版本号：用于未来的迁移和兼容性检查
-    pub version: u32,
-
     pub meta: ProjectMetadata,
     pub library: ProjectLibrary,
     /// 序列：带时序的层级内容树，纯值语义。
@@ -22,7 +19,6 @@ pub struct Project {
 impl Project {
     pub fn new() -> Self {
         Self {
-            version: 0,
             meta: ProjectMetadata::default(),
             library: ProjectLibrary::default(),
             sequence: Sequence::new(),

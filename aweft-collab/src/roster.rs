@@ -34,6 +34,7 @@
 //! 读的是库里的游标），内存里的名册会跟着重启清空，而清空等于回到「不认识即放行」。
 
 use anyhow::{Context, Result};
+use aweft_storage::{JsonFile, read_json, write_json};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,10 +42,6 @@ use willow25::authorisation::WriteCapability;
 use willow25::prelude::SubspaceId;
 
 use crate::cap::{SEED_LEN, decode_capability, derived_from, encode_capability, extends, last_delegator};
-use crate::config::write_atomic;
-
-/// 名册文件格式版本：只用来拒绝比本程序更新的文件。
-const FORMAT: u8 = 1;
 
 /// 一次通告的处置结果。
 #[derive(Debug, PartialEq, Eq)]
@@ -204,29 +201,24 @@ impl Roster {
 
     fn load(&mut self) -> Result<()> {
         let Some(path) = &self.path else { return Ok(()) };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Ok(()); // 首次启动还没有名册文件
-        };
-        let file = match serde_json::from_str::<RosterFile>(&text) {
-            Ok(file) if file.format == FORMAT => file,
-            Ok(_) => {
-                log::warn!("名册文件版本过新，按空名册处理：{}", path.display());
-                return Ok(());
-            }
-            Err(error) => {
-                log::warn!("名册文件读不懂，按空名册处理（{}）：{error:?}", path.display());
-                return Ok(());
-            }
-        };
-        for (member, capability) in file.entries {
-            let record = match read_entry(&member, capability.as_deref()) {
-                Ok(record) => record,
-                Err(error) => {
-                    log::warn!("名册条目无效，跳过（{member}）：{error:?}");
-                    continue;
+        // 名册读不出就按空名册处理，不拦下上线：缺通告不等于已撤销（见 is_current）。
+        // 只有确有文件时才读，首启没有文件是正常状态，不该记日志。
+        if path.is_file() {
+            match read_json::<RosterFile>(path) {
+                Ok(file) => {
+                    for (member, capability) in file.entries {
+                        let record = match read_entry(&member, capability.as_deref()) {
+                            Ok(record) => record,
+                            Err(error) => {
+                                log::warn!("名册条目无效，跳过（{member}）：{error:?}");
+                                continue;
+                            }
+                        };
+                        self.entries.insert(record.member, record.entry);
+                    }
                 }
-            };
-            self.entries.insert(record.member, record.entry);
+                Err(error) => log::warn!("名册文件读不懂，按空名册处理：{error:?}"),
+            }
         }
         let own = self.own.clone();
         let cap = decode_capability(&own)?;
@@ -237,7 +229,7 @@ impl Roster {
     fn save(&self) -> Result<()> {
         let Some(path) = &self.path else { return Ok(()) };
         let file = RosterFile {
-            format: FORMAT,
+            format: RosterFile::FORMAT,
             entries: self
                 .entries
                 .iter()
@@ -249,16 +241,37 @@ impl Roster {
                 })
                 .collect(),
         };
-        let text = serde_json::to_string_pretty(&file).context("名册序列化失败")?;
-        write_atomic(path, &text).with_context(|| format!("名册写盘失败：{}", path.display()))
+        write_json(path, &file).context("名册写盘失败")
     }
 }
 
 /// 名册文件形状：成员标识 → 凭证字节（十六进制），值为 `null` 即墓碑（已撤销）。
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 struct RosterFile {
-    format: u8,
+    format: u32,
     entries: BTreeMap<String, Option<String>>,
+}
+
+impl Default for RosterFile {
+    fn default() -> Self {
+        Self {
+            format: Self::FORMAT,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl JsonFile for RosterFile {
+    const FORMAT: u32 = 1;
+
+    fn format(&self) -> u32 {
+        self.format
+    }
+
+    fn set_format(&mut self, format: u32) {
+        self.format = format;
+    }
 }
 
 /// 文件里一条记录解码后的样子。

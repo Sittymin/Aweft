@@ -783,6 +783,7 @@ dependencies = [
  "aweft-convert",
  "aweft-gui",
  "aweft-settings",
+ "aweft-storage",
 ]
 
 [[package]]
@@ -791,7 +792,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aweft-gui",
- "aweft-settings",
+ "aweft-storage",
  "gstreamer",
  "jni 0.22.4",
  "log",
@@ -824,7 +825,7 @@ dependencies = [
  "anyhow",
  "aweft-model",
  "aweft-project",
- "aweft-settings",
+ "aweft-storage",
  "chrono",
  "futures",
  "hex",
@@ -865,6 +866,7 @@ dependencies = [
  "aweft-plugins",
  "aweft-project",
  "aweft-settings",
+ "aweft-storage",
  "bitflags 2.13.1",
  "bytemuck",
  "chrono",
@@ -951,14 +953,25 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aweft-model",
+ "aweft-storage",
  "chrono",
  "log",
  "serde",
- "serde_json",
 ]
 
 [[package]]
 name = "aweft-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aweft-storage",
+ "log",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
+name = "aweft-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",

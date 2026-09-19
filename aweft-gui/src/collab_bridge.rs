@@ -191,9 +191,9 @@ impl CollabBridge {
         if store.sequence().items.is_empty() {
             return Ok(());
         }
-        let data = serde_json::to_vec(&store.document())?;
+        let data = store.encode_snapshot()?;
+        log::info!("已发送工程快照（{} 字节）", data.len());
         engine.publish_snapshot(data)?;
-        log::info!("已发送工程快照（{} 字节）", serde_json::to_vec(&store.document())?.len());
         Ok(())
     }
 
@@ -297,10 +297,10 @@ impl AppStore {
                     log::info!("收到自己发出的快照，回环忽略");
                     return;
                 }
-                match serde_json::from_slice::<aweft_project::document::AweftDocument>(&data) {
-                    Ok(doc) => {
+                match ProjectStore::decode_snapshot(&data, &author) {
+                    Ok(store) => {
                         log::warn!("收到完整工程快照（来自 {author}），本地将被覆盖");
-                        self.state.project = ProjectStore::new(doc);
+                        self.state.project = store;
                         // 旧 store 的订阅者（watch/collab）随替换已丢，全部重建
                         self.refresh_queue = crate::store::project_watch::register(&mut self.state.project);
                         if let Some(engine) = &self.collab_bridge.engine {
@@ -311,7 +311,7 @@ impl AppStore {
                         self.evaluate_depsgraph();
                         log::info!("快照已应用，当前行数 {}", self.state.project.sequence().items.len());
                     }
-                    Err(e) => log::warn!("快照解析失败：{e:?}"),
+                    Err(e) => log::warn!("快照未采纳，本地不变：{e:?}"),
                 }
             }
         }

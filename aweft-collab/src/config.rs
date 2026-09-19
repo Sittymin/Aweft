@@ -10,16 +10,19 @@
 //! ```
 //!
 //! 字段一律以十六进制文本存 JSON，与工程文件同一种可读格式：密钥文件要能被人
-//! 备份、复制、手写，二进制只会添堵。写盘一律「临时文件 + 刷盘 + rename」，
-//! 半途而废的密钥文件比没有密钥文件更糟。
+//! 备份、复制、手写，二进制只会添堵。写盘的「临时文件 + 刷盘 + rename」与版本门都在
+//! `aweft-storage`，半途而废的密钥文件比没有密钥文件更糟，所以这里一律走那一份规矩。
 //!
 //! 邀请分两段：`Meadowcap` 的凭证必须写明接收者，所以所有者先拿到对方的成员标识
 //! 才能 [`invite`]；被邀请者 [`accept`] 时核对串里的接收者是不是自己。
 
 use anyhow::{Context, Result, bail};
 use aweft_model::ids::ItemId;
+use aweft_storage::{
+    JsonFile, config_dir, read_json, restrict_dir, restrict_file, write_json, write_text_atomic,
+};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use willow25::groupings::Area;
 
 use crate::cap::{
@@ -28,8 +31,9 @@ use crate::cap::{
 };
 use crate::engine::{Bootstrap, Session};
 
-/// 文件格式版本：只用来拒绝比本程序更新的文件，不做静默兼容。
-const FORMAT: u8 = 1;
+/// 本机落盘文件（成员密钥、会话记录）与邀请文本共用的格式版本。
+/// 加字段不 bump；只有旧值必须改写才有意义时才 bump 并在对应的 `migrate` 里补一步。
+const FORMAT: u32 = 1;
 
 /// 转授范围。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,14 +46,26 @@ pub enum Scope {
 
 #[derive(Serialize, Deserialize)]
 struct MemberFile {
-    format: u8,
+    format: u32,
     seed: String,
+}
+
+impl JsonFile for MemberFile {
+    const FORMAT: u32 = FORMAT;
+
+    fn format(&self) -> u32 {
+        self.format
+    }
+
+    fn set_format(&mut self, format: u32) {
+        self.format = format;
+    }
 }
 
 /// 一个工程的协作会话记录。落盘形状与内存形状一致，字段即 JSON 字段。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRecord {
-    pub format: u8,
+    pub format: u32,
     /// 展示名，只在本地生效，不进网络。
     pub name: String,
     /// 命名空间标识：同时是主题，也是本记录的键。
@@ -69,9 +85,22 @@ pub struct ProjectRecord {
     pub grants: Vec<String>,
 }
 
+impl JsonFile for ProjectRecord {
+    const FORMAT: u32 = FORMAT;
+
+    fn format(&self) -> u32 {
+        self.format
+    }
+
+    fn set_format(&mut self, format: u32) {
+        self.format = format;
+    }
+}
+
+/// 邀请文本：不是落盘文件，是一段十六进制包裹的 JSON，所以不过版本门而是自己比对。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Invite {
-    pub format: u8,
+    pub format: u32,
     pub name: String,
     pub namespace: String,
     pub capability: String,
@@ -81,7 +110,7 @@ pub struct Invite {
 
 /// `collab/` 目录，不存在时创建。
 pub fn collab_dir() -> Result<PathBuf> {
-    let dir = aweft_settings::config_dir()
+    let dir = config_dir()
         .context("没有可用的配置目录，协作身份无法落盘")?
         .join("collab");
     std::fs::create_dir_all(&dir).with_context(|| format!("协作目录创建失败：{}", dir.display()))?;
@@ -93,11 +122,7 @@ pub fn collab_dir() -> Result<PathBuf> {
 pub fn load_or_create_member() -> Result<Member> {
     let path = collab_dir()?.join("member.json");
     if path.is_file() {
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("成员密钥读取失败：{}", path.display()))?;
-        let file: MemberFile =
-            serde_json::from_str(&text).with_context(|| format!("成员密钥无效：{}", path.display()))?;
-        check_format(file.format, &path)?;
+        let file: MemberFile = read_json(&path).context("成员密钥读不出")?;
         return Ok(Member::from_seed(&seed_of(&file.seed)?));
     }
     let member = Member::generate();
@@ -107,7 +132,7 @@ pub fn load_or_create_member() -> Result<Member> {
     };
     write_json(&path, &file)?;
     // 密钥文件只给本机用户读：默认 umask 下的 0644 在共享机器上等于泄露。
-    restrict(&path);
+    restrict_file(&path);
     log::info!("已生成本机协作身份 {}", member.hex_id());
     Ok(member)
 }
@@ -133,12 +158,7 @@ fn namespace_key(namespace: &str) -> Result<String> {
 /// 某工程的会话记录。不存在时报错，由调用方决定这是「未加入」还是异常。
 pub fn load_record(namespace: &str) -> Result<ProjectRecord> {
     let path = record_path(namespace)?;
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("会话记录读取失败：{}", path.display()))?;
-    let record: ProjectRecord = serde_json::from_str(&text)
-        .with_context(|| format!("会话记录无效：{}", path.display()))?;
-    check_format(record.format, &path)?;
-    Ok(record)
+    read_json(&path).context("会话记录读不出")
 }
 
 /// 所有已加入的工程，按展示名排序。读不懂的记录只记日志跳过，不挡住启动。
@@ -157,13 +177,10 @@ pub fn list_records() -> Vec<ProjectRecord> {
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        match serde_json::from_str::<ProjectRecord>(&text) {
-            Ok(record) if record.format == FORMAT => records.push(record),
-            Ok(_) => log::warn!("会话记录版本过新，跳过：{}", path.display()),
-            Err(error) => log::warn!("会话记录无效，跳过（{}）：{error:?}", path.display()),
+        // 一份坏记录只挡住它自己：读不懂就跳过，不能因此停在启动路上。
+        match read_json::<ProjectRecord>(&path) {
+            Ok(record) => records.push(record),
+            Err(error) => log::warn!("会话记录跳过：{error:?}"),
         }
     }
     records.sort_by(|a, b| a.name.cmp(&b.name));
@@ -173,7 +190,7 @@ pub fn list_records() -> Vec<ProjectRecord> {
 pub fn save_record(record: &ProjectRecord) -> Result<()> {
     let path = record_path(&record.namespace)?;
     write_json(&path, record)?;
-    restrict(&path);
+    restrict_file(&path);
     Ok(())
 }
 
@@ -187,8 +204,8 @@ pub fn set_active(namespace: &str) -> Result<()> {
     // 先过 `namespace_key`：存进去的只能是规范化标识，不能是任意文本。
     let key = namespace_key(namespace)?;
     let path = active_path()?;
-    write_atomic(&path, &format!("{key}\n"))?;
-    restrict(&path);
+    write_text_atomic(&path, &format!("{key}\n"))?;
+    restrict_file(&path);
     Ok(())
 }
 
@@ -369,16 +386,6 @@ fn database_path(namespace: &str) -> Result<PathBuf> {
     Ok(dir.join(format!("{}.sqlite", namespace_key(namespace)?)))
 }
 
-fn check_format(format: u8, path: &Path) -> Result<()> {
-    if format > FORMAT {
-        bail!(
-            "文件版本 {format} 比本程序支持的 {FORMAT} 新，拒绝改写：{}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 /// 定长密钥的十六进制。成员标识、命名空间标识与密钥种子同为 32 字节，共用一个解码。
 fn seed_of(text: &str) -> Result<[u8; SEED_LEN]> {
     Ok(hex_of(text)?
@@ -390,47 +397,3 @@ fn seed_of(text: &str) -> Result<[u8; SEED_LEN]> {
 fn hex_of(text: &str) -> Result<Vec<u8>> {
     Ok(hex::decode(text.trim())?)
 }
-
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let text =
-        serde_json::to_string_pretty(value).with_context(|| format!("序列化失败：{}", path.display()))?;
-    write_atomic(path, &text)
-}
-
-/// 原子写：临时文件 + 刷盘 + rename。半途而废的密钥文件比没有密钥文件更糟。
-pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let result = (|| -> Result<()> {
-        use std::io::Write;
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(text.as_bytes())?;
-        // 没刷盘就 rename，掉电后会留下一个盖掉旧文件的 0 字节文件。
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result.with_context(|| format!("写盘失败：{}", path.display()))
-}
-
-#[cfg(unix)]
-fn restrict(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-
-/// 目录要的是可穿透的 0700（0600 连自己进不去）。锁住 `collab/` 一层，
-/// 下面的会话与数据库目录就都跟着只有本机用户可见。
-#[cfg(unix)]
-fn restrict_dir(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
-}
-
-#[cfg(not(unix))]
-fn restrict(_path: &Path) {}
-
-#[cfg(not(unix))]
-fn restrict_dir(_path: &Path) {}

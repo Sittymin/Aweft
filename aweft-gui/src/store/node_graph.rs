@@ -8,7 +8,7 @@
 //! 本模块提供 model 操作、编辑上下文与派生视图模型的局部更新原语。
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
 
@@ -716,8 +716,8 @@ pub trait GraphEditable: Sized {
     type Node;
     type Kind: Clone;
 
-    fn nodes(&self) -> &HashMap<NodeId, Self::Node>;
-    fn sockets(&self) -> &HashMap<SocketId, Socket>;
+    fn nodes(&self) -> &BTreeMap<NodeId, Self::Node>;
+    fn sockets(&self) -> &BTreeMap<SocketId, Socket>;
     fn links(&self) -> &[Link];
     fn node(&self, id: NodeId) -> &Self::Node;
     fn socket(&self, id: SocketId) -> &Socket;
@@ -756,10 +756,10 @@ impl<K: NodeTreeType + NodeUi> GraphEditable for NodeGraph<K> {
     type Node = Node<K>;
     type Kind = K;
 
-    fn nodes(&self) -> &HashMap<NodeId, Node<K>> {
+    fn nodes(&self) -> &BTreeMap<NodeId, Node<K>> {
         &self.nodes
     }
-    fn sockets(&self) -> &HashMap<SocketId, Socket> {
+    fn sockets(&self) -> &BTreeMap<SocketId, Socket> {
         &self.sockets
     }
     fn links(&self) -> &[Link] {

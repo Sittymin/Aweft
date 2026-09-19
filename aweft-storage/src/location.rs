@@ -4,16 +4,16 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// 覆盖配置目录的环境变量。它是给用户看的配置入口，不是测试开关：设置文件自己的
-/// 位置不能由设置文件里的字段决定，所以这一层必须留一个进程外的口。
+/// 覆盖配置目录的环境变量。它是给用户看的配置入口，不是测试开关：落盘文件自己的
+/// 位置不能由文件里的字段决定，所以这一层必须留一个进程外的口。
 /// 只覆盖目录，不覆盖任何单个设置项。
-pub const SETTINGS_DIR_ENV: &str = "AWEFT_USER_CONFIG";
+pub const USER_CONFIG_ENV: &str = "AWEFT_USER_CONFIG";
 
 static CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// 入口在启动早期调一次，把本平台算出来的目录交进来。之后再调不生效。
 pub fn set_config_dir(platform_dir: PathBuf) {
-    let dir = resolve(std::env::var_os(SETTINGS_DIR_ENV), platform_dir);
+    let dir = resolve(std::env::var_os(USER_CONFIG_ENV), platform_dir);
     if CONFIG_DIR.set(dir).is_err() {
         log::warn!("配置目录已定，忽略第二次提交：现有 {:?}", config_dir());
     }
@@ -69,22 +69,22 @@ mod tests {
     fn explicit_override_wins() {
         assert_eq!(
             resolve(
-                Some(OsString::from("/tmp/other-config")),
-                PathBuf::from("/tmp/platform")
+                Some(OsString::from("/other-config")),
+                PathBuf::from("/platform")
             ),
-            PathBuf::from("/tmp/other-config")
+            PathBuf::from("/other-config")
         );
     }
 
     #[test]
     fn empty_override_is_ignored() {
         assert_eq!(
-            resolve(Some(OsString::new()), PathBuf::from("/tmp/platform")),
-            PathBuf::from("/tmp/platform")
+            resolve(Some(OsString::new()), PathBuf::from("/platform")),
+            PathBuf::from("/platform")
         );
         assert_eq!(
-            resolve(None, PathBuf::from("/tmp/platform")),
-            PathBuf::from("/tmp/platform")
+            resolve(None, PathBuf::from("/platform")),
+            PathBuf::from("/platform")
         );
     }
 

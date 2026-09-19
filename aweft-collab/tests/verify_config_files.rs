@@ -44,8 +44,8 @@ fn identity_invitation_and_session_round_trip() {
     let dir = scratch_config_dir();
     // 环境变量优先于代码提交的目录（那是给用户留的配置入口），测试里要把它让开：
     // 否则临时目录不生效，这份记录会写进开发者真实的配置目录。
-    std::env::remove_var(aweft_settings::SETTINGS_DIR_ENV);
-    aweft_settings::set_config_dir(dir.clone());
+    std::env::remove_var(aweft_storage::USER_CONFIG_ENV);
+    aweft_storage::set_config_dir(dir.clone());
 
     let owner = load_or_create_member().expect("首次读取应当生成并落盘本机身份");
     let again = load_or_create_member().expect("身份文件应当可复读");

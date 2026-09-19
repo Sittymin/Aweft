@@ -16,7 +16,7 @@ use aweft_collab::subscriber;
 use aweft_collab::wire::PendingEdit;
 use aweft_model::ids::ItemId;
 use aweft_model::sequence::{EventData, GroupData, ItemLocation};
-use aweft_project::{AweftDocument, MutationKind, MutationReceipt, Origin, ProjectStore};
+use aweft_project::{MutationKind, MutationReceipt, Origin, ProjectStore, SavedProject};
 use chrono::TimeDelta;
 use futures::channel::mpsc;
 use willow25::groupings::Area;
@@ -64,7 +64,8 @@ fn bytes_of(id: ItemId) -> Vec<u8> {
 
 /// 一份两行两轨的工程：`granted_*` 在转授范围内的轨道里，`other_*` 在范围外的那条。
 struct Fixture {
-    text: String,
+    /// 工程快照字节：两台「电脑」各解一份，走的就是生产那条编解码路。
+    bytes: Vec<u8>,
     granted_track: ItemId,
     granted_row: ItemId,
     /// 同一轨道内的第二行：让两个成员可以各写一行，不抢同一个坐标。
@@ -74,7 +75,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let mut store = ProjectStore::new(AweftDocument::new());
+    let mut store = ProjectStore::new(SavedProject::new());
     let data = || EventData {
         start_time: TimeDelta::milliseconds(0),
         end_time: TimeDelta::milliseconds(100),
@@ -110,7 +111,7 @@ fn fixture() -> Fixture {
         .create_event(data(), ItemLocation::InGroup(granted_track, 1))
         .expect("第二行创建失败");
     Fixture {
-        text: serde_json::to_string(store.document()).expect("工程文档应当可序列化"),
+        bytes: store.encode_snapshot().expect("工程快照应当可序列化"),
         granted_track,
         granted_row,
         granted_row2,
@@ -152,9 +153,8 @@ impl Computer {
         let capability = session.capability.clone();
         let (tx, rx) = mpsc::unbounded::<CollabEvent>();
         let engine = Rc::new(CollabEngine::spawn(session, tx).expect("协作引擎应当能起后台线程"));
-        let mut store = ProjectStore::new(
-            serde_json::from_str::<AweftDocument>(&fixture.text).expect("工程文档应当可解析"),
-        );
+        let mut store =
+            ProjectStore::decode_snapshot(&fixture.bytes, "fixture").expect("工程快照应当可读回");
         subscriber::register(&mut store, Rc::clone(&engine));
         let receipts = Rc::new(RefCell::new(VecDeque::new()));
         store.subscribe(Rc::new(Recorder {
@@ -183,6 +183,7 @@ impl Computer {
                 CollabEvent::Remote(edit) => incoming.push(edit),
                 CollabEvent::Ready { node_id } => log::info!("节点就绪 {node_id}"),
                 CollabEvent::Peers { connected } => log::info!("对端数 {connected}"),
+                CollabEvent::Snapshot { author, .. } => log::info!("收到 {author} 的工程快照"),
                 CollabEvent::Capability { capability } => {
                     self.capability = hex::decode(capability).expect("通告里的凭证应当是十六进制")
                 }
