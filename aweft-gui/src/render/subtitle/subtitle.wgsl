@@ -78,18 +78,17 @@ fn vs_main(
 // 片元着色器：计算最终颜色
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // 1. 从 Alpha 纹理中采样，获取当前像素的"形状"透明度
+    // 1. 从 Alpha 纹理中采样，得到当前像素的形状覆盖
     let shape_alpha = textureSample(t_alpha_mask, s_sampler, in.tex_coords).r;
 
-    // 2. 将"形状"透明度与图层的"整体"透明度相乘
-    // 注意：对于 color.a = 0 的图层，我们使用 1.0 作为默认透明度
-    // WARN: 这里是否是正确运算不明!
-    // FIXME: 检查是否是因为libass当中的默认样式是半透明？
-    let layer_alpha = max(in.color.a, 1.0);
-    let final_alpha = shape_alpha * layer_alpha;
-    // let final_alpha = shape_alpha * in.color.a;
+    // 2. 乘上图层自身的不透明度。in.color.a 已是不透明度语义：libass 的
+    // 「低字节是透明度」在 aweft-libass 的 from_libass_u32 里翻转，渲染层经
+    // aweft-ass 的 render::Tile::color 拿到它（libass 按透明度 0xFF 丢弃全透明
+    // 位图，ass_render.c:3416）。
+    // \alpha、\fad、半透明描边与阴影全靠这一项生效。
+    let final_alpha = shape_alpha * in.color.a;
 
-    // 3. 使用这个最终的 Alpha 值来计算预乘颜色
+    // 3. 预乘输出，配合 wgpu 的 ALPHA_BLENDING
     let final_color = vec4<f32>(in.color.rgb * final_alpha, final_alpha);
 
     return final_color;

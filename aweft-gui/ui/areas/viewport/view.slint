@@ -11,7 +11,7 @@ import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { TickLabels } from "../graph_editor/ruler.slint";
 import { Theme } from "../../theme/index.slint";
-import { DismissOverlayState, VideoState } from "../../bridge/state.slint";
+import { DismissOverlayState, SubtitleState, VideoState } from "../../bridge/state.slint";
 import { VideoCallbacks } from "../../bridge/callbacks.slint";
 
 export component VideoPlayer inherits Rectangle {
@@ -209,6 +209,36 @@ export component VideoPlayer inherits Rectangle {
                 image-fit: fill;
                 source: VideoState.video-frames[index];
             }
+        }
+    }
+
+    // 字幕覆盖层：贴在主视频矩形上的整帧图。帧的排版比例 = 主视频显示像素比例，
+    // 但纹理按这个矩形在屏幕上的**物理像素数**光栅化（1:1，放大字幕时不发虚），
+    // 倍率由 Rust 决定，见 `render::subtitle::pipeline::raster_size`。
+    // 声明在所有视频矩形之后、标尺之前：字幕压在画面上，但不遮标尺。
+    // 缩放/平移与主视频共用同一组 screen-x/screen-y。
+    Rectangle {
+        x: root.main-rect-x;
+        y: root.main-rect-y;
+        width: root.main-rect-w;
+        height: root.main-rect-h;
+        clip: true;
+        // 逻辑尺寸报给 Rust 换算光栅尺寸（.slint 读不到 scale factor）。
+        // 只有缩放手势与改窗口尺寸会触发，档位之外的抖动在 Rust 侧被吸收。
+        changed width => {
+            SubtitleState.report-overlay-size(root.main-rect-w, root.main-rect-h);
+        }
+        changed height => {
+            SubtitleState.report-overlay-size(root.main-rect-w, root.main-rect-h);
+        }
+
+        Image {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            image-fit: fill;
+            source: SubtitleState.current-subtitle-frame;
         }
     }
 

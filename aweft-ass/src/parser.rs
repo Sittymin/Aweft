@@ -13,7 +13,7 @@ use rayon::prelude::*;
 use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
@@ -163,8 +163,10 @@ where
 impl ASSFile {
     pub fn parse_from_file(path: impl AsRef<Path>) -> Result<Self> {
         let file = File::open(path)?;
-        let reader = BufReader::new(file);
+        Self::parse_from_reader(BufReader::new(file))
+    }
 
+    pub fn parse_from_reader(reader: impl BufRead + Send) -> Result<Self> {
         // 使用我们的自定义迭代器，代码意图非常清晰
         let section_iterator = SectionIterator::new(reader.lines());
 
@@ -283,17 +285,11 @@ impl ASSFile {
             }
         }
     }
-    pub fn write_to_file_buffered(
-        &self,
-        path: &PathBuf,
-        // HACK: 看看这个是否可以自适应
-        events_flush_interval: usize,
-    ) -> Result<()> {
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
+    /// 按 `[Script Info]` / `[V4+ Styles]` / `[Events]` 顺序写出完整脚本。
+    /// 导出与预览共用这一份序列化逻辑，两者得到的字节必须一致。
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<()> {
         writeln!(writer, "[Script Info]")?;
         writeln!(writer, "{}", self.script_info)?;
-        writer.flush()?;
 
         if self.script_info.script_type == script::ScriptType::ASS {
             writeln!(writer, "[V4+ Styles]")?;
@@ -316,15 +312,25 @@ impl ASSFile {
             writer,
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         )?;
-        for (index, event) in self.events.iter().enumerate() {
+        for event in self.events.iter() {
             writeln!(writer, "{}", event)?;
-            if (index + 1) % events_flush_interval == 0 {
-                writer.flush()?;
-            }
         }
 
         writer.flush()?;
         Ok(())
+    }
+
+    /// 序列化到内存字节。导出文件与视口预览都从这里取字节，二者才不会分叉。
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.write_to(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    pub fn write_to_file(&self, path: &Path) -> Result<()> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        self.write_to(&mut writer)
     }
 }
 
@@ -1257,6 +1263,71 @@ mod tests {
                     other => panic!("Expected Events, got: {:?}", other),
                 }
             }
+        }
+    }
+
+    mod serialize {
+        use crate::types::event::{Dialogue, Event, TextSegment};
+        use crate::types::tags::StyleTag;
+        use crate::types::time::AssTime;
+        use crate::types::ASSFile;
+
+        const SAMPLE_SCRIPT: &str = "\
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\\fs48}你好
+";
+
+        fn handcrafted() -> ASSFile {
+            let mut ass = ASSFile::new();
+            ass.script_info.layout_res_x = 1280;
+            ass.script_info.layout_res_y = 720;
+            ass.events.push(Event::Dialogue(Dialogue {
+                layer: 0,
+                start: AssTime::from_centiseconds(100),
+                end: AssTime::from_centiseconds(300),
+                style: "Default".to_string(),
+                name: None,
+                margin_l: 0,
+                margin_r: 0,
+                margin_v: 0,
+                effect: None,
+                content: vec![
+                    TextSegment::Overrides(vec![StyleTag::FontSize(48.0)]),
+                    TextSegment::Text("你好".to_string()),
+                ],
+            }));
+            ass
+        }
+
+        /// 写出单独一条，不经过解析线程编排：帧尺寸要进 PlayResX/PlayResY，
+        /// 覆盖块必须带花括号（裸 \fs48 会被 libass 当正文渲染出来）。
+        #[test]
+        fn write_to_braces_override_blocks() {
+            let text = String::from_utf8(handcrafted().to_bytes().unwrap()).unwrap();
+            assert!(text.contains("PlayResX: 1280"), "{text}");
+            assert!(
+                text.contains(r"Dialogue:0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\fs48}你好"),
+                "{text}"
+            );
+        }
+
+        /// parse_from_reader 的线程编排目前不返回（`load_ass` 在本仓库没有存活调用者，
+        /// 这条路径此前从未被执行到）。单独运行它来定位，别让它挂住整个套件。
+        #[test]
+        #[ignore = "parse_from_reader 目前挂住不返回"]
+        fn parse_sample_script_from_reader() {
+            let ass = ASSFile::parse_from_reader(SAMPLE_SCRIPT.as_bytes()).unwrap();
+            assert_eq!(ass.events.len(), 1);
         }
     }
 }

@@ -9,7 +9,7 @@ nom = "8.0.0"
 # 用于语言字段
 isolang = { version = "2.4.0", features = ["list_languages"] }
 # 由于需要负数时间
-chrono = "0.4.45"
+chrono = { version = "0.4.45", features = ["serde"] }
 # 多线程读取解析
 num_cpus = "1.17.0"
 crossbeam-channel = "0.5.16"
@@ -19,4 +19,4 @@ proptest = "1.11.0"
 log = "0.4.33"
 thiserror = "2.0.19"
 slotmap = "1.1.1"
-serde = "1.0.229"
+serde = { version = "1.0.229", features = ["derive"] }

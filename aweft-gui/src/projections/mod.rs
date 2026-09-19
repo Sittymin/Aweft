@@ -14,6 +14,7 @@ mod audio;
 mod node_graph;
 mod screen;
 mod sequence;
+mod subtitle;
 mod video;
 
 pub use animation::{
@@ -28,6 +29,8 @@ pub use screen::{op_screen_layout, op_screen_overlays};
 pub use sequence::{
     op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode,
 };
+pub use subtitle::op_subtitle_script;
+pub(crate) use subtitle::subtitle_rebuild_script;
 pub use video::{
     ui_project_video_mute, ui_project_video_playback, ui_project_video_position,
     ui_project_video_selection, ui_project_video_structure, ui_project_video_time,
@@ -310,6 +313,41 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                 exec: op_screen_layout,
             },
         ],
+    });
+
+    // 字幕脚本投影：脚本内容 = 序列行（结构/时间/文本）+ 逐行样式（节点图）
+    // + 拟合出的动画段（曲线/NLA）+ 帧尺寸（主视频）。编脚本要跑 DP 拟合，
+    // 属用户操作节奏的活，逐帧路径不再碰工程数据。
+    depsgraph.register(Component {
+        id: ComponentId::new(),
+        depends_on: &[
+            DataId::Sequence,
+            DataId::Animation,
+            DataId::NodeGraph,
+            DataId::Video,
+        ],
+        operations: vec![Operation {
+            id: OperationId::new(),
+            code: OperationCode::SubtitleScript,
+            handles: &[
+                TagKind::SequenceStructure,
+                TagKind::SequenceTimecode,
+                TagKind::SequenceText,
+                TagKind::GraphStructure,
+                TagKind::GraphKeyframes,
+                TagKind::NlaStructure,
+                TagKind::NlaStripStructure,
+                TagKind::NlaStripPosition,
+                TagKind::NodeGraphStructure,
+                TagKind::NodeGraphLinks,
+                TagKind::NodeGraphSocket,
+                TagKind::NodeGraphChain,
+                TagKind::VideoStructure,
+                TagKind::VideoMain,
+            ],
+            depends_on: &[],
+            exec: op_subtitle_script,
+        }],
     });
 
     // 跨组件 Relation 边：把 depends_on 的 "组件名/操作名" 解析为 OperationId。

@@ -9,6 +9,7 @@ use crate::bridge::types::{
 use crate::bridge::types::MediaPickerCallbacks;
 
 use crate::bridge::{parse_time, slint_area_key_to_key, slint_area_type_to_rust};
+use crate::render::subtitle::Composition;
 use crate::store::AppStore;
 use aweft_model::ids::ItemId;
 use log::warn;
@@ -46,9 +47,22 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_animation_callbacks(instance, Rc::clone(&store));
     setup_nla_callbacks(instance, Rc::clone(&store));
     setup_video_callbacks(instance, Rc::clone(&store));
+    setup_preview_clock(instance, &store);
     setup_audio_callbacks(instance, Rc::clone(&store));
     setup_media_picker_callbacks(instance, Rc::clone(&store));
     setup_collab_callbacks(instance, store);
+}
+
+/// 登记预览时钟的心跳回调（登记后立即停表，起停由 transport 决定）。
+///
+/// 心跳抓 store 的弱引用：时钟本身住在 `AppState` 里，抓强引用会构成循环。
+fn setup_preview_clock(instance: &MainWindow, store: &Rc<RefCell<AppStore>>) {
+    let (weak_store, weak_instance) = (Rc::downgrade(store), instance.as_weak());
+    store
+        .borrow()
+        .state()
+        .preview_clock
+        .install(&weak_store, &weak_instance);
 }
 
 fn setup_collab_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
@@ -666,6 +680,9 @@ fn setup_rendering_notifier_callback(instance: &MainWindow, store: Rc<RefCell<Ap
                 for session in store_mut.state_mut().video_sessions.iter_mut() {
                     session.wgpu_sink.after_rendering();
                 }
+                if let Some(subtitle) = store_mut.state_mut().subtitle.as_mut() {
+                    subtitle.after_rendering();
+                }
             }
             RenderingState::RenderingTeardown => {
                 // Teardown 通常不需要实例
@@ -764,54 +781,97 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
 }
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {
     crate::render::video_sink::teardown(&mut store.borrow_mut());
+    if let Some(subtitle) = store.borrow_mut().state_mut().subtitle.as_mut() {
+        subtitle.teardown();
+    }
 }
 
-fn handle_before_rendering(_instance: &MainWindow, store: &Rc<RefCell<AppStore>>) {
-    let mut store_mut = store.borrow_mut();
-
-    // 未打开视频：高频路径零开销返回（不查位置、不碰 Sink）
-    if store_mut.state().video_sessions.is_empty() {
+/// 逐帧字幕出图：与视频帧、播放时钟同属实时例外，直接写 Slint 图像属性，
+/// 不经 reducer/depsgraph（脚本本身由 `projections::subtitle` 在用户操作时编好）。
+///
+/// 时间取动画域当前时间（播放头显示值）；排版基准取预览帧尺寸（主视频显示像素尺寸，
+/// 无主视频时兜底 1080P），脚本里的事件时间、PlayRes 与覆盖层贴的矩形同一基准。
+/// 光栅尺寸另取覆盖层在屏幕上的物理像素数（视口报来的逻辑尺寸 × 窗口缩放），
+/// 字幕纹理因此与屏幕 1:1，放大画面时不会让 Slint 替我们做插值放大。
+fn render_subtitle_frame(instance: &MainWindow, store: &mut AppStore) {
+    let layout_size = store.state().preview_frame_size();
+    let Some(pipeline) = store.state_mut().subtitle.as_mut() else {
         return;
-    }
+    };
 
+    let subtitle_state = instance.global::<crate::bridge::types::SubtitleState>();
+    let scale_factor = instance.window().scale_factor() as f32;
+    let on_screen_physical = (
+        subtitle_state.get_overlay_width() * scale_factor,
+        subtitle_state.get_overlay_height() * scale_factor,
+    );
+
+    let now_ms = (instance
+        .global::<crate::bridge::types::AnimationState>()
+        .get_current_time() as f64
+        * 1000.0) as i64;
+    let composition = match pipeline.render_at(now_ms, layout_size, on_screen_physical) {
+        Ok(composition) => composition,
+        Err(error) => {
+            log::warn!("字幕出帧失败: {error}");
+            return;
+        }
+    };
+
+    match composition {
+        Composition::Frame(image) => subtitle_state.set_current_subtitle_frame(image),
+        // 当前时刻没有字幕：交回默认空图，覆盖层因此不可见
+        Composition::Empty => subtitle_state.set_current_subtitle_frame(slint::Image::default()),
+        // 输出槽位全忙或画面未变：保持上一帧，一个属性都不写
+        Composition::Skipped => {}
+    }
+}
+
+/// 逐帧视频通路：拉取各会话最新帧、同步播放位置、校正 transport 标量。
+///
+/// 新 sample/preroll 回调是播放渲染的唯一驱动；其它窗口重绘不查询媒体管线。
+fn render_video_frames(store: &mut AppStore) {
     // 逐个会话拉取最新帧；帧消费与对应 UI 行立即配对，不创建临时帧数组。
-    let session_count = store_mut.state().video_sessions.len();
+    let session_count = store.state().video_sessions.len();
     let mut received_frame = false;
     for index in 0..session_count {
-        let frame = store_mut.state_mut().video_sessions[index]
+        let frame = store.state_mut().video_sessions[index]
             .wgpu_sink
             .fetch_next_frame();
         if let Some((image, width, height)) = frame {
             received_frame = true;
-            store_mut.ui_models.video.frames.set_row_data(index, image);
+            store.ui_models.video.frames.set_row_data(index, image);
             if let (Some(w), Some(h)) = (width, height) {
-                store_mut
-                    .ui_models
-                    .video
-                    .widths
-                    .set_row_data(index, w as i32);
-                store_mut
-                    .ui_models
-                    .video
-                    .heights
-                    .set_row_data(index, h as i32);
+                store.ui_models.video.widths.set_row_data(index, w as i32);
+                store.ui_models.video.heights.set_row_data(index, h as i32);
             }
-            render_sync_video_playback_time(&mut store_mut, index);
+            render_sync_video_playback_time(store, index);
         }
     }
 
-    // 新 sample/preroll 回调是播放渲染的唯一驱动；其它窗口重绘不查询媒体管线。
     if received_frame {
-        crate::projections::ui_sync_active_video_time_realtime(&mut store_mut);
+        crate::projections::ui_sync_active_video_time_realtime(store);
     }
     // Bus 在 EOS 时置一次脏标记并请求重绘。普通窗口重绘不遍历 transport 目标。
-    let playback_dirty = store_mut
+    let playback_dirty = store
         .state()
         .video_playback_dirty
         .swap(false, std::sync::atomic::Ordering::AcqRel);
-    if playback_dirty && crate::reducers::media::media_refresh_video_playing_state(&mut store_mut) {
-        crate::projections::ui_sync_video_playback_scalar(&store_mut);
+    if playback_dirty && crate::reducers::media::media_refresh_video_playing_state(store) {
+        crate::projections::ui_sync_video_playback_scalar(store);
     }
+}
+
+fn handle_before_rendering(instance: &MainWindow, store: &Rc<RefCell<AppStore>>) {
+    let mut store_mut = store.borrow_mut();
+
+    // 没有视频会话就不碰媒体管线；字幕照常出图
+    if !store_mut.state().video_sessions.is_empty() {
+        render_video_frames(&mut store_mut);
+    }
+
+    // 动画域当前时间已随上面的帧同步写完，字幕按同一时刻出图
+    render_subtitle_frame(instance, &mut store_mut);
 }
 
 /// 播放中仅同步本次确有新帧的会话位置，并局部刷新其时间条模型。活跃视频
@@ -899,11 +959,17 @@ fn handle_rendering_setup(
             queue,
             ..
         } => {
-            store.borrow_mut().state_mut().video_wgpu = Some((
+            let handles = (
                 std::sync::Arc::new(instance.clone()),
                 std::sync::Arc::new(device.clone()),
                 std::sync::Arc::new(queue.clone()),
-            ));
+            );
+            store.borrow_mut().state_mut().video_wgpu = Some(handles.clone());
+            // 字幕合成器与视频输出共用同一对 GPU 句柄
+            store.borrow_mut().state_mut().subtitle =
+                Some(crate::render::subtitle::SubtitlePipeline::new(&handles));
+            // 通路建好之前打过的字幕 tag 不会再来了：按当前真相补编一次脚本
+            crate::projections::subtitle_rebuild_script(&mut store.borrow_mut());
         }
         _ => log::warn!("非 WGPU 渲染器，视频输出不可用"),
     }
@@ -945,22 +1011,6 @@ fn setup_winit_window_event_callback(instance: &MainWindow, store: Rc<RefCell<Ap
         let instance_opt = weak_instance.upgrade();
         match event {
             WindowEvent::Resized(new_size) => {
-                // TODO: 这部分重构没有处理
-                // // HACK: 更新字幕
-                // // FIXME: 需要使用动态参数的数据
-                // let subtitle_image_opt = Self::render_hello_world_subtitle(
-                //     &mut state,
-                //     &instance,
-                //     new_size.width as i32,
-                //     new_size.height as i32,
-                // );
-                // if let Some((subtitle_image, x, y)) = subtitle_image_opt {
-                //     instance
-                //         .global::<SubtitleState>()
-                //         .set_current_subtitle_frame(subtitle_image);
-                //     instance.set_subtitle_x(x as f32);
-                //     instance.set_subtitle_y(y as f32);
-                // }
                 if let Some(instance) = instance_opt.as_ref() {
                     handle_resized(instance, &store, &new_size);
                 }

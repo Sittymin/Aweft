@@ -81,20 +81,27 @@ pub fn ui_project_video_time(store: &mut AppStore, tags: &[Tag]) {
     }
 }
 
-/// transport 状态变化：只同步 Slint 播放标量。
+/// transport 状态变化：同步 Slint 播放标量与预览心跳。
 pub fn ui_project_video_playback(store: &mut AppStore, _tags: &[Tag]) {
     ui_sync_video_playback_scalar(store);
 }
 
 /// 将权威播放状态同步到 Slint 标量。渲染时钟校正播放状态时也复用此实时出口。
+///
+/// 顺带决定预览心跳：没有视频会话时它是播放头的唯一驱动，有会话（或已暂停）时必须
+/// 停表，见 `bridge::preview_clock`。
 pub(crate) fn ui_sync_video_playback_scalar(store: &AppStore) {
+    let state = store.state();
+    state
+        .preview_clock
+        .set_running(state.video_playing && state.video_sessions.is_empty());
     let Some(weak) = &store.video_state else {
         return;
     };
-    let Some(state) = weak.upgrade() else {
+    let Some(video_state) = weak.upgrade() else {
         return;
     };
-    state.set_playing(store.state().video_playing);
+    video_state.set_playing(state.video_playing);
 }
 
 /// 实时播放时钟共用的行级出口。该函数不参与普通 Action 的 reducer 调用。

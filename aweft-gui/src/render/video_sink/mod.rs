@@ -13,7 +13,8 @@
 //! # 模块职责
 //! - `pipeline`：GStreamer 管线搭建与格式协商
 //! - `sink`：`SlintWGPUSink` 数据结构与生命周期（连接、逐帧回调、取帧、槽位归还）
-//! - `frame`：一帧 Sample → RGBA 位图（dmabuf/sysmem 平面、上传、输出槽位池）
+//! - `frame`：一帧 Sample → RGBA 位图（dmabuf/sysmem 平面、上传、输出槽位池
+//!   的使用；池本身在 `render::output_pool`，与字幕共用一份实现）
 //! - `convert`：YUV→RGB 离屏转色管线
 //! - `dmabuf`：DMA-BUF 零拷贝导入器
 //! 本文件是入口：会话的初始化 / 停止 / 连接与总线回路。

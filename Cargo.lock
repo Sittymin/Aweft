@@ -860,8 +860,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "aweft-ass",
  "aweft-collab",
- "aweft-libass",
+ "aweft-convert",
  "aweft-model",
  "aweft-plugins",
  "aweft-project",

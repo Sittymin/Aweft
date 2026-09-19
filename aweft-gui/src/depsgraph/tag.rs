@@ -498,6 +498,8 @@ pub enum OperationCode {
     VideoPlayback,
     /// 视频当前播放音轨投影。
     VideoAudioTrack,
+    /// 字幕脚本投影（序列 + 样式图 + 动画 → ASS 脚本）。
+    SubtitleScript,
 }
 
 impl Tag {

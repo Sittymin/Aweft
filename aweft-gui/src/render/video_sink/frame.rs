@@ -2,12 +2,11 @@
 //! 纹理视图，经离屏 `YuvConvertPipeline` 转成 RGBA 输出纹理。包含：
 //! - 平面布局推导与上传（sysmem 路径，含 256 字节行距对齐）
 //! - dmabuf 零拷贝导入组装（委托给 `dmabuf::DmabufImporter`）
-//! - 固定槽位的 RGBA 输出纹理池（Slint Image 生命周期安全复用）
+//! - 输出纹理槽位池的使用（池本身在 `render::output_pool`，与字幕共用）
 //! - 几何 / 色彩辅助函数
 
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 // DmaBufMemory 是上游按 target_os = "linux" 门控的（android 上不存在），
 // 连带 VideoInfoDmaDrm/is_dma_drm_caps（只服务于 dmabuf 路）在 Android 上也用不到，
@@ -130,17 +129,6 @@ pub(crate) fn display_width_from_par(storage_width: u32, par: gstreamer::Fractio
     }
 }
 
-/// Slint::Image 持有导入的 wgpu::Texture 句柄，因此输出纹理不能在提交给
-/// Slint 后立即覆盖。固定大小的槽位池在 AfterRendering 后等待对应 queue
-/// submission 完成，再允许槽位复用。
-pub(crate) const OUTPUT_TEXTURE_POOL_SIZE: usize = 3;
-
-pub(crate) struct OutputTextureSlot {
-    pub(crate) texture: wgpu::Texture,
-    pub(crate) view: wgpu::TextureView,
-    pub(crate) in_flight: Arc<AtomicBool>,
-}
-
 impl SlintWGPUSink {
     /// 一帧 → RGBA slint::Image：按 caps 分派 dmabuf（零拷贝导入）
     /// 或 sysmem（map 后上传）路径，产出平面视图后共用离屏转色。
@@ -195,9 +183,10 @@ impl SlintWGPUSink {
         // Slint::Image 会在后续渲染提交中继续持有并采样这张纹理。使用固定
         // 槽位池；当前槽位在 AfterRendering 后等待 GPU 完成，避免覆盖旧帧。
         let (slot_index, out_tex, out_view) =
-            self.acquire_output_texture(device, planes.width, planes.height)?;
+            self.output_pool
+                .acquire(device, planes.width, planes.height)?;
         let Some(convert) = self.convert.as_ref() else {
-            self.release_output_slot(slot_index);
+            self.output_pool.discard(slot_index);
             return None;
         };
         convert.run(device, queue, &planes, &out_view);
@@ -211,66 +200,14 @@ impl SlintWGPUSink {
 
         match slint::Image::try_from(out_tex) {
             Ok(image) => {
-                self.active_output_slot = Some(slot_index);
+                self.output_pool.mark_active(slot_index);
                 Some(image)
             }
             Err(e) => {
-                self.release_output_slot(slot_index);
+                self.output_pool.discard(slot_index);
                 log::error!("转换为 Slint Image 失败: {:?}", e);
                 None
             }
-        }
-    }
-
-    fn acquire_output_texture(
-        &mut self,
-        device: &Arc<wgpu::Device>,
-        width: u32,
-        height: u32,
-    ) -> Option<(usize, wgpu::Texture, wgpu::TextureView)> {
-        for index in 0..self.output_pool.len() {
-            let slot = &self.output_pool[index];
-            if slot
-                .in_flight
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                if slot.texture.width() == width && slot.texture.height() == height {
-                    return Some((index, slot.texture.clone(), slot.view.clone()));
-                }
-                slot.in_flight.store(false, Ordering::Release);
-            }
-        }
-
-        if self.output_pool.len() >= OUTPUT_TEXTURE_POOL_SIZE {
-            // 分辨率切换后，只有所有旧尺寸槽位都空闲才能整池替换。
-            // 仍在使用的旧槽位不能提前销毁，否则 Slint 的旧 Image 可能悬空。
-            if self
-                .output_pool
-                .iter()
-                .any(|slot| slot.in_flight.load(Ordering::Acquire))
-            {
-                log::trace!("RGBA 输出纹理池暂时没有可用槽位，丢弃一帧");
-                return None;
-            }
-            self.output_pool.clear();
-        }
-
-        let texture = self.create_rgba_output(device, width, height);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let in_flight = Arc::new(AtomicBool::new(true));
-        let index = self.output_pool.len();
-        self.output_pool.push(OutputTextureSlot {
-            texture: texture.clone(),
-            view: view.clone(),
-            in_flight,
-        });
-        Some((index, texture, view))
-    }
-
-    fn release_output_slot(&self, index: usize) {
-        if let Some(slot) = self.output_pool.get(index) {
-            slot.in_flight.store(false, Ordering::Release);
         }
     }
 
@@ -667,35 +604,6 @@ impl SlintWGPUSink {
             },
         );
         true
-    }
-
-    /// 创建可被 Slint 导入的独立 RGBA 输出纹理。
-    ///
-    /// `COPY_SRC` 是 Slint/wgpu 纹理跨渲染器提交时所需的可复制 usage；输出
-    /// 纹理不能缓存复用，因为每个 Slint Image 可能跨帧继续采样自己的纹理。
-    fn create_rgba_output(
-        &self,
-        device: &Arc<wgpu::Device>,
-        width: u32,
-        height: u32,
-    ) -> wgpu::Texture {
-        device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("video-rgba-out"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        })
     }
 }
 

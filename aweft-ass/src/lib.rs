@@ -1,6 +1,7 @@
 pub mod error;
 mod parser;
 mod processor;
+pub mod render;
 pub mod types;
 
 use std::path::Path;
@@ -15,7 +16,7 @@ pub fn load_ass(path: impl AsRef<Path>) -> Result<ASSFile> {
 }
 
 pub fn save_ass(ass: &ASSFile, path: impl AsRef<Path>) -> Result<()> {
-    ass.write_to_file_buffered(&path.as_ref().to_path_buf(), 1000)
+    ass.write_to_file(path.as_ref())
 }
 
 // TODO: implemented this

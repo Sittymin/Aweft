@@ -19,10 +19,10 @@ src/
 │       ├── graph.rs     # 曲线/摄影表（Graph）Action（Keyframe/Handle/Channel/Marquee/Summary）
 │       └── nla.rs       # NLA 轨道/片断 Action（Strip/Track/PushDown/Search）
 ├── app/                 # 应用生命周期（window_manager：创建窗口、初始化 store/编辑器）
-├── bridge/              # Slint ↔ Rust（callbacks / types / converters）
+├── bridge/              # Slint ↔ Rust（callbacks / types / converters / preview_clock 无视频时的播放心跳）
 ├── clipboard/           # 剪贴板（facade 强类型 API + backend 系统/内存 + kinds 数据种类）
 ├── depsgraph/           # 依赖图调度器（DataId / Component / Operation / Tag，graph.rs 调度实现）
-├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video/audio）
+├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video/audio/subtitle）
 │   └── animation/       # 动画域单 Component（DataId::Animation，Graph+NLA 13 ops，TagKind 隔离）
 │       ├── mod.rs       # 重导出 op_graph_* / op_nla_*，单域注册说明
 │       ├── graph.rs     # 曲线/摄影表 6 ops（GraphStructure/Keyframes/Selection/DragEnded/Channel/Scalars）
@@ -41,12 +41,22 @@ src/
 │       ├── graph.rs     # 曲线/摄影表子 reducer（改 Action 曲线 + 打 Graph* Tag）
 │       └── nla.rs       # NLA 子 reducer（改 AnimData.tracks + 打 Nla* Tag）
 ├── render/              # 渲染进 Slint
-│   ├── subtitle.rs      # 字幕渲染（wgpu + libass 图块实例化）
-│   ├── subtitle.wgsl    # 字幕着色器
+│   ├── output_pool.rs   # RGBA 输出纹理槽位池（视频与字幕共用一份归还规则）
+│   ├── wgpu_test_support.rs # 无头 wgpu 设备与纹理回读（视频/字幕测试共用）
+│   ├── subtitle/        # 字幕渲染（ASS 字形块 → wgpu 整帧纹理）
+│   │   ├── pipeline.rs  # 脚本字节 → aweft-ass 渲染轨 → 合成；逐帧入口与光栅尺寸档位
+│   │   ├── compositor.rs# wgpu 常驻资源、按需增长的图集与实例化合成
+│   │   ├── subtitle.wgsl# 字幕着色器
+│   │   └── tests.rs     # 无头像素校验：落位、等比放大与图集增长
 │   └── video_sink/      # 视频播放（GStreamer → wgpu → Slint）
 │       ├── mod.rs       # 播放管线生命周期
-│       ├── wgpu.rs      # appsink、帧队列和 YUV→RGB
+│       ├── pipeline.rs  # 解码管线搭建与 caps 协商
+│       ├── sink.rs      # appsink、最新帧槽位、GPU 句柄缓存
+│       ├── frame.rs     # 一帧 Sample → RGBA（平面上传/零拷贝导入/转色）
+│       ├── convert.rs   # YUV→RGB 离屏管线
 │       ├── dmabuf.rs    # DMA-BUF 平面导入
+│       ├── audio.rs     # 音轨选择
+│       ├── waveform.rs  # 波形独立解码管线
 │       ├── yuv_convert.wgsl # YUV→RGB 着色器
 │       └── tests.rs     # 播放与着色器测试
 ├── screen/              # 屏幕布局（area / edge / vertex / map / primitives + ops/：split/join/move_edge/cleanup）

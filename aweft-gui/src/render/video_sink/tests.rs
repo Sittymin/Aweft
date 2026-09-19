@@ -25,6 +25,8 @@ use gstreamer::Sample;
 use gstreamer_video::{VideoFormat, VideoInfo, VideoInfoDmaDrm, VideoMeta, is_dma_drm_caps};
 use slint::wgpu_30::wgpu;
 
+use crate::render::wgpu_test_support::{headless_wgpu, readback_rgba};
+
 /// 生成测试视频的参数：1280x720/30fps 的 6 秒 SMPTE 彩条。静态内容保证两条
 /// 独立管线（我们的渲染 vs GStreamer 原生参考）拉到的任意两帧逐像素相同，
 /// 不会因解码时序差一帧而产生非对齐差异。
@@ -460,82 +462,6 @@ fn test_video_caps_are_derived_from_format_capabilities() {
     assert!(sysmem_plane_layout(VideoFormat::P01010le).is_some());
 }
 
-/// headless wgpu 设备（Vulkan，无 surface）
-fn headless_wgpu() -> (wgpu::Instance, wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter =
-        futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .expect("无可用 GPU 适配器");
-    let (device, queue) =
-        futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
-            ..Default::default()
-        }))
-        .expect("创建 wgpu 设备失败");
-    (instance, device, queue)
-}
-
-/// RGBA 纹理回读（unpad 到紧密行距）
-fn readback_rgba(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    tex: &wgpu::Texture,
-    w: u32,
-    h: u32,
-) -> Vec<u8> {
-    let bytes_per_row = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-    let buf = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("test-readback"),
-        size: (bytes_per_row * h) as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut enc = device.create_command_encoder(&Default::default());
-    enc.copy_texture_to_buffer(
-        tex.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buf,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: None,
-            },
-        },
-        wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit([enc.finish()]);
-    let slice = buf.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .expect("device.poll 失败");
-    rx.recv_timeout(Duration::from_secs(10))
-        .unwrap()
-        .expect("map 失败");
-    let mapped = slice.get_mapped_range().expect("mapped range");
-    let tight = (0..h as usize)
-        .flat_map(|y| {
-            mapped[y * bytes_per_row as usize..y * bytes_per_row as usize + w as usize * 4].to_vec()
-        })
-        .collect();
-    drop(mapped);
-    buf.unmap();
-    tight
-}
-
 /// 平面纹理（按字节模式逐像素填充后建视图）
 fn uniform_plane(
     device: &wgpu::Device,
@@ -911,7 +837,11 @@ fn test_playback_realpath() {
                         );
                     }
                     MessageView::Warning(w) => {
-                        eprintln!("GStreamer 警告: {} (来自 {:?})", w.error(), w.src().map(|s| s.path_string()));
+                        eprintln!(
+                            "GStreamer 警告: {} (来自 {:?})",
+                            w.error(),
+                            w.src().map(|s| s.path_string())
+                        );
                     }
                     MessageView::Element(elem) => {
                         eprintln!("Element 消息: {:?}", elem.structure());
