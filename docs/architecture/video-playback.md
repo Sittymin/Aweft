@@ -102,7 +102,19 @@ libass 的 `set_frame_size` 换渲染帧而**不动脚本里的 PlayRes**，因�
 `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`（256）的整数倍，暂存行距才等于图集宽度。
 
 换过尺寸后必须**强制合成一次**：空帧→空帧时 libass 的 `has_changed` 为 false，
-只按 `changed` 闸门会在改完尺寸后继续显示旧尺寸的上一帧。
+只按 `changed` 闸门会在改完尺寸后继续显示旧尺寸的上一帧。换脚本也是同一个道理，
+所以 `SubtitlePipeline::set_script` 只置一个待应用标记，标记生效的那一帧同样算强制合成。
+
+**换脚本不换 libass 渲染器。** 编脚本的投影挂在用户操作节奏的 tag 上，拖动一行字幕的
+时间会产生一串 motion 事件，每个事件都要重编整份脚本。libass 的渲染器 `ASS_Renderer`
+持有字形缓存，`ASS_Library` 持有字体提供器与已加载字体，重建一次就要重做一遍字体匹配、
+并把这一屏所有字形重新光栅化。这个绑定本来就把两者分开了：`Track` 存着自己的脚本字节，
+在字段被改动后自动重新解析（`aweft-libass/src/track.rs` 的 `rebuild`），而
+`render_frame` 是逐调用接收轨道的（`aweft-libass/src/renderer.rs`）。所以轨道可以随时换，
+渲染器不该换——`AssScriptRenderer::load_script` 就只做前者。两条测试钉住这个行为：
+`aweft-libass` 的 `load_script_replaces_the_track_but_keeps_the_renderer` 断言换脚本后
+`Library` 指针不变、轨道指针变了、并且只有新脚本里的事件时刻出图；
+`aweft-gui` 的 `a_new_script_reaches_the_next_frame` 断言换脚本一定落到下一帧。
 
 ## 生命周期
 

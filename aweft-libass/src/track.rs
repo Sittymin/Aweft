@@ -326,6 +326,22 @@ impl Track {
 
     fn rebuild(&mut self) -> Result<()> {
         let source = self.source.clone();
+        self.rebuild_with_source(source)
+    }
+
+    /// 换一份脚本字节：只重解析出新的 `ASS_Track`，`Library` 与 `Renderer` 都不动。
+    ///
+    /// `extract_fonts` 沿用轨道当前值：为真时每次换脚本都会把内嵌字体再交给一次
+    /// `ass_add_font`，那是在 `Library` 上追加字体数据。
+    pub(crate) fn load_script(&mut self, data: &[u8], codepage: Option<&str>) -> Result<()> {
+        self.rebuild_with_source(TrackSource::Script {
+            data: data.to_vec(),
+            codepage: codepage.map(str::to_owned),
+            events_flushed: false,
+        })
+    }
+
+    fn rebuild_with_source(&mut self, source: TrackSource) -> Result<()> {
         let feature_settings = self.feature_settings.clone();
         let check_readorder = self.check_readorder;
         let prune_delay = self.prune_delay;

@@ -19,6 +19,8 @@
 
 use anyhow::Result;
 use aweft_ass::render::Renderer;
+#[cfg(test)]
+use slint::wgpu_30::wgpu;
 
 use super::compositor::{Composition, SubtitleCompositor};
 use crate::render::video_sink::WgpuHandles;
@@ -71,6 +73,9 @@ pub(crate) struct SubtitlePipeline {
     /// 最近一次生成的脚本字节。建轨需要帧尺寸，尺寸到位前只存字节。
     script: Option<Vec<u8>>,
     renderer: Option<Renderer>,
+    /// `script` 已经换过但还没交给 `renderer`。换脚本只重新解析 libass 轨道，
+    /// 渲染器与它的字体提供器、字形缓存不动（`Renderer::set_script`）。
+    script_is_pending: bool,
     /// 设备允许的单边纹理尺寸，光栅尺寸钳到它以内
     max_texture_dimension_2d: u32,
 }
@@ -82,14 +87,15 @@ impl SubtitlePipeline {
             compositor: SubtitleCompositor::new(handles),
             script: None,
             renderer: None,
+            script_is_pending: false,
             max_texture_dimension_2d: device.limits().max_texture_dimension_2d,
         }
     }
 
-    /// 换脚本。旧轨立即作废，下一次出帧按当时的帧尺寸重建。
+    /// 换脚本。渲染器留着，新字节在下一次 `render_at` 里原地换进 libass 轨道。
     pub(crate) fn set_script(&mut self, script: Vec<u8>) {
         self.script = Some(script);
-        self.renderer = None;
+        self.script_is_pending = true;
     }
 
     /// 出一帧。`layout_size` 是预览帧尺寸（排版基准，无主视频时已是 1080P 兜底值），
@@ -116,11 +122,21 @@ impl SubtitlePipeline {
             self.max_texture_dimension_2d,
         );
         self.compositor.set_raster_size(raster);
-        // 换尺寸不换轨：PlayRes 仍读脚本里的排版尺寸，libass 自己按倍率缩放
-        let resized = match self.renderer.as_mut() {
-            Some(renderer) => renderer.set_size(raster.0, raster.1)?,
+        // 换尺寸不换轨：PlayRes 仍读脚本里的排版尺寸，libass 自己按倍率缩放。
+        // 换脚本也只换轨不换渲染器，字体匹配与字形缓存因此跨脚本复用。
+        let updated = match self.renderer.as_mut() {
+            Some(renderer) => {
+                let mut updated = renderer.set_size(raster.0, raster.1)?;
+                if self.script_is_pending {
+                    renderer.set_script(script)?;
+                    self.script_is_pending = false;
+                    updated = true;
+                }
+                updated
+            }
             None => {
                 self.renderer = Some(Renderer::from_script(raster.0, raster.1, script)?);
+                self.script_is_pending = false;
                 true
             }
         };
@@ -131,9 +147,9 @@ impl SubtitlePipeline {
             .ok_or_else(|| anyhow::anyhow!("字幕渲染轨未建立"))?
             .render(now_ms)?;
         // ASS 渲染自己判定了字形块列表与上一调用是否相同：相同就不重复合成，
-        // 静止的字幕因此完全不占 GPU。但换过尺寸的那一帧必须出图——静止且为空的
-        // 时刻 libass 不报变化，旧尺寸的画面否则会一直留在覆盖层上。
-        if !frame.changed && !resized {
+        // 静止的字幕因此完全不占 GPU。但换过尺寸或换过脚本的那一帧必须出图——
+        // 静止且为空的时刻 libass 不报变化，旧尺寸或旧脚本的画面否则会留在覆盖层上。
+        if !frame.changed && !updated {
             return Ok(Composition::Skipped);
         }
         self.compositor.compose(&frame.tiles)
@@ -142,6 +158,12 @@ impl SubtitlePipeline {
     /// Slint 画完一轮场景后归还本帧的输出槽位。
     pub(crate) fn after_rendering(&mut self) {
         self.compositor.after_rendering();
+    }
+
+    /// 测试出口：本帧用掉的输出纹理，供无头像素校验回读。
+    #[cfg(test)]
+    pub(crate) fn target_textures(&self) -> impl Iterator<Item = &wgpu::Texture> {
+        self.compositor.target_textures()
     }
 
     /// 释放 GPU 资源（渲染器销毁时）。

@@ -78,6 +78,20 @@ impl Renderer {
         self.size
     }
 
+    /// 换脚本字节，渲染轨不重建：libass 只把新字节重新解析成一份轨道，字体提供器
+    /// 与字形缓存原样留着。渲染帧尺寸（`size`）记在渲染器上，换脚本不动它。
+    ///
+    /// 换完之后调用方要把这一帧当作有变化：`render` 的 `changed` 是 libass 比较
+    /// 前后两次字形块列表得出的，内容恰好相同的新脚本不会报变化。
+    pub fn set_script(&mut self, script: &[u8]) -> Result<()> {
+        self.inner
+            .load_script(script, None)
+            .map_err(|error| RenderError {
+                message: error.to_string(),
+            })?;
+        Ok(())
+    }
+
     /// 换渲染帧尺寸。脚本里的 `PlayResX/Y` 不动，libass 因此给出「同一份排版的
     /// 整体缩放」：字形按新尺寸重新光栅化，位置与比例按新/旧排版倍率缩放。
     /// 比 `from_script` 重建省掉重新解析脚本。返回 false 表示尺寸没变。

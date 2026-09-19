@@ -4,6 +4,7 @@
 //! 这里刻意不走 `SubtitlePipeline`（它只做「脚本字节 → 出帧」的调度），而是
 //! `Renderer` + `SubtitleCompositor` 两段真实生产代码直接串起来，然后回读整帧。
 //! 覆盖的是只有 GPU 才能发现的问题：usage 位不足、投影符号、三角形朝向、图集行距。
+//! 唯一走通路本身的是末尾那条 `a_new_script_reaches_the_next_frame`，它要验的正是调度。
 //!
 //! 对账用「内容包围盒」而不是图块的名义盒：见 `covered_bounds` 的说明。
 
@@ -13,12 +14,16 @@ use aweft_ass::render::{Renderer, Tile};
 use slint::wgpu_30::wgpu;
 
 use super::compositor::{Composition, SubtitleCompositor};
-use super::pipeline::raster_size;
+use super::pipeline::{SubtitlePipeline, raster_size};
 use crate::render::video_sink::WgpuHandles;
 use crate::render::wgpu_test_support::{headless_wgpu, readback_rgba};
 
 const FRAME_W: u32 = 640;
 const FRAME_H: u32 = 360;
+
+/// 覆盖层在屏幕上的物理尺寸：与排版尺寸相等 ⇒ `raster_size` 停在 1 倍档，
+/// 走通路的测试因此和上面直连合成器的测试对同一张整帧对账。
+const ON_SCREEN: (f32, f32) = (FRAME_W as f32, FRAME_H as f32);
 
 /// 一行带 `\pos` 的字幕。样式对齐 2（底部居中），所以墨迹的下边界≈锚点 y、
 /// 水平中心≈锚点 x。锚点刻意取在非居中的 (160,300)：任何一轴的翻转或偏移都会
@@ -289,5 +294,81 @@ fn raster_size_buckets_up_and_stays_inside_the_limits() {
     assert!(
         (ratio - 1920.0 / 1080.0).abs() < 0.01,
         "钳完把画面比例钳变了: {huge:?}（{ratio}）"
+    );
+}
+
+/// 把 `SCRIPT` 里那行的 `\pos` 锚点换成给定坐标。返回的字节必定与 `SCRIPT` 不同
+/// （调用处再断一次），所以「替换没命中」不会伪装成一次有效对照。
+fn script_anchored_at(x: i32, y: i32) -> Vec<u8> {
+    let text = String::from_utf8(SCRIPT.to_vec()).expect("SCRIPT 是 UTF-8");
+    let moved = text.replace(r"{\pos(160,300)}", &format!(r"{{\pos({},{})}}", x, y));
+    assert_ne!(moved, text, "SCRIPT 里找不到待替换的 \\pos 锚点");
+    moved.into_bytes()
+}
+
+/// `SubtitlePipeline` 的调度：换脚本必须落到下一帧，静止时不得白占 GPU。
+/// 上面的像素校验都直连 `Renderer` + `SubtitleCompositor`，只有这条走通路本身。
+#[test]
+fn a_new_script_reaches_the_next_frame() {
+    let handles = handles();
+    let (device, queue) = (handles.1.clone(), handles.2.clone());
+    let mut pipeline = SubtitlePipeline::new(&handles);
+
+    pipeline.set_script(SCRIPT.to_vec());
+    assert!(
+        matches!(
+            pipeline
+                .render_at(1_000, (FRAME_W, FRAME_H), ON_SCREEN)
+                .expect("出帧失败"),
+            Composition::Frame(_)
+        ),
+        "首帧应当交出一帧纹理"
+    );
+    pipeline.after_rendering();
+    let first = {
+        let textures: Vec<&wgpu::Texture> = pipeline.target_textures().collect();
+        ink_bounds(
+            &readback_rgba(&device, &queue, textures[0], FRAME_W, FRAME_H),
+            FRAME_W,
+            FRAME_H,
+        )
+    }
+    .expect("第一帧没有墨迹");
+
+    // 换脚本不换渲染器：新锚点必须出现在下一帧上
+    pipeline.set_script(script_anchored_at(400, 120));
+    assert!(
+        matches!(
+            pipeline
+                .render_at(1_000, (FRAME_W, FRAME_H), ON_SCREEN)
+                .expect("换脚本后出帧失败"),
+            Composition::Frame(_)
+        ),
+        "换了脚本的那一帧必须重新合成"
+    );
+    pipeline.after_rendering();
+    let second = {
+        let textures: Vec<&wgpu::Texture> = pipeline.target_textures().collect();
+        ink_bounds(
+            &readback_rgba(&device, &queue, textures[0], FRAME_W, FRAME_H),
+            FRAME_W,
+            FRAME_H,
+        )
+    }
+    .expect("换脚本后的帧没有墨迹");
+    assert!(
+        second.1 < first.1 - 100 && second.0 > first.0 + 100,
+        "换脚本后墨迹没有跟到新锚点 (400,120)：前 {first:?}，后 {second:?}"
+    );
+
+    // 同一时刻、同一脚本再出一次：libass 报未变化，通路就不该再占 GPU
+    assert!(
+        matches!(
+            pipeline
+                .render_at(1_000, (FRAME_W, FRAME_H), ON_SCREEN)
+                .expect("出帧失败"),
+            Composition::Skipped
+        ),
+        "静止的同一帧被重复合成了"
     );
 }
