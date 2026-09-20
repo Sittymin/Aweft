@@ -58,15 +58,10 @@ pub fn op_node_graph_chain(store: &mut AppStore, tags: &[Tag]) {
         if let Tag::NodeGraph { kind, change } = tag
             && let NodeGraphChange::ChainSwitched { target } = change
         {
-            // 派生链菜单 + 设当前链 + （应用链套默认四列布局）+ 全量重建
+            // 派生链菜单 + 设当前链 + 全量重建（位置按连线拓扑平铺）
             store.refresh_chain_menus();
             store.set_current_chain(*kind, *target);
-            store.with_graph(*kind, |editor, mut access| {
-                if matches!(kind, crate::depsgraph::NodeGraphKind::App) {
-                    access.set_default_layout(editor);
-                }
-                access.rebuild(editor);
-            });
+            store.with_graph(*kind, |editor, access| access.rebuild(editor));
         }
     }
 }

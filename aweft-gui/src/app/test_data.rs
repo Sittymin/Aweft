@@ -239,7 +239,62 @@ mod tests {
             - ys.iter().fold(f64::MAX, |acc, &y| acc.min(y));
         assert!(
             span > 100.0,
-            "端点纵向跨度应达排版高度的成（>100px），实际 {span}: {ys:?}"
+            "端点纵向跨度应超过排版高度的一成（>100px），实际 {span}: {ys:?}"
         );
+    }
+
+    /// 播种链装进编辑器后的排布：连线一律从左指向右，且没有两个节点叠在一起。
+    /// 旧的硬编码四列布局不认识布尔常量/应用动画（`_ => continue`），把它们排在了
+    /// 上下文输入/样式链引用原来的坐标上——现在位置只由连线拓扑推导。
+    #[test]
+    fn seeded_chain_lays_out_by_links_without_overlap() {
+        use slint::Model;
+
+        i_slint_backend_testing::init_no_event_loop();
+        let instance = crate::bridge::types::MainWindow::new().unwrap();
+        let mut store = AppStore::new(&instance);
+        create_test_subtitle_animation(&mut store);
+        store.initialize_node_graph_editors(&instance);
+
+        let editor = &store.ui_models.app_graph;
+        let nodes: Vec<(String, f32, f32)> = (0..editor.nodes.row_count())
+            .map(|i| {
+                let row = editor.nodes.row_data(i).unwrap();
+                (row.title.as_str().to_string(), row.x, row.y)
+            })
+            .collect();
+        assert!(nodes.len() >= 5, "播种链节点数 {}", nodes.len());
+
+        // 同列（横向间距小于节点宽）的节点，纵向至少差一行——完全重合是最刺眼的那种重叠。
+        let min_row = editor.metrics.header + editor.metrics.row;
+        for (i, a) in nodes.iter().enumerate() {
+            for b in nodes.iter().skip(i + 1) {
+                assert!(
+                    (a.1 - b.1).abs() >= editor.metrics.node_width || (a.2 - b.2).abs() >= min_row,
+                    "{} ({}, {}) 与 {} ({}, {}) 重叠",
+                    a.0,
+                    a.1,
+                    a.2,
+                    b.0,
+                    b.1,
+                    b.2
+                );
+            }
+        }
+
+        assert!(editor.links.row_count() > 0, "播种链应有连线");
+        for i in 0..editor.links.row_count() {
+            let link = editor.links.row_data(i).unwrap();
+            let from = editor.nodes.row_data(link.from_node as usize).unwrap();
+            let to = editor.nodes.row_data(link.to_node as usize).unwrap();
+            assert!(
+                from.x < to.x,
+                "连线 {}→{} 从右指向左（{} ≥ {}）",
+                from.title,
+                to.title,
+                from.x,
+                to.x
+            );
+        }
     }
 }
