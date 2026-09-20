@@ -3,7 +3,7 @@
 //! 预览把这里产出的 `ASSFile` 经 `ASSFile::to_bytes` 交给 libass，导出把同一份
 //! `ASSFile` 写成文件。两条路出自同一个内存结构，字节不会分叉。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use aweft_ass::types::event::{Dialogue, Event, TextSegment};
 use aweft_ass::types::style::StyleWithoutName;
@@ -11,7 +11,7 @@ use aweft_ass::types::tags::StyleTag;
 use aweft_ass::types::time::AssTime;
 use aweft_ass::types::ASSFile;
 use aweft_model::application_graph::{ApplicationError, ApplicationGraphMatch, LineContext};
-use aweft_model::ids::{ItemId, NodeGraphId};
+use aweft_model::ids::{AnimDataId, ItemId, NodeGraphId};
 use aweft_model::library::ProjectLibrary;
 use aweft_model::node_graph::style::StyleResult;
 use aweft_model::node_graph::EvalContext;
@@ -29,10 +29,27 @@ const DEFAULT_STYLE: &str = "Default";
 ///
 /// `frame_size` 是渲染帧尺寸（视口侧取主视频的显示像素尺寸），写进
 /// `[Script Info]` 的 PlayResX/PlayResY；libass 按它解释边距与对齐锚点。
+///
+/// 一次性转换用这个。界面那样反复转换同一个工程请用 [`sequence_to_ass_with_cache`]：
+/// 逐行拟合结果留在调用方的 [`SequenceFitCache`] 里，挪动一行不必把整个序列重拟合一遍。
 pub fn sequence_to_ass(
     project: &mut Project,
     frame_size: (u32, u32),
     opts: &ConvertOptions,
+) -> Result<ASSFile, ApplicationError> {
+    let mut cache = SequenceFitCache::default();
+    sequence_to_ass_with_cache(project, frame_size, opts, &mut cache)
+}
+
+/// [`sequence_to_ass`] 的复用版：拟合结果在 `cache` 里跨调用留存。
+///
+/// 命中条件是「这一行拟合所依赖的输入一个都没变」，判定见 [`LineFitKey`]，所以输出与
+/// 不带缓存时逐字节相同。缓存按内容指纹自我失效，调用方不需要在编辑之后手动清理。
+pub fn sequence_to_ass_with_cache(
+    project: &mut Project,
+    frame_size: (u32, u32),
+    opts: &ConvertOptions,
+    cache: &mut SequenceFitCache,
 ) -> Result<ASSFile, ApplicationError> {
     // 拆开借用：sequence 全程只读，而 node_graphs 与 style_layer 求值时要写各自
     // 的求值缓存（NodeGraph::evaluate 与 ApplicationLayer::evaluate_matches 都收 &mut self）。
@@ -44,6 +61,7 @@ pub fn sequence_to_ass(
     } = project;
 
     let style_results = evaluate_style_results(library)?;
+    cache.begin_run(animation_library_text(library));
 
     let mut ass = ASSFile::new();
     ass.script_info.layout_res_x = frame_size.0;
@@ -51,12 +69,13 @@ pub fn sequence_to_ass(
     ass.styles
         .insert(DEFAULT_STYLE.to_string(), StyleWithoutName::default());
 
-    for (index, event) in visible_events(sequence).into_iter().enumerate() {
+    let mut seen = Vec::new();
+    for (index, (item_id, event)) in visible_events(sequence).into_iter().enumerate() {
         let duration = event.end_time - event.start_time;
         if duration <= TimeDelta::zero() {
             continue;
         }
-        let duration_ms = duration.num_milliseconds() as f64;
+        let duration_ms = duration.num_milliseconds();
         let start_ms = event.start_time.num_milliseconds() as f64;
 
         let matches = style_layer.evaluate_matches(
@@ -67,29 +86,47 @@ pub fn sequence_to_ass(
             },
             &style_results,
         )?;
-        let converted = match_to_ass_tags(
-            &merge_matches(matches),
-            &library.animation_library,
+        let merged = merge_matches(matches);
+        let key = LineFitKey {
+            style: merged.style.clone(),
+            animation: merged.animation,
+            duration_ms,
             frame_size,
-            duration_ms / 1000.0,
-            opts,
-        );
-        if !converted.fallbacks.is_empty() {
+            tolerance: opts.error_tolerance.to_bits(),
+        };
+        seen.push(item_id);
+        let hit = cache
+            .get(item_id, &key)
+            .map(|entry| (entry.segments.clone(), entry.fallbacks));
+        let (mut segments, fallbacks) = match hit {
+            Some(hit) => hit,
+            None => {
+                let converted = match_to_ass_tags(
+                    &merged,
+                    &library.animation_library,
+                    frame_size,
+                    duration_ms as f64 / 1000.0,
+                    opts,
+                );
+                let fallbacks = converted.fallbacks.len();
+                cache.put(item_id, key, &converted.segments, fallbacks);
+                (converted.segments, fallbacks)
+            }
+        };
+        if fallbacks > 0 {
             log::warn!(
-                "字幕行 {:?} 有 {} 处动画无法表达成 ASS 标签，这些帧不进脚本",
-                event.text,
-                converted.fallbacks.len()
+                "字幕行 {:?} 有 {fallbacks} 处动画无法表达成 ASS 标签，这些帧不进脚本",
+                event.text
             );
         }
 
         let text = ass_text(&event.text);
-        let mut segments = converted.segments;
         if segments.is_empty() {
             // 既无样式基线也无动画时 match_to_ass_tags 返回空段（animate_to_ass.rs:331），
             // 补一个覆盖整行的空标签段，这一行才不会从脚本里消失。
             segments.push(TimedTags {
                 start_ms: 0.0,
-                end_ms: duration_ms,
+                end_ms: duration_ms as f64,
                 tags: Vec::new(),
             });
         }
@@ -103,7 +140,95 @@ pub fn sequence_to_ass(
         }
     }
 
+    cache.end_run(&seen);
     Ok(ass)
+}
+
+/// 一行拟合结果的键：`match_to_ass_tags` 读到的全部输入。
+///
+/// 不含行的起始时间——标签段是行内相对时间（`sequence_to_ass_with_cache` 加上起始），
+/// 所以整行平移时这一项不变，缓存直接命中。动画只记引用 id，内容改动由
+/// [`animation_library_text`] 那一层兜住。
+#[derive(Debug, Clone, PartialEq)]
+struct LineFitKey {
+    style: StyleResult,
+    animation: Option<AnimDataId>,
+    /// 行时长，整毫秒。`match_to_ass_tags` 拿到的是它除以 1000，二者一一对应。
+    duration_ms: i64,
+    frame_size: (u32, u32),
+    /// 误差容限的位型：拟合判据本身，换容限必须重拟合。
+    tolerance: u64,
+}
+
+/// 一份缓存的行拟合：行内相对时间的标签段，加上转不出标签的帧数（只用于告警）。
+struct CachedLineFit {
+    key: LineFitKey,
+    segments: Vec<TimedTags>,
+    fallbacks: usize,
+}
+
+/// 跨多次 [`sequence_to_ass_with_cache`] 留存的逐行拟合结果。
+///
+/// 界面每动一次字幕就重转整个工程，而行与行的拟合互不影响（每行自配一个
+/// `Cursor::from_style`，animate_to_ass.rs:363）。把这个 map 放在拟合线程上，改动一行
+/// 就只重拟合那一行：其余行的键没变，直接复用。
+///
+/// 自我失效，调用方不需要清理：动画库内容变了整份丢掉（[`animation_library_text`]），
+/// 样式、时长、帧尺寸、容限变了那一行的键对不上，行删了随 [`Self::end_run`] 剪掉。
+#[derive(Default)]
+pub struct SequenceFitCache {
+    lines: HashMap<ItemId, CachedLineFit>,
+    /// 上次拟合时的动画库内容；对不上就把整份缓存丢掉。
+    library_text: String,
+    /// 本次转换真正跑了拟合的行数，界面上「重拟合几行」读它。
+    refits: usize,
+}
+
+impl SequenceFitCache {
+    fn begin_run(&mut self, library_text: String) {
+        if library_text != self.library_text {
+            self.lines.clear();
+        }
+        self.library_text = library_text;
+        self.refits = 0;
+    }
+
+    fn get(&self, item_id: ItemId, key: &LineFitKey) -> Option<&CachedLineFit> {
+        self.lines.get(&item_id).filter(|entry| &entry.key == key)
+    }
+
+    fn put(&mut self, item_id: ItemId, key: LineFitKey, segments: &[TimedTags], fallbacks: usize) {
+        self.refits += 1;
+        self.lines.insert(
+            item_id,
+            CachedLineFit {
+                key,
+                segments: segments.to_vec(),
+                fallbacks,
+            },
+        );
+    }
+
+    /// 丢掉本次没再出现的行：删掉的、隐藏掉的，还有粘贴出来的新 id 都从这里出清。
+    fn end_run(&mut self, seen: &[ItemId]) {
+        let seen: HashSet<ItemId> = seen.iter().copied().collect();
+        self.lines.retain(|item_id, _| seen.contains(item_id));
+    }
+
+    /// 最近一次转换里实际重跑拟合的行数。等于行数就是全量重拟合，0 表示全部复用。
+    pub fn refits(&self) -> usize {
+        self.refits
+    }
+}
+
+/// 动画库内容的判据。拟合读的就是这一份数据（`anim_datas` 与它引用的 `actions`），
+/// 而行 id 在改关键帧时不变，所以只能按内容判新旧。
+///
+/// 取派生的 `Debug` 文本并整份留着逐字比对：`AnimationLibrary` 的两个容器都是
+/// `BTreeMap`（按 id 有序，library.rs:18 就是为这个写的），成员类型一律 derive(Debug)，
+/// 所以新增字段自动进判据，不会漏掉一类编辑，也不存在哈希撞车留下的旧结果。
+fn animation_library_text(library: &ProjectLibrary) -> String {
+    format!("{:?}", library.animation_library)
 }
 
 /// 预先求值所有样式链：应用图的 AppRef 节点按被引用图的求值结果取样式
@@ -122,19 +247,24 @@ fn evaluate_style_results(
 ///
 /// 只按字幕行自身的 `visible` 过滤：分组的 `visible` 目前只作用于分组头那一行
 /// 自己的显示（aweft-gui/src/store/sequence_rows_model.rs:643,674），不向子项传播。
-fn visible_events(sequence: &Sequence) -> Vec<&EventData> {
+/// 带上 `ItemId` 是因为逐行拟合缓存按它存。
+fn visible_events(sequence: &Sequence) -> Vec<(ItemId, &EventData)> {
     let mut out = Vec::new();
     collect_events(&sequence.root_items, sequence, &mut out);
     out
 }
 
-fn collect_events<'a>(ids: &'a [ItemId], sequence: &'a Sequence, out: &mut Vec<&'a EventData>) {
+fn collect_events<'a>(
+    ids: &'a [ItemId],
+    sequence: &'a Sequence,
+    out: &mut Vec<(ItemId, &'a EventData)>,
+) {
     for id in ids {
         let Some(item) = sequence.get(*id) else {
             continue;
         };
         match &item.content {
-            ItemContent::Event(event) if item.visible => out.push(event),
+            ItemContent::Event(event) if item.visible => out.push((*id, event)),
             ItemContent::Group(group) => collect_events(&group.children, sequence, out),
             _ => {}
         }
@@ -315,5 +445,156 @@ mod tests {
             dialogue_lines(&script_text(&mut project)),
             vec![r"Dialogue:0,0:00:00.00,0:00:01.00,Default,,0,0,0,,上\N下"],
         );
+    }
+
+    /// 带缓存的那条路，界面上的拟合线程走的就是它。
+    fn script_text_cached(project: &mut Project, cache: &mut SequenceFitCache) -> String {
+        let opts = ConvertOptions::default();
+        let ass = sequence_to_ass_with_cache(project, (1920, 1080), &opts, cache).unwrap();
+        String::from_utf8(ass.to_bytes().unwrap()).unwrap()
+    }
+
+    /// 把一行的两端一起挪：时长不变，只有起始时间动。
+    fn shift_row(project: &mut Project, id: ItemId, delta_ms: i64) {
+        row_times(project, id, delta_ms, delta_ms);
+    }
+
+    fn row_times(project: &mut Project, id: ItemId, start_delta_ms: i64, end_delta_ms: i64) {
+        let ItemContent::Event(row) = &mut project.sequence.get_mut(id).unwrap().content else {
+            unreachable!()
+        };
+        row.start_time += TimeDelta::milliseconds(start_delta_ms);
+        row.end_time += TimeDelta::milliseconds(end_delta_ms);
+    }
+
+    /// 三份行、一份缓存。第一遍每行都得拟合；之后只挪其中一行，一行都不必重拟合——
+    /// 标签段是行内相对时间，起始时间在外面加上去。
+    #[test]
+    fn shifting_rows_reuses_every_fit() {
+        let mut project = Project::new();
+        let a = project
+            .sequence
+            .create_event(event(0, 1000, "甲"), ItemLocation::Root(0))
+            .unwrap();
+        let b = project
+            .sequence
+            .create_event(event(2000, 3500, "乙"), ItemLocation::Root(1))
+            .unwrap();
+        project
+            .sequence
+            .create_event(event(5000, 6000, "丙"), ItemLocation::Root(2))
+            .unwrap();
+
+        let mut cache = SequenceFitCache::default();
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 3, "第一遍没有可复用的结果");
+
+        shift_row(&mut project, a, 500);
+        shift_row(&mut project, b, -750);
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 0, "纯平移不该重拟合任何一行");
+    }
+
+    /// 缓存不能改变结果：热缓存下挪出来的脚本与从零算一遍逐字节相同。
+    #[test]
+    fn cached_script_is_the_same_script_as_a_cold_run() {
+        let build = || {
+            let mut project = Project::new();
+            let id = project
+                .sequence
+                .create_event(event(0, 1000, "甲"), ItemLocation::Root(0))
+                .unwrap();
+            project
+                .sequence
+                .create_event(event(2000, 2500, "乙"), ItemLocation::Root(1))
+                .unwrap();
+            (project, id)
+        };
+
+        let (mut cold, id) = build();
+        shift_row(&mut cold, id, 1500);
+        let cold_text = script_text(&mut cold);
+
+        let (mut warm, id) = build();
+        let mut cache = SequenceFitCache::default();
+        script_text_cached(&mut warm, &mut cache);
+        shift_row(&mut warm, id, 1500);
+        assert_eq!(script_text_cached(&mut warm, &mut cache), cold_text);
+    }
+
+    /// 只改一行的时长：那一行的键变了，其余行照常复用。
+    #[test]
+    fn resizing_one_row_refits_only_that_row() {
+        let mut project = Project::new();
+        let a = project
+            .sequence
+            .create_event(event(0, 1000, "甲"), ItemLocation::Root(0))
+            .unwrap();
+        project
+            .sequence
+            .create_event(event(2000, 3000, "乙"), ItemLocation::Root(1))
+            .unwrap();
+
+        let mut cache = SequenceFitCache::default();
+        script_text_cached(&mut project, &mut cache);
+        row_times(&mut project, a, 0, 800);
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 1, "改时长只重拟合被改的那一行");
+    }
+
+    /// 动画库内容变了，行自身的键一个都没动，也必须是全量重拟合：拟合读的就是这份
+    /// 数据，而行 id 在改关键帧时不变。
+    #[test]
+    fn animation_library_edits_invalidate_every_row() {
+        use aweft_model::animation::action::Action;
+        use aweft_model::ids::ActionId;
+
+        let mut project = Project::new();
+        project
+            .sequence
+            .create_event(event(0, 1000, "甲"), ItemLocation::Root(0))
+            .unwrap();
+        project
+            .sequence
+            .create_event(event(2000, 3000, "乙"), ItemLocation::Root(1))
+            .unwrap();
+
+        let mut cache = SequenceFitCache::default();
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 2);
+
+        project.library.animation_library.insert_action(Action {
+            id: ActionId::new(),
+            name: "新动作".to_string(),
+            duration: 1.0,
+            curves: Vec::new(),
+        });
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 2, "动画库变了要逐行重来");
+    }
+
+    /// 不参与渲染的行要从缓存里出清，否则重新显示它会拿到一份没人要的结果；
+    /// 邻居不受影响。
+    #[test]
+    fn hidden_rows_leave_the_cache() {
+        let mut project = Project::new();
+        project
+            .sequence
+            .create_event(event(0, 1000, "甲"), ItemLocation::Root(0))
+            .unwrap();
+        let hidden = project
+            .sequence
+            .create_event(event(2000, 3000, "乙"), ItemLocation::Root(1))
+            .unwrap();
+
+        let mut cache = SequenceFitCache::default();
+        script_text_cached(&mut project, &mut cache);
+        project.sequence.get_mut(hidden).unwrap().visible = false;
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 0, "藏起来的行的邻居不必重拟合");
+
+        project.sequence.get_mut(hidden).unwrap().visible = true;
+        script_text_cached(&mut project, &mut cache);
+        assert_eq!(cache.refits(), 1, "重新显示的那一行要重拟合，另一行仍复用");
     }
 }

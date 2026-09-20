@@ -114,18 +114,20 @@ pub enum ProgressEvent {
         /// 通道没有意义。
         curve_samples: Vec<(f64, f64)>,
     },
-    /// 生产路径的轻量推进事件：`end` 走到格点 `end`，共 `n` 个。
-    DpProgress { end: usize, n: usize },
-    /// 对固定 end 完成了一次评估：valid 记录每个 start 是否合法
-    DpStep {
+    /// DP 走完一个格点 `end`：进度、本格选出的起点，以及（诊断详略下）本格逐起点的
+    /// 有效性判据。
+    DpProgress {
+        /// 当前格点，取值 `1..=n`。
         end: usize,
-        /// 该 end 下，各 start 的有效性（长度 = end）
-        valid: Vec<bool>,
-        /// DP 为该 end 选择的最优起点（如果有）
+        /// 区间总数，与 `ActionStarted.n` 相同。
+        n: usize,
+        /// DP 为该 `end` 选出的起点，即最终 `parent[end]`；`None` 表示本格还不可达。
+        /// `end` 的起点一旦定案就不再改写，所以按 `end` 顺序记下一份 `chosen` 就能
+        /// 在消费端重建出已锁定的前缀路径，不必每格传整条链。
         chosen: Option<usize>,
-        /// 当前已确定的最优前缀路径：parent[end] 是 end 的起点，
-        /// 沿 parent 链可回溯到 0。用于实时显示已锁定的段。
-        parent_chain: Vec<usize>,
+        /// 该 `end` 下各起点的有效性：`valid[start]` 为真表示该段误差达标，
+        /// 长度 = `end`。只有 `ProgressDetail::Diagnostic` 才填，Light 下为空。
+        valid: Vec<bool>,
     },
     /// DP 完成，`path` 是最终分段路径
     SegmentsFound { path: Vec<(usize, usize)> },
@@ -134,11 +136,12 @@ pub enum ProgressEvent {
 /// 进度事件的详细程度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProgressDetail {
-    /// 界面够用的那一组：动作名、DP 推进、最终路径。
+    /// 界面够用的那一组：动作名、DP 推进（含本格起点）、最终路径。DP 走的是
+    /// 与不发进度时同一条实现，只是每格多一次 channel 发送。
     #[default]
     Light,
-    /// 每个 `end` 附带全部起点的有效性判据与已锁定路径，供调试可视化（`live_dp`）。
-    /// 每个 `end` 额外分配两份 O(n) 表，比生产路径明显更慢。
+    /// `DpProgress.valid` 额外带上该格全部起点的有效性判据，供画有效性色带
+    /// （`live_dp` 与字幕拟合遮罩用它）。每格多分配一张布尔表，`is_valid` 次数不变。
     Diagnostic,
 }
 
@@ -248,11 +251,13 @@ impl Cursor {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct AnimAssResult {
     pub segments: Vec<TimedTags>,
     pub fallbacks: Vec<(f64, Vec<StyleTag>)>,
 }
 
+#[derive(Debug, Clone)]
 pub struct TimedTags {
     pub start_ms: f64,
     pub end_ms: f64,
@@ -1200,8 +1205,7 @@ mod tests {
     }
 
     /// 轻量进度事件是界面遮罩唯一的输入：每条动画一份曲线图、按格点推进到满格、收尾
-    /// 给出分段路径，而且不带调试版那种每格点两份 O(n) 表的 `DpStep`。发不发进度不得
-    /// 改变转换结果。
+    /// 给出分段路径，而且不带调试版那张逐起点有效性表。发不发进度不得改变转换结果。
     #[test]
     fn light_progress_events_drive_the_ui_overlay() {
         let keyframes = &[(0.0, 40.0), (0.5, 60.0), (1.0, 40.0)];
@@ -1255,11 +1259,69 @@ mod tests {
             "收尾要给出最终分段路径"
         );
         assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, ProgressEvent::DpStep { .. })),
-            "轻量模式不该发调试用的 DpStep"
+            events.iter().all(
+                |event| !matches!(event, ProgressEvent::DpProgress { valid, .. } if !valid.is_empty())
+            ),
+            "轻量模式不该带逐起点有效性表"
         );
+    }
+
+    /// 诊断详略下界面拿两样东西：逐起点有效性表画色带，本格起点画候选段。
+    /// 已锁定路径不随事件传，消费端按 `end` 顺序记 `chosen` 自己回溯——这条测试就是
+    /// 在钉住「记下来的链」和「最终导出的路径」是同一份东西。
+    #[test]
+    fn diagnostic_progress_rebuilds_the_final_path() {
+        let keyframes = &[(0.0, 40.0), (0.5, 60.0), (1.0, 40.0)];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opts = ConvertOptions {
+            progress_sender: Some(sender),
+            progress_detail: ProgressDetail::Diagnostic,
+            ..Default::default()
+        };
+        let _ = convert_curves_with(
+            vec![linear_curve(PropertyPath::FontSize, keyframes)],
+            LAYOUT,
+            &opts,
+        );
+        let events: Vec<ProgressEvent> = receiver.try_iter().collect();
+
+        let mut parents: Vec<usize> = Vec::new();
+        let mut n = 0;
+        let mut final_path = Vec::new();
+        for event in &events {
+            match event {
+                ProgressEvent::DpProgress {
+                    end,
+                    n: en,
+                    chosen,
+                    valid,
+                } => {
+                    assert!(
+                        !valid.is_empty(),
+                        "诊断详略下第 {end} 格要带有效性表，实际长度 {}",
+                        valid.len()
+                    );
+                    assert_eq!(valid.len(), *end, "有效性表逐起点，长度 = end");
+                    parents.push(chosen.unwrap_or(usize::MAX));
+                    assert_eq!(parents.len(), *end, "每格报一次、按序报");
+                    n = *en;
+                }
+                ProgressEvent::SegmentsFound { path } => final_path = path.clone(),
+                _ => {}
+            }
+        }
+        assert_eq!(parents.len(), n, "报满 {n} 格");
+
+        let mut rebuilt = Vec::new();
+        let mut end = n;
+        while end != 0 {
+            let start = parents[end - 1];
+            assert_ne!(start, usize::MAX, "格点 {end} 不可达，链回溯不回去");
+            rebuilt.push((start, end));
+            end = start;
+        }
+        rebuilt.reverse();
+        assert_eq!(rebuilt, final_path, "按 chosen 重建的链就是导出用的路径");
     }
 
     /// 可重复的拟合开销测量：与初始化播种的「上下浮动」同形（贝塞尔往复 + 分数位置）。

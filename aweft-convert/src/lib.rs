@@ -5,5 +5,5 @@ pub use animate_to_ass::{
 };
 pub mod parse_srt;
 pub mod sequence_to_ass;
-pub use sequence_to_ass::sequence_to_ass;
+pub use sequence_to_ass::{SequenceFitCache, sequence_to_ass, sequence_to_ass_with_cache};
 pub(crate) mod segmentation;

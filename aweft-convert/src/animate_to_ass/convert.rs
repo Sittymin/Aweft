@@ -28,7 +28,7 @@ use super::{
     curve_global_range, has_modifiers, try_build_segment,
 };
 use crate::segmentation::{
-    UniformGrid, diagnostic_min_segmentation, force_single_step_path, min_segmentation,
+    UniformGrid, force_single_step_path, min_segmentation, min_segmentation_traced,
     reconstruct_path,
 };
 
@@ -209,7 +209,7 @@ fn convert_action_strip(
     };
 
     let mut parent = match &opts.progress_sender {
-        None => min_segmentation(grid.len(), is_valid, |_| {}),
+        None => min_segmentation(grid.len(), is_valid, |_, _| {}),
         Some(sender) => {
             // 曲线图取全局摆幅最大的那条通道：读第一条的话，一个只有 Y 在动的上下浮动
             // 会画成一根平线，图上根本看不出拟合的是什么。
@@ -236,19 +236,26 @@ fn convert_action_strip(
             });
             let n = grid.len();
             let s = sender.clone();
-            let result = if opts.progress_detail == ProgressDetail::Diagnostic {
-                diagnostic_min_segmentation(
-                    n, is_valid,
-                    move |end, valid, chosen, parent_chain| {
-                        let _ = s.send(ProgressEvent::DpStep { end, valid, chosen, parent_chain });
-                    },
-                )
-            } else {
-                min_segmentation(n, is_valid, move |end| {
-                    let _ = s.send(ProgressEvent::DpProgress { end, n });
+            let diagnostic = opts.progress_detail == ProgressDetail::Diagnostic;
+            if diagnostic {
+                min_segmentation_traced(n, is_valid, move |end, valid, chosen| {
+                    let _ = s.send(ProgressEvent::DpProgress {
+                        end,
+                        n,
+                        chosen,
+                        valid: valid.to_vec(),
+                    });
                 })
-            };
-            result
+            } else {
+                min_segmentation(n, is_valid, move |end, chosen| {
+                    let _ = s.send(ProgressEvent::DpProgress {
+                        end,
+                        n,
+                        chosen,
+                        valid: Vec::new(),
+                    });
+                })
+            }
         }
     };
     if parent[n] == usize::MAX {

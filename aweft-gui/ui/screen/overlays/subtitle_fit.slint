@@ -1,18 +1,53 @@
-// 字幕拟合遮罩：编脚本时的 DP 分段在后台线程跑，跑完之前用整屏遮罩挡住其余操作。
-// 卡片中间显示正在拟合哪条动画、这条动画的分段进度，以及被拟合的那条曲线与已定
-// 分段边界。两条曲线都是 Rust 拼好的 `Path.commands` 字符串，坐标已归一到 0..100 ×
-// 0..40 的 viewbox：Slint 的 Path 子元素不支持 `for` 重复（compile_paths.rs 直接报错），
-// 数据驱动的折线只能走 commands 字符串。
+// 字幕拟合遮罩：编脚本的 DP 分段跑在后台线程，跑完之前用整屏遮罩挡住其余操作。
+// 卡片里画的就是那条正在分段的曲线，画法是 `aweft-convert/examples/live_dp.rs` 那一套：
+// 曲线 + 坐标网格 + 底部有效性色带 + 当前格点（黄）+ 本格候选段（绿）+ 已锁定分段（蓝），
+// 收尾再把最终分段逐段着色。
+//
+// 数据驱动的线全部走 `Path.commands` 字符串：Slint 的 `Path` 子元素不支持 `for` 重复
+// （`compile_paths.rs` 直接报错）。Rust 侧把坐标统一归一到 0..1000 × 0..400 的 viewbox，
+// 与下面每个 `Path` 的 `viewbox-width/-height` 一致。`stroke-width` 是元素坐标里的
+// 逻辑长度（items/path.rs:49），不随 viewbox 缩放。
+//
+// 最终分段那几根彩色边界与底色用 Rectangle 画（`for`  repeater 在 Rectangle 上是允许
+// 的），因为它们要逐段换颜色，而一个 `Path` 只有一种描边色。
+
+/// 收尾时的一个最终分段：横向占据 [x0, x1]（绘图区宽度的比例，0..=1）。
+export struct FitSegmentInfo {
+    x0: float,
+    x1: float,
+    color: color,
+}
 
 export struct SubtitleFitOverlayData {
     // 正在拟合的动画名
     action-name: string,
+    // 状态行：这条动画推进到第几格、多少起点达标、锁了几段
+    stats: string,
     // 当前这条动画的 DP 推进（0..=100，Rust 侧已钳好）
     percent: int,
-    // 曲线折线（viewbox 100×40）
+
+    // 坐标网格 + 每 n/16 一根参考竖线（每条动画算一次）
+    grid-commands: string,
+    // 被拟合的那条曲线（每条动画算一次）
     curve-commands: string,
-    // 已定分段的边界竖线（同一 viewbox）
-    bounds-commands: string,
+    // 底部有效性色带：达标起点绿、不达标红（每格点重算）
+    ribbon-valid-commands: string,
+    ribbon-invalid-commands: string,
+    // 已锁定的分段边界（蓝）与它们的底色（半透明）
+    locked-commands: string,
+    span-commands: string,
+    // 当前格点 `end`（黄）与本格 DP 选出的候选段（绿）
+    end-commands: string,
+    chosen-commands: string,
+    chosen-span-commands: string,
+    // 两根标签线的横向位置（绘图区宽度比例）与文字
+    end-fraction: float,
+    end-label: string,
+    chosen-fraction: float,
+    chosen-label: string,
+
+    // 收尾：最终分段路径，逐段着色（结构体里的数组字段在 Rust 侧是 `ModelRc`）
+    segments: [FitSegmentInfo],
 }
 
 export component SubtitleFitOverlay inherits Rectangle {
@@ -36,77 +71,189 @@ export component SubtitleFitOverlay inherits Rectangle {
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000a6;
+        background: #000000c0;
 
-        Rectangle {
-            width: min(520px, parent.width - 48px);
-            height: 240px;
+        VerticalLayout {
+            width: min(880px, parent.width - 40px);
+            height: min(560px, parent.height - 40px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: #1e1e1ef8;
-            border-radius: 12px;
+            padding: 16px;
+            spacing: 10px;
 
-            VerticalLayout {
-                padding: 16px;
+            HorizontalLayout {
                 spacing: 10px;
 
                 Text {
                     text: "正在拟合字幕动画：{root.data.action-name}";
                     font-size: 15px;
                     color: #ffffff;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
                 }
+                Rectangle { min-width: 0px; horizontal-stretch: 1; }
+                Text {
+                    visible: root.data.segments.length > 0;
+                    text: "最终分段：{root.data.segments.length} 段";
+                    font-size: 13px;
+                    color: #44cc44;
+                    vertical-alignment: center;
+                }
+            }
+
+            // ── 画图区 ──────────────────────────────────────────────────────────
+            Rectangle {
+                min-height: 120px;
+                vertical-stretch: 1;
+                width: 100%;
+                background: #0d0d10;
+                border-radius: 6px;
+                clip: true;
+
+                // 收尾那几段：先铺半透明底，再压一根彩色右边界
+                for seg in root.data.segments: Rectangle {
+                    x: parent.width * seg.x0;
+                    width: parent.width * (seg.x1 - seg.x0);
+                    height: 100%;
+                    background: seg.color;
+                    opacity: 0.13;
+                }
+                for seg in root.data.segments: Rectangle {
+                    x: parent.width * seg.x1 - 1px;
+                    width: 2px;
+                    height: 100%;
+                    background: seg.color;
+                }
+
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #33333a;
+                    stroke-width: 1px;
+                    commands: root.data.grid-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    fill: #ffffff1a;
+                    commands: root.data.span-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    fill: #44cc4426;
+                    commands: root.data.chosen-span-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #e8e8ea;
+                    stroke-width: 2px;
+                    commands: root.data.curve-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #cc3333;
+                    stroke-width: 2px;
+                    commands: root.data.ribbon-invalid-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #44cc44;
+                    stroke-width: 2px;
+                    commands: root.data.ribbon-valid-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #3399ff;
+                    stroke-width: 2px;
+                    commands: root.data.locked-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #00ff00;
+                    stroke-width: 2px;
+                    commands: root.data.chosen-commands;
+                }
+                Path {
+                    width: 100%;
+                    height: 100%;
+                    viewbox-width: 1000;
+                    viewbox-height: 400;
+                    stroke: #ffee00;
+                    stroke-width: 2px;
+                    commands: root.data.end-commands;
+                }
+
+                Text {
+                    visible: root.data.end-label != "";
+                    text: root.data.end-label;
+                    x: parent.width * root.data.end-fraction - self.width / 2;
+                    y: 2px;
+                    font-size: 11px;
+                    color: #ffee00;
+                }
+                Text {
+                    visible: root.data.chosen-label != "";
+                    text: root.data.chosen-label;
+                    x: parent.width * root.data.chosen-fraction - self.width / 2;
+                    y: 16px;
+                    font-size: 11px;
+                    color: #00ff00;
+                }
+            }
+
+            // ── 进度条 ──────────────────────────────────────────────────────────
+            HorizontalLayout {
+                spacing: 8px;
 
                 Rectangle {
-                    height: 120px;
-                    width: 100%;
-                    background: #101010;
-                    border-radius: 6px;
-
-                    Path {
-                        width: 100%;
-                        height: 100%;
-                        viewbox-width: 100;
-                        viewbox-height: 40;
-                        stroke: #44cc44;
-                        stroke-width: 1.5px;
-                        commands: root.data.curve-commands;
-                    }
-                    Path {
-                        width: 100%;
-                        height: 100%;
-                        viewbox-width: 100;
-                        viewbox-height: 40;
-                        stroke: #3399ff;
-                        stroke-width: 1px;
-                        commands: root.data.bounds-commands;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
+                    height: 8px;
+                    min-width: 0px;
+                    horizontal-stretch: 1;
+                    border-radius: 4px;
+                    background: #333333;
 
                     Rectangle {
-                        height: 8px;
-                        min-width: 0px;
-                        horizontal-stretch: 1;
+                        width: parent.width * root.data.percent / 100;
+                        height: 100%;
                         border-radius: 4px;
-                        background: #333333;
-
-                        Rectangle {
-                            width: parent.width * root.data.percent / 100;
-                            height: 100%;
-                            border-radius: 4px;
-                            background: #44cc44;
-                        }
-                    }
-
-                    Text {
-                        text: "{root.data.percent}%";
-                        font-size: 13px;
-                        color: #aaaaaa;
-                        vertical-alignment: center;
+                        background: #44cc44;
                     }
                 }
+
+                Text {
+                    text: "{root.data.percent}%";
+                    font-size: 13px;
+                    color: #aaaaaa;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: root.data.stats;
+                font-size: 12px;
+                color: #8a8a92;
             }
         }
     }

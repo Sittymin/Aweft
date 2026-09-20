@@ -471,6 +471,7 @@ fn main() {
         let total = render_curves.len();
         let mut grid_times = Vec::new();
         let mut curve_samples = Vec::new();
+        let mut parents: Vec<usize> = Vec::new();
         let mut n = 0;
         let mut curve_idx = 0usize;
         for event in rx {
@@ -485,16 +486,15 @@ fn main() {
                     n = dn;
                     grid_times = gt;
                     curve_samples = cs;
+                    parents = vec![usize::MAX; n + 1];
                     curve_idx += 1;
                 }
-                // 轻量推进事件：本工具要的是 `DpStep`，请求了 Diagnostic 详略，收不到它。
-                ProgressEvent::DpProgress { .. } => {}
-                ProgressEvent::DpStep {
-                    end,
-                    valid,
-                    chosen,
-                    parent_chain,
+                ProgressEvent::DpProgress {
+                    end, chosen, valid, ..
                 } => {
+                    // 每格的起点一旦报出来就是定案，逐格记下来就是已锁定的前缀路径。
+                    // 采样跳过的那些格也要记，否则回溯会踩空洞。
+                    parents[end] = chosen.unwrap_or(usize::MAX);
                     // 采样约 1/4 帧（浏览器 33ms 轮询，全量 256 帧既拖慢也看不完），
                     // 再用自适应定速：渲染耗时不足 33ms 就补觉到 ~30fps，
                     // 渲染本身慢（debug）则顺其自然，避免叠加卡顿。
@@ -513,7 +513,7 @@ fn main() {
                         &curve_samples,
                         &valid,
                         chosen,
-                        &parent_chain,
+                        &parents,
                     );
                     let target = Duration::from_millis(33);
                     let elapsed = t0.elapsed();
