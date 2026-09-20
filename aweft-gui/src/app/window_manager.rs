@@ -112,6 +112,10 @@ impl AppWindowManager {
         // 未启用协作时它直接返回。
         crate::collab_bridge::start_event_pump(&store);
         store.borrow().sync_collab_ui();
+        // HACK: 给测试字幕数据接一条上下浮动的动画曲线（临时；正确路径是用户在曲线
+        // 编辑器里 K 帧）。必须在节点图编辑器初始化之前——链菜单、第 0 条链与默认布局
+        // 都从 model 派生（见 app::test_data）。
+        crate::app::test_data::create_test_subtitle_animation(&mut store.borrow_mut());
         // 初始化节点图编辑器（建链/右键菜单、绑定全局、加载第 0 条链）
         store.borrow_mut().initialize_node_graph_editors(&instance);
         // HACK: 初始化曲线编辑器。视图/属性 Area 未实现、无法 K 帧，暂时直接用测试数据
