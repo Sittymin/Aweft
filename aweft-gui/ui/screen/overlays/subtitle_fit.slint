@@ -1,0 +1,113 @@
+// 字幕拟合遮罩：编脚本时的 DP 分段在后台线程跑，跑完之前用整屏遮罩挡住其余操作。
+// 卡片中间显示正在拟合哪条动画、这条动画的分段进度，以及被拟合的那条曲线与已定
+// 分段边界。两条曲线都是 Rust 拼好的 `Path.commands` 字符串，坐标已归一到 0..100 ×
+// 0..40 的 viewbox：Slint 的 Path 子元素不支持 `for` 重复（compile_paths.rs 直接报错），
+// 数据驱动的折线只能走 commands 字符串。
+
+export struct SubtitleFitOverlayData {
+    // 正在拟合的动画名
+    action-name: string,
+    // 当前这条动画的 DP 推进（0..=100，Rust 侧已钳好）
+    percent: int,
+    // 曲线折线（viewbox 100×40）
+    curve-commands: string,
+    // 已定分段的边界竖线（同一 viewbox）
+    bounds-commands: string,
+}
+
+export component SubtitleFitOverlay inherits Rectangle {
+    in property <SubtitleFitOverlayData> data;
+
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+
+    // 整屏遮罩：先声明，卡片在其后（更高 z 序）。挂 pointer-event 只为把本区域标成
+    // 可交互，从而吞掉落在其内的按下事件——拟合期间点不到底下任何控件。
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        pointer-event(event) => {
+            // 有意留空：拟合不可中途取消，这里只吞事件。
+        }
+    }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000a6;
+
+        Rectangle {
+            width: min(520px, parent.width - 48px);
+            height: 240px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #1e1e1ef8;
+            border-radius: 12px;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+
+                Text {
+                    text: "正在拟合字幕动画：{root.data.action-name}";
+                    font-size: 15px;
+                    color: #ffffff;
+                }
+
+                Rectangle {
+                    height: 120px;
+                    width: 100%;
+                    background: #101010;
+                    border-radius: 6px;
+
+                    Path {
+                        width: 100%;
+                        height: 100%;
+                        viewbox-width: 100;
+                        viewbox-height: 40;
+                        stroke: #44cc44;
+                        stroke-width: 1.5px;
+                        commands: root.data.curve-commands;
+                    }
+                    Path {
+                        width: 100%;
+                        height: 100%;
+                        viewbox-width: 100;
+                        viewbox-height: 40;
+                        stroke: #3399ff;
+                        stroke-width: 1px;
+                        commands: root.data.bounds-commands;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Rectangle {
+                        height: 8px;
+                        min-width: 0px;
+                        horizontal-stretch: 1;
+                        border-radius: 4px;
+                        background: #333333;
+
+                        Rectangle {
+                            width: parent.width * root.data.percent / 100;
+                            height: 100%;
+                            border-radius: 4px;
+                            background: #44cc44;
+                        }
+                    }
+
+                    Text {
+                        text: "{root.data.percent}%";
+                        font-size: 13px;
+                        color: #aaaaaa;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

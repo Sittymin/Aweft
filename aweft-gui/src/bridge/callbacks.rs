@@ -49,6 +49,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     setup_video_callbacks(instance, Rc::clone(&store));
     setup_preview_clock(instance, &store);
     setup_audio_callbacks(instance, Rc::clone(&store));
+    setup_subtitle_fit(Rc::clone(&store));
     setup_media_picker_callbacks(instance, Rc::clone(&store));
     setup_collab_callbacks(instance, store);
 }
@@ -792,6 +793,21 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
             });
     }
 }
+
+/// 装好字幕拟合的后台通路：建通道、起 UI 线程 pump、把发送端交给 `AppState`。
+///
+/// 与波形批次同一套形状（后台增量直接写模型/遮罩，不走 reducer）。没装这条通路的
+/// 场合（无头测试）里 `request_rebuild` 会自己跳过，投影不会退回同步慢路径去冻界面。
+fn setup_subtitle_fit(store: Rc<RefCell<AppStore>>) {
+    let (ui_sender, ui_receiver) =
+        futures::channel::mpsc::unbounded::<crate::store::subtitle_fit::FitMessage>();
+    let _ = slint::spawn_local(crate::store::subtitle_fit::ui_pump_fit_messages(
+        Rc::clone(&store),
+        ui_receiver,
+    ));
+    store.borrow_mut().state_mut().fit_ui_sender = Some(ui_sender);
+}
+
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {
     crate::render::video_sink::teardown(&mut store.borrow_mut());
     if let Some(subtitle) = store.borrow_mut().state_mut().subtitle.as_mut() {

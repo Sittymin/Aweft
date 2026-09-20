@@ -161,6 +161,16 @@ pub struct AppState {
     pub video_wgpu: Option<crate::render::video_sink::WgpuHandles>,
     // 字幕通路：libass 轨 + wgpu 合成器（RenderingSetup 时随 GPU 句柄建好）
     pub(crate) subtitle: Option<crate::render::subtitle::SubtitlePipeline>,
+    // 字幕拟合后台通路的投递端（`setup_subtitle_fit` 装 pump 时存入）。
+    // 无头测试不装，请求直接跳过。
+    pub(crate) fit_ui_sender:
+        Option<futures::channel::mpsc::UnboundedSender<crate::store::subtitle_fit::FitMessage>>,
+    // 每次真正提交给后台线程的请求递增；回到 UI 线程的消息按它丢弃过期批次。
+    pub(crate) fit_generation: u64,
+    // 单飞：后台线程此刻正握着一份拟合。
+    pub(crate) fit_in_flight: bool,
+    // 合并最新：在飞期间又收到请求，等这份跑完用当时最新的数据再跑一份。
+    pub(crate) fit_pending: bool,
     // 无视频时的播放心跳（`setup_callbacks` 登记回调；transport 起停它）。
     // 有视频会话时播放头由媒体时钟驱动，本时钟不参与。
     pub(crate) preview_clock: crate::bridge::preview_clock::PreviewClock,
@@ -189,6 +199,10 @@ impl AppState {
             video_seek_session: None,
             video_wgpu: None,
             subtitle: None,
+            fit_ui_sender: None,
+            fit_generation: 0,
+            fit_in_flight: false,
+            fit_pending: false,
             preview_clock: Default::default(),
         }
     }

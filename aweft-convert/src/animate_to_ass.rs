@@ -99,17 +99,23 @@ static ALPHA_PAIRS: &[(PropertyPath, AlphaGroupFn)] = &[
 ];
 
 /// DP 进度事件：由分段算法在运行时通过 channel 发送，供实时可视化消费。
+#[derive(Debug, Clone)]
 pub enum ProgressEvent {
     /// DP 开始处理一条新 action
     ActionStarted {
         action_id: aweft_model::ids::ActionId,
+        /// 动作名，界面上「正在拟合哪条动画」就读它。
+        name: String,
         /// 格点数（0..=n）
         n: usize,
         /// 格点对应的时间值（长度 n+1）
         grid_times: Vec<f64>,
-        /// 真实曲线采样（供渲染用）
+        /// 真实曲线采样（供渲染用）：取全局摆幅最大的那条通道，画一根不动的
+        /// 通道没有意义。
         curve_samples: Vec<(f64, f64)>,
     },
+    /// 生产路径的轻量推进事件：`end` 走到格点 `end`，共 `n` 个。
+    DpProgress { end: usize, n: usize },
     /// 对固定 end 完成了一次评估：valid 记录每个 start 是否合法
     DpStep {
         end: usize,
@@ -125,10 +131,23 @@ pub enum ProgressEvent {
     SegmentsFound { path: Vec<(usize, usize)> },
 }
 
+/// 进度事件的详细程度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProgressDetail {
+    /// 界面够用的那一组：动作名、DP 推进、最终路径。
+    #[default]
+    Light,
+    /// 每个 `end` 附带全部起点的有效性判据与已锁定路径，供调试可视化（`live_dp`）。
+    /// 每个 `end` 额外分配两份 O(n) 表，比生产路径明显更慢。
+    Diagnostic,
+}
+
 pub struct ConvertOptions {
     pub error_tolerance: f64,
     /// 若设置，DP 分段过程中会通过此通道发送实时进度事件
     pub progress_sender: Option<std::sync::mpsc::Sender<ProgressEvent>>,
+    /// 发了 `progress_sender` 时要不要附带调试用的全量判据。
+    pub progress_detail: ProgressDetail,
 }
 
 impl Default for ConvertOptions {
@@ -136,6 +155,7 @@ impl Default for ConvertOptions {
         Self {
             error_tolerance: 0.01,
             progress_sender: None,
+            progress_detail: ProgressDetail::Light,
         }
     }
 }
@@ -769,6 +789,14 @@ mod tests {
 
     /// 把这些曲线包成单条 action strip，按 `layout` 转成标签段。
     fn convert_curves(curves: Vec<ActionCurve>, layout: (u32, u32)) -> AnimAssResult {
+        convert_curves_with(curves, layout, &ConvertOptions::default())
+    }
+
+    fn convert_curves_with(
+        curves: Vec<ActionCurve>,
+        layout: (u32, u32),
+        opts: &ConvertOptions,
+    ) -> AnimAssResult {
         let duration = curves
             .iter()
             .flat_map(|curve| curve.curve.keyframes.iter())
@@ -801,7 +829,7 @@ mod tests {
             },
             &lib,
             duration,
-            &ConvertOptions::default(),
+            opts,
         )
     }
 
@@ -1168,6 +1196,69 @@ mod tests {
         assert!(
             (peak - 60.0).abs() <= tol,
             "往复的波峰 60 应出现在输出里（±{tol}），实际 {sizes:?}"
+        );
+    }
+
+    /// 轻量进度事件是界面遮罩唯一的输入：每条动画一份曲线图、按格点推进到满格、收尾
+    /// 给出分段路径，而且不带调试版那种每格点两份 O(n) 表的 `DpStep`。发不发进度不得
+    /// 改变转换结果。
+    #[test]
+    fn light_progress_events_drive_the_ui_overlay() {
+        let keyframes = &[(0.0, 40.0), (0.5, 60.0), (1.0, 40.0)];
+        let build = || linear_curve(PropertyPath::FontSize, keyframes);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opts = ConvertOptions {
+            progress_sender: Some(sender),
+            ..Default::default()
+        };
+        let with_progress = font_sizes(&convert_curves_with(vec![build()], LAYOUT, &opts));
+        let events: Vec<ProgressEvent> = receiver.try_iter().collect();
+
+        let plain = font_sizes(&convert_curves(vec![build()], LAYOUT));
+        assert_eq!(with_progress, plain, "进度上报不得改变拟合结果");
+
+        let started: Vec<&ProgressEvent> = events
+            .iter()
+            .filter(|event| matches!(event, ProgressEvent::ActionStarted { .. }))
+            .collect();
+        assert_eq!(started.len(), 1, "一条动画一份曲线图，实际 {started:?}");
+        let ProgressEvent::ActionStarted {
+            name,
+            n,
+            grid_times,
+            curve_samples,
+            ..
+        } = started[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(name, "a");
+        assert_eq!(grid_times.len(), n + 1, "格点时间必须覆盖 0..=n");
+        assert!(!curve_samples.is_empty(), "曲线图不能是空的");
+
+        let steps: Vec<usize> = events
+            .iter()
+            .filter_map(|event| match event {
+                ProgressEvent::DpProgress { end, .. } => Some(*end),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !steps.is_empty() && steps[steps.len() - 1] == *n,
+            "进度要一路报满 {n} 格，实际 {steps:?}"
+        );
+        assert!(
+            events.iter().any(
+                |event| matches!(event, ProgressEvent::SegmentsFound { path } if !path.is_empty())
+            ),
+            "收尾要给出最终分段路径"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ProgressEvent::DpStep { .. })),
+            "轻量模式不该发调试用的 DpStep"
         );
     }
 

@@ -29,9 +29,13 @@ impl UniformGrid {
 
 
 /// 在 `0..=n` 的格点上求「覆盖到每个格点所需的最少段数」，返回 `parent` 表。
+///
+/// 每处理完一个 `end` 就回调一次 `on_end(end)`，界面上那条进度读它；不需要就传
+/// `|_| {}`。回调在外层串行循环里，不在并行段里，因此没有额外同步开销。
 pub(crate) fn min_segmentation(
     n: usize,
     is_valid: impl Fn(usize, usize) -> bool + Sync,
+    mut on_end: impl FnMut(usize),
 ) -> Vec<usize> {
     use rayon::prelude::*;
     let mut dp = vec![u32::MAX; n + 1];
@@ -54,6 +58,7 @@ pub(crate) fn min_segmentation(
                 parent[end] = start;
             }
         }
+        on_end(end);
     }
     parent
 }
@@ -132,17 +137,25 @@ mod tests {
 
     #[test]
     fn min_segmentation_all_valid_yields_single_segment() {
-        let parent = min_segmentation(8, |_, _| true);
+        let parent = min_segmentation(8, |_, _| true, |_| {});
         assert_eq!(parent[8], 0); // 整段一次切完
         let path = reconstruct_path(&parent);
         assert_eq!(path, vec![(0, 8)]);
+    }
+
+    /// 进度回调每个格点报一次、按序报完，界面上那条进度就读它。
+    #[test]
+    fn min_segmentation_reports_progress_once_per_grid_point() {
+        let mut seen = Vec::new();
+        min_segmentation(5, |_, _| true, |end| seen.push(end));
+        assert_eq!(seen, vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn min_segmentation_splits_at_blocked_boundary() {
         // 只有完全落在 [0,3] 或 [3,6] 内的段合法，跨越 3 的段不合法。
         let is_valid = |start: usize, end: usize| end <= 3 || start >= 3;
-        let parent = min_segmentation(6, is_valid);
+        let parent = min_segmentation(6, is_valid, |_| {});
         assert_eq!(parent[3], 0);
         assert_eq!(parent[6], 3);
         let path = reconstruct_path(&parent);
@@ -152,7 +165,7 @@ mod tests {
     #[test]
     fn min_segmentation_prefers_fewer_segments() {
         // 全部合法时，最少段数路径优先（整段一段）。
-        let parent = min_segmentation(4, |_, _| true);
+        let parent = min_segmentation(4, |_, _| true, |_| {});
         assert_eq!(parent[4], 0);
         assert_eq!(reconstruct_path(&parent), vec![(0, 4)]);
     }
@@ -161,7 +174,7 @@ mod tests {
     fn min_segmentation_returns_max_when_unreachable() {
         // 没有任何段能到达格点 5 → 终点不可达。
         let is_valid = |_start: usize, end: usize| end <= 4;
-        let parent = min_segmentation(5, is_valid);
+        let parent = min_segmentation(5, is_valid, |_| {});
         assert_eq!(parent[5], usize::MAX);
     }
 

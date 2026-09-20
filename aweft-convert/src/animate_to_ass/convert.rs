@@ -24,7 +24,7 @@ use aweft_model::ids::ActionId;
 use aweft_model::node_graph::style::StyleResult;
 
 use super::{
-    AnimAssResult, ConvertOptions, Cursor, ProgressEvent, TimeMapper, TimedTags,
+    AnimAssResult, ConvertOptions, Cursor, ProgressDetail, ProgressEvent, TimeMapper, TimedTags,
     curve_global_range, has_modifiers, try_build_segment,
 };
 use crate::segmentation::{
@@ -208,29 +208,48 @@ fn convert_action_strip(
         diagnostics.max_err <= tolerance
     };
 
-    let mut parent = if let Some(sender) = &opts.progress_sender {
-        let curve_samples: Vec<(f64, f64)> = (0..=128)
-            .map(|i| {
-                let t = t_start + (i as f64 / 128.0) * span;
-                let v = curve_map.values().next().map_or(0.0, |ac| evaluate_fcurve(&ac.curve, t));
-                (t, v)
-            })
-            .collect();
-        let grid_times: Vec<f64> = (0..=grid.len()).map(|i| grid.time_at(i)).collect();
-        let _ = sender.send(ProgressEvent::ActionStarted {
-            action_id, n: grid.len(), grid_times, curve_samples,
-        });
-        let s = sender.clone();
-        let result = diagnostic_min_segmentation(
-            grid.len(), is_valid,
-            move |end, valid, chosen, parent_chain| {
-                let _ = s.send(ProgressEvent::DpStep { end, valid, chosen, parent_chain });
-            },
-        );
-        let _ = sender.send(ProgressEvent::SegmentsFound { path: reconstruct_path(&result) });
-        result
-    } else {
-        min_segmentation(grid.len(), is_valid)
+    let mut parent = match &opts.progress_sender {
+        None => min_segmentation(grid.len(), is_valid, |_| {}),
+        Some(sender) => {
+            // 曲线图取全局摆幅最大的那条通道：读第一条的话，一个只有 Y 在动的上下浮动
+            // 会画成一根平线，图上根本看不出拟合的是什么。
+            let busiest = curve_map
+                .iter()
+                .max_by(|(_, ac_a), (_, ac_b)| {
+                    granges[&ac_a.property].total_cmp(&granges[&ac_b.property])
+                })
+                .map(|(_, ac)| &ac.curve);
+            let curve_samples: Vec<(f64, f64)> = (0..=128)
+                .map(|i| {
+                    let t = t_start + (i as f64 / 128.0) * span;
+                    let v = busiest.as_ref().map_or(0.0, |ac| evaluate_fcurve(ac, t));
+                    (t, v)
+                })
+                .collect();
+            let grid_times: Vec<f64> = (0..=grid.len()).map(|i| grid.time_at(i)).collect();
+            let _ = sender.send(ProgressEvent::ActionStarted {
+                action_id,
+                name: action.name.clone(),
+                n: grid.len(),
+                grid_times,
+                curve_samples,
+            });
+            let n = grid.len();
+            let s = sender.clone();
+            let result = if opts.progress_detail == ProgressDetail::Diagnostic {
+                diagnostic_min_segmentation(
+                    n, is_valid,
+                    move |end, valid, chosen, parent_chain| {
+                        let _ = s.send(ProgressEvent::DpStep { end, valid, chosen, parent_chain });
+                    },
+                )
+            } else {
+                min_segmentation(n, is_valid, move |end| {
+                    let _ = s.send(ProgressEvent::DpProgress { end, n });
+                })
+            };
+            result
+        }
     };
     if parent[n] == usize::MAX {
         log::warn!(
@@ -238,6 +257,13 @@ fn convert_action_strip(
              degrading to per-grid segments (precision may exceed tolerance)"
         );
         force_single_step_path(&mut parent);
+    }
+    // 收尾路径必须在兜底之后发：不可达时 `parent` 里还是 `usize::MAX`，
+    // `reconstruct_path` 会拿它当下标直接越界 panic。
+    if let Some(sender) = &opts.progress_sender {
+        let _ = sender.send(ProgressEvent::SegmentsFound {
+            path: reconstruct_path(&parent),
+        });
     }
 
     let path = reconstruct_path(&parent);

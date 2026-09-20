@@ -121,6 +121,14 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
 弯曲量只是二阶小量，相对误差反而飙升，每格都不合格、DP 连不通，最后退化成逐格切段（一行
 几百条 `Dialogue`）。代价是端点只在容差内逼近波的极值，不会精确落在关键帧时间上。
 
+**拟合跑在后台线程**：DP 分段是格点平方量级的求值，一份真实工程的脚本要几百毫秒，在 UI
+线程上同步跑就等于每次动字幕冻住界面。`op_subtitle_script` 因此只把 `Project` 副本交给
+`store/subtitle_fit.rs` 的工作线程，进度经两条通道回到 UI 线程的 pump，pump 直接写
+`OverlayState.show-subtitle-fit-overlay`（与波形批次同属「后台增量」，不进依赖图），收尾才把
+脚本字节交给 `SubtitlePipeline::set_script`。并发策略是单飞 + 合并最新：同时最多一份在飞，
+期间新到的请求只置 `fit_pending`，手上这份跑完再用当时最新的数据补一份，遮罩在两次之间不撤。
+后台线程不回写任何真相——它的唯一产物是脚本文本，副本里过期的求值缓存只影响一次命中。
+
 **测试字幕动画的播种**（`aweft-gui/src/app/test_data.rs`，HACK，随真实工程流程落地后整块删除）：
 `create_test_subtitle_animation` 必须在 `initialize_node_graph_editors` **之前**调用——
 链菜单、当前链下标与默认布局都从 model 派生，播种晚于初始化则编辑器看不到这两条链。

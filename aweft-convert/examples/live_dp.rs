@@ -460,6 +460,7 @@ fn main() {
                 &ConvertOptions {
                     error_tolerance: 0.01,
                     progress_sender: Some(tx.clone()),
+                    progress_detail: aweft_convert::ProgressDetail::Diagnostic,
                 },
             );
         }
@@ -476,6 +477,7 @@ fn main() {
             match event {
                 ProgressEvent::ActionStarted {
                     action_id: _,
+                    name: _,
                     n: dn,
                     grid_times: gt,
                     curve_samples: cs,
@@ -485,6 +487,8 @@ fn main() {
                     curve_samples = cs;
                     curve_idx += 1;
                 }
+                // 轻量推进事件：本工具要的是 `DpStep`，请求了 Diagnostic 详略，收不到它。
+                ProgressEvent::DpProgress { .. } => {}
                 ProgressEvent::DpStep {
                     end,
                     valid,
