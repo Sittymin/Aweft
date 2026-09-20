@@ -70,6 +70,7 @@ pub fn sequence_to_ass(
         let converted = match_to_ass_tags(
             &merge_matches(matches),
             &library.animation_library,
+            frame_size,
             duration_ms / 1000.0,
             opts,
         );

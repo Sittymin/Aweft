@@ -453,7 +453,7 @@ fn main() {
             };
             let _ = convert_anim_data(
                 &Default::default(),
-                &mut Cursor::from_style(&Default::default()),
+                &mut Cursor::from_style(&Default::default(), (1920, 1080)),
                 &anim,
                 &lib,
                 1.0,

@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 
 use aweft_ass::types::tags::StyleTag;
-use aweft_ass::AssColorRgb;
 use aweft_model::animation::action::ActionCurve;
 use aweft_model::animation::anim_data::PropertyPath;
 use aweft_model::animation::fcurve::evaluate_fcurve;
@@ -188,16 +187,16 @@ fn convert_action_strip(
     // Action 时长为 0，或所有关键帧都在一个点：直接输出单个瞬间快照，
     // 避免无效的零宽 DP 计算。
     if span <= 1e-12 {
-        return Ok(single_snapshot_segment(t_start, t_end, &curve_map, &granges, &time, cursor));
+        let snapshot =
+            single_snapshot_segment(t_start, t_end, &curve_map, &granges, &time, cursor);
+        advance_cursor_to_end(&curve_map, cursor, t_end);
+        return Ok(snapshot);
     }
 
-    // 采样节点处的 cursor 与路径无关：缺失轴回退到基础位置，存在的轴使用该
-    // 时刻的曲线值。
-    let (base_x, base_y) = cursor.pos_or_default();
-    let base_colors = cursor.colors;
+    // 探测用基 cursor 的副本：颜色会就地写回副本，不影响真实链路；位置只读基值。
     log::info!("DP segmenting action {action_id} (n={n}, tolerance={tolerance})...");
     let is_valid = |start: usize, end: usize| {
-        let mut probe = node_cursor_at(&curve_map, &grid, base_x, base_y, base_colors, start);
+        let mut probe = cursor.clone();
         let (_, diagnostics) = try_build_segment(
             grid.time_at(start),
             grid.time_at(end),
@@ -243,6 +242,7 @@ fn convert_action_strip(
 
     let path = reconstruct_path(&parent);
     let segments = build_segments_from_path(&path, &grid, &curve_map, &granges, &time, cursor);
+    advance_cursor_to_end(&curve_map, cursor, t_end);
     Ok(group_into_lines(segments))
 }
 
@@ -338,27 +338,22 @@ fn collect_segment_times(
     Some(times)
 }
 
-/// 构建采样节点处的「路径无关」cursor：缺失轴回退到基础位置，存在的轴使用该
-/// 时刻的曲线值。
-fn node_cursor_at(
+/// strip 走完才推进 cursor：把终点时刻解析出的锚点折成像素基值，下一条 strip 从这里
+/// 接着走。这条 strip 没有位置曲线时不动 cursor——位置槽原样继承，折一次会把样式的
+/// 分数基值永久变成像素偏移。
+fn advance_cursor_to_end(
     curve_map: &HashMap<PropertyPath, &ActionCurve>,
-    grid: &UniformGrid,
-    base_x: f64,
-    base_y: f64,
-    base_colors: [Option<AssColorRgb>; 4],
-    idx: usize,
-) -> Cursor {
-    let t = grid.time_at(idx);
-    let x = curve_map
-        .get(&PropertyPath::PositionX)
-        .map_or(base_x, |curve| evaluate_fcurve(&curve.curve, t));
-    let y = curve_map
-        .get(&PropertyPath::PositionY)
-        .map_or(base_y, |curve| evaluate_fcurve(&curve.curve, t));
-    Cursor {
-        pos: Some((x, y)),
-        colors: base_colors,
+    cursor: &mut Cursor,
+    t_end: f64,
+) {
+    let axes = Cursor::position_curves(curve_map);
+    if axes
+        .iter()
+        .all(|axis| axis.offset.is_none() && axis.ratio.is_none())
+    {
+        return;
     }
+    cursor.advance_to(cursor.anchor_at(axes, t_end));
 }
 
 /// 把切分路径（格点对序列）转换成最终的时间段 + 标签段列表。

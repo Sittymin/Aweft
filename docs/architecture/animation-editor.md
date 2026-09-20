@@ -100,4 +100,29 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
 - 测试：`nla_editor/tests.rs` 单测（`project`走`apply_selection/strip_structure/position`单职责；`hit_test`纯只读）+
   `tests/nla_editor_integration.rs`（dispatch → 投影 → model 写回全链路；`strip_hit_test`+`StripPressed` dispatch）
 
+**位置锚点的两种单位**（同一个锚点，可并存）：
+- `PropertyPath::PositionX/Y` = 排版像素；`PositionRatioX/Y` = 排版尺寸的分数（0..1）。
+  核心数据侧（aweft-model）只有这两个抽象概念，不含 ASS 语义。
+- **唯一换算点**是 `aweft-convert` 的 `Cursor::anchor_at`：`offset + layout * ratio`，
+  分数部分随排版尺寸（= `AppState::preview_frame_size()`，见
+  [video-playback.md](video-playback.md)）等比缩放，像素部分作固定偏移。新增消费者
+  不要另起一处换算。
+- 一条 strip 走完，`convert_action_strip` 末尾调用一次 `Cursor::advance_to`，把该时刻
+  解析出的像素写回 `offset` 并把 `ratio` 清零——下一条 strip 接续的是绝对位置。段内每段
+  都从同一个基值解析，把每段终点折回基值会让分数部分被重复累加。
+- ASS 侧只在 `\move` 端点用像素；静态样式位置仍不进脚本（`style_to_static_tags`
+  从不发 `\pos`），因此纯分数基准值目前没有对应的 `StyleOpKind`，只能靠常量曲线表达。
+
+**位置拟合的误差口径**：`error_tolerance` 对位置通道读作「偏排版尺寸的百分之几」——
+`chord_error` 把「真实锚点」到「该时刻线性插值位置」的距离除以排版尺寸
+（`Cursor::layout` 的较大边），默认 0.01 即 1% 画面。两处口径都会被否掉：只量到弦所在
+无限直线的垂直距离，单轴往复（只有 Y 动的上下浮动）所有采样点都落在那条直线上、误差恒
+为 0，整段来回会被一根静止的 `\move` 吃掉；按弦长归一化则在转折点附近失真，弦长趋零而
+弯曲量只是二阶小量，相对误差反而飙升，每格都不合格、DP 连不通，最后退化成逐格切段（一行
+几百条 `Dialogue`）。代价是端点只在容差内逼近波的极值，不会精确落在关键帧时间上。
+
+**测试字幕动画的播种**（`aweft-gui/src/app/test_data.rs`，HACK，随真实工程流程落地后整块删除）：
+`create_test_subtitle_animation` 必须在 `initialize_node_graph_editors` **之前**调用——
+链菜单、当前链下标与默认布局都从 model 派生，播种晚于初始化则编辑器看不到这两条链。
+
 **已知 TODO**：调色盘（channel.rs）

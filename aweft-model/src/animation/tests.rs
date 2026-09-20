@@ -851,6 +851,39 @@ fn merge_overrides_position_and_bold() {
 }
 
 #[test]
+fn merge_keeps_the_two_position_units_apart() {
+    use crate::node_graph::Vec2;
+
+    let mut style = StyleResult::default();
+    apply_animation_to_style(
+        &mut style,
+        &[EvaluatedStrip {
+            blend_mode: BlendMode::Replace,
+            influence: 1.0,
+            values: {
+                let mut m = HashMap::new();
+                m.insert(PropertyPath::PositionX, 960.0);
+                m.insert(PropertyPath::PositionRatioY, 0.7);
+                m
+            },
+        }],
+    );
+    assert_eq!(style.position, Some(Vec2 { x: 960.0, y: 0.0 }));
+    assert_eq!(
+        style.position_ratio,
+        Some(Vec2 { x: 0.0, y: 0.7 }),
+        "分数通道写进了绝对通道"
+    );
+
+    let base = StyleResult {
+        position_ratio: Some(Vec2 { x: 0.5, y: 0.5 }),
+        ..StyleResult::default()
+    };
+    let merged = base.merge_over(style);
+    assert_eq!(merged.position_ratio, Some(Vec2 { x: 0.0, y: 0.7 }));
+}
+
+#[test]
 fn merge_preserves_untouched_properties() {
     let mut style = StyleResult {
         font_size: Some(24.0),

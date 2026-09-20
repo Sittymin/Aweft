@@ -195,6 +195,12 @@ fn apply_scalar(
         PropertyPath::PositionY => {
             vec2_component(&mut style.position, 1, value, mode, influence);
         }
+        PropertyPath::PositionRatioX => {
+            vec2_component(&mut style.position_ratio, 0, value, mode, influence);
+        }
+        PropertyPath::PositionRatioY => {
+            vec2_component(&mut style.position_ratio, 1, value, mode, influence);
+        }
         PropertyPath::OriginX => vec2_component(&mut style.origin, 0, value, mode, influence),
         PropertyPath::OriginY => vec2_component(&mut style.origin, 1, value, mode, influence),
         PropertyPath::ClipRectX1 => {
