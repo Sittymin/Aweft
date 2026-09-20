@@ -23,11 +23,14 @@ use fit::{chord_error, fit_color_segment, fit_scalar_segment, Acceleration};
 const RANGE_SAMPLES_PER_INTERVAL: usize = 256;
 const RANGE_SAMPLES_MAX: usize = 100_000;
 /// 用于评估拟合段相对源曲线误差的采样数。
-// 时间拆分数比较误差值
-const FIT_SAMPLES: usize = 128;
+// 时间拆分数比较误差值。DP 的每个候选段都会用这个预算把段内每个动画属性求一遍，
+// 候选总数是格点的平方量级，因此这里是主要的乘数。64 个点在「每个关键帧区间
+// 至少 16 个采样」的形状下仍能抓住极值，峰值低估约 0.2%，远小于 tolerance。
+const FIT_SAMPLES: usize = 64;
 /// minimax 优化器的粗指数网格。
-// 幂函数区间分割数（尝试的幂函数）
-const MINIMAX_GRID: usize = 80;
+// 幂函数区间分割数（尝试的幂函数）。网格在 log(0.001)..log(1000) 上均分，只负责
+// 挑对盆地，随后的黄金分割精化决定精度，所以每倍量级十个点足够。
+const MINIMAX_GRID: usize = 32;
 
 // ── 属性 → ASS 标签映射表（固定表） ───────────────────────────────────────
 type ColorGroupFn = fn(AssColorRgb) -> AnimatedStyleTag;
@@ -427,8 +430,7 @@ fn build_position(
     let [x1, y1] = cursor.anchor_at(axes, t1);
 
     let chord_deviation = chord_error(
-        |t| cursor.anchor_at(axes, t)[0],
-        |t| cursor.anchor_at(axes, t)[1],
+        |t| cursor.anchor_at(axes, t),
         t0,
         t1,
         FIT_SAMPLES,
@@ -478,20 +480,22 @@ fn build_colors(
         tags.push(to_static_tag(make_anim(start_color)));
         cursor.colors[color_group_index] = Some(end_color);
 
-        if start_color != end_color {
-            let fit_curves: Vec<&FCurve> = animated.iter().flatten().map(|ac| &ac.curve).collect();
-            let fit = fit_color_segment(&fit_curves, t0, t1, FIT_SAMPLES);
-            let mut present = 0;
-            for (channel_idx, channel) in animated.iter().enumerate() {
-                if channel.is_none() {
-                    continue;
-                }
-                let scale = fit.channel_errors[present] / granges[&props[channel_idx]];
-                present += 1;
-                if scale > max_err {
-                    max_err = scale;
-                }
+        // 与标量同理：颜色组起止相同不等于组内不动。拟合误差必须无条件测量，
+        // 否则一个完整往复的颜色会被静态颜色吃掉而 DP 照样判它合格。
+        let fit_curves: Vec<&FCurve> = animated.iter().flatten().map(|ac| &ac.curve).collect();
+        let fit = fit_color_segment(&fit_curves, t0, t1, FIT_SAMPLES);
+        let mut present = 0;
+        for (channel_idx, channel) in animated.iter().enumerate() {
+            if channel.is_none() {
+                continue;
             }
+            let scale = fit.channel_errors[present] / granges[&props[channel_idx]];
+            present += 1;
+            if scale > max_err {
+                max_err = scale;
+            }
+        }
+        if start_color != end_color {
             tags.push(StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds(
                     (time.to_strip(t0) * 1_000_000.0) as i64,
@@ -549,12 +553,16 @@ fn build_scalars(
         let start_value = evaluate_fcurve(&action_curve.curve, t0);
         let end_value = evaluate_fcurve(&action_curve.curve, t1);
         tags.push(to_static_tag(make_anim(start_value)));
+        // 误差无条件测量：段端点相同不等于段内不动（一个完整往复的起止同值）。这种段
+        // 只能输出一个静态值，把往复整个吃掉；判它不合格，DP 才会在转折点切开，两半
+        // 各自起止不同、可用 `\t` 表达。拟合在 progress=1 处必然偏差一个整幅，所以真
+        // 往复必定超限；幅度远小于全局值域的摆动仍然合格。
+        let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
+        let scale = fit.max_err / granges[prop];
+        if scale > max_err {
+            max_err = scale;
+        }
         if (start_value - end_value).abs() > 1e-9 {
-            let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
-            let scale = fit.max_err / granges[prop];
-            if scale > max_err {
-                max_err = scale;
-            }
             tags.push(StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds(
                     (time.to_strip(t0) * 1_000_000.0) as i64,
@@ -593,12 +601,13 @@ fn build_alphas(
         let alpha_end = ((1.0 - evaluate_fcurve(&action_curve.curve, t1).clamp(0.0, 1.0)) * 255.0)
             .round() as u8;
         tags.push(to_static_tag(make_anim(alpha_start)));
+        // 与标量同理：量化后端点相同不等于段内不动，误差必须无条件测量才能逼 DP 切开。
+        let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
+        let scale = fit.max_err / granges[prop];
+        if scale > max_err {
+            max_err = scale;
+        }
         if alpha_start != alpha_end {
-            let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
-            let scale = fit.max_err / granges[prop];
-            if scale > max_err {
-                max_err = scale;
-            }
             tags.push(StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds(
                     (time.to_strip(t0) * 1_000_000.0) as i64,
@@ -916,20 +925,19 @@ mod tests {
     #[test]
     fn chord_error() {
         use super::fit::chord_error;
-        assert!(chord_error(|_| 0.0, |_| 0.0, 0.0, 1.0, 32, 1.0) < 1e-3);
-        assert!(chord_error(|t| t, |t| t * 2.0, 0.0, 1.0, 32, 1.0) < 0.01);
-        let err = chord_error(|t| t, |t| (t - 0.5).powi(2) * 4.0, 0.0, 1.0, 64, 1.0);
+        assert!(chord_error(|_| [0.0, 0.0], 0.0, 1.0, 32, 1.0) < 1e-3);
+        assert!(chord_error(|t| [t, t * 2.0], 0.0, 1.0, 32, 1.0) < 0.01);
+        let err = chord_error(|t| [t, (t - 0.5).powi(2) * 4.0], 0.0, 1.0, 64, 1.0);
         assert!(err > 0.01, "弯曲路径应有弦误差");
         // `norm` 只做线性缩放，误差仍是「偏基准的百分之几」。
-        let scaled = chord_error(|t| t, |t| (t - 0.5).powi(2) * 4.0, 0.0, 1.0, 64, 10.0);
+        let scaled = chord_error(|t| [t, (t - 0.5).powi(2) * 4.0], 0.0, 1.0, 64, 10.0);
         assert!(
             (scaled - err / 10.0).abs() < 1e-9,
             "norm 应只缩放误差：{scaled} vs {err}"
         );
         // 往复转折点附近弦长趋零，误差不得因此发散（按基准而非弦长归一）。
         let turn = chord_error(
-            |_| 0.0,
-            |t| (t - 0.5).powi(2) * 4.0 - 1.0,
+            |t| [0.0, (t - 0.5).powi(2) * 4.0 - 1.0],
             0.0,
             1.0,
             64,
@@ -1117,6 +1125,131 @@ mod tests {
                 "上下两端都应在 `\\move` 端点的 {tol}px 邻域内出现，实际 y 端点 {ys:?}"
             );
         }
+    }
+
+    /// 输出里出现过的所有 `\fs` 值：既包括静态标签，也包括 `\t` 的目标值。
+    fn font_sizes(result: &AnimAssResult) -> Vec<f64> {
+        let mut out = Vec::new();
+        for segment in &result.segments {
+            for tag in &segment.tags {
+                match tag {
+                    StyleTag::FontSize(v) => out.push(*v),
+                    StyleTag::Transform { tags, .. } => {
+                        for anim in tags {
+                            if let AnimatedStyleTag::FontSize(v) = anim {
+                                out.push(*v);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// 标量版的同一个坑：字号一个来回的起止也同值，退化分支同样会把它拍平成一根静态
+    /// `\fs`。波峰必须仍然出现在输出里（允许 tolerance × 全局值域的误差）。
+    #[test]
+    fn a_round_trip_scalar_still_reaches_its_peak() {
+        let curves = vec![linear_curve(
+            PropertyPath::FontSize,
+            &[
+                (0.0, 40.0),
+                (0.5, 60.0),
+                (1.0, 40.0),
+                (1.5, 60.0),
+                (2.0, 40.0),
+            ],
+        )];
+        let sizes = font_sizes(&convert_curves(curves, LAYOUT));
+        let peak = sizes.iter().cloned().fold(f64::MIN, f64::max);
+        let tol = ConvertOptions::default().error_tolerance * 20.0;
+        assert!(
+            (peak - 60.0).abs() <= tol,
+            "往复的波峰 60 应出现在输出里（±{tol}），实际 {sizes:?}"
+        );
+    }
+
+    /// 可重复的拟合开销测量：与初始化播种的「上下浮动」同形（贝塞尔往复 + 分数位置）。
+    /// 预览卡住主线程的就是这个数，调网格/采样常量前后都回来跑一次：
+    /// `cargo test -p aweft-convert --lib -- --ignored --nocapture`。
+    #[test]
+    #[ignore = "手动跑的耗时测量，不进常规用例"]
+    fn measure_fit_cost_of_seeded_float() {
+        use aweft_model::animation::keyframe::BezierHandle;
+
+        let handle = 0.5 / 3.0;
+        let ease = |time, value| {
+            Keyframe::bezier(
+                time,
+                value,
+                BezierHandle::new(-handle, 0.0),
+                BezierHandle::new(handle, 0.0),
+            )
+        };
+        let eased = |property, keyframes: Vec<Keyframe>| {
+            ActionCurve::new(
+                property,
+                FCurve {
+                    keyframes,
+                    ..Default::default()
+                },
+            )
+        };
+        let curves = vec![
+            eased(
+                PropertyPath::PositionRatioX,
+                vec![ease(0.0, 0.5), ease(2.0, 0.5)],
+            ),
+            eased(
+                PropertyPath::PositionRatioY,
+                vec![
+                    ease(0.0, 0.72),
+                    ease(0.5, 0.60),
+                    ease(1.0, 0.72),
+                    ease(1.5, 0.60),
+                    ease(2.0, 0.72),
+                ],
+            ),
+        ];
+        let started = std::time::Instant::now();
+        let result = convert_curves(curves, LAYOUT);
+        let moves = moves(&result);
+        println!(
+            "位置 {} 行（{} 个 \\move），用时 {:.0}ms",
+            result.segments.len(),
+            moves.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+
+        // 标量通道走的是幂函数拟合（minimax 指数网格）这条完全不同的代码路径，
+        // 因此单独计时，才能看出指数网格这个旋钮的代价。
+        let scalar = eased(
+            PropertyPath::FontSize,
+            vec![
+                ease(0.0, 40.0),
+                ease(0.5, 60.0),
+                ease(1.0, 40.0),
+                ease(1.5, 60.0),
+                ease(2.0, 40.0),
+            ],
+        );
+        let started = std::time::Instant::now();
+        let scalar_result = convert_curves(vec![scalar], LAYOUT);
+        let sizes = font_sizes(&scalar_result);
+        let transforms = scalar_result
+            .segments
+            .iter()
+            .flat_map(|segment| segment.tags.iter())
+            .filter(|tag| matches!(tag, StyleTag::Transform { .. }))
+            .count();
+        println!(
+            "标量 {} 行（{transforms} 个连挂 \\t），峰值 {:.1}（应≈60），用时 {:.0}ms",
+            scalar_result.segments.len(),
+            sizes.iter().cloned().fold(f64::MIN, f64::max),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
     }
 
     /// 位置真的一动不动时仍只输出一段：退化分支不能把静态位置也切成细条。

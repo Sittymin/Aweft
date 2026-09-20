@@ -202,8 +202,9 @@ pub(super) fn fit_color_segment(
 /// 吃掉；按弦长归一化则在转折点附近失真，弦长趋零而弯曲量只是二阶小量，相对误差
 /// 反而飙升，每格都不合格、DP 连不通，最后退化成逐格切段。
 pub(super) fn chord_error(
-    eval_x: impl Fn(f64) -> f64,
-    eval_y: impl Fn(f64) -> f64,
+    // 一次求值同时给出两轴锚点：位置的两个轴本就同源，拆成两个闭包会把每条曲线
+    // 在每个采样时刻都求两遍，数值一个不变、开销翻倍。
+    eval: impl Fn(f64) -> [f64; 2],
     t0: f64,
     t1: f64,
     // 时间均匀分割数（用于比较误差值）
@@ -211,19 +212,19 @@ pub(super) fn chord_error(
     // 误差归一化基准：排版尺寸（像素）
     norm: f64,
 ) -> f64 {
-    let start_x = eval_x(t0);
-    let start_y = eval_y(t0);
-    let delta_x = eval_x(t1) - start_x;
-    let delta_y = eval_y(t1) - start_y;
+    let [start_x, start_y] = eval(t0);
+    let [end_x, end_y] = eval(t1);
+    let delta_x = end_x - start_x;
+    let delta_y = end_y - start_y;
     let span = t1 - t0;
     let inv_norm = 1.0 / norm.max(1e-6);
 
     let mut max_deviation = 0.0f64;
     for idx in 0..sample_count {
         let progress = idx as f64 / (sample_count - 1) as f64;
-        let time = t0 + progress * span;
-        let dev_x = eval_x(time) - (start_x + progress * delta_x);
-        let dev_y = eval_y(time) - (start_y + progress * delta_y);
+        let [x, y] = eval(t0 + progress * span);
+        let dev_x = x - (start_x + progress * delta_x);
+        let dev_y = y - (start_y + progress * delta_y);
         let deviation = (dev_x * dev_x + dev_y * dev_y).sqrt() * inv_norm;
         if deviation > max_deviation {
             max_deviation = deviation;
