@@ -134,6 +134,9 @@ export component NodeGraphEditor inherits Rectangle {
         socket-input-changed(socket-idx, text) => {
             NodeGraphCallbacks.socket-input-changed(root.graph-type, i, socket-idx, text);
         }
+        socket-bool-toggled(socket-idx) => {
+            NodeGraphCallbacks.socket-bool-toggled(root.graph-type, i, socket-idx);
+        }
         socket-input-focused(socket-idx, focused) => {
             if focused {
                 root.set-edit-overlay(i, socket-idx);

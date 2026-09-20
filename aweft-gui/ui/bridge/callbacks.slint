@@ -141,6 +141,8 @@ export global NodeGraphCallbacks {
     callback create-actor(graph-type: GraphType, node-index: int, socket-row: int, name: string);
     // 内嵌文本输入框提交（字符串常量）：设端口默认值
     callback socket-input-changed(graph-type: GraphType, node-index: int, socket-row: int, text: string);
+    // 端口行内嵌真/假切换（布尔常量）：翻转端口默认值
+    callback socket-bool-toggled(graph-type: GraphType, node-index: int, socket-row: int);
 }
 
 // 动画编辑器（曲线编辑器 + 摄影表 + NLA）回调：编辑器只做渲染与拖拽瞬态，

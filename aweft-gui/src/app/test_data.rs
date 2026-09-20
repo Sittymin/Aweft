@@ -10,7 +10,9 @@ use aweft_model::animation::fcurve::FCurve;
 use aweft_model::animation::keyframe::{BezierHandle, Keyframe};
 use aweft_model::animation::strip::{NlaStrip, NlaTrack, StripType};
 use aweft_model::animation::{AnimData, PropertyPath};
-use aweft_model::application_graph::{ApplicationNodeHandle, ApplicationNodeKind, ApplyAnimation};
+use aweft_model::application_graph::{
+    ApplicationNodeHandle, ApplicationNodeKind, ApplyAnimation, BoolConst,
+};
 use aweft_model::node_graph::{Node, NodeId, SocketValue};
 
 /// HACK: 给初始化测试字幕数据接一条「上下浮动」动画（与 `create_test_subtitle_data` 配套）。
@@ -19,7 +21,7 @@ use aweft_model::node_graph::{Node, NodeId, SocketValue};
 ///  `Action`（X 轴 `PositionRatioX` 常量居中、Y 轴 `PositionRatioY` 往复）
 /// → `AnimData`（单轨单片断，`StripPlacement::Full` 把一次往复拉伸铺满每行自身时长）
 /// → 样式链（默认样式，供应用动画取静态基线）
-/// → 应用链（匹配角色空 pattern = 命中每一行 → 应用动画 → 组输出）。
+/// → 应用链（布尔常量为条件 = 命中每一行 → 应用动画 → 组输出）。
 ///
 /// 位置走「排版尺寸的分数」而不是排版像素：随视口等比缩放，和 `\move` 的像素单位解耦
 /// （两种单位的换算点唯一在 `aweft_convert::animate_to_ass::Cursor::anchor_at`）。
@@ -93,24 +95,39 @@ pub fn create_test_subtitle_animation(store: &mut AppStore) {
         .node_graphs
         .insert(style_id, style_chain);
 
-    // 复用默认应用链的形状（上下文输入 → 匹配角色 → 样式引用 → 应用匹配 → 组输出），
-    // 再挂一个应用动画节点接进同一个组输出口。空 pattern 让匹配角色对每行都成立
-    // （`str::contains("")` 恒真）。
-    let mut graph = new_app_chain("字幕上下浮动", Some(style_id), Some(""));
-    let apply: ApplicationNodeHandle<ApplyAnimation> = graph
-        .add_node(ApplicationNodeKind::ApplyAnimation, &[], &[])
+    // 默认应用链的形状是「上下文输入 → 匹配角色 → 样式引用 → 应用匹配 → 组输出」。
+    // 这里把匹配角色整个换成布尔常量：演示数据要的是「每一行都生效」，那是常量真的语义，
+    // 不该靠空 pattern 碰 `str::contains("")` 恒真。样式基线与浮动动画共用同一个常量真。
+    let mut graph = new_app_chain("字幕上下浮动", Some(style_id), None);
+    let matcher = sole_node(&graph.nodes, |kind| {
+        matches!(kind, ApplicationNodeKind::MatchActor)
+    })
+    .id;
+    graph.remove_node(matcher);
+    let always: ApplicationNodeHandle<BoolConst> = graph
+        .add_node(ApplicationNodeKind::BoolConst, &[], &[])
+        .unwrap();
+    let always_true = always.outputs.value.id;
+    graph
+        .set_socket_value(always_true, Some(SocketValue::Bool(true)))
         .unwrap();
     let style_out = sole_node(&graph.nodes, |kind| {
         matches!(kind, ApplicationNodeKind::AppRef(_))
     })
     .outputs[0];
+    let apply: ApplicationNodeHandle<ApplyAnimation> = graph
+        .add_node(ApplicationNodeKind::ApplyAnimation, &[], &[])
+        .unwrap();
     graph.connect_raw(style_out, apply.inputs.style.id).unwrap();
-    let matched = sole_node(&graph.nodes, |kind| {
-        matches!(kind, ApplicationNodeKind::MatchActor)
+    let apply_match_condition = sole_node(&graph.nodes, |kind| {
+        matches!(kind, ApplicationNodeKind::ApplyMatch)
     })
-    .outputs[0];
+    .inputs[1];
     graph
-        .connect_raw(matched, apply.inputs.condition.id)
+        .connect_raw(always_true, apply_match_condition)
+        .unwrap();
+    graph
+        .connect_raw(always_true, apply.inputs.condition.id)
         .unwrap();
     let group_out = sole_node(&graph.nodes, |kind| {
         matches!(kind, ApplicationNodeKind::GroupOutput)

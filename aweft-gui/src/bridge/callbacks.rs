@@ -620,6 +620,19 @@ fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>
             });
             dispatch_and_render(&s, action, &weak);
         });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_socket_bool_toggled(move |graph_type, node_index, socket_row| {
+            let action = Action::NodeGraph(NodeGraphAction::SocketBoolToggled {
+                graph_type: graph_type_of(graph_type),
+                node_index: node_index as usize,
+                socket_index: socket_row as usize,
+            });
+            dispatch_and_render(&s, action, &weak);
+        });
 }
 
 /// 设置区域类型切换回调 - 使用 Action 模式

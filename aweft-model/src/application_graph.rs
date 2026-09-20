@@ -61,6 +61,9 @@ pub enum ApplicationNodeKind {
     AppRef(NodeGraphId),
     /// 字符串常量：输出一段文本（值由节点默认值提供，UI 节点内可编辑）。
     TextConst,
+    /// 布尔常量：输出一个真/假（值由节点默认值提供，UI 节点内可切换）。条件支路
+    /// 要「无条件成立」时用它，而不是拿空 pattern 的匹配角色碰 `contains("")` 恒真。
+    BoolConst,
     /// 应用匹配：style + condition → 一个应用单元（命中才生效）。应用单元只有
     /// 接到组输出才有意义。
     ApplyMatch,
@@ -222,6 +225,17 @@ impl NodeTreeType for ApplicationNodeKind {
                         _ => String::new(),
                     };
                     cache.socket_values.insert(sid, SocketValue::Text(text));
+                }
+            }
+
+            // 布尔常量：输出节点默认值里的布尔（UI 节点内切换，未设则假）。
+            ApplicationNodeKind::BoolConst => {
+                if let Some(&sid) = node.outputs.first() {
+                    let value = matches!(
+                        graph.socket(sid).default_value,
+                        Some(SocketValue::Bool(true))
+                    );
+                    cache.socket_values.insert(sid, SocketValue::Bool(value));
                 }
             }
 
@@ -518,6 +532,11 @@ define_application_nodes! {
         kind: ApplicationNodeKind::TextConst;
         inputs: {}
         outputs: { text: TextSocket }
+    }
+    BoolConst, BoolConstIn, BoolConstOut {
+        kind: ApplicationNodeKind::BoolConst;
+        inputs: {}
+        outputs: { value: BoolSocket }
     }
     ApplyMatch, ApplyMatchIn, ApplyMatchOut {
         kind: ApplicationNodeKind::ApplyMatch;
@@ -1059,8 +1078,8 @@ mod tests {
     fn apply_animation_style_must_be_connected() {
         // 应用动画的样式输入未连接 → 必须报错，不能静默使用默认样式。
         let mut g = ApplicationGraph::new("anim-no-style");
-        let matcher: ApplicationNodeHandle<MatchActor> = g
-            .add_node(ApplicationNodeKind::MatchActor, &[], &[])
+        let always: ApplicationNodeHandle<BoolConst> = g
+            .add_node(ApplicationNodeKind::BoolConst, &[], &[])
             .unwrap();
         let anim: ApplicationNodeHandle<ApplyAnimation> = g
             .add_node(ApplicationNodeKind::ApplyAnimation, &[], &[])
@@ -1073,19 +1092,11 @@ mod tests {
             )
             .unwrap();
 
-        // 动画条件 = matcher 输出（恒真模式放行：source/pattern 都给空串，contains 恒真）
-        g.connect(matcher.outputs.matched, anim.inputs.condition)
+        // 条件用常量真放行：这条测试只盯「样式未连接」，不该再靠空 pattern 碰 contains 恒真。
+        g.connect(always.outputs.value, anim.inputs.condition)
             .unwrap();
-        g.set_socket_value(
-            matcher.inputs.source.id,
-            Some(SocketValue::Text(String::new())),
-        )
-        .unwrap();
-        g.set_socket_value(
-            matcher.inputs.pattern.id,
-            Some(SocketValue::Text(String::new())),
-        )
-        .unwrap();
+        g.set_socket_value(always.outputs.value.id, Some(SocketValue::Bool(true)))
+            .unwrap();
         g.connect_raw(anim.outputs.application.id, g.nodes[&group_out].inputs[0])
             .unwrap();
         g.set_socket_value(
@@ -1102,5 +1113,54 @@ mod tests {
         };
         let err = g.evaluate(&EvalContext::app(&ctx, &HashMap::new())).unwrap_err();
         assert!(matches!(err, EvalError::StyleNotConnected(_)));
+    }
+
+    #[test]
+    fn bool_const_gates_application() {
+        // 布尔常量作条件：真放行、假拦住、未设按假。空 pattern 的匹配角色不该再当「恒真」用。
+        let mut g = ApplicationGraph::new("bool-gate");
+        let app_ref = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::AppRef(NodeGraphId::new()),
+                &[],
+                &[SocketDecl::output("style", SocketType::Style)],
+            )
+            .unwrap();
+        let always: ApplicationNodeHandle<BoolConst> = g
+            .add_node(ApplicationNodeKind::BoolConst, &[], &[])
+            .unwrap();
+        let apply: ApplicationNodeHandle<ApplyMatch> = g
+            .add_node(ApplicationNodeKind::ApplyMatch, &[], &[])
+            .unwrap();
+        let group_out = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::GroupOutput,
+                &[SocketDecl::input("application", SocketType::Application)],
+                &[],
+            )
+            .unwrap();
+
+        g.connect_raw(g.nodes[&app_ref].outputs[0], apply.inputs.style.id)
+            .unwrap();
+        g.connect(always.outputs.value, apply.inputs.condition)
+            .unwrap();
+        g.connect_raw(apply.outputs.application.id, g.nodes[&group_out].inputs[0])
+            .unwrap();
+
+        let line_ctx = LineContext {
+            actor: String::new(),
+            line_text: String::new(),
+            line_index: 0,
+        };
+        let style_results = HashMap::new();
+        let ctx = EvalContext::app(&line_ctx, &style_results);
+        // 未设默认值 → 假
+        assert!(g.evaluate(&ctx).unwrap().is_none());
+        g.set_socket_value(always.outputs.value.id, Some(SocketValue::Bool(true)))
+            .unwrap();
+        assert!(g.evaluate(&ctx).unwrap().is_some());
+        g.set_socket_value(always.outputs.value.id, Some(SocketValue::Bool(false)))
+            .unwrap();
+        assert!(g.evaluate(&ctx).unwrap().is_none());
     }
 }

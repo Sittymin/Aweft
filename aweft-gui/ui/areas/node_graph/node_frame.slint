@@ -38,6 +38,9 @@ export struct NodeSocketData {
     input: bool,
     // 内嵌输入框的当前值（端口默认值）
     input-text: string,
+    // 该端口行内嵌真/假切换（如布尔常量的输出端口），bool-value 即端口默认值
+    bool-editor: bool,
+    bool-value: bool,
 }
 
 // 一条节点连接：数据流方向固定 from（输出端）→ to（输入端）。
@@ -184,6 +187,8 @@ export component SocketInteractions inherits Rectangle {
     // 内嵌文本输入框提交 / 聚焦变化
     callback socket-input-changed(socket-index: int, text: string);
     callback socket-input-focused(socket-index: int, focused: bool);
+    // 真/假切换被点击：编辑据此翻转该端口的默认值
+    callback socket-bool-toggled(socket-index: int);
 
     // 按 view-zoom 缩放后的几何量
     private property <length> socket-size: Theme.data.node-editor.socket-size * view-zoom;
@@ -220,6 +225,34 @@ export component SocketInteractions inherits Rectangle {
         port-btn-ta := TouchArea {
             clicked => {
                 root.socket-menu-requested(root.socket-index);
+            }
+        }
+    }
+
+    // 真/假切换（布尔常量的输出端口）：标签即端口默认值，点一下翻转。
+    if socket.bool-editor: Rectangle {
+        x: parent.width - socket-size - 58px * view-zoom;
+        y: 3px * view-zoom;
+        width: 56px * view-zoom;
+        height: socket-row-height - 6px * view-zoom;
+        border-radius: 3px * view-zoom;
+        background: socket.bool-value
+            ? Theme.data.node-editor.node-header-background
+            : Theme.data.node-editor.canvas-background;
+        border-width: 1px * view-zoom;
+        border-color: Theme.data.node-editor.node-border;
+        Text {
+            text: socket.bool-value ? "真" : "假";
+            width: 100%;
+            height: 100%;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            color: Theme.data.node-editor.node-text;
+            font-size: socket-font-size;
+        }
+        TouchArea {
+            clicked => {
+                root.socket-bool-toggled(root.socket-index);
             }
         }
     }
@@ -364,6 +397,8 @@ export component NodeFrame inherits Rectangle {
     callback socket-input-changed(socket-index: int, text: string);
     // 内嵌文本输入框聚焦变化：编辑据此设置全窗口收起遮罩（挖孔定位）
     callback socket-input-focused(socket-index: int, focused: bool);
+    // 端口行内的真/假切换被点击（布尔常量输出端口）：编辑据此翻转端口默认值
+    callback socket-bool-toggled(socket-index: int);
     // 端口命中（本地坐标，相对节点左上角；含 ta-overhang 已减后的节点内坐标）：
     // 返回 sockets 组合数组下标，-1 无。由编辑器绑定到 Rust 统一命中（与
     // find_drop_socket 同源，消除 Slint 硬编码端口数上限——C1 修复）。
@@ -513,7 +548,7 @@ export component NodeFrame inherits Rectangle {
         }
     }
 
-    // 端口行可交互元素（预设下拉按钮 / 内嵌文本输入框）：
+    // 端口行可交互元素（预设下拉按钮 / 内嵌文本输入框 / 真/假切换）：
     // 置于端口拖拽 TouchArea 之后，否则点击会被 ta 抢走（同 ReferenceMenuRow 处理模式）。
     for socket[i] in root.sockets: SocketInteractions {
         y: header-height + root.menu-row-height + socket.row * socket-row-height;
@@ -529,6 +564,9 @@ export component NodeFrame inherits Rectangle {
         }
         socket-input-focused(socket-idx, focused) => {
             root.socket-input-focused(socket-idx, focused);
+        }
+        socket-bool-toggled(socket-idx) => {
+            root.socket-bool-toggled(socket-idx);
         }
     }
 

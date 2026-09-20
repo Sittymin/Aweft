@@ -287,6 +287,8 @@ impl NodeGraphState {
                 connected,
                 input: false,
                 input_text: SharedString::default(),
+                bool_editor: false,
+                bool_value: false,
             });
         }
         for (output_row, &socket_id) in G::outputs(node).iter().enumerate() {
@@ -301,6 +303,15 @@ impl NodeGraphState {
             } else {
                 SharedString::default()
             };
+            let is_bool_editor = G::bool_editor(node, false, output_row);
+            let bool_value = if is_bool_editor {
+                matches!(
+                    &socket.default_value,
+                    Some(aweft_model::node_graph::SocketValue::Bool(true))
+                )
+            } else {
+                false
+            };
             sockets.push(NodeSocketData {
                 name: socket.name.clone().into(),
                 is_input: false,
@@ -311,6 +322,8 @@ impl NodeGraphState {
                 connected,
                 input: is_editor,
                 input_text,
+                bool_editor: is_bool_editor,
+                bool_value,
             });
         }
         // 样式引用节点：生成下拉菜单行数据（标签 + 样式链选项 + 当前选中）
@@ -613,6 +626,8 @@ pub trait NodeUi: NodeTreeType {
     fn actor_dropdown(&self, is_input: bool, idx: usize) -> bool;
     /// 该端口行是否内嵌文本输入框（如字符串常量的输出端口）。
     fn text_editor(&self, is_input: bool, idx: usize) -> bool;
+    /// 该端口行是否内嵌真/假切换（如布尔常量的输出端口）。
+    fn bool_editor(&self, is_input: bool, idx: usize) -> bool;
 }
 
 impl NodeUi for NodeKind {
@@ -623,6 +638,9 @@ impl NodeUi for NodeKind {
         false
     }
     fn text_editor(&self, _is_input: bool, _idx: usize) -> bool {
+        false
+    }
+    fn bool_editor(&self, _is_input: bool, _idx: usize) -> bool {
         false
     }
 }
@@ -638,6 +656,10 @@ impl NodeUi for ApplicationNodeKind {
     fn text_editor(&self, is_input: bool, idx: usize) -> bool {
         // 字符串常量的输出端口：无输入，端口行内嵌文本输入框
         !is_input && idx == 0 && matches!(self, ApplicationNodeKind::TextConst)
+    }
+    fn bool_editor(&self, is_input: bool, idx: usize) -> bool {
+        // 布尔常量的输出端口：端口行内嵌真/假切换，点一下翻转默认值
+        !is_input && idx == 0 && matches!(self, ApplicationNodeKind::BoolConst)
     }
 }
 
@@ -703,6 +725,7 @@ fn application_node_kind_title(kind: &ApplicationNodeKind) -> &'static str {
         ApplicationNodeKind::Not => "非",
         ApplicationNodeKind::AppRef(_) => "样式链引用",
         ApplicationNodeKind::TextConst => "字符串常量",
+        ApplicationNodeKind::BoolConst => "布尔常量",
         ApplicationNodeKind::ApplyMatch => "应用匹配",
         ApplicationNodeKind::ApplyAnimation => "应用动画",
         ApplicationNodeKind::GroupOutput => "组输出",
@@ -750,6 +773,8 @@ pub trait GraphEditable: Sized {
     fn actor_dropdown(n: &Self::Node, is_input: bool, idx: usize) -> bool;
     /// 该端口行是否内嵌文本输入框（如字符串常量的输出端口）。
     fn text_editor(n: &Self::Node, is_input: bool, idx: usize) -> bool;
+    /// 该端口行是否内嵌真/假切换（如布尔常量的输出端口）。
+    fn bool_editor(n: &Self::Node, is_input: bool, idx: usize) -> bool;
 }
 
 impl<K: NodeTreeType + NodeUi> GraphEditable for NodeGraph<K> {
@@ -817,6 +842,9 @@ impl<K: NodeTreeType + NodeUi> GraphEditable for NodeGraph<K> {
     }
     fn text_editor(n: &Node<K>, is_input: bool, idx: usize) -> bool {
         n.kind.text_editor(is_input, idx)
+    }
+    fn bool_editor(n: &Node<K>, is_input: bool, idx: usize) -> bool {
+        n.kind.bool_editor(is_input, idx)
     }
 }
 
@@ -1286,6 +1314,18 @@ impl<'a> GraphEditorAccess<'a> {
         }
     }
 
+    pub(crate) fn toggle_socket_bool_default(
+        self,
+        editor: &mut NodeGraphState,
+        node_index: usize,
+        socket_index: usize,
+    ) {
+        match self {
+            Self::Style(g) => toggle_socket_bool_default(g, editor, node_index, socket_index),
+            Self::App(g) => toggle_socket_bool_default(g, editor, node_index, socket_index),
+        }
+    }
+
     pub(crate) fn rebuild(self, editor: &mut NodeGraphState) {
         match self {
             Self::Style(g) => editor.rebuild(g),
@@ -1666,6 +1706,17 @@ pub fn set_socket_text_default_dispatch(
     });
 }
 
+pub fn toggle_socket_bool_default_dispatch(
+    store: &mut AppStore,
+    graph_type: NodeGraphKind,
+    node_index: usize,
+    socket_index: usize,
+) {
+    store.with_graph(graph_type, |editor, access| {
+        access.toggle_socket_bool_default(editor, node_index, socket_index)
+    });
+}
+
 /// 新建链（reducer：只改 model，返回目标链下标）。链菜单/当前链/渲染全由投影完成。
 pub fn new_chain_dispatch(store: &mut AppStore, graph_type: NodeGraphKind) -> usize {
     match graph_type {
@@ -1843,6 +1894,23 @@ fn set_socket_text_default<G: GraphEditable>(
     if let Some(sid) = sid {
         let _ = graph.graph_set_socket_value(sid, value);
     }
+}
+
+/// 翻转端口布尔默认值（布尔常量的输出端口：点一下在真/假之间切换）。
+fn toggle_socket_bool_default<G: GraphEditable>(
+    graph: &mut G,
+    editor: &mut NodeGraphState,
+    node_index: usize,
+    socket_index: usize,
+) {
+    let Some(sid) = socket_id_at(graph, editor, node_index, socket_index) else {
+        return;
+    };
+    let current = matches!(
+        graph.socket(sid).default_value,
+        Some(SocketValue::Bool(true))
+    );
+    let _ = graph.graph_set_socket_value(sid, Some(SocketValue::Bool(!current)));
 }
 
 /// 取指定图类型某端口的真实 SocketId。

@@ -63,6 +63,12 @@ pub enum NodeGraphAction {
         socket_index: usize,
         text: String,
     },
+    /// 端口行内嵌真/假切换（布尔常量输出）：翻转端口默认值。
+    SocketBoolToggled {
+        graph_type: NodeGraphKind,
+        node_index: usize,
+        socket_index: usize,
+    },
     /// 新建一条默认链并切换到它。
     NewChain { graph_type: NodeGraphKind },
 }
@@ -121,6 +127,7 @@ pub fn app_templates() -> Vec<ApplicationNodeKind> {
         ApplicationNodeKind::Or,
         ApplicationNodeKind::Not,
         ApplicationNodeKind::TextConst,
+        ApplicationNodeKind::BoolConst,
         ApplicationNodeKind::ApplyMatch,
         ApplicationNodeKind::ApplyAnimation,
         ApplicationNodeKind::GroupOutput,

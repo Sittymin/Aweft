@@ -10,12 +10,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use aweft_gui::actions::node_graph::app_templates;
 use aweft_gui::actions::{Action, node_graph::NodeGraphAction};
-use aweft_gui::bridge::types::MainWindow;
+use aweft_gui::bridge::callbacks::setup_callbacks;
+use aweft_gui::bridge::types::{GraphType, MainWindow, NodeGraphCallbacks};
 use aweft_gui::screen::primitives::Insets;
-use aweft_model::node_graph::NodeGraphKind;
+use aweft_model::application_graph::ApplicationNodeKind;
+use aweft_model::node_graph::{NodeGraphKind, SocketValue};
 use i_slint_backend_testing::init_no_event_loop;
-use slint::Model;
+use slint::{ComponentHandle, Model};
 
 /// 构造 MainWindow + 初始化编辑器（含绑定 NodeGraphState 全局）。
 fn setup() -> (MainWindow, Rc<RefCell<aweft_gui::store::AppStore>>) {
@@ -159,4 +162,82 @@ fn edge_drag_end_preserves_editor_and_areas() {
         assert_eq!(s.ui_models().style_graph.nodes.row_count(), 2);
         assert_eq!(s.ui_models().style_graph.chain_items.row_count(), 1);
     }
+}
+
+/// 布尔常量端口行里的真/假切换：走真实回调链（Slint invoke → dispatch → 投影），
+/// 一次覆盖「写回 model 端口默认值」和「视图模型行跟着刷新」。
+#[test]
+fn bool_const_toggle_writes_back() {
+    init_no_event_loop();
+    let (instance, store) = setup();
+    setup_callbacks(&instance, Rc::clone(&store));
+
+    let bool_template = app_templates()
+        .iter()
+        .position(|kind| matches!(kind, ApplicationNodeKind::BoolConst))
+        .expect("应用图模板里应有布尔常量");
+    {
+        let mut s = store.borrow_mut();
+        s.dispatch(Action::NodeGraph(NodeGraphAction::NewChain {
+            graph_type: NodeGraphKind::App,
+        }))
+        .unwrap();
+        s.dispatch(Action::NodeGraph(NodeGraphAction::AddNode {
+            graph_type: NodeGraphKind::App,
+            template_index: bool_template,
+            x: 0.0,
+            y: 0.0,
+        }))
+        .unwrap();
+        s.evaluate_depsgraph();
+    }
+
+    let node_index = {
+        let s = store.borrow();
+        (0..s.ui_models().app_graph.nodes.row_count())
+            .filter_map(|i| {
+                s.ui_models()
+                    .app_graph
+                    .nodes
+                    .row_data(i)
+                    .map(|node| (i, node))
+            })
+            .find(|(_, node)| node.title == "布尔常量")
+            .map(|(i, _)| i as i32)
+            .expect("新节点应已渲染进应用图编辑器")
+    };
+
+    // 布尔常量无输入，输出端口在组合下标里就是 0。
+    let toggle = |value: bool| {
+        instance
+            .global::<NodeGraphCallbacks>()
+            .invoke_socket_bool_toggled(GraphType::AppGraph, node_index, 0);
+        let s = store.borrow();
+        let graph =
+            &s.state().project.project().style_layer.graphs[s.ui_models().app_graph.current_chain];
+        let socket = graph
+            .nodes
+            .values()
+            .find(|node| matches!(node.kind, ApplicationNodeKind::BoolConst))
+            .and_then(|node| graph.sockets.get(&node.outputs[0]))
+            .expect("布尔常量应有输出端口");
+        assert!(
+            matches!(
+                socket.default_value,
+                Some(SocketValue::Bool(v)) if v == value
+            ),
+            "端口默认值应为 {value}"
+        );
+        let row = s
+            .ui_models()
+            .app_graph
+            .nodes
+            .row_data(node_index as usize)
+            .expect("节点行应已渲染");
+        let socket_row = row.sockets.row_data(0).expect("布尔常量应有一个端口行");
+        assert!(socket_row.bool_editor, "端口行应带真/假切换");
+        assert_eq!(socket_row.bool_value, value);
+    };
+    toggle(true);
+    toggle(false);
 }

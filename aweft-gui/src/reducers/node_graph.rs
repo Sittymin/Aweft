@@ -165,6 +165,27 @@ impl crate::store::AppStore {
                     NodeGraphChange::SocketValueChanged { node_id, socket_id },
                 )
             }
+            NodeGraphAction::SocketBoolToggled {
+                graph_type,
+                node_index,
+                socket_index,
+            } => {
+                crate::store::node_graph::toggle_socket_bool_default_dispatch(
+                    self,
+                    graph_type,
+                    node_index,
+                    socket_index,
+                );
+                let Some((node_id, socket_id)) =
+                    self.node_and_socket_id(graph_type, node_index, socket_index)
+                else {
+                    return Ok(vec![]);
+                };
+                (
+                    graph_type,
+                    NodeGraphChange::SocketValueChanged { node_id, socket_id },
+                )
+            }
             NodeGraphAction::NewChain { graph_type } => {
                 // reducer 只建链（model），返回目标下标；菜单/当前链/渲染由投影完成
                 let target = crate::store::node_graph::new_chain_dispatch(self, graph_type);
