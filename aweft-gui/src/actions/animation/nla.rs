@@ -10,6 +10,10 @@ use crate::bridge::types::SlintSelectionModifier;
 /// NLA 编辑器交互操作。
 #[derive(Debug, Clone)]
 pub enum NlaAction {
+    // —— 编辑目标 ——
+    /// Header 下拉切换编辑的动画片段：下标指向候选清单（`NlaEditorState::anim_order`）。
+    AnimDataSelected { index: i32 },
+
     // —— 片断 ——
     /// 片断按下：none=单选，shift/ctrl=追加切换。同时记录拖拽起点。
     StripPressed {

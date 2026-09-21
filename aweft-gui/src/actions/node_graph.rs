@@ -9,6 +9,7 @@
 
 use aweft_model::{
     application_graph::ApplicationNodeKind,
+    ids::AnimDataId,
     node_graph::{ColorRole, NodeGraphKind, NodeKind, StyleOpKind, VecOpKind},
 };
 
@@ -36,7 +37,8 @@ pub enum NodeGraphAction {
         x: f32,
         y: f32,
     },
-    /// 样式引用节点下拉选择样式链（C2：走删旧建新，不直接改 kind）。
+    /// 引用节点的下拉选择（两种引用共用）：样式链引用选样式链，非线性动画引用选
+    /// 动画片段。写入方式是原位改 kind 内嵌 id，不删节点、不动端口与连线。
     MenuSelected {
         graph_type: NodeGraphKind,
         node_index: usize,
@@ -128,6 +130,9 @@ pub fn app_templates() -> Vec<ApplicationNodeKind> {
         ApplicationNodeKind::Not,
         ApplicationNodeKind::TextConst,
         ApplicationNodeKind::BoolConst,
+        // 占位 AnimDataId：`store::node_graph::resolve_app_payload` 在添加时换成
+        // 库里按名排序的第一个动画片段（本函数拿不到库数据）。
+        ApplicationNodeKind::AnimRef(AnimDataId::new()),
         ApplicationNodeKind::ApplyMatch,
         ApplicationNodeKind::ApplyAnimation,
         ApplicationNodeKind::GroupOutput,

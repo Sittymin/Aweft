@@ -80,8 +80,9 @@ pub fn slint_key_to_model(k: &SlintKeyframe) -> ModelKeyframe {
     }
 }
 
-/// 由 Action 名称列表派生下拉菜单项（无前导色点/无分隔线）。
-pub fn build_action_menu_items(names: &[SharedString]) -> Vec<ContextMenuItem> {
+/// 由名字列表派生下拉菜单项（无前导色点/无分隔线）：摄影表 Header 的 Action 下拉
+/// 与 NLA Header 的动画片段下拉共用。
+pub fn build_name_menu_items(names: &[SharedString]) -> Vec<ContextMenuItem> {
     names
         .iter()
         .map(|name| ContextMenuItem {

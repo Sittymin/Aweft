@@ -21,7 +21,7 @@ use aweft_model::node_graph::{Node, NodeId, SocketValue};
 ///  `Action`（X 轴 `PositionRatioX` 常量居中、Y 轴 `PositionRatioY` 往复）
 /// → `AnimData`（单轨单片断，`StripPlacement::Full` 把一次往复拉伸铺满每行自身时长）
 /// → 样式链（默认样式，供应用动画取静态基线）
-/// → 应用链（布尔常量为条件 = 命中每一行 → 应用动画 → 组输出）。
+/// → 应用链（布尔常量为条件 = 命中每一行；非线性动画引用把动画片段连进应用动画 → 组输出）。
 ///
 /// 位置走「排版尺寸的分数」而不是排版像素：随视口等比缩放，和 `\move` 的像素单位解耦
 /// （两种单位的换算点唯一在 `aweft_convert::animate_to_ass::Cursor::anchor_at`）。
@@ -136,11 +136,13 @@ pub fn create_test_subtitle_animation(store: &mut AppStore) {
     graph
         .connect_raw(apply.outputs.application.id, group_out)
         .unwrap();
+    // 动画片段经「非线性动画引用」节点连线送进应用动画，不写端口默认值：
+    // 默认值在画布上不画边，用户看不出这条链用的是哪一段动画。
+    let anim_ref = graph
+        .add_node::<NodeId>(ApplicationNodeKind::AnimRef(anim_data_id), &[], &[])
+        .unwrap();
     graph
-        .set_socket_value(
-            apply.inputs.animation.id,
-            Some(SocketValue::Animation(anim_data_id)),
-        )
+        .connect_raw(graph.nodes[&anim_ref].outputs[0], apply.inputs.animation.id)
         .unwrap();
     store
         .state
@@ -296,5 +298,46 @@ mod tests {
                 to.x
             );
         }
+    }
+
+    /// 播种链用的动画片段是一条看得见的连线（非线性动画引用 → 应用动画的动画端口），
+    /// 不是端口默认值：默认值在画布上不画边，用户看不出这条链用的是哪一段动画。
+    #[test]
+    fn seeded_chain_links_anim_ref_into_apply_animation() {
+        use slint::Model;
+
+        i_slint_backend_testing::init_no_event_loop();
+        let instance = crate::bridge::types::MainWindow::new().unwrap();
+        let mut store = AppStore::new(&instance);
+        create_test_subtitle_animation(&mut store);
+        store.initialize_node_graph_editors(&instance);
+
+        let editor = &store.ui_models.app_graph;
+        let row_of = |title: &str| {
+            (0..editor.nodes.row_count())
+                .find(|&i| editor.nodes.row_data(i).unwrap().title.as_str() == title)
+                .unwrap_or_else(|| panic!("播种链应有 {title} 节点"))
+        };
+        let anim_ref = row_of("非线性动画引用");
+        let apply = row_of("应用动画");
+
+        // 下拉候选来自库里的动画片段（`refresh_anim_data_menu`），选中项是播种的那段
+        let row = editor.nodes.row_data(anim_ref).unwrap();
+        assert_eq!(row.menu_label.as_str(), "非线性动画");
+        assert_eq!(row.menu_options.row_count(), 1);
+        assert_eq!(row.menu_options.row_data(0).unwrap().as_str(), "字幕浮动");
+        assert_eq!(row.menu_selected, 0);
+
+        // 应用动画的输入顺序是 style / animation / condition，动画端口是第 1 个
+        assert!(
+            (0..editor.links.row_count())
+                .map(|i| editor.links.row_data(i).unwrap())
+                .any(|link| {
+                    link.from_node as usize == anim_ref
+                        && link.to_node as usize == apply
+                        && link.to_socket == 1
+                }),
+            "非线性动画引用的输出应连进应用动画的动画端口"
+        );
     }
 }

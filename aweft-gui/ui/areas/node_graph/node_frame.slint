@@ -75,8 +75,8 @@ export struct GraphNode {
     input-count: int,
     // 端口总行数 = max(输入, 输出)（两列各自独立从顶排），决定节点高度。
     socket-rows: int,
-    // 样式引用节点的下拉菜单行：menu-label 非空时在标题栏下显示
-    // "标签 + 下拉菜单"（选择引用的样式链）
+    // 引用节点的下拉菜单行：menu-label 非空时在标题栏下显示"标签 + 下拉菜单"。
+    // 样式链引用选样式链，非线性动画引用选动画片段；候选与选中下标都由 Rust 侧填。
     menu-label: string,
     menu-options: [string],
     menu-selected: int,
@@ -289,7 +289,8 @@ export component SocketInteractions inherits Rectangle {
     }
 }
 
-// 样式引用下拉菜单行：标题栏下"标签 + 下拉菜单"选择引用的样式链。
+// 引用节点的下拉菜单行：标题栏下"标签 + 下拉菜单"选择引用的对象
+// （样式链引用选样式链，非线性动画引用选动画片段）。
 // 独立组件便于 NodeFrame 组装（避免 NodeFrame 巨型化）。
 export component ReferenceMenuRow inherits Rectangle {
     in property <string> menu-label: "";
@@ -328,9 +329,11 @@ export component ReferenceMenuRow inherits Rectangle {
         border-width: 1px * view-zoom;
         border-color: Theme.data.node-editor.node-border;
         Text {
+            // 未选中（引用的对象已删或还没选）时的占位文案：按标签拼，
+            // 样式链引用读作「选择样式链」，非线性动画引用读作「选择非线性动画」。
             text: root.menu-options.length > 0 && root.menu-selected >= 0 && root.menu-selected < root.menu-options.length
                 ? root.menu-options[root.menu-selected]
-                : "选择样式链";
+                : "选择" + root.menu-label;
             x: 6px * view-zoom;
             width: parent.width - 12px * view-zoom;
             height: 100%;
@@ -369,7 +372,7 @@ export component NodeFrame inherits Rectangle {
     in property <float> view-zoom: 1.0;
     // 选中状态：整圈描边换成高亮色并加粗（Blender 用主题 select 色画节点轮廓）
     in property <bool> selected: false;
-    // 样式引用下拉菜单行（menu-label 非空才显示）
+    // 引用节点的下拉菜单行（样式链引用 / 非线性动画引用；menu-label 非空才显示）
     in property <string> menu-label: "";
     in property <[string]> menu-options;
     in property <int> menu-selected: -1;
@@ -389,7 +392,7 @@ export component NodeFrame inherits Rectangle {
     callback socket-drag-canceled();
     // 右键按下节点主体（未在端口拖拽中）：编辑据此弹出节点菜单（世界坐标）
     callback right-pressed(at-world-x: length, at-world-y: length);
-    // 点击样式引用下拉按钮：编辑据此在按钮位置弹出样式链选择菜单
+    // 点击引用节点的下拉按钮：编辑据此在按钮位置弹出候选菜单（样式链或动画片段）
     callback menu-requested();
     // 点击端口预设下拉按钮（socket-index 为组合数组下标）：编辑据此弹出预设菜单
     callback socket-menu-requested(socket-index: int);
@@ -414,7 +417,7 @@ export component NodeFrame inherits Rectangle {
     private property <length> node-radius: Theme.data.node-editor.node-border-radius * view-zoom;
     private property <length> title-font-size: Theme.data.node-editor.node-title-font-size * view-zoom;
     private property <length> socket-font-size: Theme.data.node-editor.node-socket-font-size * view-zoom;
-    // 下拉菜单行（仅样式引用节点）：标题栏与端口行之间的额外一行
+    // 下拉菜单行（仅引用节点：样式链引用 / 非线性动画引用）：标题栏与端口行之间的额外一行
     private property <length> menu-row-height: root.menu-label == "" ? 0px : socket-row-height;
 
     x: node-x * view-zoom + view-pan-x;
@@ -570,7 +573,7 @@ export component NodeFrame inherits Rectangle {
         }
     }
 
-    // 样式引用下拉菜单行（在端口拖拽 TouchArea 之后，避免按钮点击被 ta 抢走）
+    // 引用节点的下拉菜单行（在端口拖拽 TouchArea 之后，避免按钮点击被 ta 抢走）
     if root.menu-label != "": ReferenceMenuRow {
         y: header-height;
         menu-label: root.menu-label;

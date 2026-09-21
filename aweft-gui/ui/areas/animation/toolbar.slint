@@ -1,8 +1,11 @@
-// NLA 编辑器标题栏：通用 AreaHeader + 右侧操作按钮（占位）。
-// 中区显示当前编辑 Action 名称（与曲线编辑器一致，来自 AnimationState）。
+// NLA 编辑器标题栏：通用 AreaHeader + 中区动画片段下拉 + 右侧操作按钮（占位）。
+// 中区注入 Dropdown（与摄影表 Header 的 Action 下拉同位置同样式），数据来自 AnimationState。
+// 当前 Action 名不在这里显示：左侧轨道列表第 0 轨（全局 Action 轨）已经写着它。
 import { SlintKey, SlintAreaType } from "../../core/types.slint";
 import { AnimationState } from "../../bridge/state.slint";
+import { AnimationCallbacks } from "../../bridge/callbacks.slint";
 import { AreaHeader } from "../area_header.slint";
+import { Dropdown } from "../../widgets/dropdown.slint";
 
 export component NlaToolbar inherits Rectangle {
     in property <SlintKey> area-key;
@@ -14,13 +17,14 @@ export component NlaToolbar inherits Rectangle {
         area-key: root.area-key;
         area-type: root.area-type;
 
-        // 中区内容（@children）：当前编辑的 Action 名称
-        Text {
-            text: AnimationState.action-name;
-            color: #ffffff;
-            vertical-alignment: center;
-            font-size: 13px;
-            font-weight: 600;
+        // 中区（@children 注入）：选择编辑哪一段动画片段
+        Dropdown {
+            items: AnimationState.nla-anim-items;
+            current-index: AnimationState.current-nla-anim;
+            current-text: AnimationState.nla-anim-name;
+            selected(i) => {
+                AnimationCallbacks.nla-anim-selected(i);
+            }
         }
 
         // 右侧操作按钮（占位，作用由 Rust 侧数据驱动）

@@ -11,7 +11,7 @@ use crate::node_graph::{
     kind::{EvalCache, EvalContext, NodeTreeType},
     socket::{
         AnimationSocket, ApplicationSocket, ApplicationUnit, BoolSocket, IntSocket, SocketDecl,
-        SocketValue, StyleSocket, TextSocket,
+        SocketType, SocketValue, StyleSocket, TextSocket,
     },
     style::StyleResult,
     Node, NodeGraph, NodeHandle,
@@ -59,6 +59,10 @@ pub enum ApplicationNodeKind {
     Or,
     Not,
     AppRef(NodeGraphId),
+    /// 非线性动画引用：输出一条动画片段（`AnimData`）引用，供应用动画的动画端口
+    /// 按连线取用。与 `AppRef` 对称——引用对象不同（动画片段 vs 样式链），
+    /// 所以载荷是 `AnimDataId`。
+    AnimRef(AnimDataId),
     /// 字符串常量：输出一段文本（值由节点默认值提供，UI 节点内可编辑）。
     TextConst,
     /// 布尔常量：输出一个真/假（值由节点默认值提供，UI 节点内可切换）。条件支路
@@ -99,6 +103,15 @@ impl NodeTreeType for ApplicationNodeKind {
     }
 
     fn socket_decls(&self) -> Option<(Vec<SocketDecl>, Vec<SocketDecl>)> {
+        // 宏生成的目录按 kind 相等比较，认不出带载荷的变体。AppRef 的端口由添加方
+        // 传 `extra_outputs` 补；AnimRef 的添加方（GUI 的 `graph_add_node`）不传
+        // extras，所以它的固定输出口只能在这里声明。
+        if let ApplicationNodeKind::AnimRef(_) = self {
+            return Some((
+                Vec::new(),
+                vec![SocketDecl::output("animation", SocketType::Animation)],
+            ));
+        }
         get_application_socket_decls(self)
     }
 
@@ -247,6 +260,15 @@ impl NodeTreeType for ApplicationNodeKind {
                 cache.node_styles.insert(node_id, style);
             }
 
+            // 非线性动画引用：输出 kind 内嵌的动画片段 id，应用动画的动画端口经连线读它。
+            ApplicationNodeKind::AnimRef(anim_id) => {
+                if let Some(&sid) = node.outputs.first() {
+                    cache
+                        .socket_values
+                        .insert(sid, SocketValue::Animation(*anim_id));
+                }
+            }
+
             // 应用匹配：style（必须明确连接）+ condition → 应用单元，供组输出收集。
             ApplicationNodeKind::ApplyMatch => {
                 let style = required_style(graph, node, cache)?;
@@ -359,6 +381,23 @@ impl NodeTreeType for ApplicationNodeKind {
     fn set_reference_id(&mut self, new_id: NodeGraphId) -> Result<(), EvalError> {
         match self {
             ApplicationNodeKind::AppRef(id) => {
+                *id = new_id;
+                Ok(())
+            }
+            _ => Err(EvalError::NotReferenceNode),
+        }
+    }
+
+    fn anim_ref_id(&self) -> Option<AnimDataId> {
+        match self {
+            ApplicationNodeKind::AnimRef(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn set_anim_ref_id(&mut self, new_id: AnimDataId) -> Result<(), EvalError> {
+        match self {
+            ApplicationNodeKind::AnimRef(id) => {
                 *id = new_id;
                 Ok(())
             }
@@ -1162,5 +1201,73 @@ mod tests {
         g.set_socket_value(always.outputs.value.id, Some(SocketValue::Bool(false)))
             .unwrap();
         assert!(g.evaluate(&ctx).unwrap().is_none());
+    }
+
+    #[test]
+    fn anim_ref_node_feeds_apply_animation_by_link() {
+        // 非线性动画引用：动画片段 id 存在 kind 里，经连线（不是端口默认值）喂给
+        // 应用动画的动画端口——引用关系因此是图上看得见的一条边。
+        let mut g = ApplicationGraph::new("anim-ref");
+        let clip_id = AnimDataId::new();
+        let anim_ref = g
+            .add_node::<NodeId>(ApplicationNodeKind::AnimRef(clip_id), &[], &[])
+            .unwrap();
+        let style_ref = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::AppRef(NodeGraphId::new()),
+                &[],
+                &[SocketDecl::output("style", SocketType::Style)],
+            )
+            .unwrap();
+        let always: ApplicationNodeHandle<BoolConst> = g
+            .add_node(ApplicationNodeKind::BoolConst, &[], &[])
+            .unwrap();
+        let apply: ApplicationNodeHandle<ApplyAnimation> = g
+            .add_node(ApplicationNodeKind::ApplyAnimation, &[], &[])
+            .unwrap();
+        let group_out = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::GroupOutput,
+                &[SocketDecl::input("application", SocketType::Application)],
+                &[],
+            )
+            .unwrap();
+
+        // 添加时不传 extras：输出口来自 `socket_decls` 里为 AnimRef 声明的那一个
+        assert_eq!(g.nodes[&anim_ref].outputs.len(), 1);
+        g.connect_raw(g.nodes[&anim_ref].outputs[0], apply.inputs.animation.id)
+            .unwrap();
+        g.connect_raw(g.nodes[&style_ref].outputs[0], apply.inputs.style.id)
+            .unwrap();
+        g.connect(always.outputs.value, apply.inputs.condition)
+            .unwrap();
+        g.set_socket_value(always.outputs.value.id, Some(SocketValue::Bool(true)))
+            .unwrap();
+        g.connect_raw(apply.outputs.application.id, g.nodes[&group_out].inputs[0])
+            .unwrap();
+
+        let line_ctx = LineContext {
+            actor: String::new(),
+            line_text: String::new(),
+            line_index: 0,
+        };
+        let style_results = HashMap::new();
+        let ctx = EvalContext::app(&line_ctx, &style_results);
+        assert_eq!(
+            g.evaluate(&ctx).unwrap().unwrap().animation,
+            Some(clip_id),
+            "连线送来的动画片段应出现在匹配结果里"
+        );
+
+        // 原位换引用的动画片段：节点/端口/连线都不动，标脏让下次求值重算
+        let other_id = AnimDataId::new();
+        g.set_node_anim_ref(anim_ref, other_id).unwrap();
+        assert_eq!(g.evaluate(&ctx).unwrap().unwrap().animation, Some(other_id));
+
+        // 非线性动画引用之外的节点不接受这个操作
+        assert!(matches!(
+            g.set_node_anim_ref(style_ref, other_id),
+            Err(EvalError::NotReferenceNode)
+        ));
     }
 }

@@ -2192,6 +2192,18 @@ fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let s = Rc::clone(&store);
     instance
         .global::<AnimationCallbacks>()
+        .on_nla_anim_selected(move |index| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::AnimDataSelected { index })),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
         .on_nla_strip_drag_cancel(move || {
             dispatch_and_render(
                 &s,

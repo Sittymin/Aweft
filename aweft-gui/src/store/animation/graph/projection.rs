@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use slint::Model;
 
 use super::GraphEditorState;
-use crate::bridge::converters::build_action_menu_items;
+use crate::bridge::converters::build_name_menu_items;
 use crate::bridge::types::{
     SlintBezierHandle, SlintExtrapolation, SlintHandleMarker, SlintInterpolation, SlintKeyframe,
 };
@@ -446,7 +446,7 @@ impl GraphEditorState {
     /// 由 `actions` 清单重建下拉菜单项模型（Action 列表变化时调用）。
     fn rebuild_action_menu(&mut self) {
         let names: Vec<SharedString> = self.actions.iter().map(|a| a.name.clone()).collect();
-        self.action_items.set_vec(build_action_menu_items(&names));
+        self.action_items.set_vec(build_name_menu_items(&names));
     }
 
     // ── 共享同步 ────────────────────────────────────────────────────────

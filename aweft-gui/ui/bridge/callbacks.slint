@@ -222,6 +222,9 @@ export global AnimationCallbacks {
     callback nla-track-push-down();
     // 轨道列表搜索（空 = 全部）
     callback nla-search-changed(text: string);
+    // —— NLA 编辑器：Header 下拉 ——
+    // 切换编辑的动画片段（下标指向 Rust 侧候选清单）
+    callback nla-anim-selected(index: int);
     // —— 共享：当前时间（播放头） ——
     callback set-current-time(time: float);
     // —— 摄影表 Header：Action 选择下拉菜单 ——
