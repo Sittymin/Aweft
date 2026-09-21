@@ -125,9 +125,14 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
 线程上同步跑就等于每次动字幕冻住界面。`op_subtitle_script` 因此只把 `Project` 副本交给
 `store/subtitle_fit.rs` 的工作线程，进度经两条通道回到 UI 线程的 pump，pump 直接写
 `OverlayState.show-subtitle-fit-overlay`（与波形批次同属「后台增量」，不进依赖图），收尾才把
-脚本字节交给 `SubtitlePipeline::set_script`。并发策略是单飞 + 合并最新：同时最多一份在飞，
-期间新到的请求只置 `fit_pending`，手上这份跑完再用当时最新的数据补一份，遮罩在两次之间不撤。
-后台线程不回写任何真相——它的唯一产物是脚本文本，副本里过期的求值缓存只影响一次命中。
+脚本字节交给 `SubtitlePipeline::set_script`。这份进度画在**视口右上角**的小浮层上
+（`aweft-gui/ui/areas/viewport/subtitle_fit.slint`，live_dp 那张曲线图：曲线 + 网格 +
+有效性色带 + 当前格点 + 候选段，收尾逐段着色）。浮层刻意不做成模态：卡片里一个 TouchArea
+都没有，按下事件穿到它下面的画布上，拟合期间照常编辑——浮层只负责解释「画面为什么还是旧的」。
+并发策略是单飞 + 合并最新：同时最多一份在飞，期间新到的请求只置 `fit_pending`，手上这份
+跑完再用当时最新的数据补一份，浮层在两次之间不撤。后台线程不回写任何真相——它的唯一产物
+是脚本文本，副本里过期的求值缓存只影响一次命中。导出（还没实现）这类必须等结果的场合，
+将来另加一个阻塞式反馈，别拿这块角标当挡操作的遮罩用。
 
 **测试字幕动画的播种**（`aweft-gui/src/app/test_data.rs`，HACK，随真实工程流程落地后整块删除）：
 `create_test_subtitle_animation` 必须在 `initialize_node_graph_editors` **之前**调用——

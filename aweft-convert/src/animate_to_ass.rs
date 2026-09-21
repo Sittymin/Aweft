@@ -141,7 +141,7 @@ pub enum ProgressDetail {
     #[default]
     Light,
     /// `DpProgress.valid` 额外带上该格全部起点的有效性判据，供画有效性色带
-    /// （`live_dp` 与字幕拟合遮罩用它）。每格多分配一张布尔表，`is_valid` 次数不变。
+    /// （`live_dp` 与字幕拟合浮层用它）。每格多分配一张布尔表，`is_valid` 次数不变。
     Diagnostic,
 }
 
@@ -1204,7 +1204,7 @@ mod tests {
         );
     }
 
-    /// 轻量进度事件是界面遮罩唯一的输入：每条动画一份曲线图、按格点推进到满格、收尾
+    /// 轻量进度事件是界面浮层唯一的输入：每条动画一份曲线图、按格点推进到满格、收尾
     /// 给出分段路径，而且不带调试版那张逐起点有效性表。发不发进度不得改变转换结果。
     #[test]
     fn light_progress_events_drive_the_ui_overlay() {

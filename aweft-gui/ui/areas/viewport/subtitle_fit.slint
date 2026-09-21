@@ -1,4 +1,8 @@
-// 字幕拟合遮罩：编脚本的 DP 分段跑在后台线程，跑完之前用整屏遮罩挡住其余操作。
+// 字幕拟合浮层：编脚本的 DP 分段跑在后台线程，跑的过程中在**视口右上角**画一块局部画面报进度。
+// 它是纯显示物，不挡操作——整块卡片一个 TouchArea 都没有，按下事件直接穿到它下面的画布上，
+// 拟合期间照常编辑；期间新到的请求由 `store/subtitle_fit.rs` 的「单飞 + 合并最新」收口。
+// 只有非等结果不可的场合（导出）才该重新引入阻塞式遮罩，目前还没有这种场合。
+//
 // 卡片里画的就是那条正在分段的曲线，画法是 `aweft-convert/examples/live_dp.rs` 那一套：
 // 曲线 + 坐标网格 + 底部有效性色带 + 当前格点（黄）+ 本格候选段（绿）+ 已锁定分段（蓝），
 // 收尾再把最终分段逐段着色。
@@ -53,49 +57,41 @@ export struct SubtitleFitOverlayData {
 export component SubtitleFitOverlay inherits Rectangle {
     in property <SubtitleFitOverlayData> data;
 
-    x: 0px;
-    y: 0px;
-    width: 100%;
-    height: 100%;
+    // 位置与大小由使用方给（贴在视口右上角，见 `areas/viewport/view.slint`）：组件自己的
+    // 顶层绑定访问不到 `parent`，让开顶部标尺这类换算只能在实例化处做。
 
-    // 整屏遮罩：先声明，卡片在其后（更高 z 序）。挂 pointer-event 只为把本区域标成
-    // 可交互，从而吞掉落在其内的按下事件——拟合期间点不到底下任何控件。
-    TouchArea {
-        width: 100%;
-        height: 100%;
-        pointer-event(event) => {
-            // 有意留空：拟合不可中途取消，这里只吞事件。
-        }
-    }
-
+    // 卡片本体。原先这一层是「整屏半透明底 + TouchArea 吞事件」，用来在拟合期间挡住
+    // 整个窗口；现在它只是一块显示进度的小面板，不参与命中，事件穿到下面的画布上。
     Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000c0;
+        background: #0e0e12e6;
+        border-width: 1px;
+        border-color: #3a3a42;
+        border-radius: 8px;
+        clip: true;
 
         VerticalLayout {
-            width: min(880px, parent.width - 40px);
-            height: min(560px, parent.height - 40px);
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            padding: 16px;
-            spacing: 10px;
+            width: 100%;
+            height: 100%;
+            padding: 10px;
+            spacing: 6px;
 
             HorizontalLayout {
-                spacing: 10px;
+                spacing: 8px;
 
                 Text {
-                    text: "正在拟合字幕动画：{root.data.action-name}";
-                    font-size: 15px;
+                    text: "正在拟合：{root.data.action-name}";
+                    font-size: 12px;
                     color: #ffffff;
-                    horizontal-alignment: left;
+                    overflow: elide;
                     vertical-alignment: center;
                 }
                 Rectangle { min-width: 0px; horizontal-stretch: 1; }
                 Text {
                     visible: root.data.segments.length > 0;
                     text: "最终分段：{root.data.segments.length} 段";
-                    font-size: 13px;
+                    font-size: 11px;
                     color: #44cc44;
                     vertical-alignment: center;
                 }
@@ -103,7 +99,7 @@ export component SubtitleFitOverlay inherits Rectangle {
 
             // ── 画图区 ──────────────────────────────────────────────────────────
             Rectangle {
-                min-height: 120px;
+                min-height: 80px;
                 vertical-stretch: 1;
                 width: 100%;
                 background: #0d0d10;
@@ -209,16 +205,16 @@ export component SubtitleFitOverlay inherits Rectangle {
                     visible: root.data.end-label != "";
                     text: root.data.end-label;
                     x: parent.width * root.data.end-fraction - self.width / 2;
-                    y: 2px;
-                    font-size: 11px;
+                    y: 1px;
+                    font-size: 9px;
                     color: #ffee00;
                 }
                 Text {
                     visible: root.data.chosen-label != "";
                     text: root.data.chosen-label;
                     x: parent.width * root.data.chosen-fraction - self.width / 2;
-                    y: 16px;
-                    font-size: 11px;
+                    y: 12px;
+                    font-size: 9px;
                     color: #00ff00;
                 }
             }
@@ -228,23 +224,23 @@ export component SubtitleFitOverlay inherits Rectangle {
                 spacing: 8px;
 
                 Rectangle {
-                    height: 8px;
+                    height: 6px;
                     min-width: 0px;
                     horizontal-stretch: 1;
-                    border-radius: 4px;
+                    border-radius: 3px;
                     background: #333333;
 
                     Rectangle {
                         width: parent.width * root.data.percent / 100;
                         height: 100%;
-                        border-radius: 4px;
+                        border-radius: 3px;
                         background: #44cc44;
                     }
                 }
 
                 Text {
                     text: "{root.data.percent}%";
-                    font-size: 13px;
+                    font-size: 11px;
                     color: #aaaaaa;
                     vertical-alignment: center;
                 }
@@ -252,8 +248,9 @@ export component SubtitleFitOverlay inherits Rectangle {
 
             Text {
                 text: root.data.stats;
-                font-size: 12px;
+                font-size: 10px;
                 color: #8a8a92;
+                overflow: elide;
             }
         }
     }

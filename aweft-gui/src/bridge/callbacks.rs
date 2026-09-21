@@ -796,7 +796,7 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
 
 /// 装好字幕拟合的后台通路：建通道、起 UI 线程 pump、把发送端交给 `AppState`。
 ///
-/// 与波形批次同一套形状（后台增量直接写模型/遮罩，不走 reducer）。没装这条通路的
+/// 与波形批次同一套形状（后台增量直接写模型/浮层，不走 reducer）。没装这条通路的
 /// 场合（无头测试）里 `request_rebuild` 会自己跳过，投影不会退回同步慢路径去冻界面。
 fn setup_subtitle_fit(store: Rc<RefCell<AppStore>>) {
     let (ui_sender, ui_receiver) =

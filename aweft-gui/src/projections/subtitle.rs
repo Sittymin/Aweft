@@ -2,7 +2,7 @@
 //!
 //! 编脚本要遍历全部行、并对每条动画跑一次 DP 分段，是整条链里唯一的重活，因此它不在
 //! 这里跑：本投影只把工程快照提交给 `store::subtitle_fit` 的后台线程，跑完由那条路上
-//! 的 pump 把脚本换进通路，期间界面上盖着一层进度遮罩。逐帧那一侧只做 libass 出图与
+//! 的 pump 把脚本换进通路，期间视口右上角显示一块进度浮层，不挡操作。逐帧那一侧只做 libass 出图与
 //! 合成（见 `render::subtitle::pipeline`），所以 `handle_before_rendering` 照常出画面。
 
 use crate::depsgraph::Tag;

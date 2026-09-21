@@ -7,11 +7,14 @@
 //  - 横向/竖向标尺复用曲线编辑器的刻度文字（TickLabels，无背景、无刻度线、无网格），
 //    直接浮在页面上：顶部横标尺 = 水平像素，左侧竖标尺 = 垂直像素
 //  - 未加载视频时显示为黑色占位，加载后视频画面按 fill 铺在其内
+//  - 字幕拟合进行中，右上角贴一块进度浮层（live_dp 那张曲线图）；它不参与命中，
+//    按下事件照常穿到画布上，拟合期间可以继续编辑
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { TickLabels } from "../graph_editor/ruler.slint";
+import { SubtitleFitOverlay } from "./subtitle_fit.slint";
 import { Theme } from "../../theme/index.slint";
-import { DismissOverlayState, SubtitleState, VideoState } from "../../bridge/state.slint";
+import { DismissOverlayState, OverlayState, SubtitleState, VideoState } from "../../bridge/state.slint";
 import { VideoCallbacks } from "../../bridge/callbacks.slint";
 
 export component VideoPlayer inherits Rectangle {
@@ -338,6 +341,17 @@ export component VideoPlayer inherits Rectangle {
                 root.menu-open = true;
             }
         }
+    }
+
+    // 字幕拟合进度浮层：贴在视口右上角，纯显示物（卡片里没有 TouchArea），
+    // 按下事件穿到上面的 CanvasNavigation。声明在右键菜单之前：菜单要能盖住它。
+    if OverlayState.show-subtitle-fit-overlay: SubtitleFitOverlay {
+        data: OverlayState.subtitle-fit-overlay-data;
+        // `y` 让开视口顶部那 16px 的横向标尺；宽高各留余量，视口挤小时整块卡片仍在画布内。
+        width: min(420px, parent.width - 24px);
+        height: min(224px, parent.height - 40px);
+        x: parent.width - self.width - 12px;
+        y: 20px;
     }
 
     // 视频右键菜单：非主视频可设为主视频；所有视频可切换静音/更换视频。

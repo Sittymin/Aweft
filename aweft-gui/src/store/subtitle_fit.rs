@@ -1,17 +1,19 @@
-//! 字幕脚本拟合的后台通路：编脚本的 DP 分段跑在专用线程，UI 线程只收进度、只画遮罩。
+//! 字幕脚本拟合的后台通路：编脚本的 DP 分段跑在专用线程，UI 线程只收进度、只画视口
+//! 右上角那块浮层（`ui/areas/viewport/subtitle_fit.slint`）。浮层不挡操作，所以拟合期间
+//! 用户照常改东西、新请求照常进来——并发全靠下面第 1 点收口。
 //!
 //! 两件事叠在这里：
 //!
 //! 1. **单飞 + 合并最新**。同一时刻只允许一份拟合在跑，期间新到的请求只置一个待办标记，
-//!    等手上这份跑完再用**当时最新**的数据重跑一份，遮罩在两次之间不撤。
+//!    等手上这份跑完再用**当时最新**的数据重跑一份，浮层在两次之间不撤。
 //! 2. **逐行复用拟合结果**。工作线程身上挂一份 [`aweft_convert::SequenceFitCache`]：
-//!    挪动一行字幕只有那一行的键对不上，其余行直接复用。于是遮罩上通常只出现真正重跑的
-//!    那条动画——全命中时一个进度事件也没有，遮罩一闪即撤。
+//!    挪动一行字幕只有那一行的键对不上，其余行直接复用。于是浮层上通常只出现真正重跑的
+//!    那条动画——全命中时一个进度事件也没有，浮层一闪即撤。
 //!
 //! 后台线程拿到的是 `Project` 的副本，不回写任何真相——拟合的唯一产物是脚本文本。副本
 //! 自带的求值缓存可能比真身旧，那只影响一次缓存命中，不影响结果。
 //!
-//! 遮罩画的是 `aweft-convert/examples/live_dp.rs` 那张图：曲线 + 网格 + 底部有效性色带
+//! 浮层画的是 `aweft-convert/examples/live_dp.rs` 那张图：曲线 + 网格 + 底部有效性色带
 //! + 当前格点（黄）+ 本格候选段（绿）+ 已锁定前缀（蓝），收尾再把最终分段逐段着色。这些
 //! 线全部由 Rust 拼成 `Path.commands` 字符串——Slint 的 `Path` 子元素不支持 `for` 重复
 //! （`compile_paths.rs` 直接报错）。坐标统一归一到 0..1000 × 0..400 的 viewbox。
@@ -27,7 +29,7 @@ use futures::StreamExt;
 use crate::bridge::types::{FitSegmentInfo, SubtitleFitOverlayData};
 use crate::store::AppStore;
 
-/// 曲线图 viewbox。必须与 `ui/screen/overlays/subtitle_fit.slint` 里每个 `Path` 写死的
+/// 曲线图 viewbox。必须与 `ui/areas/viewport/subtitle_fit.slint` 里每个 `Path` 写死的
 /// `viewbox-width: 1000` / `viewbox-height: 400` 一致。
 const CHART_WIDTH: f64 = 1000.0;
 const CHART_HEIGHT: f64 = 400.0;
@@ -56,7 +58,7 @@ const SEGMENT_COLORS: [(u8, u8, u8); 5] = [
 /// 后台送回 UI 线程的消息。`generation` 是请求序号，用于丢弃过期消息。
 #[derive(Debug)]
 pub enum FitMessage {
-    /// 转换进度（`ProgressDetail::Diagnostic` 那组），只用来画遮罩。
+    /// 转换进度（`ProgressDetail::Diagnostic` 那组），只用来画浮层。
     Progress {
         generation: u64,
         event: ProgressEvent,
@@ -142,7 +144,7 @@ fn run_job(job: FitJob, cache: &mut aweft_convert::SequenceFitCache) {
     let _ = ui_sender.unbounded_send(FitMessage::Finished { generation, script });
 }
 
-/// 提交一次拟合请求。遮罩立即盖上，脚本在后台线程编好后由 pump 换进字幕通路。
+/// 提交一次拟合请求。浮层立即显出（不挡操作），脚本在后台线程编好后由 pump 换进字幕通路。
 ///
 /// 门禁与同步版一致：字幕通路还没建好时不做（`handle_rendering_setup` 建好会再调一次）。
 /// 通道没装（无头测试不启动 pump）时也跳过——脚本只是显示产物，没人收就别白跑一趟。
@@ -177,7 +179,7 @@ pub(crate) fn request_rebuild(store: &mut AppStore) {
     show_blank_overlay(store);
 }
 
-/// 一份拟合跑完后的收尾：换上脚本，再按待办标记决定重跑一份还是撤遮罩。
+/// 一份拟合跑完后的收尾：换上脚本，再按待办标记决定重跑一份还是撤浮层。
 fn settle(store: &mut AppStore, generation: u64, script: Option<Vec<u8>>) {
     let pending;
     {
@@ -246,14 +248,14 @@ fn apply(store: &Rc<RefCell<AppStore>>, session: &mut Option<Session>, message: 
             if store.borrow().state().fit_generation != generation {
                 return;
             }
-            // 遮罩的去留由 `settle` 定；先丢掉这一场，别让随后的重绘把它盖回去。
+            // 浮层的去留由 `settle` 定；先丢掉这一场，别让随后的重绘把它显回去。
             *session = None;
             settle(&mut store.borrow_mut(), generation, script);
         }
     }
 }
 
-/// 一场拟合在遮罩上的状态。曲线与网格是每条动画算一次的静态部分，DP 逐格往前推的是
+/// 一场拟合在浮层上的状态。曲线与网格是每条动画算一次的静态部分，DP 逐格往前推的是
 /// `end`/`chosen`/`valid` 这三样，外加从 `parents` 回溯出来的已锁定前缀。
 struct Session {
     name: String,
@@ -549,7 +551,7 @@ fn span_or_one(span: f64) -> f64 {
     if span > 1e-12 { span } else { 1.0 }
 }
 
-/// 一份什么都没有的遮罩数据：新请求盖上遮罩时先清场，别把上一场的曲线留在屏上。
+/// 一份什么都没有的浮层数据：新请求显出浮层时先清场，别把上一场的曲线留在屏上。
 fn blank_data() -> SubtitleFitOverlayData {
     SubtitleFitOverlayData {
         action_name: slint::SharedString::default(),
@@ -572,7 +574,7 @@ fn blank_data() -> SubtitleFitOverlayData {
     }
 }
 
-/// 盖上遮罩并清场。
+/// 显出浮层并清场。
 fn show_blank_overlay(store: &AppStore) {
     let Some(overlay) = store.overlay_state.as_ref().and_then(|weak| weak.upgrade()) else {
         return;

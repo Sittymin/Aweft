@@ -10,7 +10,6 @@ import {
     CloseAreaOverlays,
     CloseAreaOverlayData,
 } from "../screen/overlays/close_area.slint";
-import { SubtitleFitOverlay } from "../screen/overlays/subtitle_fit.slint";
 import { ScrEdgeDisplay } from "../screen/edges/edge_display.slint";
 import { ScrEdgeTouchArea } from "../screen/edges/edge_touch_area.slint";
 import { SlintScrArea } from "../screen/area_container.slint";
@@ -148,9 +147,4 @@ export component MainWindow inherits Window {
     }
     // 顶栏高度会合并到 safe-inset-top，供 Rust 布局预留。
     out property <length> menu-bar-height: menu-bar.bar-height;
-
-    // 字幕拟合遮罩：最后一层，盖在顶栏之上，拟合期间整个窗口点不动。
-    if OverlayState.show-subtitle-fit-overlay: SubtitleFitOverlay {
-        data: OverlayState.subtitle-fit-overlay-data;
-    }
 }

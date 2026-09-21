@@ -30,7 +30,7 @@ import {
 } from "../screen/overlays/close_area.slint";
 import {
     SubtitleFitOverlayData,
-} from "../screen/overlays/subtitle_fit.slint";
+} from "../areas/viewport/subtitle_fit.slint";
 
 export global VideoState {
     // 每个会话的最新视频帧（首帧到来前为空图）
@@ -180,8 +180,9 @@ export global OverlayState {
     in property <JoinHighlightOverlayData> join-highlight-overlay-data;
     in property <bool> show-close-area-overlays: false;
     in property <[CloseAreaOverlayData]> close-area-overlay-datas;
-    // 字幕拟合遮罩：脚本在后台线程编，编完之前盖住整个窗口。由 UI 线程上的进度
-    // pump 直接写（不走 depsgraph，理由同波形批次：它是后台增量，不是状态变更）。
+    // 字幕拟合浮层的显隐：脚本在后台线程编，编的过程中在视口右上角（`areas/viewport/
+    // subtitle_fit.slint`）显示这份进度，不挡操作。由 UI 线程上的进度 pump 直接写
+    // （不走 depsgraph，理由同波形批次：它是后台增量，不是状态变更）。
     in property <bool> show-subtitle-fit-overlay: false;
     in property <SubtitleFitOverlayData> subtitle-fit-overlay-data;
 }
