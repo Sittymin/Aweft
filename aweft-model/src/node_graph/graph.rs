@@ -377,8 +377,22 @@ impl<K: NodeTreeType> NodeGraph<K> {
 
     /// 求值：遍历脏节点（拓扑序），再按树类型收集图级结果。
     pub fn evaluate(&mut self, ctx: &EvalContext) -> Result<K::Result, EvalError> {
+        // 缓存按行有效。应用图每行求值一次，而 `ensure_node_evaluated` 只重算脏节点：
+        // 行信息变了却不标脏的话，第二行会直接沿用第一行的 `ContextInput` 输出。
+        let line_key = ctx.line.map(|line| line.item_id);
+        if self
+            .cache
+            .as_ref()
+            .is_some_and(|cache| cache.line_key != line_key)
+        {
+            self.cache = None;
+            self.dirty = self.nodes.keys().copied().collect();
+        }
         if self.cache.is_none() {
-            self.cache = Some(EvalCache::default());
+            self.cache = Some(EvalCache {
+                line_key,
+                ..EvalCache::default()
+            });
             if self.dirty.is_empty() {
                 self.dirty = self.nodes.keys().copied().collect();
             }
@@ -492,6 +506,19 @@ impl NodeTreeType for NodeKind {
                     .and_then(|up| cache.node_styles.get(&up).cloned())
                     .unwrap_or_default();
                 let result = apply_style_op(graph, node, kind, style, &cache.socket_values)?;
+                // 设位置还额外把位置本身作为 Vec2 数据输出，供下游参与运算。没写位置时
+                // 删掉缓存值，下游才会退回 socket 默认值，而不是拿到上一次的旧数字。
+                if matches!(kind, NodeKind::StyleOp(StyleOpKind::SetPosition)) {
+                    let value = result
+                        .position
+                        .map(|p| SocketValue::Vec2 { x: p.x, y: p.y });
+                    if let Some(&sid) = node.outputs.get(1) {
+                        match value {
+                            Some(v) => cache.socket_values.insert(sid, v),
+                            None => cache.socket_values.remove(&sid),
+                        };
+                    }
+                }
                 cache.node_styles.insert(node_id, result);
             }
 

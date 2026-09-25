@@ -107,6 +107,7 @@ impl AppStore {
             Action::Area(area_action) => self.dispatch_area(area_action),
             Action::Media(act) => self.dispatch_media(act),
             Action::Sequence(act) => self.dispatch_sequence(act),
+            Action::Subtitle(act) => self.dispatch_subtitle(act),
             Action::NodeGraph(act) => self.dispatch_node_graph(act),
             Action::Animation(act) => self.dispatch_animation(act),
         }

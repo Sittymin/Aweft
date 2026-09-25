@@ -30,7 +30,7 @@ pub use sequence::{
     op_sequence_collapse, op_sequence_selection, op_sequence_structure, op_sequence_timecode,
 };
 pub use subtitle::op_subtitle_script;
-pub(crate) use subtitle::subtitle_rebuild_script;
+pub(crate) use subtitle::{subtitle_rebuild_script, ui_sync_subtitle_boxes};
 pub use video::{
     ui_project_video_mute, ui_project_video_playback, ui_project_video_position,
     ui_project_video_selection, ui_project_video_structure, ui_project_video_time,

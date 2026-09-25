@@ -4,7 +4,7 @@
 //! 画面上有哪些字形块（一块单通道覆盖 + 一个颜色 + 一个帧内位置）。把这些块
 //! 铺成纹理、贴进窗口是渲染层的事，它不需要知道 libass 的存在。
 
-use aweft_libass::{color::AssColorRgba, AssScriptRenderer};
+use aweft_libass::{color::AssColorRgba, AssScriptRenderer, ImageType};
 use thiserror::Error;
 
 /// 脚本渲染失败。字形块的具体来源（libass）不外泄，只带一句人话。
@@ -15,6 +15,18 @@ pub struct RenderError {
 }
 
 type Result<T> = std::result::Result<T, RenderError>;
+
+/// 字形块的类别。阴影块带一段固定偏移，量一行字幕的框时要把它们排除，
+/// 否则框会朝阴影方向虚出一截。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileKind {
+    /// 正文填充
+    Glyph,
+    /// 描边
+    Outline,
+    /// 阴影
+    Shadow,
+}
 
 /// 一块字形覆盖：libass 已把一段文字（或它的描边、阴影）合并成一张单通道图。
 #[derive(Debug, Clone)]
@@ -27,6 +39,7 @@ pub struct Tile {
     /// 块左上角在渲染帧内的像素坐标
     pub x: i32,
     pub y: i32,
+    pub kind: TileKind,
     color: AssColorRgba,
 }
 
@@ -41,7 +54,12 @@ impl Tile {
 /// 一次 `render` 的结果。
 #[derive(Debug)]
 pub struct Frame {
-    /// 该时刻画面上的字形块，按 libass 给出的顺序（同层内后画的压在前面的上面）
+    /// 该时刻画面上的字形块，按 libass 给出的顺序（同层内后画的压在前面的上面）。
+    ///
+    /// 这个顺序有一件事是**承重的**：libass 先按 `(Layer, ReadOrder)` 排事件，再把每个
+    /// 事件的块**连续**接进列表（`ass_render.c` 的 `qsort` + 尾部拼接）。也就是说同一层
+    /// 内，块按脚本里 `Dialogue` 的先后成段出现。视口命中就靠这一点把块还原成每一行的框
+    /// （`aweft-gui/src/render/subtitle`）——把两段合并、或者改序，都会让它静默错位。
     pub tiles: Vec<Tile>,
     /// 与上一次调用相比字形块列表是否变了。静止的字幕据此跳过重绘。
     pub changed: bool,
@@ -126,6 +144,11 @@ impl Renderer {
                 height: image.height() as usize,
                 x: image.dst_x(),
                 y: image.dst_y(),
+                kind: match image.image_type() {
+                    ImageType::Character => TileKind::Glyph,
+                    ImageType::Outline => TileKind::Outline,
+                    ImageType::Shadow => TileKind::Shadow,
+                },
                 color: image.color(),
             })
             .collect();

@@ -6,6 +6,8 @@ pub(crate) mod project_watch;
 pub mod sequence;
 pub mod sequence_rows_model;
 pub mod state;
+pub mod subtitle;
+pub mod subtitle_chains;
 pub mod subtitle_fit;
 pub mod ui_models;
 pub mod utils;

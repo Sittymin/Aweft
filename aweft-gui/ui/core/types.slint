@@ -218,3 +218,17 @@ export struct SlintVideoPos {
     x: float,
     y: float,
 }
+
+// 视口里一行字幕的包围框。坐标是**排版像素**，与视口世界坐标同一基准（字幕覆盖层
+// 矩形就按主视频的世界矩形定位），因此视口画它时只需乘自己的缩放。
+// Rust 每次出帧从 libass 的字形块还原出来（`src/render/subtitle/hits.rs`）。
+export struct SlintSubtitleBox {
+    // 这一行字幕的 ItemId 字符串：序列编辑器与视口共用的行身份
+    item-id: string,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    // 该行是否已在序列里被选中（选中才描包围框）
+    selected: bool,
+}

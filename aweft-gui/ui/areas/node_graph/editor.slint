@@ -67,11 +67,16 @@ export component NodeGraphEditor inherits Rectangle {
     private property <length> drag-x: 0px;
     private property <length> drag-y: 0px;
 
-    // 第 i 个端口垂直中心相对节点顶部的偏移。
-    // 引用节点（样式链引用 / 非线性动画引用）多一行下拉菜单（menu-label 非空），端口整体下移一格。
-    function socket-offset(node-idx: int, idx: int) -> length {
-        let menu: length = root.nodes[node-idx].menu-label != "" ? Theme.data.node-editor.node-socket-row-height : 0px;
-        return Theme.data.node-editor.node-header-height + menu + idx * Theme.data.node-editor.node-socket-row-height + Theme.data.node-editor.node-socket-row-height / 2;
+    // 某个端口圆点的垂直中心（相对节点顶部）。圆点固定画在该口的第一行，而数值口
+    // 一个分量占一行、后面的口会往后挪，所以行号只能读模型里的 socket.row。
+    // col-idx 是列内下标：输入列就是 sockets 的前段，输出列要跳过 input-count。
+    function socket-offset(node-idx: int, is-input: bool, col-idx: int) -> length {
+        let node = root.nodes[node-idx];
+        let socket = is-input ? node.sockets[col-idx] : node.sockets[node.input-count + col-idx];
+        let menu: length = node.menu-label != "" ? Theme.data.node-editor.node-socket-row-height : 0px;
+        return Theme.data.node-editor.node-header-height + menu
+            + socket.row * Theme.data.node-editor.node-socket-row-height
+            + Theme.data.node-editor.node-socket-row-height / 2;
     }
 
     // 背景点阵（Blender 式层级）；未编辑链时切换为灰色叉叉背景（空状态）
@@ -99,9 +104,9 @@ export component NodeGraphEditor inherits Rectangle {
     for link[i] in root.links: GraphNodeLink {
         visible: root.chain-editing && !(root.link-dragging && i == root.drag-link-index);
         from-x: (nodes[link.from-node].x + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
-        from-y: (nodes[link.from-node].y + root.socket-offset(link.from-node, link.from-socket)) * nav.zoom + nav.pan-y;
+        from-y: (nodes[link.from-node].y + root.socket-offset(link.from-node, false, link.from-socket)) * nav.zoom + nav.pan-y;
         to-x: nodes[link.to-node].x * nav.zoom + nav.pan-x;
-        to-y: (nodes[link.to-node].y + root.socket-offset(link.to-node, link.to-socket)) * nav.zoom + nav.pan-y;
+        to-y: (nodes[link.to-node].y + root.socket-offset(link.to-node, true, link.to-socket)) * nav.zoom + nav.pan-y;
         data-type: link.data-type;
         view-zoom: nav.zoom;
     }
@@ -133,6 +138,9 @@ export component NodeGraphEditor inherits Rectangle {
         }
         socket-input-changed(socket-idx, text) => {
             NodeGraphCallbacks.socket-input-changed(root.graph-type, i, socket-idx, text);
+        }
+        socket-number-changed(socket-idx, field, text) => {
+            NodeGraphCallbacks.socket-number-changed(root.graph-type, i, socket-idx, field, text);
         }
         socket-bool-toggled(socket-idx) => {
             NodeGraphCallbacks.socket-bool-toggled(root.graph-type, i, socket-idx);
@@ -166,7 +174,7 @@ export component NodeGraphEditor inherits Rectangle {
     // 拖拽中的连线（屏幕坐标）：位于端口上层，已连接端泛白、拖拽端接口色、中间渐变
     if root.link-dragging: GraphNodeLink {
         from-x: (nodes[root.drag-from-node].x + Theme.data.node-editor.node-width) * nav.zoom + nav.pan-x;
-        from-y: (nodes[root.drag-from-node].y + root.socket-offset(root.drag-from-node, root.drag-from-socket)) * nav.zoom + nav.pan-y;
+        from-y: (nodes[root.drag-from-node].y + root.socket-offset(root.drag-from-node, false, root.drag-from-socket)) * nav.zoom + nav.pan-y;
         to-x: root.drag-x * nav.zoom + nav.pan-x;
         to-y: root.drag-y * nav.zoom + nav.pan-y;
         data-type: root.drag-type;
@@ -378,12 +386,11 @@ export component NodeGraphEditor inherits Rectangle {
         menu-mode = 3;
         let n = root.nodes[node-id];
         let s = n.sockets[socket-idx];
-        // 列内 row：sockets 数组 = 输入 0..input-count + 输出 input-count..
-        let socket-row: int = socket-idx < n.input-count ? socket-idx : socket-idx - n.input-count;
         // 左对齐端口下拉按钮（节点右缘 - socket - 按钮宽 58px），菜单从其下方弹出
         menu-screen-x = (n.x + Theme.data.node-editor.node-width - Theme.data.node-editor.socket-size - 58px) * nav.zoom + nav.pan-x;
-        // 按钮位于端口行内，菜单从其下方弹出（+ 一行行高）
-        menu-screen-y = (n.y + Theme.data.node-editor.node-header-height + (socket-row + 1) * Theme.data.node-editor.node-socket-row-height) * nav.zoom + nav.pan-y;
+        // 按钮画在该口第一行，菜单从该口最后一行的下沿弹出（数值口占好几行）
+        menu-screen-y = (n.y + Theme.data.node-editor.node-header-height
+            + (s.row + s.span) * Theme.data.node-editor.node-socket-row-height) * nav.zoom + nav.pan-y;
         menu-open = true;
     }
 
@@ -428,7 +435,8 @@ export component NodeGraphEditor inherits Rectangle {
             // 拖输出端：拉新线
             drag-link-index = -1;
             drag-from-node = node-id;
-            drag-from-socket = socket-index;
+            // 报来的是 sockets 组合下标（输入在前），换成输出列内下标
+            drag-from-socket = socket-index - root.nodes[node-id].input-count;
         }
         drag-type = data-type;
         drag-x = wx;

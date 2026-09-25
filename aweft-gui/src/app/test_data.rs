@@ -200,7 +200,8 @@ mod tests {
             (1920, 1080),
             &aweft_convert::ConvertOptions::default(),
         )
-        .unwrap();
+        .unwrap()
+        .ass;
         let script = String::from_utf8(ass.to_bytes().unwrap()).unwrap();
         let dialogues: Vec<&str> = script
             .lines()

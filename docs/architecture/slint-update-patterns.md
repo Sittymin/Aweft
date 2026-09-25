@@ -38,6 +38,18 @@ LineEditor：`FilterModel` 折叠过滤 + `MapModel` 映射，不手动维护 `k
 
 通知必须由源模型发出，禁止直接往 UI 行模型链末端操作（会绕过 MapModel）。
 
+## 逐帧重建的实时模型
+
+实时例外通路（`before_rendering` 里重算的那类：帧图像、逐帧播放时钟、字幕行框）每帧都算一份
+全量行数据，出口**必须先 diff 再写**：`set_row_data` 无条件发 `row_changed`，通知引发重绘，
+重绘又回到 `before_rendering`——不比对旧值就把重绘循环自己转起来了。写法是逐行比、只在值不同
+时 `set_row_data`，尾部多出来的行 `remove`，缺的 `push`；行数不变且逐个全等时一个通知都不发。
+比对要求行类型 `PartialEq`（Slint 的 Rust 结构体已自带）。
+
+这类模型同样禁用 `set_vec`/`clear`/换模型实例：它们是 `reset`，Repeater 会全量清空重建，逐帧
+调用等于每帧销毁重建一遍组件。模型实例在 `setup` 时装一次（`slint::ModelRc::from(rc.clone())`），
+之后只做行级操作。
+
 ## 其他
 
 - Screen：`set_row_data`（几何局部）/ `insert`、`remove`（split/join）/ `set_vec`

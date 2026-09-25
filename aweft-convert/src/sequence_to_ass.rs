@@ -36,7 +36,7 @@ pub fn sequence_to_ass(
     project: &mut Project,
     frame_size: (u32, u32),
     opts: &ConvertOptions,
-) -> Result<ASSFile, ApplicationError> {
+) -> Result<Converted, ApplicationError> {
     let mut cache = SequenceFitCache::default();
     sequence_to_ass_with_cache(project, frame_size, opts, &mut cache)
 }
@@ -50,7 +50,7 @@ pub fn sequence_to_ass_with_cache(
     frame_size: (u32, u32),
     opts: &ConvertOptions,
     cache: &mut SequenceFitCache,
-) -> Result<ASSFile, ApplicationError> {
+) -> Result<Converted, ApplicationError> {
     // 拆开借用：sequence 全程只读，而 node_graphs 与 style_layer 求值时要写各自
     // 的求值缓存（NodeGraph::evaluate 与 ApplicationLayer::evaluate_matches 都收 &mut self）。
     let Project {
@@ -64,6 +64,7 @@ pub fn sequence_to_ass_with_cache(
     cache.begin_run(animation_library_text(library));
 
     let mut ass = ASSFile::new();
+    let mut lines = Vec::new();
     ass.script_info.layout_res_x = frame_size.0;
     ass.script_info.layout_res_y = frame_size.1;
     ass.styles
@@ -83,6 +84,7 @@ pub fn sequence_to_ass_with_cache(
                 actor: actor_name(library, event),
                 line_text: event.text.clone(),
                 line_index: index as i64,
+                item_id,
             },
             &style_results,
         )?;
@@ -131,17 +133,68 @@ pub fn sequence_to_ass_with_cache(
             });
         }
         for segment in segments {
-            ass.events.push(Event::Dialogue(dialogue(
+            let dialogue = dialogue(
                 start_ms + segment.start_ms,
                 start_ms + segment.end_ms,
                 segment.tags,
                 &text,
-            )));
+            );
+            lines.push(LineHit::of(&dialogue, item_id));
+            ass.events.push(Event::Dialogue(dialogue));
         }
     }
 
     cache.end_run(&seen);
-    Ok(ass)
+    Ok(Converted { ass, lines })
+}
+
+/// 一次转换的产物：脚本，和一份与脚本里 `Dialogue` **同序、等长**的行索引。
+///
+/// 索引不进脚本、也不从脚本反解：导出只需要 `ass`，视口命中需要 `lines`。
+pub struct Converted {
+    pub ass: ASSFile,
+    pub lines: Vec<LineHit>,
+}
+
+/// 一条 `Dialogue` 属于哪一行字幕，以及它在画面上可被辨认的那几点信息。
+///
+/// 视口要靠它把 libass 吐出的字形块配回具体某一行：块列表按 `(layer, 这里的下标)` 成段
+/// 出现（见 `aweft_ass::render::Frame::tiles`），`anchor` 用来在段数对不上时兜底配位。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineHit {
+    pub item_id: ItemId,
+    /// `Dialogue.layer`：libass 先按它给事件分组排序
+    pub layer: i32,
+    /// 生效区间，毫秒，取脚本里写进去的厘秒值（与 libass 的事件判定同一口径：
+    /// `start <= now < end`）
+    pub start_ms: i64,
+    pub end_ms: i64,
+    /// 这段带的 `\pos`（排版像素，锚点是**行框底部中点**）。没有就是 `None`：
+    /// 位置由对齐边距定死，多行之间再由 libass 的碰撞挤开。
+    pub anchor: Option<(f64, f64)>,
+}
+
+impl LineHit {
+    fn of(dialogue: &Dialogue, item_id: ItemId) -> Self {
+        let mut anchor = None;
+        for segment in &dialogue.content {
+            let TextSegment::Overrides(tags) = segment else {
+                continue;
+            };
+            for tag in tags {
+                if let StyleTag::Position(p) = tag {
+                    anchor = Some((p.x, p.y));
+                }
+            }
+        }
+        Self {
+            item_id,
+            layer: dialogue.layer,
+            start_ms: dialogue.start.as_centiseconds() * 10,
+            end_ms: dialogue.end.as_centiseconds() * 10,
+            anchor,
+        }
+    }
 }
 
 /// 一行拟合结果的键：`match_to_ass_tags` 读到的全部输入。
@@ -348,8 +401,8 @@ mod tests {
     /// 因为预览交给 libass 的就是这份字节。
     fn script_text(project: &mut Project) -> String {
         let opts = ConvertOptions::default();
-        let ass = sequence_to_ass(project, (1920, 1080), &opts).unwrap();
-        String::from_utf8(ass.to_bytes().unwrap()).unwrap()
+        let converted = sequence_to_ass(project, (1920, 1080), &opts).unwrap();
+        String::from_utf8(converted.ass.to_bytes().unwrap()).unwrap()
     }
 
     fn dialogue_lines(text: &str) -> Vec<&str> {
@@ -413,6 +466,122 @@ mod tests {
         );
     }
 
+    /// 视口拖动将要生成的那两条链，端到端只作用在它绑定的那一行上。
+    ///
+    /// 同时验两件事：行身份（`LineContext.item_id` + `TextEq`）能不能锁定一行，以及求值
+    /// 缓存是否换行作废——不作废时第二行会沿用第一行的命中结果，两行标签变得一样。
+    #[test]
+    fn a_per_line_chain_hits_only_its_own_line() {
+        use aweft_model::application_graph::{ApplicationGraph, ApplicationNodeKind};
+        use aweft_model::node_graph::{
+            NodeGraph, NodeId, NodeKind, SocketDecl, SocketType, SocketValue, StyleOpKind,
+        };
+
+        let mut project = Project::new();
+        let moved = project
+            .sequence
+            .create_event(event(0, 1_000, "甲"), ItemLocation::Root(0))
+            .unwrap();
+        let untouched = project
+            .sequence
+            .create_event(event(0, 1_000, "乙"), ItemLocation::Root(1))
+            .unwrap();
+
+        // 样式链：StyleSource → SetPosition(排版像素) → 组输出
+        let mut chain = NodeGraph::new("视口位置");
+        let source = chain
+            .add_node::<NodeId>(NodeKind::StyleSource, &[], &[])
+            .unwrap();
+        let set_pos = chain
+            .add_node::<NodeId>(NodeKind::StyleOp(StyleOpKind::SetPosition), &[], &[])
+            .unwrap();
+        let style_out = chain.add_node::<NodeId>(NodeKind::GroupOutput, &[], &[]).unwrap();
+        chain
+            .connect_raw(
+                chain.nodes[&source].outputs[0],
+                chain.nodes[&set_pos].inputs[0],
+            )
+            .unwrap();
+        chain
+            .connect_raw(
+                chain.nodes[&set_pos].outputs[0],
+                chain.nodes[&style_out].inputs[0],
+            )
+            .unwrap();
+        chain
+            .set_socket_value(
+                chain.nodes[&set_pos].inputs[1],
+                Some(SocketValue::Vec2 { x: 300.0, y: 400.0 }),
+            )
+            .unwrap();
+        let chain_id = chain.id;
+        project.library.node_graphs.insert(chain_id, chain);
+
+        // 应用链：上下文 id 全等本行 → 条件；样式链引用 → 应用匹配 → 组输出
+        let mut app = ApplicationGraph::new("视口位置");
+        let ctx = app
+            .add_node::<NodeId>(ApplicationNodeKind::ContextInput, &[], &[])
+            .unwrap();
+        let eq = app
+            .add_node::<NodeId>(ApplicationNodeKind::TextEq, &[], &[])
+            .unwrap();
+        let style_ref = app
+            .add_node::<NodeId>(
+                ApplicationNodeKind::AppRef(chain_id),
+                &[],
+                &[SocketDecl::output("style", SocketType::Style)],
+            )
+            .unwrap();
+        let apply = app
+            .add_node::<NodeId>(ApplicationNodeKind::ApplyMatch, &[], &[])
+            .unwrap();
+        let app_out = app
+            .add_node::<NodeId>(
+                ApplicationNodeKind::GroupOutput,
+                &[SocketDecl::input("application", SocketType::Application)],
+                &[],
+            )
+            .unwrap();
+        // 上下文第 4 个输出口是行身份
+        app.connect_raw(app.nodes[&ctx].outputs[3], app.nodes[&eq].inputs[0])
+            .unwrap();
+        app.connect_raw(app.nodes[&eq].outputs[0], app.nodes[&apply].inputs[1])
+            .unwrap();
+        app.connect_raw(app.nodes[&style_ref].outputs[0], app.nodes[&apply].inputs[0])
+            .unwrap();
+        app.connect_raw(app.nodes[&apply].outputs[0], app.nodes[&app_out].inputs[0])
+            .unwrap();
+        app.set_socket_value(
+            app.nodes[&eq].inputs[1],
+            Some(SocketValue::Text(moved.to_string())),
+        )
+        .unwrap();
+        project.style_layer.graphs.push(app);
+
+        let text = script_text(&mut project);
+        let lines = dialogue_lines(&text);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].contains(r"\pos(300,400)"),
+            "绑定行该带上拖动位置：{}",
+            lines[0]
+        );
+        assert!(
+            !lines[1].contains(r"\pos("),
+            "未绑定的行不该吃到这个位置：{}",
+            lines[1]
+        );
+
+        // 视口命中靠这份索引认行：与脚本里的 Dialogue 同序等长，锚点就是写进标签的那个。
+        let opts = ConvertOptions::default();
+        let converted = sequence_to_ass(&mut project, (1920, 1080), &opts).unwrap();
+        assert_eq!(converted.lines.len(), lines.len());
+        assert_eq!(converted.lines[0].item_id, moved);
+        assert_eq!(converted.lines[0].anchor, Some((300.0, 400.0)));
+        assert_eq!(converted.lines[1].item_id, untouched);
+        assert_eq!(converted.lines[1].anchor, None);
+    }
+
     #[test]
     fn default_style_scales_are_percent() {
         let mut project = Project::new();
@@ -450,8 +619,8 @@ mod tests {
     /// 带缓存的那条路，界面上的拟合线程走的就是它。
     fn script_text_cached(project: &mut Project, cache: &mut SequenceFitCache) -> String {
         let opts = ConvertOptions::default();
-        let ass = sequence_to_ass_with_cache(project, (1920, 1080), &opts, cache).unwrap();
-        String::from_utf8(ass.to_bytes().unwrap()).unwrap()
+        let converted = sequence_to_ass_with_cache(project, (1920, 1080), &opts, cache).unwrap();
+        String::from_utf8(converted.ass.to_bytes().unwrap()).unwrap()
     }
 
     /// 把一行的两端一起挪：时长不变，只有起始时间动。

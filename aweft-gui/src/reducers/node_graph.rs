@@ -165,6 +165,31 @@ impl crate::store::AppStore {
                     NodeGraphChange::SocketValueChanged { node_id, socket_id },
                 )
             }
+            NodeGraphAction::SocketNumberChanged {
+                graph_type,
+                node_index,
+                socket_index,
+                field,
+                text,
+            } => {
+                crate::store::node_graph::set_socket_number_default_dispatch(
+                    self,
+                    graph_type,
+                    node_index,
+                    socket_index,
+                    field,
+                    &text,
+                );
+                let Some((node_id, socket_id)) =
+                    self.node_and_socket_id(graph_type, node_index, socket_index)
+                else {
+                    return Ok(vec![]);
+                };
+                (
+                    graph_type,
+                    NodeGraphChange::SocketValueChanged { node_id, socket_id },
+                )
+            }
             NodeGraphAction::SocketBoolToggled {
                 graph_type,
                 node_index,

@@ -40,13 +40,17 @@ import {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
+    SubtitleCallbacks,
     MediaPickerCallbacks,
     CollabCallbacks,
 } from "../bridge/callbacks.slint";
 import { AreaTypeMetadata } from "../core/area_type_metadata.slint";
 import { Theme } from "../theme/index.slint";
 
-// 重新导出全局对象，使其在 Rust 侧可见
+// 重新导出全局对象，使其在 Rust 侧可见。新增 `export global` 必须同时出现在上面的
+// import 列表和这里：Slint 只为「从入口文件导出」的全局生成 Rust 类型（llr 里
+// `exported` 由 `check_public_api` 按入口文件的导出名单置位），漏了这一行时 .slint
+// 照常编译通过、画面照常跑，只有 Rust 侧报 `no X in bridge::types`。
 export {
     VideoState,
     AudioState,
@@ -62,6 +66,7 @@ export {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
+    SubtitleCallbacks,
     AreaTypeMetadata,
     MediaPickerState,
     MediaPickerCallbacks,

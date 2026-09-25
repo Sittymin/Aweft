@@ -324,7 +324,7 @@ define_nodes! {
     SetPosition, SetPositionInputs, SetPositionOutputs {
         kind: NodeKind::StyleOp(StyleOpKind::SetPosition);
         inputs: { style: StyleSocket, position: Vec2Socket }
-        outputs: { style: StyleSocket }
+        outputs: { style: StyleSocket, position: Vec2Socket }
     }
     SetClipRect, SetClipRectInputs, SetClipRectOutputs {
         kind: NodeKind::StyleOp(StyleOpKind::SetClipRect);

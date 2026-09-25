@@ -16,7 +16,7 @@ use aweft_model::{
     application_graph::{ApplicationGraph, ApplicationNodeKind},
     ids::{AnimDataId, NodeGraphId, NodeId, SocketId},
     node_graph::{
-        ColorRole, Link, Node, NodeGraph, NodeGraphKind, NodeKind, NodeTreeType, Socket,
+        ColorRole, ClipRect, Link, Node, NodeGraph, NodeGraphKind, NodeKind, NodeTreeType, Socket,
         SocketDecl, SocketType, SocketValue, StyleOpKind, VecOpKind, error::EvalError,
     },
 };
@@ -327,15 +327,47 @@ impl NodeGraphState {
         let node = graph.node(node_id);
         let node_index = self.order.iter().position(|&id| id == node_id)?;
         let (x, y) = self.pos(node_id, node_index);
-        // 端口 row = 列内下标：输入列/输出列各自从顶部独立排列（Blender 式），
-        // 互不影响。渲染/命中/连线全部用列内 row。
+        // 端口 row = 该口第一行在列内的行号：输入列/输出列各自从顶部独立排列
+        // （Blender 式），互不影响。数值输入口按分量占好几行，所以输入列的 row
+        // 是累加出来的。渲染/命中/连线全部用这个 row。
         let input_count = G::inputs(node).len();
         let output_count = G::outputs(node).len();
         let mut sockets = Vec::with_capacity(input_count + output_count);
-        for (input_row, &socket_id) in G::inputs(node).iter().enumerate() {
+        // 输入列的 row 是累加的：一个数值口按分量数占几行，后面的口跟着往后挪。
+        let mut input_rows = 0i32;
+        for (input_index, &socket_id) in G::inputs(node).iter().enumerate() {
             let socket = graph.socket(socket_id);
             let connected = graph.links().iter().any(|link| link.to == socket_id);
-            let is_actor = G::actor_dropdown(node, true, input_row);
+            let is_actor = G::actor_dropdown(node, true, input_index);
+            let row = input_rows;
+            input_rows += socket_span(socket.data_type, connected);
+            // 未连接的数值口拆成分量，一个分量一行；已连线的口由连线供数，这里
+            // 不再摆一份数字——同一行两处真相会打架。
+            let labels = if connected {
+                &[][..]
+            } else {
+                socket_labels(socket.data_type)
+            };
+            let numbers = if labels.is_empty() {
+                Vec::new()
+            } else {
+                socket_numbers(socket.data_type, socket.default_value.as_ref())
+            };
+            let number_texts: ModelRc<SharedString> = Rc::new(VecModel::from(
+                numbers
+                    .iter()
+                    .map(socket_number_text)
+                    .map(SharedString::from)
+                    .collect::<Vec<_>>(),
+            ))
+            .into();
+            let number_labels: ModelRc<SharedString> = Rc::new(VecModel::from(
+                labels
+                    .iter()
+                    .map(|label| SharedString::from(*label))
+                    .collect::<Vec<_>>(),
+            ))
+            .into();
             let selected = if is_actor {
                 match &socket.default_value {
                     Some(aweft_model::node_graph::SocketValue::Text(text)) => self
@@ -352,7 +384,8 @@ impl NodeGraphState {
                 name: socket.name.clone().into(),
                 is_input: true,
                 data_type: socket_type_to_slint(socket.data_type),
-                row: input_row as i32,
+                row,
+                span: socket_span(socket.data_type, connected),
                 menu_items: if is_actor {
                     actor_menu_items(&self.actor_names)
                 } else {
@@ -364,6 +397,8 @@ impl NodeGraphState {
                 input_text: SharedString::default(),
                 bool_editor: false,
                 bool_value: false,
+                number_texts,
+                number_labels,
             });
         }
         for (output_row, &socket_id) in G::outputs(node).iter().enumerate() {
@@ -392,6 +427,7 @@ impl NodeGraphState {
                 is_input: false,
                 data_type: socket_type_to_slint(socket.data_type),
                 row: output_row as i32,
+                span: 1,
                 menu_items: ModelRc::from(Rc::new(VecModel::default())),
                 selected: -1,
                 connected,
@@ -399,6 +435,8 @@ impl NodeGraphState {
                 input_text,
                 bool_editor: is_bool_editor,
                 bool_value,
+                number_texts: ModelRc::from(Rc::new(VecModel::default())),
+                number_labels: ModelRc::from(Rc::new(VecModel::default())),
             });
         }
         // 引用节点的下拉菜单行（标签 + 候选 + 当前选中）：样式链引用选样式链，
@@ -427,8 +465,8 @@ impl NodeGraphState {
             y,
             sockets: Rc::new(VecModel::from(sockets)).into(),
             input_count: input_count as i32,
-            // 端口行数 = 两列各自独立从顶排，节点高度取两列较大者
-            socket_rows: input_count.max(output_count) as i32,
+            // 端口行数 = 两列各自的累加行数取大者（一个数值口可能占好几行）
+            socket_rows: input_rows.max(output_count as i32),
             menu_label,
             menu_options,
             menu_selected,
@@ -573,8 +611,10 @@ impl NodeGraphState {
                     self.nodes.set_row(idx, node);
                 }
             }
-            // 新建链：投影 op_node_graph_chain 已完成菜单派生/当前链设置，这里兜底重建。
-            NodeGraphChange::ChainSwitched { .. } => self.rebuild(graph),
+            // 换链 / 链列表变了：投影 op 已完成菜单派生与当前链设置，这里兜底重建。
+            NodeGraphChange::ChainSwitched { .. } | NodeGraphChange::ChainListChanged => {
+                self.rebuild(graph)
+            }
         }
     }
 
@@ -646,8 +686,8 @@ impl NodeGraphState {
         let radius = self.metrics.radius;
         let input_count = G::inputs(node).len();
 
-        // 各端口中心：输入列在左缘外半伸（row 0..in），输出列在右缘外半伸（row 0..out）。
-        // 用距离²（免开方），选半径内最近者。
+        // 各端口中心：输入列在左缘半伸出，输出列在右缘半伸出。圆点画在该口的
+        // 第一行（数值口的其余行只有数字框），所以中心 = 该口起始行 + 半行。
         let mut best_socket = -1;
         let mut best_distance_sq = f32::MAX;
         let mut consider = |socket_index: usize, center_x: f32, center_y: f32| {
@@ -659,12 +699,15 @@ impl NodeGraphState {
                 best_distance_sq = distance_sq;
             }
         };
-        for (input_row, _) in G::inputs(node).iter().enumerate() {
+        let mut row = 0i32;
+        for (input_index, &socket_id) in G::inputs(node).iter().enumerate() {
             consider(
-                input_row,
+                input_index,
                 0.0, // 输入圆点中心在节点左缘（半伸出），与渲染/拖拽命中一致
-                header_height + input_row as f32 * row_height + row_height / 2.0,
+                header_height + (row as f32 + 0.5) * row_height,
             );
+            let connected = graph.links().iter().any(|link| link.to == socket_id);
+            row += socket_span(graph.socket(socket_id).data_type, connected);
         }
         for (output_row, _) in G::outputs(node).iter().enumerate() {
             consider(
@@ -783,6 +826,7 @@ fn application_node_kind_title(kind: &ApplicationNodeKind) -> &'static str {
         ApplicationNodeKind::MatchActor => "匹配角色",
         ApplicationNodeKind::MatchText => "匹配文本",
         ApplicationNodeKind::IntEq => "整数相等",
+        ApplicationNodeKind::TextEq => "文本全等",
         ApplicationNodeKind::And => "与",
         ApplicationNodeKind::Or => "或",
         ApplicationNodeKind::Not => "非",
@@ -973,7 +1017,15 @@ const LAYOUT_GAP_Y: f32 = 24.0;
 /// （标题栏 + 引用节点的菜单行 + 端口行数 × 行高）：算小了自动排布就会重叠。
 fn node_height<G: GraphEditable>(graph: &G, node_id: NodeId, metrics: &EditorMetrics) -> f32 {
     let node = graph.node(node_id);
-    let rows = G::inputs(node).len().max(G::outputs(node).len()) as f32;
+    // 与 build_node_at 同一套 span：一个数值口按分量占几行，算矮了自动排布就会重叠
+    let input_rows: f32 = G::inputs(node)
+        .iter()
+        .map(|&sid| {
+            let connected = graph.links().iter().any(|link| link.to == sid);
+            socket_span(graph.socket(sid).data_type, connected) as f32
+        })
+        .sum();
+    let rows = input_rows.max(G::outputs(node).len() as f32);
     let has_menu_row = G::reference_chain_id(node).is_some() || G::anim_ref_id(node).is_some();
     metrics.header + (f32::from(has_menu_row) + rows) * metrics.row
 }
@@ -1183,23 +1235,25 @@ pub fn find_drop_socket<G: GraphEditable>(
     for (node_index, &node_id) in editor.order.iter().enumerate() {
         let node = graph.node(node_id);
         let (node_x, node_y) = editor.pos(node_id, node_index);
-        for (input_row, &socket_id) in G::inputs(node).iter().enumerate() {
+        let mut row = 0i32;
+        for (input_index, &socket_id) in G::inputs(node).iter().enumerate() {
             let socket = graph.socket(socket_id);
+            // 行号无论类型是否匹配都要按该口的 span 前进：数值口一个分量一行
+            let connected = graph.links().iter().any(|link| link.to == socket_id);
+            let center_y = node_y
+                + editor.metrics.header
+                + (row as f32 + 0.5) * editor.metrics.row;
+            row += socket_span(socket.data_type, connected);
             if socket.data_type != want {
                 continue;
             }
-            // 输入列内 row = input_row（输入列从节点顶部独立排）
-            let center_y = node_y
-                + editor.metrics.header
-                + input_row as f32 * editor.metrics.row
-                + editor.metrics.row / 2.0;
             let dx = x - node_x;
             let dy = y - center_y;
             let distance_sq = dx * dx + dy * dy;
             if distance_sq < radius * radius
                 && best.is_none_or(|(best_distance, _, _)| distance_sq < best_distance)
             {
-                best = Some((distance_sq, node_index, input_row));
+                best = Some((distance_sq, node_index, input_index));
             }
         }
     }
@@ -1446,6 +1500,24 @@ impl<'a> GraphEditorAccess<'a> {
         match self {
             Self::Style(g) => set_socket_text_default(g, editor, node_index, socket_index, text),
             Self::App(g) => set_socket_text_default(g, editor, node_index, socket_index, text),
+        }
+    }
+
+    pub(crate) fn set_socket_number_default(
+        self,
+        editor: &mut NodeGraphState,
+        node_index: usize,
+        socket_index: usize,
+        field: usize,
+        text: &str,
+    ) {
+        match self {
+            Self::Style(g) => {
+                set_socket_number_default(g, editor, node_index, socket_index, field, text)
+            }
+            Self::App(g) => {
+                set_socket_number_default(g, editor, node_index, socket_index, field, text)
+            }
         }
     }
 
@@ -1848,6 +1920,19 @@ pub fn set_socket_text_default_dispatch(
     });
 }
 
+pub fn set_socket_number_default_dispatch(
+    store: &mut AppStore,
+    graph_type: NodeGraphKind,
+    node_index: usize,
+    socket_index: usize,
+    field: usize,
+    text: &str,
+) {
+    store.with_graph(graph_type, |editor, access| {
+        access.set_socket_number_default(editor, node_index, socket_index, field, text)
+    });
+}
+
 pub fn toggle_socket_bool_default_dispatch(
     store: &mut AppStore,
     graph_type: NodeGraphKind,
@@ -1942,6 +2027,57 @@ impl AppStore {
         }
     }
 
+    /// 当前编辑的链的身份。解析路径与 `with_graph` 一致：样式链走 `style_order`（按名排序），
+    /// 应用链走 `style_layer.graphs` 的 Vec 下标。
+    pub(crate) fn current_chain_id(&self, kind: NodeGraphKind) -> Option<NodeGraphId> {
+        match kind {
+            NodeGraphKind::Style => {
+                let editor = &self.ui_models.style_graph;
+                editor.style_order.get(editor.current_chain).copied()
+            }
+            NodeGraphKind::App => self
+                .state
+                .project
+                .project()
+                .style_layer
+                .graphs
+                .get(self.ui_models.app_graph.current_chain)
+                .map(|graph| graph.id),
+        }
+    }
+
+    /// 某条链现在排在菜单/编辑路径的第几位（链被增删后下标会变）。
+    pub(crate) fn chain_index_of(&self, kind: NodeGraphKind, id: NodeGraphId) -> Option<usize> {
+        match kind {
+            NodeGraphKind::Style => self
+                .ui_models
+                .style_graph
+                .style_order
+                .iter()
+                .position(|&gid| gid == id),
+            NodeGraphKind::App => self
+                .state
+                .project
+                .project()
+                .style_layer
+                .graphs
+                .iter()
+                .position(|graph| graph.id == id),
+        }
+    }
+
+    /// 链列表变了但不切走用户正在编辑的那条：重派生菜单，再按 id 找回当前链并重建快照。
+    /// 视口拖动这类自动生成操作用它——插入一条样式链会让按名排序的下标整体漂移。
+    pub(crate) fn reload_chain_list(&mut self, kind: NodeGraphKind) {
+        let loaded = self.current_chain_id(kind);
+        self.refresh_chain_menus();
+        let index = loaded
+            .and_then(|id| self.chain_index_of(kind, id))
+            .unwrap_or(0);
+        self.set_current_chain(kind, index);
+        self.with_graph(kind, |editor, access| access.rebuild(editor));
+    }
+
     /// 派生样式链切换菜单（模型侧为 id-keyed map，显示顺序按名字排序，属 UI 数据）。
     pub(crate) fn refresh_style_chain_menu(&mut self) {
         let AppStore {
@@ -2032,6 +2168,115 @@ impl AppStore {
 }
 
 // ── 通用图操作（G: GraphEditable，被 GraphEditorAccess 分发） ─────────────────
+
+/// 数值输入口各分量的轴标签，**顺序与 [`socket_numbers`] 拆出来的分量严格一致**。
+/// 一个分量占一行，所以标签的个数就是这个口占几个可视行。非数值类型为空。
+/// 单个分量（float/int）不需要标签，占位空串保持行序对齐。
+fn socket_labels(data_type: SocketType) -> &'static [&'static str] {
+    match data_type {
+        SocketType::Float | SocketType::Int => &[""],
+        SocketType::Vec2 => &["x", "y"],
+        SocketType::Vec3 => &["x", "y", "z"],
+        SocketType::ClipRect => &["x1", "y1", "x2", "y2"],
+        _ => &[],
+    }
+}
+
+/// 该端口占几个可视行：数值输入口按分量数，其余一行。
+/// 已连线的输入口不摆数字框（数据由连线供），所以也只剩一行。
+fn socket_span(data_type: SocketType, connected: bool) -> i32 {
+    if connected {
+        return 1;
+    }
+    socket_labels(data_type).len().max(1) as i32
+}
+
+/// 数值输入口拆成的分量。非数值类型返回空列表 = 这一行不放数字框。
+/// 端口没有默认值时按类型给全零，数字框仍显示（写一次就把值建立起来）。
+fn socket_numbers(data_type: SocketType, value: Option<&SocketValue>) -> Vec<f64> {
+    let mut out = match data_type {
+        SocketType::Float | SocketType::Int => vec![0.0],
+        SocketType::Vec2 => vec![0.0; 2],
+        SocketType::Vec3 => vec![0.0; 3],
+        SocketType::ClipRect => vec![0.0; 4],
+        _ => return Vec::new(),
+    };
+    match value {
+        Some(SocketValue::Float(v)) => out[0] = *v,
+        Some(SocketValue::Int(v)) => out[0] = *v as f64,
+        Some(SocketValue::Vec2 { x, y }) => {
+            out[0] = *x;
+            out[1] = *y;
+        }
+        Some(SocketValue::Vec3 { x, y, z }) => {
+            out[0] = *x;
+            out[1] = *y;
+            out[2] = *z;
+        }
+        Some(SocketValue::ClipRect(rect)) => out = vec![rect.x1, rect.y1, rect.x2, rect.y2],
+        _ => {}
+    }
+    out
+}
+
+/// 数字框里的显示文本：整数值不写小数点，其余保留一位（排版像素量级下更细的位数没意义）。
+fn socket_number_text(value: &f64) -> String {
+    if (value - value.round()).abs() < 0.05 {
+        format!("{}", value.round() as i64)
+    } else {
+        format!("{:.1}", value)
+    }
+}
+
+/// 分量列表还原成对应类型的端口值。类型与分量数对不上时返回 `None`，调用方不动数据。
+fn socket_value_from_parts(data_type: SocketType, parts: &[f64]) -> Option<SocketValue> {
+    match (data_type, parts) {
+        (SocketType::Float, [x]) => Some(SocketValue::Float(*x)),
+        (SocketType::Int, [x]) => Some(SocketValue::Int(x.round() as i64)),
+        (SocketType::Vec2, [x, y]) => Some(SocketValue::Vec2 { x: *x, y: *y }),
+        (SocketType::Vec3, [x, y, z]) => Some(SocketValue::Vec3 {
+            x: *x,
+            y: *y,
+            z: *z,
+        }),
+        (SocketType::ClipRect, [x1, y1, x2, y2]) => Some(SocketValue::ClipRect(ClipRect {
+            x1: *x1,
+            y1: *y1,
+            x2: *x2,
+            y2: *y2,
+        })),
+        _ => None,
+    }
+}
+
+/// 改一个数值输入口的某个分量（端口行内嵌数字框提交）。
+/// 文本解析不了就不动：删空中间态、半截数字都不该把已有的值清零。
+fn set_socket_number_default<G: GraphEditable>(
+    graph: &mut G,
+    editor: &mut NodeGraphState,
+    node_index: usize,
+    socket_index: usize,
+    field: usize,
+    text: &str,
+) {
+    let Ok(parsed) = text.trim().parse::<f64>() else {
+        return;
+    };
+    let Some(sid) = socket_id_at(graph, editor, node_index, socket_index) else {
+        return;
+    };
+    let data_type = graph.socket(sid).data_type;
+    let mut parts = socket_numbers(data_type, graph.socket(sid).default_value.as_ref());
+    if !parts.get_mut(field).is_some_and(|slot| {
+        *slot = parsed;
+        true
+    }) {
+        return;
+    }
+    if let Some(value) = socket_value_from_parts(data_type, &parts) {
+        let _ = graph.graph_set_socket_value(sid, Some(value));
+    }
+}
 
 /// 设置端口文本默认值（字符串常量输出 / 角色下拉等）。
 fn set_socket_text_default<G: GraphEditable>(
@@ -2674,6 +2919,74 @@ mod tests {
         assert_eq!(row.menu_label.as_str(), "非线性动画");
         assert_eq!(row.menu_selected, 0);
         assert_eq!(g.nodes[&nid].outputs.len(), 1);
+    }
+
+    /// 数值输入口的数字框：显示拆好的分量，改一个分量不影响另一个，坏文本不清零。
+    #[test]
+    fn a_numeric_port_shows_its_parts_and_edits_one_at_a_time() {
+        let mut g = NodeGraph::new("t");
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        let node_id =
+            add_node(&mut g, &mut st, NodeKind::StyleOp(StyleOpKind::SetPosition), 40.0, 40.0)
+                .unwrap();
+        st.rebuild(&g);
+        let index = st.order.iter().position(|&id| id == node_id).unwrap();
+        // 设位置的输入口顺序是 style(0)、position(1)
+        let sid = socket_id_at(&g, &st, index, 1).unwrap();
+
+        macro_rules! parts {
+            () => {{
+                let sockets = st.build_node_at(&g, node_id).unwrap().sockets;
+                let position = sockets.row_data(1).unwrap();
+                // 一个分量一行：Vec2 占两行，标签按 x/y 排
+                assert_eq!(position.span, 2);
+                // 行号累加：输入列 = 样式口 1 行 + 位置口 2 行；输出列 2 行 → 取大者 3
+                assert_eq!(position.row, 1);
+                assert_eq!(
+                    st.build_node_at(&g, node_id).unwrap().socket_rows,
+                    3,
+                    "节点高度要按分量占的行数算"
+                );
+                assert_eq!(
+                    (0..position.number_labels.row_count())
+                        .map(|i| position.number_labels.row_data(i).unwrap().to_string())
+                        .collect::<Vec<_>>(),
+                    ["x", "y"]
+                );
+                (0..position.number_texts.row_count())
+                    .map(|i| position.number_texts.row_data(i).unwrap().to_string())
+                    .collect::<Vec<_>>()
+            }};
+        }
+        assert_eq!(parts!(), ["0", "0"]);
+
+        set_socket_number_default(&mut g, &mut st, index, 1, 1, "120.5");
+        assert!(
+            matches!(
+                g.sockets.get(&sid).unwrap().default_value,
+                Some(SocketValue::Vec2 { x, y }) if x == 0.0 && (y - 120.5).abs() < 1e-9
+            ),
+            "只该改 y 分量"
+        );
+        // 提交后走的就是投影那条单行重建，数字框文本随之刷新
+        st.apply_change(
+            &g,
+            &crate::depsgraph::NodeGraphChange::SocketValueChanged {
+                node_id,
+                socket_id: sid,
+            },
+        );
+        assert_eq!(parts!(), ["0", "120.5"]);
+
+        set_socket_number_default(&mut g, &mut st, index, 1, 0, "");
+        assert!(
+            matches!(
+                g.sockets.get(&sid).unwrap().default_value,
+                Some(SocketValue::Vec2 { x, y }) if x == 0.0 && (y - 120.5).abs() < 1e-9
+            ),
+            "解析不了的文本不该动已有值"
+        );
     }
 
     /// 面板模板里的 `AnimDataId` 是占位（`app_templates` 是纯函数，拿不到库数据）：

@@ -2,6 +2,7 @@
 // Rust 侧通过 set_xxx 更新这些状态
 import {
     SlintAudioTrack,
+    SlintSubtitleBox,
     SlintSubtitleRow,
     SlintTimelineSubBlock,
     SlintVideoPos,
@@ -87,6 +88,9 @@ export global DismissOverlayState {
 export global SubtitleState {
     in property <image> current-subtitle-frame;
     in property <[SlintSubtitleRow]> rows: [];
+    // 每行字幕的包围框（排版像素）。Rust 每次出帧从 libass 的字形块还原，视口把它画成
+    // 选中行的包围框，并据它判定点击命中哪一行、按住拖动哪一行。
+    in property <[SlintSubtitleBox]> boxes: [];
     // 时间线根级收起时显示的"全部字幕行片段块"（Rust 侧全量事件模型；
     // 与分组收起显示的 child-blocks 共用同一渲染组件）
     in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];

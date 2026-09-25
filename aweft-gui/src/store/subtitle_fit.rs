@@ -10,8 +10,9 @@
 //!    挪动一行字幕只有那一行的键对不上，其余行直接复用。于是浮层上通常只出现真正重跑的
 //!    那条动画——全命中时一个进度事件也没有，浮层一闪即撤。
 //!
-//! 后台线程拿到的是 `Project` 的副本，不回写任何真相——拟合的唯一产物是脚本文本。副本
-//! 自带的求值缓存可能比真身旧，那只影响一次缓存命中，不影响结果。
+//! 后台线程拿到的是 `Project` 的副本，不回写任何真相——拟合的产物只有脚本字节和它的
+//! 逐行索引（视口命中要用，见 `FitResult`）。副本自带的求值缓存可能比真身旧，那只影响
+//! 一次缓存命中，不影响结果。
 //!
 //! 浮层画的是 `aweft-convert/examples/live_dp.rs` 那张图：曲线 + 网格 + 底部有效性色带
 //! + 当前格点（黄）+ 本格候选段（绿）+ 已锁定前缀（蓝），收尾再把最终分段逐段着色。这些
@@ -23,7 +24,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::mpsc;
 
-use aweft_convert::ProgressEvent;
+use aweft_convert::{LineHit, ProgressEvent};
 use futures::StreamExt;
 
 use crate::bridge::types::{FitSegmentInfo, SubtitleFitOverlayData};
@@ -55,18 +56,28 @@ const SEGMENT_COLORS: [(u8, u8, u8); 5] = [
     (0x9b, 0x59, 0xb6),
 ];
 
+/// 一份跑完的拟合产物：脚本文本，加上同一批的逐行索引。
+///
+/// `lines` 与脚本里的 `Dialogue` 一一对应（见 [`aweft_convert::LineHit`]），视口靠它把
+/// libass 吐出的字形块配回具体哪一行字幕——没有它就点不中、也拖不动。
+#[derive(Debug)]
+pub(crate) struct FitResult {
+    bytes: Vec<u8>,
+    lines: Vec<LineHit>,
+}
+
 /// 后台送回 UI 线程的消息。`generation` 是请求序号，用于丢弃过期消息。
 #[derive(Debug)]
-pub enum FitMessage {
+pub(crate) enum FitMessage {
     /// 转换进度（`ProgressDetail::Diagnostic` 那组），只用来画浮层。
     Progress {
         generation: u64,
         event: ProgressEvent,
     },
-    /// 这份拟合跑完了。`script` 为 `None` 表示生成失败，保留上一份脚本。
+    /// 这份拟合跑完了。`result` 为 `None` 表示生成失败，保留上一份脚本。
     Finished {
         generation: u64,
-        script: Option<Vec<u8>>,
+        result: Option<FitResult>,
     },
 }
 
@@ -123,9 +134,12 @@ fn run_job(job: FitJob, cache: &mut aweft_convert::SequenceFitCache) {
     };
     let converted =
         aweft_convert::sequence_to_ass_with_cache(&mut project, frame_size, &options, cache);
-    let script = match converted {
-        Ok(ass) => match ass.to_bytes() {
-            Ok(bytes) => Some(bytes),
+    let result = match converted {
+        Ok(converted) => match converted.ass.to_bytes() {
+            Ok(bytes) => Some(FitResult {
+                bytes,
+                lines: converted.lines,
+            }),
             Err(error) => {
                 log::warn!("字幕脚本写进内存失败: {error}");
                 None
@@ -141,7 +155,7 @@ fn run_job(job: FitJob, cache: &mut aweft_convert::SequenceFitCache) {
     // 最后几个进度事件排在 `Finished` 前面。
     drop(options);
     let _ = relay.join();
-    let _ = ui_sender.unbounded_send(FitMessage::Finished { generation, script });
+    let _ = ui_sender.unbounded_send(FitMessage::Finished { generation, result });
 }
 
 /// 提交一次拟合请求。浮层立即显出（不挡操作），脚本在后台线程编好后由 pump 换进字幕通路。
@@ -180,7 +194,7 @@ pub(crate) fn request_rebuild(store: &mut AppStore) {
 }
 
 /// 一份拟合跑完后的收尾：换上脚本，再按待办标记决定重跑一份还是撤浮层。
-fn settle(store: &mut AppStore, generation: u64, script: Option<Vec<u8>>) {
+fn settle(store: &mut AppStore, generation: u64, result: Option<FitResult>) {
     let pending;
     {
         let state = store.state_mut();
@@ -189,9 +203,14 @@ fn settle(store: &mut AppStore, generation: u64, script: Option<Vec<u8>>) {
         }
         state.fit_in_flight = false;
         pending = std::mem::take(&mut state.fit_pending);
-        if let (Some(bytes), Some(pipeline)) = (script, state.subtitle.as_mut()) {
-            pipeline.set_script(bytes);
+        if let (Some(result), Some(pipeline)) = (result, state.subtitle.as_mut()) {
+            pipeline.set_script(result.bytes, result.lines);
         }
+    }
+    // 拟合是异步的，落地时那次操作触发的重绘早过去了。不主动要一帧，覆盖层会停在旧脚本上。
+    if let Some(window) = store.main_window.as_ref().and_then(|weak| weak.upgrade()) {
+        use slint::ComponentHandle as _;
+        window.window().request_redraw();
     }
     if pending {
         request_rebuild(store);
@@ -244,13 +263,13 @@ fn apply(store: &Rc<RefCell<AppStore>>, session: &mut Option<Session>, message: 
                 }
             }
         }
-        FitMessage::Finished { generation, script } => {
+        FitMessage::Finished { generation, result } => {
             if store.borrow().state().fit_generation != generation {
                 return;
             }
             // 浮层的去留由 `settle` 定；先丢掉这一场，别让随后的重绘把它显回去。
             *session = None;
-            settle(&mut store.borrow_mut(), generation, script);
+            settle(&mut store.borrow_mut(), generation, result);
         }
     }
 }
@@ -643,9 +662,9 @@ mod tests {
         let first = ui_receiver.try_recv().expect("应当有一条消息");
         assert!(ui_receiver.try_recv().is_err(), "收尾之后不该还有消息");
         match first {
-            FitMessage::Finished { generation, script } => {
+            FitMessage::Finished { generation, result } => {
                 assert_eq!(generation, 7);
-                assert!(script.is_some_and(|bytes| !bytes.is_empty()));
+                assert!(result.is_some_and(|result| !result.bytes.is_empty()));
             }
             other => panic!("空工程没有动画可分段，收尾应当直接到 Finished，实际 {other:?}"),
         }

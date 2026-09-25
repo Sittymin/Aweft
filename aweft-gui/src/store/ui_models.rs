@@ -11,6 +11,7 @@ use crate::store::animation::AnimationState;
 use crate::store::audio::AudioUiState;
 use crate::store::node_graph::NodeGraphState;
 use crate::store::sequence::SequenceState;
+use crate::store::subtitle::SubtitleUiState;
 use crate::store::video::VideoUiState;
 
 /// 汇总所有需要在 Rust 侧持久化的 UI 模型。
@@ -27,6 +28,8 @@ pub struct UiModels {
     pub video: VideoUiState,
     /// 音频域 UI 状态：各视频音轨行与波形桶模型，派生到 AudioState
     pub audio: AudioUiState,
+    /// 字幕域 UI 状态：视口里每行字幕的包围框模型，派生到 SubtitleState.boxes
+    pub subtitle: SubtitleUiState,
     pub scrarea_model: Rc<VecModel<ScrAreaData>>,
     pub scredge_touch_display_model: Rc<VecModel<ScrEdgeTouchAreaDisplayData>>,
     pub scredge_touch_model: Rc<VecModel<ScrEdgeTouchAreaData>>,
@@ -45,6 +48,7 @@ impl UiModels {
             animation: AnimationState::default(),
             video: VideoUiState::default(),
             audio: AudioUiState::default(),
+            subtitle: SubtitleUiState::default(),
             scrarea_model: Rc::new(VecModel::default()),
             scredge_touch_display_model: Rc::new(VecModel::default()),
             scredge_touch_model: Rc::new(VecModel::default()),

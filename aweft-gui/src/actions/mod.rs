@@ -5,6 +5,7 @@ pub mod media;
 pub mod node_graph;
 pub mod screen;
 pub mod sequence;
+pub mod subtitle;
 
 /// 顶层 Action - 按功能域分类
 #[derive(Debug, Clone)]
@@ -18,6 +19,8 @@ pub enum Action {
     /// 媒体相关操作
     Media(media::MediaAction),
     Sequence(sequence::SequenceAction),
+    /// 字幕行的视口操作（选中、拖动位置）
+    Subtitle(subtitle::SubtitleAction),
     /// 节点图（样式图/应用图）结构/值操作
     NodeGraph(node_graph::NodeGraphAction),
     /// 动画域（统一曲线编辑器/摄影表/NLA，共享 DataId::Animation）

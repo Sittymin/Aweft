@@ -161,6 +161,8 @@ pub struct AppState {
     pub video_wgpu: Option<crate::render::video_sink::WgpuHandles>,
     // 字幕通路：libass 轨 + wgpu 合成器（RenderingSetup 时随 GPU 句柄建好）
     pub(crate) subtitle: Option<crate::render::subtitle::SubtitlePipeline>,
+    // Some 表示视口里正按住一行字幕拖动；会话持有锚点与预览偏移，松手时才提交到链。
+    pub(crate) subtitle_line_drag: Option<crate::store::subtitle::LineDragSession>,
     // 字幕拟合后台通路的投递端（`setup_subtitle_fit` 装 pump 时存入）。
     // 无头测试不装，请求直接跳过。
     pub(crate) fit_ui_sender:
@@ -199,6 +201,7 @@ impl AppState {
             video_seek_session: None,
             video_wgpu: None,
             subtitle: None,
+            subtitle_line_drag: None,
             fit_ui_sender: None,
             fit_generation: 0,
             fit_in_flight: false,

@@ -169,10 +169,11 @@ impl Default for ConvertOptions {
 pub struct Cursor {
     /// 排版尺寸（写进脚本的 PlayResX/Y）：分数位置通道乘的就是它。
     layout: [f64; 2],
-    /// 两轴的锚点基值，排版像素。绝对位置曲线缺省时取它，`\move` 走过一段后推进到
+    /// 两轴的锚点基线，排版像素：绝对位置曲线在它之上相加，`\move` 走过一段后推进到
     /// 解析出的锚点。
     offset: [f64; 2],
-    /// 两轴的锚点基值，排版尺寸的分数。锚点一旦解析成像素就清零，避免下一段重复计入。
+    /// 两轴的锚点基线，排版尺寸的分数：分数位置曲线在它之上相加。锚点一旦解析成像素
+    /// 就清零，避免下一段重复计入。
     ratio: [f64; 2],
     /// 每个 COLOR_GROUPS 颜色组的当前颜色（按索引对齐）。颜色动画的缺省通道
     /// 从这里读取基础值，因此上一条 strip 动画过的通道会被继承，而不是跳回
@@ -216,16 +217,26 @@ impl Cursor {
         ]
     }
 
-    /// `t` 时刻的锚点，排版像素：分数通道按比例随排版尺寸缩放，绝对通道作偏移。
+    /// 静态样式锚点（两轴都没有曲线时）的排版像素位置。换算仍旧走 `anchor_at`，
+    /// 「排版尺寸 → 像素」这一处换算保持唯一。
+    fn base_anchor(&self) -> [f64; 2] {
+        self.anchor_at([AxisCurves::default(), AxisCurves::default()], 0.0)
+    }
+
+    /// `t` 时刻的锚点，排版像素。样式位置是**基线**，两条曲线都在它之上相加：绝对通道
+    /// 加像素，分数通道乘排版尺寸后加像素。所以动画行被拖动时改样式里的位置，整条
+    /// `\move` 轨迹跟着平移，动画本身不会被抹平。
     fn anchor_at(&self, axes: [AxisCurves<'_>; 2], t: f64) -> [f64; 2] {
         std::array::from_fn(|axis| {
             let curves = axes[axis];
-            let offset = curves
-                .offset
-                .map_or(self.offset[axis], |curve| evaluate_fcurve(curve, t));
-            let ratio = curves
-                .ratio
-                .map_or(self.ratio[axis], |curve| evaluate_fcurve(curve, t));
+            let offset = self.offset[axis]
+                + curves
+                    .offset
+                    .map_or(0.0, |curve| evaluate_fcurve(curve, t));
+            let ratio = self.ratio[axis]
+                + curves
+                    .ratio
+                    .map_or(0.0, |curve| evaluate_fcurve(curve, t));
             offset + self.layout[axis] * ratio
         })
     }
@@ -265,6 +276,10 @@ pub struct TimedTags {
 }
 
 // ── StyleResult → 静态 StyleTag ──────────────────────────────────────────
+//
+// 位置两字段（`position` / `position_ratio`）不在这里出：它们要换算成排版像素，而排版尺寸
+// 是 `match_to_ass_tags` 的参数、不在 `StyleResult` 里；且 `\pos` 必须逐行避让 `\move`。
+// 那两件事都由 `match_to_ass_tags` 负责。
 
 pub fn style_to_static_tags(style: &StyleResult) -> Vec<StyleTag> {
     let mut tags = Vec::new();
@@ -368,6 +383,16 @@ pub fn match_to_ass_tags(
     let mut cursor = Cursor::from_style(&matched.style, layout);
     let style_baseline = style_to_static_tags(&matched.style);
 
+    // 静态锚点。`\pos` 与 `\move` 在 libass 里先到者生效、后来者被整个忽略
+    // （ass_parse.c 的 EVENT_POSITIONED 分支），所以这条标签只能补给**不含 `\move`
+    // 的行**：预置到动画行上会让该行的位置动画失效。
+    let static_pos = if matched.style.position.is_some() || matched.style.position_ratio.is_some() {
+        let [x, y] = cursor.base_anchor();
+        Some(StyleTag::Position(PointF64 { x, y }))
+    } else {
+        None
+    };
+
     if let Some(ref anim_id) = matched.animation {
         if let Some(anim_data) = library.anim_datas.get(anim_id) {
             let mut result = convert::convert_anim_data(
@@ -384,6 +409,13 @@ pub fn match_to_ass_tags(
             // 第 1 段需要这个，但处处都加也无害。
             for seg in &mut result.segments {
                 let mut full = style_baseline.clone();
+                if !seg
+                    .tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Move { .. }))
+                {
+                    full.extend(static_pos.iter().cloned());
+                }
                 full.append(&mut seg.tags);
                 seg.tags = full;
             }
@@ -393,12 +425,14 @@ pub fn match_to_ass_tags(
     }
 
     // 无动画：输出单个承载静态样式基线的段。
-    if !style_baseline.is_empty() {
+    let mut baseline = style_baseline;
+    baseline.extend(static_pos);
+    if !baseline.is_empty() {
         return AnimAssResult {
             segments: vec![TimedTags {
                 start_ms: 0.0,
                 end_ms: duration * 1000.0,
-                tags: style_baseline,
+                tags: baseline,
             }],
             fallbacks: Vec::new(),
         };
@@ -430,13 +464,13 @@ impl TimeMapper {
     }
 }
 
-/// 位置：单条 `\move` 弦。位置曲线是「该时刻的绝对锚点」，所以这一段只读基值、
+/// 位置：单条 `\move` 弦。位置曲线是相对样式位置基线的位移，所以这一段只读基值、
 /// 不推进 cursor——段与段的端点都由同一个基值解析出来，首尾自然相接；把上一段终点
 /// 折回基值会让下一段在已解析的像素上再加一次分数。
 ///
-/// 两轴各支持两种单位的曲线：排版像素与排版尺寸的分数。端点一律先解析成排版像素
-/// 再写进 `\move`（ASS 的坐标就是 PlayRes 像素），所以分数曲线随排版尺寸等比缩放，
-/// 绝对曲线一个像素都不动；同一轴上两者并存时相加。
+/// 两轴各支持两种单位的曲线：排版像素与排版尺寸的分数，两者与基线一并相加。端点一律
+/// 先解析成排版像素再写进 `\move`（ASS 的坐标就是 PlayRes 像素），所以分数曲线随排版
+/// 尺寸等比缩放，绝对曲线一个像素都不动。
 fn build_position(
     curve_map: &std::collections::HashMap<PropertyPath, &ActionCurve>,
     t0: f64,
@@ -908,6 +942,7 @@ mod tests {
             .iter()
             .any(|t| matches!(t, StyleTag::Bold(_))));
 
+        // 位置的换算不在这里做（要排版尺寸），只此一处；见 `a_static_anchor_is_emitted_as_pos`。
         let style = StyleResult {
             position: Some(Vec2 { x: 100.0, y: 200.0 }),
             ..Default::default()
@@ -1432,6 +1467,164 @@ mod tests {
         let [x, y] = cursor.anchor_at(Cursor::position_curves(&no_curves), 0.0);
         assert!((x - (960.0 - 40.0)).abs() <= 1e-9, "x 锚点 {x}");
         assert!((y - (270.0 + 20.0)).abs() <= 1e-9, "y 锚点 {y}");
+    }
+
+    /// 把 `curves` 装成一条 action strip 的 `AnimData`，连同承载它的 library 一起返回。
+    fn anim_of(curves: Vec<ActionCurve>) -> (AnimationLibrary, AnimDataId) {
+        let duration = curves
+            .iter()
+            .flat_map(|curve| curve.curve.keyframes.iter())
+            .map(|key| key.time)
+            .fold(0.0f64, f64::max)
+            .max(0.001);
+        let mut lib = AnimationLibrary::default();
+        let id = ActionId::new();
+        lib.insert_action(Action {
+            id,
+            name: "a".into(),
+            duration,
+            curves,
+        });
+        let aid = AnimDataId::new();
+        lib.insert_anim_data(AnimData {
+            id: aid,
+            name: "d".into(),
+            base_action: None,
+            temporary_edit: false,
+            tracks: vec![NlaTrack {
+                name: "t".into(),
+                muted: false,
+                solo: false,
+                strips: vec![NlaStrip::new_action("s", id)],
+            }],
+        });
+        (lib, aid)
+    }
+
+    /// 一条匹配（样式 + 可选动画）按 `LAYOUT` 转成标签段。
+    fn matched(
+        style: StyleResult,
+        animation: Option<AnimDataId>,
+        lib: &AnimationLibrary,
+    ) -> AnimAssResult {
+        match_to_ass_tags(
+            &aweft_model::application_graph::ApplicationGraphMatch { style, animation },
+            lib,
+            LAYOUT,
+            2.0,
+            &ConvertOptions::default(),
+        )
+    }
+
+    /// 静态锚点要真的进脚本：视口里拖出来的位置靠 `\pos` 落位，否则拖动没有可见结果。
+    #[test]
+    fn a_static_anchor_is_emitted_as_pos() {
+        let style = StyleResult {
+            position: Some(Vec2 { x: -40.0, y: 20.0 }),
+            position_ratio: Some(Vec2 { x: 0.5, y: 0.25 }),
+            ..Default::default()
+        };
+        let result = matched(style, None, &AnimationLibrary::default());
+        let [StyleTag::Position(p)] = result.segments[0].tags.as_slice() else {
+            panic!(
+                "只有静态锚点的行应输出一条 \\pos，实际 {:?}",
+                result.segments[0].tags
+            );
+        };
+        assert!((p.x - 920.0).abs() <= 1e-9, "x {p:?}");
+        assert!((p.y - 290.0).abs() <= 1e-9, "y {p:?}");
+    }
+
+    /// 位置动画行不吃静态 `\pos`：libass 里 `\pos` 与 `\move` 先到者生效，
+    /// 基线带上 `\pos` 会把整条位置动画吃掉。
+    #[test]
+    fn an_animated_position_suppresses_the_static_pos() {
+        let (lib, aid) = anim_of(vec![linear_curve(
+            PropertyPath::PositionX,
+            &[(0.0, 100.0), (2.0, 400.0)],
+        )]);
+        let style = StyleResult {
+            position: Some(Vec2 { x: 10.0, y: 20.0 }),
+            ..Default::default()
+        };
+        let result = matched(style, Some(aid), &lib);
+        assert!(!result.segments.is_empty(), "位置动画应产出段");
+        for seg in &result.segments {
+            assert!(
+                seg.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Move { .. })),
+                "每行都该有 \\move：{:?}",
+                seg.tags
+            );
+            assert!(
+                !seg.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Position(_))),
+                "带 \\move 的行不该再有 \\pos：{:?}",
+                seg.tags
+            );
+        }
+    }
+
+    /// 有位置动画时样式位置是**基线**：整条 `\move` 轨迹跟着平移，动画不被抹平。
+    /// 视口里拖动一行动画字幕改的就是这条基线。
+    #[test]
+    fn the_style_position_shifts_an_animated_track() {
+        let curves = || {
+            vec![
+                linear_curve(PropertyPath::PositionX, &[(0.0, 100.0), (2.0, 400.0)]),
+                linear_curve(PropertyPath::PositionRatioY, &[(0.0, 0.5), (2.0, 0.5)]),
+            ]
+        };
+        let (lib, aid) = anim_of(curves());
+        let bare = moves(&matched(StyleResult::default(), Some(aid), &lib));
+        let (lib, aid) = anim_of(curves());
+        let styled = matched(
+            StyleResult {
+                position: Some(Vec2 { x: 30.0, y: -50.0 }),
+                ..Default::default()
+            },
+            Some(aid),
+            &lib,
+        );
+        let styled = moves(&styled);
+
+        assert!(!bare.is_empty(), "位置动画应产出 \\move");
+        assert_eq!(bare.len(), styled.len(), "基线改变了分段数");
+        let delta = [30.0, -50.0, 30.0, -50.0];
+        for (plain, shifted) in bare.iter().zip(styled.iter()) {
+            for (index, (want, got)) in plain.iter().zip(shifted).enumerate() {
+                assert!(
+                    (got - (want + delta[index])).abs() <= 1e-6,
+                    "端点 {index} 没按基线平移：{want} → {got}"
+                );
+            }
+        }
+    }
+
+    /// 动画没碰位置的行照旧吃静态锚点：位置属于样式，与有没有别的动画无关。
+    #[test]
+    fn an_animation_without_position_keeps_the_static_pos() {
+        let (lib, aid) = anim_of(vec![linear_curve(
+            PropertyPath::FontSize,
+            &[(0.0, 24.0), (2.0, 36.0)],
+        )]);
+        let style = StyleResult {
+            position: Some(Vec2 { x: 10.0, y: 20.0 }),
+            ..Default::default()
+        };
+        let result = matched(style, Some(aid), &lib);
+        assert!(!result.segments.is_empty(), "字号动画应产出段");
+        for seg in &result.segments {
+            assert!(
+                seg.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Position(_))),
+                "无位置动画的行该有 \\pos：{:?}",
+                seg.tags
+            );
+        }
     }
 
     #[test]

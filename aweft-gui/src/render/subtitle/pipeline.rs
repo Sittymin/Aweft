@@ -19,10 +19,12 @@
 
 use anyhow::Result;
 use aweft_ass::render::Renderer;
+use aweft_convert::LineHit;
 #[cfg(test)]
 use slint::wgpu_30::wgpu;
 
 use super::compositor::{Composition, SubtitleCompositor};
+use super::hits::{LineBox, TileRect, line_boxes};
 use crate::render::video_sink::WgpuHandles;
 
 /// 光栅倍率的档位：倍率向上凑到 1/8 的整数倍（1080P 排版即 135 高一档）。
@@ -72,6 +74,11 @@ pub(crate) struct SubtitlePipeline {
     compositor: SubtitleCompositor,
     /// 最近一次生成的脚本字节。建轨需要帧尺寸，尺寸到位前只存字节。
     script: Option<Vec<u8>>,
+    /// 与 `script` 同一批的逐行索引：脚本里每条 `Dialogue` 属于哪一行字幕。
+    /// 换脚本必须一起换，否则行框会配到旧身份上。
+    hits: Vec<LineHit>,
+    /// 最近一次出帧算出的每行包围框（排版像素），逐帧随 `render_at` 重建。
+    line_boxes: Vec<LineBox>,
     renderer: Option<Renderer>,
     /// `script` 已经换过但还没交给 `renderer`。换脚本只重新解析 libass 轨道，
     /// 渲染器与它的字体提供器、字形缓存不动（`Renderer::set_script`）。
@@ -86,16 +93,26 @@ impl SubtitlePipeline {
         Self {
             compositor: SubtitleCompositor::new(handles),
             script: None,
+            hits: Vec::new(),
+            line_boxes: Vec::new(),
             renderer: None,
             script_is_pending: false,
             max_texture_dimension_2d: device.limits().max_texture_dimension_2d,
         }
     }
 
-    /// 换脚本。渲染器留着，新字节在下一次 `render_at` 里原地换进 libass 轨道。
-    pub(crate) fn set_script(&mut self, script: Vec<u8>) {
+    /// 换脚本，连同它的逐行索引。渲染器留着，新字节在下一次 `render_at` 里原地换进
+    /// libass 轨道。
+    pub(crate) fn set_script(&mut self, script: Vec<u8>, hits: Vec<LineHit>) {
         self.script = Some(script);
+        self.hits = hits;
         self.script_is_pending = true;
+    }
+
+    /// 最近一次 `render_at` 算出的每行包围框，排版像素（= 视口世界坐标，覆盖层矩形
+    /// 就是按它定位的）。还没出过帧时为空。
+    pub(crate) fn line_boxes(&self) -> &[LineBox] {
+        &self.line_boxes
     }
 
     /// 出一帧。`layout_size` 是预览帧尺寸（排版基准，无主视频时已是 1080P 兜底值），
@@ -109,10 +126,12 @@ impl SubtitlePipeline {
         on_screen_physical: (f32, f32),
     ) -> Result<Composition> {
         let Some(script) = self.script.as_ref() else {
+            self.line_boxes.clear();
             return Ok(Composition::Empty);
         };
         let (width, height) = layout_size;
         if width == 0 || height == 0 {
+            self.line_boxes.clear();
             return Ok(Composition::Empty);
         }
 
@@ -146,6 +165,12 @@ impl SubtitlePipeline {
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("字幕渲染轨未建立"))?
             .render(now_ms)?;
+        // 行框逐帧重算，不跟着 `changed` 省这一次：`changed` 比的是几何，前后两帧几何全同
+        // 而换了一行时它不报变化（紧邻两行同样的字、同样的位置），框就会指到旧身份上。
+        // 一遍聚类只要块列表，跟 libass 这次渲染比可以忽略。
+        let rects: Vec<TileRect> = frame.tiles.iter().map(TileRect::of).collect();
+        let boxes = line_boxes(&rects, &self.hits, now_ms, layout_size, raster);
+        self.line_boxes = boxes;
         // ASS 渲染自己判定了字形块列表与上一调用是否相同：相同就不重复合成，
         // 静止的字幕因此完全不占 GPU。但换过尺寸或换过脚本的那一帧必须出图——
         // 静止且为空的时刻 libass 不报变化，旧尺寸或旧脚本的画面否则会留在覆盖层上。

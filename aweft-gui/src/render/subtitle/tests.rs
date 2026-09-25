@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use aweft_ass::render::{Renderer, Tile};
+use aweft_convert::LineHit;
 use slint::wgpu_30::wgpu;
 
 use super::compositor::{Composition, SubtitleCompositor};
@@ -306,6 +307,11 @@ fn script_anchored_at(x: i32, y: i32) -> Vec<u8> {
     moved.into_bytes()
 }
 
+/// 换脚本时不带逐行索引：这几条像素校验只关心出不出帧，不碰行框。
+fn no_rows() -> Vec<LineHit> {
+    Vec::new()
+}
+
 /// `SubtitlePipeline` 的调度：换脚本必须落到下一帧，静止时不得白占 GPU。
 /// 上面的像素校验都直连 `Renderer` + `SubtitleCompositor`，只有这条走通路本身。
 #[test]
@@ -314,7 +320,7 @@ fn a_new_script_reaches_the_next_frame() {
     let (device, queue) = (handles.1.clone(), handles.2.clone());
     let mut pipeline = SubtitlePipeline::new(&handles);
 
-    pipeline.set_script(SCRIPT.to_vec());
+    pipeline.set_script(SCRIPT.to_vec(), no_rows());
     assert!(
         matches!(
             pipeline
@@ -336,7 +342,7 @@ fn a_new_script_reaches_the_next_frame() {
     .expect("第一帧没有墨迹");
 
     // 换脚本不换渲染器：新锚点必须出现在下一帧上
-    pipeline.set_script(script_anchored_at(400, 120));
+    pipeline.set_script(script_anchored_at(400, 120), no_rows());
     assert!(
         matches!(
             pipeline
@@ -371,4 +377,46 @@ fn a_new_script_reaches_the_next_frame() {
         ),
         "静止的同一帧被重复合成了"
     );
+}
+
+/// 行框对账：`hits` 只给身份与生效区间，框的几何全部由 libass 的字形块还原。
+/// 视口能点中一行字幕、能把那一行拖走，前提就是这条链在真 libass 输出上成立——
+/// 上面的纯几何测试用不了 libass（它要 GPU 与字体），只有走通路本身才验得到。
+#[test]
+fn the_row_box_lands_where_libass_painted_the_glyphs() {
+    let handles = handles();
+    let mut pipeline = SubtitlePipeline::new(&handles);
+    let item_id = aweft_model::ids::ItemId::new();
+    let row = LineHit {
+        item_id,
+        layer: 0,
+        start_ms: 0,
+        end_ms: 10_000,
+        anchor: Some((ANCHOR.0 as f64, ANCHOR.1 as f64)),
+    };
+
+    pipeline.set_script(SCRIPT.to_vec(), vec![row]);
+    pipeline
+        .render_at(1_000, (FRAME_W, FRAME_H), ON_SCREEN)
+        .expect("出帧失败");
+
+    let boxes = pipeline.line_boxes();
+    assert_eq!(boxes.len(), 1, "一行字幕应当还原出恰好一个框");
+    let line = boxes[0];
+    assert_eq!(line.item_id, item_id);
+    // 行框的底部中点：生成的样式一律用 `Alignment::BottomCenter`，libass 的
+    // `get_base_point` 因此钉住脚本里 `\pos` 那个点，框的底部中点就该落在它上面。
+    let (centre_x, bottom_y) = (line.x + line.w / 2.0, line.y + line.h);
+    assert!(
+        (centre_x - f64::from(ANCHOR.0)).abs() <= 12.0,
+        "行框底部中点的横坐标 {centre_x} 离 \\pos 锚点 {} 太远",
+        ANCHOR.0,
+    );
+    assert!(
+        (bottom_y - f64::from(ANCHOR.1)).abs() <= 12.0,
+        "行框底部 {bottom_y} 离 \\pos 锚点 {} 太远（Y 轴或对齐出错？）",
+        ANCHOR.1,
+    );
+    // 框要有实际大小：宽 0 说明块被全滤掉了，那样视口里点不到任何东西
+    assert!(line.w > 10.0 && line.h > 10.0, "行框小得点不着：{line:?}");
 }
