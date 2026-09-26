@@ -225,3 +225,11 @@ export global AnimationCallbacks {
     // —— 共享：视图缩放变化 —— 更新命中检测容差依据（刻度已 Slint 侧即时计算）
     callback view-changed(zoom-x: float, zoom-y: float);
 }
+
+// 媒体选择器回调（仅 Android 用，见 MediaPickerState）。
+export global MediaPickerCallbacks {
+    // 点选第 index 行
+    callback pick-media(index: int);
+    // 取消（点遮罩或取消按钮）
+    callback cancel-media();
+}

@@ -162,3 +162,12 @@ export global OverlayState {
     in property <bool> show-close-area-overlays: false;
     in property <[CloseAreaOverlayData]> close-area-overlay-datas;
 }
+
+// 媒体选择器状态（仅 Android 用：MediaStore 查库后由 Rust 填行、弹层；
+// 桌面走 rfd 原生对话框，用不到它，但 global 与桌面共存无害）。
+export global MediaPickerState {
+    // 弹层是否可见
+    in property <bool> visible: false;
+    // 待选行文案（Rust 按 "名 · 时长 · 大小" 拼好，下标与 Rust 侧条目一一对应）
+    in property <[string]> items: [];
+}

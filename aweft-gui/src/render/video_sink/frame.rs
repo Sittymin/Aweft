@@ -9,10 +9,18 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// DmaBufMemory 是上游按 target_os = "linux" 门控的（android 上不存在），
+// 连带 VideoInfoDmaDrm/is_dma_drm_caps（只服务于 dmabuf 路）在 Android 上也用不到，
+// 一并只给桌面编；sysmem 路只认 VideoInfo/VideoMeta。
+#[cfg(not(target_os = "android"))]
 use gstreamer_allocators::DmaBufMemory;
-use gstreamer_video::{VideoInfo, VideoInfoDmaDrm, VideoMeta, is_dma_drm_caps};
+use gstreamer_video::{VideoInfo, VideoMeta};
+#[cfg(not(target_os = "android"))]
+use gstreamer_video::{VideoInfoDmaDrm, is_dma_drm_caps};
 use slint::wgpu_30::wgpu;
 
+// Android 上 dmabuf 路被门控，self（模块路径）暂无引用，PlaneLayout 照常用。
+#[cfg_attr(target_os = "android", allow(unused_imports))]
 use super::dmabuf::{self, PlaneLayout};
 use super::sink::SlintWGPUSink;
 
@@ -162,8 +170,12 @@ impl SlintWGPUSink {
             self.last_cache_epoch = epoch;
         }
 
-        let is_dmabuf = is_dma_drm_caps(caps.as_ref());
-        let planes = if is_dmabuf {
+        // Android：没有 dmabuf（无 VA、无外部内存导入），恒走 sysmem 上传，
+        // 连 caps 都不查——该目标上永远是 false。
+        #[cfg(target_os = "android")]
+        let planes = self.sysmem_planes(device, queue, &caps, &buffer)?;
+        #[cfg(not(target_os = "android"))]
+        let planes = if is_dma_drm_caps(caps.as_ref()) {
             self.dmabuf_planes(device, queue, &caps, &buffer)
         } else {
             self.sysmem_planes(device, queue, &caps, &buffer)
@@ -263,6 +275,8 @@ impl SlintWGPUSink {
     }
 
     /// dmabuf 帧 → 平面视图：每 plane 一个 fd，使用 Vulkan 外部内存零拷贝导入。
+    /// 桌面独占：fd 提取依赖上游 linux 门控的 DmaBufMemory。
+    #[cfg(not(target_os = "android"))]
     pub(crate) fn dmabuf_planes(
         &mut self,
         device: &Arc<wgpu::Device>,
@@ -691,6 +705,7 @@ pub(crate) fn sysmem_plane_layout(format: gstreamer_video::VideoFormat) -> Optio
     super::dmabuf::capability_for_video_format(format).map(|capability| capability.sysmem_layout)
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) struct DmabufPlane {
     pub(crate) fd: i32,
     pub(crate) offset: u64,
@@ -716,6 +731,7 @@ fn plane_memory_start(
     Some((memory_range.start, local_offset))
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) fn dmabuf_plane(
     buffer: &gstreamer::BufferRef,
     offset: usize,

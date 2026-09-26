@@ -1,0 +1,25 @@
+# Meson Android arm64 交叉文件。NDK 路径不写死，由 android-deps.sh 调用时
+# 从环境 ANDROID_NDK_ROOT 拼出来（该变量由 flake 的 shellHook 导出）。
+[binaries]
+c = '@CC@'
+cpp = '@CXX@'
+ar = '@AR@'
+strip = '@STRIP@'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+
+[properties]
+# 注意：这里不设 sys_root。NDK 的版本化 clang 包装自带正确的 --sysroot；
+# 若再设 sys_root，clang 会把 freetype .pc 里的绝对 -I 路径拼到 sysroot 下
+#（曾导致 hb-ft.h 找不到 ft2build.h），而预编产物实际落在宿主文件系统。
+c_args = ['--target=aarch64-linux-android26']
+c_link_args = ['--target=aarch64-linux-android26']
+cpp_args = ['--target=aarch64-linux-android26']
+cpp_link_args = ['--target=aarch64-linux-android26']
+# 交叉时只认 TARGET_PKG_CONFIG_PATH（由 android-deps.sh 导出），不碰主机库。
+pkg_config_libdir = '@PKGCONFIG_DIR@'

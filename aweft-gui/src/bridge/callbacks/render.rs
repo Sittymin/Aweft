@@ -142,9 +142,34 @@ fn handle_rendering_setup(
 ) {
     log::info!("窗口初始化完成",);
     let windows_size = instance.window().size();
+    // 现读一份 theme：store 里那份是建窗时读的，Android 上那一刻 scale_factor
+    // 还是 1.0，真值要到本回调才有。
+    let theme = crate::bridge::types::ThemeSettings::from_main_window(instance);
+    let scale_factor = theme.get_scale_factor();
+    // Slint 的 safe-area-insets 是逻辑像素，顶点坐标系是物理像素，走 theme 换算。
+    let inset = {
+        let px = |logical: f32| theme.to_physical_px(f64::from(logical)).round().max(0.0) as u32;
+        crate::screen::primitives::Insets {
+            left: px(instance.get_safe_inset_left()),
+            top: px(instance.get_safe_inset_top()),
+            right: px(instance.get_safe_inset_right()),
+            bottom: px(instance.get_safe_inset_bottom()),
+        }
+    };
+    log::info!(
+        "窗口 {}x{}@{scale_factor:.2}，安全区（物理像素）左{} 上{} 右{} 下{}",
+        windows_size.width,
+        windows_size.height,
+        inset.left,
+        inset.top,
+        inset.right,
+        inset.bottom
+    );
     let action = Action::Screen(crate::actions::screen::ScreenAction::InitializeLayout {
         width: windows_size.width,
         height: windows_size.height,
+        scale_factor,
+        inset,
     });
     dispatch_and_render(store, action, &instance.as_weak());
 

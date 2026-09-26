@@ -1,0 +1,27 @@
+# xbuild 打包配置（`x build` / `x run` 在本目录执行时读取）。
+# 字段名与 xbuild 源码的 serde 结构一致（apk/src/manifest.rs、xbuild/src/config.rs）。
+
+android:
+  manifest:
+    # 反向域名跟 aweft.org 对齐（用户确认 2026-09-12）。换包名等于换应用身份，
+    # MIUI 会拦新包的安装（INSTALL_FAILED_USER_RESTRICTED），需要在开发者选项里
+    # 开「通过 USB 安装」；已装过的包名重复安装不受影响。
+    package: org.aweft
+    sdk:
+      # Slint 硬性要求 26 起；target 取 nix 闭包里的 platform 35。
+      min_sdk_version: 26
+      target_sdk_version: 35
+    uses_permission:
+      # 协作需要网络：p2panda/iroh 要开 UDP/TCP 套接字、mDNS 发现，没有它直接起不来。
+      - name: android.permission.INTERNET
+      - name: android.permission.ACCESS_NETWORK_STATE
+      - name: android.permission.ACCESS_WIFI_STATE
+      - name: android.permission.CHANGE_WIFI_MULTICAST_STATE
+      # MediaStore 查库：API 33 起读写分离，视频取 VIDEO；
+      # 音频轨信息（如以后读）取 AUDIO；32 及以下用旧的外部存储权限。
+      - name: android.permission.READ_MEDIA_VIDEO
+      - name: android.permission.READ_MEDIA_AUDIO
+      - name: android.permission.READ_EXTERNAL_STORAGE
+        max_sdk_version: 32
+    application:
+      label: Aweft

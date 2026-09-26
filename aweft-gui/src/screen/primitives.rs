@@ -122,6 +122,31 @@ impl Rcti {
     }
 }
 
+/// 系统栏占掉的一圈（物理像素）。桌面恒为全 0；Android 上来自
+/// `Window.safe-area-insets`，见 `bridge::callbacks::handle_rendering_setup`。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Insets {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl Insets {
+    /// 窗口物理尺寸扣掉四周后的可用矩形（包含端坐标）。
+    /// 某一侧内缩超过窗口尺寸时收成零宽/零高的退化矩形，不做无符号回绕。
+    pub fn usable_rect(&self, width: u32, height: u32) -> Rcti {
+        let last_x = width.saturating_sub(1);
+        let last_y = height.saturating_sub(1);
+        Rcti {
+            xmin: self.left.min(last_x),
+            xmax: last_x.saturating_sub(self.right).max(self.left),
+            ymin: self.top.min(last_y),
+            ymax: last_y.saturating_sub(self.bottom).max(self.top),
+        }
+    }
+}
+
 /// 浮点数定义的矩形区域
 #[derive(Debug, Clone)]
 pub struct Rctf {

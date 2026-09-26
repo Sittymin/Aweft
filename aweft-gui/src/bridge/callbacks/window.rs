@@ -3,12 +3,15 @@ use crate::bridge::types::MainWindow;
 
 use crate::store::AppStore;
 use slint::ComponentHandle;
+#[cfg(not(target_os = "android"))]
 use slint::winit_030::winit::{self, event::WindowEvent};
+#[cfg(not(target_os = "android"))]
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use std::{cell::RefCell, rc::Rc};
 
 use super::dispatch_and_render;
 
+#[cfg(not(target_os = "android"))]
 pub(super) fn setup_winit_window_event_callback(
     instance: &MainWindow,
     store: Rc<RefCell<AppStore>>,
@@ -52,6 +55,7 @@ pub(super) fn setup_winit_window_event_callback(
     });
 }
 
+#[cfg(not(target_os = "android"))]
 fn handle_resized(
     instance: &MainWindow,
     store: &Rc<RefCell<AppStore>>,
@@ -67,6 +71,7 @@ fn handle_resized(
     dispatch_and_render(store, action, &instance.as_weak());
 }
 
+#[cfg(not(target_os = "android"))]
 fn handle_scale_factor_changed(
     instance: &MainWindow,
     store: &Rc<RefCell<AppStore>>,

@@ -11,6 +11,7 @@ use std::{cell::RefCell, rc::Rc};
 mod animation;
 mod area;
 mod audio;
+mod media_picker;
 mod nla;
 mod node_graph;
 mod render;
@@ -22,6 +23,7 @@ mod window;
 pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     area::setup_area_type_callback(instance, Rc::clone(&store));
     render::setup_rendering_notifier_callback(instance, Rc::clone(&store));
+    #[cfg(not(target_os = "android"))]
     window::setup_winit_window_event_callback(instance, Rc::clone(&store));
     area::setup_actionzone_drag_callback(instance, Rc::clone(&store));
     area::setup_actionzone_drag_end_callback(instance, Rc::clone(&store));
@@ -43,12 +45,13 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     nla::setup_nla_callbacks(instance, Rc::clone(&store));
     video::setup_video_callbacks(instance, Rc::clone(&store));
     audio::setup_audio_callbacks(instance, Rc::clone(&store));
+    media_picker::setup_media_picker_callbacks(instance, Rc::clone(&store));
 }
 
 /// 统一的 dispatch 和渲染逻辑。
 ///
 /// reducer 修改数据并向依赖图打 tag；`evaluate_depsgraph` 只重算受影响的投影。
-pub(super) fn dispatch_and_render(
+pub(crate) fn dispatch_and_render(
     store: &Rc<RefCell<AppStore>>,
     action: Action,
     _weak_instance: &slint::Weak<MainWindow>,

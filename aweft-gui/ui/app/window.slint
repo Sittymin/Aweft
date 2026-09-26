@@ -15,12 +15,22 @@ import { ScrEdgeTouchArea } from "../screen/edges/edge_touch_area.slint";
 import { SlintScrArea } from "../screen/area_container.slint";
 import { SubtitleOverlay } from "../areas/subtitle.slint";
 import { DismissOverlay } from "../widgets/dismiss_overlay.slint";
+import { MediaPicker } from "../areas/media_picker.slint";
 import {
     ScrEdgeTouchAreaDisplayData,
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
-import { VideoState, AudioState, SubtitleState, OverlayState, NodeGraphState, DismissOverlayState, AnimationState } from "../bridge/state.slint";
+import {
+    VideoState,
+    AudioState,
+    SubtitleState,
+    OverlayState,
+    NodeGraphState,
+    DismissOverlayState,
+    AnimationState,
+    MediaPickerState,
+} from "../bridge/state.slint";
 import {
     DragCallbacks,
     AreaCallbacks,
@@ -29,6 +39,7 @@ import {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
+    MediaPickerCallbacks,
 } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -48,11 +59,20 @@ export {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
+    MediaPickerState,
+    MediaPickerCallbacks,
     Theme
 }
 
 // 主窗口组件
 export component MainWindow inherits Window {
+    // 四周系统栏的厚度（逻辑像素）。Android 上窗口是全屏的，状态栏与导航条盖在
+    // 内容上、且那一圈的触摸归系统，Rust 侧读这四个值把布局整体内缩；桌面恒为 0。
+    out property <length> safe-inset-left: root.safe-area-insets.left;
+    out property <length> safe-inset-top: root.safe-area-insets.top;
+    out property <length> safe-inset-right: root.safe-area-insets.right;
+    out property <length> safe-inset-bottom: root.safe-area-insets.bottom;
+
     in property <[ScrAreaData]> scr-areas: [];
     in property <[ScrEdgeTouchAreaDisplayData]> scr-edge-touch-areas-displays: [];
     in property <[ScrEdgeTouchAreaData]> scr-edge-touch-areas: [];
@@ -93,6 +113,18 @@ export component MainWindow inherits Window {
         hole-height: DismissOverlayState.hole-height;
         dismissed => {
             DismissOverlayState.active = false;
+        }
+    }
+
+    // 媒体选择弹层（仅 Android 由 Rust 驱动显隐）：盖在字幕层之下、内容之上，
+    // 点行走 pick-media，点遮罩/取消走 cancel-media。
+    if MediaPickerState.visible: MediaPicker {
+        items: MediaPickerState.items;
+        pick(index) => {
+            MediaPickerCallbacks.pick-media(index);
+        }
+        cancel() => {
+            MediaPickerCallbacks.cancel-media();
         }
     }
 

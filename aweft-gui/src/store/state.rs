@@ -4,7 +4,7 @@ use crate::bridge::types::{SplitPreviewOverlayData, ThemeSettings};
 use crate::screen::area::ScrAreaKey;
 use crate::screen::edge::ScrEdgeKey;
 use crate::screen::map::ScrAreaMap;
-use crate::screen::primitives::{Adjacency, Rcti};
+use crate::screen::primitives::{Adjacency, Insets, Rcti};
 use crate::screen::vertex::ScrVertKey;
 use aweft_project::{ProjectStore, SavedProject};
 use slint::PhysicalSize;
@@ -121,6 +121,9 @@ pub struct AppState {
     pub screen_map: ScrAreaMap,
     pub theme_settings: ThemeSettings,
     pub window_size: PhysicalSize,
+    /// 四周系统栏占掉的物理像素。桌面恒为 0；Android 上不减这一圈，
+    /// 顶栏会画在状态栏底下，那里的触摸被系统吃掉（真机实测点不到）。
+    pub safe_inset: Insets,
     pub initialized: bool,
     // 当前拖拽操作状态
     pub current_drag_operation: DragOperation,
@@ -163,6 +166,7 @@ impl AppState {
             screen_map: ScrAreaMap::new(),
             theme_settings,
             window_size: window.size(),
+            safe_inset: Insets::default(),
             initialized: false,
             current_drag_operation: DragOperation::None,
             video_sessions: Vec::new(),
@@ -181,14 +185,11 @@ impl AppState {
         }
     }
 
-    /// 以包含端坐标返回当前窗口的物理像素矩形 (0,0)-(w-1,h-1)
+    /// 可用区的物理像素矩形（包含端坐标）：窗口尺寸扣掉四周系统栏。
+    /// 桌面 inset 为 0，结果与整窗口一致。
     pub fn current_window_rect(&self) -> Rcti {
-        Rcti {
-            xmin: 0,
-            ymin: 0,
-            xmax: self.window_size.width.saturating_sub(1),
-            ymax: self.window_size.height.saturating_sub(1),
-        }
+        self.safe_inset
+            .usable_rect(self.window_size.width, self.window_size.height)
     }
 
     /// 当前焦点视频：选择集合末项优先，无选择时回落主视频。

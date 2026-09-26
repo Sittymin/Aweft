@@ -9,4 +9,9 @@ aweft-libass/compile_flags.txt
 # 忽略备份文件
 *~
 
+# libass 的 Android 预编依赖（freetype/fribidi/harfbuzz 静态库）与构建目录：
+# 体积大且随 NDK 版本变，换机器跑 aweft-libass/android-deps.sh 重建即可。
+/aweft-libass/third_party/android-deps/
+/aweft-libass/third_party/android-deps-build/
+
 */proptest-regressions/

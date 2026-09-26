@@ -4,11 +4,13 @@ use crate::store::AppStore;
 use anyhow::{Context, Result};
 use aweft_model::sequence::GroupData;
 use slint::ComponentHandle;
+#[cfg(not(target_os = "android"))]
 use slint::wgpu_30::WGPUConfiguration;
 use std::{cell::RefCell, rc::Rc};
 
 /// 自建 wgpu 设备/队列（交 slint Manual 配置使用）。
 /// TEXTURE_FORMAT_16BIT_NORM：P010 10bit 视频平面（R16Unorm/Rg16Unorm）必需。
+#[cfg(not(target_os = "android"))]
 fn create_wgpu_device() -> Result<(
     slint::wgpu_30::wgpu::Instance,
     slint::wgpu_30::wgpu::Adapter,
@@ -54,11 +56,13 @@ pub struct AppWindowManager {
 impl AppWindowManager {
     /// 创建新的应用窗口管理器
     pub fn new() -> Result<Self> {
-        use slint::BackendSelector;
         // 初始化日志（放最前，确保后续所有 log::* 都可用）。
         // 默认只输出本 workspace（aweft*）的 debug+；第三方 crate（slint/
         // gstreamer/winit 等）默认 warn+，避免刷屏。可通过 RUST_LOG 环境变量
         // 覆盖（如 `RUST_LOG=debug` 或 `RUST_LOG=aweft_gui=trace`）。
+        // Android 不走这里：stderr 不进 logcat，且 logger 已由 aweft-android 的
+        // logging::install 装好，env_logger 的 init 在同一次进程里装第二个会 panic。
+        #[cfg(not(target_os = "android"))]
         env_logger::Builder::from_env(
             env_logger::Env::default().default_filter_or(
                 "aweft=debug,aweft_gui=debug,aweft_model=debug,aweft_convert=debug,aweft_libass=debug,warn",
@@ -69,7 +73,15 @@ impl AppWindowManager {
         // 用法）：启用 16bit 归一化纹理格式（R16Unorm/Rg16Unorm，P010 10bit
         // 视频平面导入/上传必需；WGPUSettings 为 non_exhaustive 无法局部修改，
         // Automatic 默认不含该特性）。
+        //
+        // Android 上没有这一步：平台是 aweft-android 里 slint::android::init 装的
+        // android-activity，而 BackendSelector 在 Android 下一旦看到不以
+        // android-activity- 开头的后端名就直接报错（slint
+        // internal/backends/selector/api.rs:430 的 select_internal），
+        // 这里写死的 "winit" 正好撞上它。
+        #[cfg(not(target_os = "android"))]
         {
+            use slint::BackendSelector;
             let (instance, adapter, device, queue) = create_wgpu_device()?;
             let sel = BackendSelector::new();
             let res = sel

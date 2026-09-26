@@ -24,23 +24,22 @@ pub(super) fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<App
         vstate.set_time_bars(slint::ModelRc::from(s.ui_models.video.time_bars.clone()));
     }
 
-    // 打开/追加视频（首个自动成为主视频）：系统文件对话框（异步不阻塞 UI）
+    // 打开/追加视频（首个自动成为主视频）：系统文件对话框（异步不阻塞 UI）。
+    // Android 没有 rfd，走 MediaStore 查库 + Slint 自绘弹层（见 file_picker::android）。
     {
         let weak = instance.as_weak();
         let s = Rc::clone(&store);
+        #[cfg(not(target_os = "android"))]
         instance.global::<VideoCallbacks>().on_open_video(move || {
-            let future = rfd::AsyncFileDialog::new()
-                .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
-                .pick_file();
+            let future = crate::file_picker::pick_video_file();
             let weak = weak.clone();
             let store = Rc::clone(&s);
             let _ = slint::spawn_local(async move {
                 // 用户取消选择
-                let Some(file) = future.await else {
+                let Some(path) = future.await else {
                     return;
                 };
                 // 本地路径 → file URI（playbin 需要 URI）
-                let path = file.path().to_path_buf();
                 let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
                     log::warn!("打开视频：路径无法转换为 URI：{}", path.display());
                     return;
@@ -53,6 +52,16 @@ pub(super) fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<App
                     &weak,
                 );
             });
+        });
+        #[cfg(target_os = "android")]
+        instance.global::<VideoCallbacks>().on_open_video(move || {
+            let weak = weak.clone();
+            let store = Rc::clone(&s);
+            let _ = slint::spawn_local(crate::file_picker::android::run_android_picker(
+                weak,
+                store,
+                crate::file_picker::android::PickKind::Append,
+            ));
         });
     }
 
@@ -213,22 +222,33 @@ pub(super) fn setup_video_callbacks(instance: &MainWindow, store: Rc<RefCell<App
     }
 
     // 右键任意视频"更换视频"：重新选择文件原地替换
+    // （Android 分支同上，选完按原下标 Replace，见 file_picker::android）。
     {
         let weak = instance.as_weak();
         let s = Rc::clone(&store);
+        #[cfg(target_os = "android")]
         instance
             .global::<VideoCallbacks>()
             .on_replace_video(move |index| {
-                let future = rfd::AsyncFileDialog::new()
-                    .add_filter("视频文件", &["mp4", "mkv", "mov", "avi", "webm", "m4v"])
-                    .pick_file();
+                let weak = weak.clone();
+                let store = Rc::clone(&s);
+                let _ = slint::spawn_local(crate::file_picker::android::run_android_picker(
+                    weak,
+                    store,
+                    crate::file_picker::android::PickKind::Replace(index.max(0) as usize),
+                ));
+            });
+        #[cfg(not(target_os = "android"))]
+        instance
+            .global::<VideoCallbacks>()
+            .on_replace_video(move |index| {
+                let future = crate::file_picker::pick_video_file();
                 let weak = weak.clone();
                 let store = Rc::clone(&s);
                 let _ = slint::spawn_local(async move {
-                    let Some(file) = future.await else {
+                    let Some(path) = future.await else {
                         return;
                     };
-                    let path = file.path().to_path_buf();
                     let Ok(uri) = url::Url::from_file_path(&path).map(|u| u.to_string()) else {
                         log::warn!("更换视频：路径无法转换为 URI：{}", path.display());
                         return;
