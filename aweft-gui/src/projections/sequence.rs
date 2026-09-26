@@ -28,17 +28,18 @@ pub fn op_sequence_structure(store: &mut AppStore, tags: &[Tag]) {
                 new_item_id,
             } => {
                 let (state, ui) = store.split_mut();
-                if let Err(err) =
-                    ui.sequence_state
-                        .handle_item_inserted(&state.project, *item_id, *new_item_id)
-                {
+                if let Err(err) = ui.sequence_state.handle_item_inserted(
+                    state.project.sequence(),
+                    *item_id,
+                    *new_item_id,
+                ) {
                     log::error!("Sequence 插入行失败: {}", err);
                 }
             }
             Tag::ItemsRemoved { item_ids } => {
                 let (state, ui) = store.split_mut();
                 ui.sequence_state
-                    .handle_items_removed(&state.project, item_ids);
+                    .handle_items_removed(state.project.sequence(), item_ids);
             }
             Tag::ItemsPasted {
                 new_root_ids,
@@ -46,7 +47,7 @@ pub fn op_sequence_structure(store: &mut AppStore, tags: &[Tag]) {
             } => {
                 let (state, ui) = store.split_mut();
                 if let Err(err) = ui.sequence_state.handle_subtrees_pasted(
-                    &state.project,
+                    state.project.sequence(),
                     *base_location,
                     new_root_ids,
                 ) {
@@ -55,10 +56,11 @@ pub fn op_sequence_structure(store: &mut AppStore, tags: &[Tag]) {
             }
             Tag::GroupsUngrouped { group_id, new_ids } => {
                 let (state, ui) = store.split_mut();
-                if let Err(err) =
-                    ui.sequence_state
-                        .handle_group_ungrouped(&state.project, *group_id, new_ids)
-                {
+                if let Err(err) = ui.sequence_state.handle_group_ungrouped(
+                    state.project.sequence(),
+                    *group_id,
+                    new_ids,
+                ) {
                     log::error!("Sequence 解散分组失败: {}", err);
                 }
             }
@@ -84,8 +86,12 @@ pub fn op_sequence_timecode(store: &mut AppStore, tags: &[Tag]) {
                     .rows_model()
                     .clear_preview_timecode(*event_id);
                 // update_row_time 内部重建该行 + 所有祖先分组头并通知（原子刷新）
-                ui.sequence_state
-                    .update_row_time(&state.project, *event_id, *is_start_time, *time);
+                ui.sequence_state.update_row_time(
+                    state.project.sequence(),
+                    *event_id,
+                    *is_start_time,
+                    *time,
+                );
             }
             Tag::TimecodePreviewChanged {
                 event_id,
@@ -122,7 +128,7 @@ pub fn op_sequence_timecode(store: &mut AppStore, tags: &[Tag]) {
                 let is_start = updates.first().map(|(_, s, _)| *s).unwrap_or(false);
                 // 内部重建所有受影响行 + 祖先分组头并通知（原子刷新）
                 ui.sequence_state.update_rows_batch_then_ancestors(
-                    &state.project,
+                    state.project.sequence(),
                     &ids,
                     is_start,
                     &times,
@@ -155,13 +161,16 @@ pub fn op_sequence_selection(store: &mut AppStore, tags: &[Tag]) {
             let (state, ui) = store.split_mut();
             match kind {
                 crate::depsgraph::SelectionKind::Single => {
-                    ui.sequence_state.select_single(&state.project, *item_id);
+                    ui.sequence_state
+                        .select_single(state.project.sequence(), *item_id);
                 }
                 crate::depsgraph::SelectionKind::Range => {
-                    ui.sequence_state.select_range(&state.project, *item_id);
+                    ui.sequence_state
+                        .select_range(state.project.sequence(), *item_id);
                 }
                 crate::depsgraph::SelectionKind::Toggle => {
-                    ui.sequence_state.select_toggle(&state.project, *item_id);
+                    ui.sequence_state
+                        .select_toggle(state.project.sequence(), *item_id);
                 }
             }
             // 聚合传播：更新所有受影响的祖先分组头选中态
@@ -181,7 +190,7 @@ pub fn op_sequence_selection(store: &mut AppStore, tags: &[Tag]) {
         {
             let (state, ui) = store.split_mut();
             ui.sequence_state.marquee_select(
-                &state.project,
+                state.project.sequence(),
                 *x_lo,
                 *x_hi,
                 *row_lo,
@@ -191,7 +200,7 @@ pub fn op_sequence_selection(store: &mut AppStore, tags: &[Tag]) {
         }
         if let Tag::SelectionDeselectedAll = tag {
             let (state, ui) = store.split_mut();
-            ui.sequence_state.deselect_all(&state.project);
+            ui.sequence_state.deselect_all(state.project.sequence());
         }
     }
 }

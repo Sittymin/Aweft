@@ -6,8 +6,7 @@ use std::{
 use anyhow::Result;
 use aweft_model::{
     ids::ItemId,
-    project::Project,
-    sequence::{ItemContent, ItemLocation},
+    sequence::{ItemContent, ItemLocation, Sequence},
 };
 use chrono::TimeDelta;
 use slint::{Model, ModelRc};
@@ -22,7 +21,7 @@ use slint::{ToSharedString, VecModel};
 type SubtitleFilterModel = slint::FilterModel<Rc<SequenceRowsModel>, Box<dyn Fn(&RowData) -> bool>>;
 
 pub struct SequenceState {
-    // 数据源模型（Slint Model，实时从权威 project 投影行）
+    // 数据源模型（Slint Model，实时从权威 sequence 投影行）
     rows_model: SequenceRowsModel,
     filter_model: Option<Rc<SubtitleFilterModel>>,
     // 运行时折叠状态集合（共享引用，供 FilterModel 的闭包使用。索引到实际数据）
@@ -67,7 +66,7 @@ impl SequenceState {
 
     /// 从全量行（经 SequenceRowsModel + 权威 sequence）派生根级收起要显示的全部字幕行片段块。
     /// 所有会改变 Event 行集合或时间的入口都应调用，保持与权威数据同步。
-    pub fn refresh_timeline_root_blocks(&self, project: &Project) {
+    pub fn refresh_timeline_root_blocks(&self, sequence: &Sequence) {
         let blocks: Vec<SlintTimelineSubBlock> = (0..self.rows_model.row_count())
             .filter_map(|i| {
                 let data = self.rows_model.row_data(i)?;
@@ -92,7 +91,7 @@ impl SequenceState {
         let blocks = if blocks.is_empty() && self.rows_model.row_count() == 0 {
             // 直接遍历 sequence 的所有 Event
             let mut v = Vec::new();
-            for (id, item) in project.sequence().items.iter() {
+            for (id, item) in sequence.items.iter() {
                 if let ItemContent::Event(ev) = &item.content {
                     let s = ev.start_time.num_milliseconds() as f32 / 1000.0;
                     let e = ev.end_time.num_milliseconds() as f32 / 1000.0;
@@ -115,8 +114,8 @@ impl SequenceState {
 
     /// 按 item_id 局部更新 timeline_root_blocks 中的一条（set_row_data，保住 grab）。
     /// 若该 id 不在模型中或时间无效则不操作。
-    pub fn update_timeline_root_block(&self, project: &Project, item_id: ItemId) {
-        let Some(item) = project.sequence().get(item_id) else {
+    pub fn update_timeline_root_block(&self, sequence: &Sequence, item_id: ItemId) {
+        let Some(item) = sequence.get(item_id) else {
             return;
         };
         let ItemContent::Event(ev) = &item.content else {
@@ -202,13 +201,13 @@ impl SequenceState {
         ModelRc::new(mapped)
     }
 
-    pub fn get_selected_events(&self, project: &Project) -> HashSet<ItemId> {
+    pub fn get_selected_events(&self, sequence: &Sequence) -> HashSet<ItemId> {
         self.rows_model
             .directly_selected_items()
             .iter()
             .filter_map(|&id| {
                 // 检查是否是事件项
-                if let Some(item) = project.sequence().get(id) {
+                if let Some(item) = sequence.get(id) {
                     if matches!(item.content, ItemContent::Event(_)) {
                         Some(id)
                     } else {
@@ -232,33 +231,33 @@ impl SequenceState {
     /// 初始化 UI 行数据（首次绑定模型）。
     ///
     /// 仅在初始化时调用。结构变化用精确锚点操作，不得走全量重建。
-    pub fn initialize_rows(&mut self, project: &Project) {
-        self.rows_model.set_sequence(&project.sequence);
+    pub fn initialize_rows(&mut self, sequence: &Sequence) {
+        self.rows_model.set_sequence(sequence);
         self.invalidate_event_counts();
-        self.refresh_timeline_root_blocks(project);
+        self.refresh_timeline_root_blocks(sequence);
     }
 
     // === 时间码更新 ===
 
     /// 更新单个事件行的时间码：重建该行 + 所有祖先分组头快照，并通知 Slint。
-    /// 权威数据（project）已由 reducer 修改；投影 op 调用此方法做 UI 刷新。
+    /// 权威数据（Sequence）已由 reducer 修改；投影 op 调用此方法做 UI 刷新。
     pub fn update_row_time(
         &mut self,
-        project: &Project,
+        sequence: &Sequence,
         event_id: ItemId,
         _is_start_time: bool,
         _time: TimeDelta,
     ) {
         self.rows_model
-            .refresh_row_with_ancestors(&project.sequence, event_id);
+            .refresh_row_with_ancestors(sequence, event_id);
         // 同步时间线的根级块（局部 set_row_data，保住 grab）
-        self.update_timeline_root_block(project, event_id);
+        self.update_timeline_root_block(sequence, event_id);
     }
 
     /// 批量更新多个事件行的时间码，并统一重建受影响行 + 所有祖先分组头。
     pub fn update_rows_batch_then_ancestors(
         &mut self,
-        project: &Project,
+        sequence: &Sequence,
         event_ids: &[ItemId],
         _is_start_time: bool,
         _times: &[TimeDelta],
@@ -268,12 +267,10 @@ impl SequenceState {
             dirty.insert(id);
             dirty.extend(self.rows_model.ancestors_of(id));
         }
-        self.rows_model.refresh_ids(
-            &project.sequence,
-            &dirty.iter().copied().collect::<Vec<_>>(),
-        );
+        self.rows_model
+            .refresh_ids(sequence, &dirty.iter().copied().collect::<Vec<_>>());
         for &id in event_ids {
-            self.update_timeline_root_block(project, id);
+            self.update_timeline_root_block(sequence, id);
         }
     }
 
@@ -303,7 +300,7 @@ impl SequenceState {
     }
 
     // 选择相关操作
-    pub fn select_single(&mut self, project: &Project, item_id: ItemId) {
+    pub fn select_single(&mut self, sequence: &Sequence, item_id: ItemId) {
         for item in &self.all_highlighted_items {
             self.rows_model
                 .set_selected(*item, SlintSelectionState::Unselected);
@@ -316,7 +313,7 @@ impl SequenceState {
         self.last_selection_anchor = Some(idx);
 
         let is_group = {
-            let Some(item) = project.sequence().get(item_id) else {
+            let Some(item) = sequence.get(item_id) else {
                 return;
             };
             matches!(item.content, ItemContent::Group(_))
@@ -339,10 +336,10 @@ impl SequenceState {
         }
         // 组头状态从 selected 派生（重算计数 + 刷新三态）
         self.rebuild_selected_event_counts();
-        self.refresh_group_selected_by_counts(project);
+        self.refresh_group_selected_by_counts(sequence);
     }
 
-    pub fn select_toggle(&mut self, project: &Project, item_id: ItemId) {
+    pub fn select_toggle(&mut self, sequence: &Sequence, item_id: ItemId) {
         let Some(idx) = self.rows_model.row_index_of(item_id) else {
             return;
         };
@@ -382,10 +379,10 @@ impl SequenceState {
             }
         }
         self.rebuild_selected_event_counts();
-        self.refresh_group_selected_by_counts(project);
+        self.refresh_group_selected_by_counts(sequence);
     }
 
-    pub fn select_range(&mut self, project: &Project, item_id: ItemId) {
+    pub fn select_range(&mut self, sequence: &Sequence, item_id: ItemId) {
         let Some(cur_idx) = self.rows_model.row_index_of(item_id) else {
             return;
         };
@@ -417,11 +414,11 @@ impl SequenceState {
             i += 1;
         }
         self.rebuild_selected_event_counts();
-        self.refresh_group_selected_by_counts(project);
+        self.refresh_group_selected_by_counts(sequence);
     }
 
     /// 清空全部选中（空白点击）。
-    pub fn deselect_all(&mut self, project: &Project) {
+    pub fn deselect_all(&mut self, sequence: &Sequence) {
         let ids: Vec<ItemId> = self.all_highlighted_items.drain().collect();
         for id in ids {
             self.rows_model
@@ -429,7 +426,7 @@ impl SequenceState {
         }
         // 组头 IndirectlySelected 由 rebuild/refresh 收敛
         self.rebuild_selected_event_counts();
-        self.refresh_group_selected_by_counts(project);
+        self.refresh_group_selected_by_counts(sequence);
         self.last_selection_anchor = None;
     }
 
@@ -440,7 +437,7 @@ impl SequenceState {
     /// （Slint rows 下标）。modifier：None=替换，Shift=加选，Ctrl=切换。
     pub fn marquee_select(
         &mut self,
-        project: &Project,
+        sequence: &Sequence,
         x_lo: f32,
         x_hi: f32,
         row_lo: i32,
@@ -468,7 +465,7 @@ impl SequenceState {
         let n_vis = visible.len() as i32;
         let Some((r_lo, r_hi)) = clamp_rows(row_lo, row_hi, n_vis) else {
             if is_replacing(modifier) {
-                self.deselect_all(project);
+                self.deselect_all(sequence);
             }
             return;
         };
@@ -490,7 +487,7 @@ impl SequenceState {
         }
         if hits.is_empty() {
             if is_replacing(modifier) {
-                self.deselect_all(project);
+                self.deselect_all(sequence);
             }
             return;
         }
@@ -513,7 +510,7 @@ impl SequenceState {
             }
         }
         self.rebuild_selected_event_counts();
-        self.refresh_group_selected_by_counts(project);
+        self.refresh_group_selected_by_counts(sequence);
         if let Some(&first) = hits.first() {
             if let Some(idx) = self.rows_model.row_index_of(first) {
                 self.last_selection_anchor = Some(idx);
@@ -560,18 +557,17 @@ impl SequenceState {
     /// 缓存只跨"单次 select 内多次调用"避免重复递归（父组递归时子组
     /// 值入缓存，子组头单独查询时命中）。结构变化时由投影显式
     /// `invalidate_event_counts` 全清，无需标脏到具体组（Blender 式粗粒度）。
-    fn event_count_cached(&mut self, project: &Project, item_id: &ItemId) -> usize {
+    fn event_count_cached(&mut self, sequence: &Sequence, item_id: &ItemId) -> usize {
         if let Some(v) = self.event_count_cache.get(item_id) {
             return *v;
         }
-        let sequence = &*project.sequence();
         let count = match sequence.get(*item_id) {
             Some(item) => match &item.content {
                 ItemContent::Event(_) => 1,
                 ItemContent::Group(g) => {
                     let mut sum = 0;
                     for cid in &g.children {
-                        sum += self.event_count_cached(project, cid);
+                        sum += self.event_count_cached(sequence, cid);
                     }
                     sum
                 }
@@ -597,7 +593,7 @@ impl SequenceState {
     /// 遍历两个来源的并集：有选中子项的组（`selected_event_counts`）+
     /// 当前已设组头选中态但子项可能已全部取消的组（`selected` 中非
     /// Unselected 的组头）——否则组头子项清空后残留旧态。
-    fn refresh_group_selected_by_counts(&mut self, project: &Project) {
+    fn refresh_group_selected_by_counts(&mut self, sequence: &Sequence) {
         let mut gids: HashSet<ItemId> = self.selected_event_counts.keys().cloned().collect();
         // 补上已设组头选中态但不在计数里的组（子项可能已全取消）
         for (id, state) in self.rows_model.selected_states() {
@@ -606,7 +602,7 @@ impl SequenceState {
             }
         }
         for gid in gids {
-            let expect = self.event_count_cached(project, &gid);
+            let expect = self.event_count_cached(sequence, &gid);
             let cnt = *self.selected_event_counts.get(&gid).unwrap_or(&0);
             let is_all_selected = expect > 0 && cnt == expect;
 
@@ -626,19 +622,18 @@ impl SequenceState {
     /// 处理项插入后的 UI 更新（精确：插入锚点 + row_added）。
     pub fn handle_item_inserted(
         &mut self,
-        project: &Project,
+        sequence: &Sequence,
         item_id: ItemId,
         new_item_id: ItemId,
     ) -> Result<()> {
         // 精确插入锚点 + 构建新行内容快照（权威数据已由 reducer 更新）。
-        self.rows_model
-            .insert_after(&project.sequence, item_id, new_item_id);
-        self.refresh_timeline_root_blocks(project);
+        self.rows_model.insert_after(sequence, item_id, new_item_id);
+        self.refresh_timeline_root_blocks(sequence);
         Ok(())
     }
 
-    /// 处理已从 `project.sequence` 移除的项的 UI 投影更新（精确：移除锚点 + row_removed）。
-    pub fn handle_items_removed(&mut self, project: &Project, item_ids: &[ItemId]) {
+    /// 处理已从 `Sequence` 移除的项的 UI 投影更新（精确：移除锚点 + row_removed）。
+    pub fn handle_items_removed(&mut self, sequence: &Sequence, item_ids: &[ItemId]) {
         // 事件数缓存失效由投影 op_sequence_structure 入口统一处理。
         for &id in item_ids {
             self.rows_model.remove_anchor(id);
@@ -646,7 +641,7 @@ impl SequenceState {
             self.rows_model.clear_preview_timecode(id);
         }
         self.cleanup_selection();
-        self.refresh_timeline_root_blocks(project);
+        self.refresh_timeline_root_blocks(sequence);
     }
 
     /// 清理已不存在的选中项（基于模型当前锚点）。
@@ -660,50 +655,48 @@ impl SequenceState {
     /// 处理解散分组的 UI 投影更新（精确：删分组头 + 子项提升）。
     pub fn handle_group_ungrouped(
         &mut self,
-        project: &Project,
+        sequence: &Sequence,
         group_id: ItemId,
         _new_ids: &[ItemId],
     ) -> Result<()> {
         // 解散不改事件归属（事件数不变），但父组头需 notify_row_changed
         // 强制重算 total_row_count（含组头行数，aggregate_group 实时递归）。
         // 事件数缓存失效由投影 op_sequence_structure 入口统一处理。
-        if let Some((idx, parent)) = self.rows_model.ungroup_anchor(&project.sequence, group_id) {
+        if let Some((idx, parent)) = self.rows_model.ungroup_anchor(sequence, group_id) {
             // 更新父组头聚合（若有父组）。父组在 sequence 中仍在，可查。
             if let Some(parent) = parent {
                 if let Some(pidx) = self.rows_model.row_index_of(parent) {
-                    self.rows_model.rebuild_row_content(pidx, &project.sequence);
+                    self.rows_model.rebuild_row_content(pidx, sequence);
                     self.rows_model.notify_row_changed(pidx);
                 }
             }
             let _ = idx;
         }
         self.cleanup_selection();
-        self.refresh_timeline_root_blocks(project);
+        self.refresh_timeline_root_blocks(sequence);
         Ok(())
     }
 
     /// 处理粘贴子树的 UI 投影更新（精确：批量插入锚点 + 一次 row_added）。
     pub fn handle_subtrees_pasted(
         &mut self,
-        project: &Project,
+        sequence: &Sequence,
         base_location: ItemLocation,
         new_root_ids: &[ItemId],
     ) -> Result<()> {
-        let at = self.compute_insert_at(project, &base_location)?;
-        self.rows_model
-            .insert_subtrees(&project.sequence, at, new_root_ids);
+        let at = self.compute_insert_at(sequence, &base_location)?;
+        self.rows_model.insert_subtrees(sequence, at, new_root_ids);
         // 事件数缓存失效由投影 op_sequence_structure 入口统一处理。
         if let Some(&first) = new_root_ids.first() {
-            self.select_single(project, first);
+            self.select_single(sequence, first);
         }
-        self.refresh_timeline_root_blocks(project);
+        self.refresh_timeline_root_blocks(sequence);
         Ok(())
     }
 
     /// 从 ItemLocation 计算扁平化插入索引（粘贴锚点）。
-    fn compute_insert_at(&self, project: &Project, location: &ItemLocation) -> Result<usize> {
+    fn compute_insert_at(&self, sequence: &Sequence, location: &ItemLocation) -> Result<usize> {
         use aweft_model::sequence::ItemContent as IC;
-        let sequence = &*project.sequence();
         match location {
             ItemLocation::Root(k) => {
                 // 第 k 个 root item 之后；若 k 超出 root_items 则插末尾

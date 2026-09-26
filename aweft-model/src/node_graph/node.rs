@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -100,7 +100,7 @@ impl<K: NodeTreeType> Node<K> {
     pub fn input<'a>(
         &self,
         idx: usize,
-        sockets: &'a HashMap<SocketId, Socket>,
+        sockets: &'a BTreeMap<SocketId, Socket>,
     ) -> Option<&'a Socket> {
         self.inputs.get(idx).and_then(|id| sockets.get(id))
     }
@@ -108,7 +108,7 @@ impl<K: NodeTreeType> Node<K> {
     pub fn output<'a>(
         &self,
         idx: usize,
-        sockets: &'a HashMap<SocketId, Socket>,
+        sockets: &'a BTreeMap<SocketId, Socket>,
     ) -> Option<&'a Socket> {
         self.outputs.get(idx).and_then(|id| sockets.get(id))
     }

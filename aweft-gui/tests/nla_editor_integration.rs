@@ -44,6 +44,7 @@ fn nla_load_from_model_builds_derived_models() {
     let anim_data = store
         .state()
         .project
+        .project()
         .library
         .animation_library
         .anim_datas
@@ -112,6 +113,7 @@ fn nla_strip_drag_commits_to_model() {
     let anim_data = store
         .state()
         .project
+        .project()
         .library
         .animation_library
         .anim_datas
@@ -180,6 +182,7 @@ fn nla_strip_drag_moves_across_tracks_and_commits() {
     let anim_data = store
         .state()
         .project
+        .project()
         .library
         .animation_library
         .anim_datas
@@ -221,6 +224,7 @@ fn nla_track_ops_and_push_down() {
         let anim_data = store
             .state()
             .project
+            .project()
             .library
             .animation_library
             .anim_datas
@@ -260,6 +264,7 @@ fn nla_track_ops_and_push_down() {
     let anim_data = store
         .state()
         .project
+        .project()
         .library
         .animation_library
         .anim_datas
@@ -379,6 +384,7 @@ fn nla_cross_track_after_reorder_keeps_layers_in_sync() {
     let anim_data = store
         .state()
         .project
+        .project()
         .library
         .animation_library
         .anim_datas

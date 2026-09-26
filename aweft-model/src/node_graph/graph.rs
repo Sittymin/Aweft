@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use palette::Srgba;
 use serde::{Deserialize, Serialize};
@@ -20,11 +20,12 @@ pub struct NodeGraph<K: NodeTreeType = NodeKind> {
     pub id: NodeGraphId,
     pub name: String,
     pub enabled: bool,
-    pub nodes: HashMap<NodeId, Node<K>>,
-    pub sockets: HashMap<SocketId, Socket>,
+    // 这四张表随工程存盘，按 ID 有序才能让每次写盘的字节一致（同 `Sequence::items`）。
+    pub nodes: BTreeMap<NodeId, Node<K>>,
+    pub sockets: BTreeMap<SocketId, Socket>,
     pub links: Vec<Link>,
-    input_link_map: HashMap<SocketId, SocketId>,
-    output_link_map: HashMap<SocketId, Vec<SocketId>>,
+    input_link_map: BTreeMap<SocketId, SocketId>,
+    output_link_map: BTreeMap<SocketId, Vec<SocketId>>,
     #[serde(skip, default)]
     pub(crate) cache: Option<EvalCache>,
     #[serde(skip, default)]
@@ -37,11 +38,11 @@ impl<K: NodeTreeType> NodeGraph<K> {
             id: NodeGraphId::new(),
             name: name.into(),
             enabled: true,
-            nodes: HashMap::new(),
-            sockets: HashMap::new(),
+            nodes: BTreeMap::new(),
+            sockets: BTreeMap::new(),
             links: Vec::new(),
-            input_link_map: HashMap::new(),
-            output_link_map: HashMap::new(),
+            input_link_map: BTreeMap::new(),
+            output_link_map: BTreeMap::new(),
             cache: None,
             dirty: HashSet::new(),
         }

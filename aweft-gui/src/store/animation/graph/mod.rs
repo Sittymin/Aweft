@@ -301,6 +301,7 @@ impl crate::store::AppStore {
         let id = action.id;
         self.state
             .project
+            .project_mut()
             .library
             .animation_library
             .insert_action(action);
@@ -313,6 +314,7 @@ impl crate::store::AppStore {
         let action = self
             .state
             .project
+            .project()
             .library
             .animation_library
             .get_action(id)
@@ -464,7 +466,7 @@ impl crate::store::AppStore {
             ],
         );
 
-        let lib = &mut self.state.project.library.animation_library;
+        let lib = &mut self.state.project.project_mut().library.animation_library;
         let main_id = lib.insert_action(main);
         let run_id = lib.insert_action(run);
         let jump_id = lib.insert_action(jump);
@@ -492,6 +494,7 @@ impl crate::store::AppStore {
         let action = self
             .state
             .project
+            .project()
             .library
             .animation_library
             .get_action(first_id)

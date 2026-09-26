@@ -863,7 +863,7 @@ fn animation_init_creates_empty_editing_action() {
     assert_eq!(channels, 0, "新建的 Action 应为空（无通道/关键帧）");
 
     // model 侧：确实有一个 Action，且无曲线
-    let lib = &store.state().project.library.animation_library;
+    let lib = &store.state().project.project().library.animation_library;
     assert_eq!(lib.actions.len(), 1);
     assert!(lib.actions.values().next().unwrap().curves.is_empty());
 }
@@ -887,7 +887,7 @@ fn animation_hack_test_data_populates_model_and_view() {
     assert_eq!(channel_count, 4, "主 Action 应有 4 条通道");
 
     // model 侧：3 个 Action 都已写入 AnimationLibrary
-    let lib = &store.state().project.library.animation_library;
+    let lib = &store.state().project.project().library.animation_library;
     assert_eq!(lib.actions.len(), 3);
 }
 
@@ -961,6 +961,7 @@ fn animation_dispatch_projects_derived_models() {
     let action = store
         .state()
         .project
+        .project()
         .library
         .animation_library
         .actions

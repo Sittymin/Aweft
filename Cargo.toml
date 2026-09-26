@@ -6,9 +6,11 @@ edition = "2021"
 [workspace]
 members = [
     "aweft-gui", "aweft-ass", "aweft-collab", "aweft-convert", "aweft-libass", "aweft-model",
+    "aweft-project", "aweft-settings", "aweft-storage",
 ]
 
 [dependencies]
 aweft-ass = { path = "aweft-ass" }
 aweft-convert = {path = "aweft-convert"}
 aweft-gui = { path = "aweft-gui" }
+aweft-storage = { path = "aweft-storage" }

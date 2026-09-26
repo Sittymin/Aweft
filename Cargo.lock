@@ -660,6 +660,7 @@ dependencies = [
  "aweft-ass",
  "aweft-convert",
  "aweft-gui",
+ "aweft-storage",
 ]
 
 [[package]]
@@ -706,6 +707,7 @@ dependencies = [
  "arboard",
  "aweft-libass",
  "aweft-model",
+ "aweft-project",
  "bitflags 2.13.1",
  "bytemuck",
  "chrono",
@@ -759,6 +761,40 @@ dependencies = [
  "serde",
  "thiserror 2.0.19",
  "uuid",
+]
+
+[[package]]
+name = "aweft-project"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aweft-model",
+ "aweft-storage",
+ "chrono",
+ "log",
+ "serde",
+]
+
+[[package]]
+name = "aweft-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aweft-storage",
+ "log",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
+name = "aweft-storage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

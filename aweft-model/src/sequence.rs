@@ -10,7 +10,7 @@ use nom::{
     sequence::separated_pair,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 // === 数据结构定义 ===
 
@@ -19,9 +19,9 @@ pub struct Sequence {
     // 根节点列表：定义了最顶层的顺序
     pub root_items: Vec<ItemId>,
 
-    // 所有项的扁平存储池 (无论是 Event 还是 Group 都在这里)
-    // 替代了原来的 groups: HashMap 和 event_location
-    pub items: HashMap<ItemId, StructureItem>,
+    // 所有项的扁平存储池（Event 与 Group 都在这里）。
+    // 用 BTreeMap 而不是 HashMap：存盘字节的顺序必须每次一致，才能比对、做自动备份与 diff。
+    pub items: BTreeMap<ItemId, StructureItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ impl Sequence {
     pub fn new() -> Self {
         Self {
             root_items: Vec::new(),
-            items: HashMap::new(),
+            items: BTreeMap::new(),
         }
     }
 

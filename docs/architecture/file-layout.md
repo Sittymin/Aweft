@@ -114,6 +114,27 @@ ui/
 └── theme/           # 主题（tokens / mixins / index）
 ```
 
+## `aweft-storage/src/`
+
+```
+src/
+├── lib.rs       # 重导出 + restrict_file(0600) / restrict_dir(0700)
+├── location.rs  # 配置目录：AWEFT_USER_CONFIG 覆盖 → platform_config_dir()（Android 返回 None，由入口交）
+└── json.rs      # JsonFile（format 字段 + migrate）、read_json / read_json_or_default / write_json、
+                 # encode_json / decode_json（不落盘的字节，同一道版本门）、write_text_atomic（temp + fsync + rename）
+```
+
+本成员不认识任何业务结构体：工程文档、应用设置、协作记录、名册各自的形状由各自的成员
+实现 `JsonFile`，原子写与版本门全工程只有这一份。
+
+## `aweft-settings/src/`
+
+```
+src/lib.rs   # Settings{format, paths}、格式版本戳 AWEFT_SETTINGS_FORMAT、进程内那一份 settings()
+```
+
+分层的完整规矩（字段分区、迁移政策、为什么没有撤销）见 `docs/architecture/settings.md`。
+
 ## 数据流（store 是中心，不是链尾）
 
 ```

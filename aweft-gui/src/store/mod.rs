@@ -2,6 +2,7 @@ pub mod animation;
 pub mod app_store;
 pub mod audio;
 pub mod node_graph;
+pub(crate) mod project_watch;
 pub mod sequence;
 pub mod sequence_rows_model;
 pub mod state;

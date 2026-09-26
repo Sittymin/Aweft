@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -15,8 +15,9 @@ use crate::ids::{ActionId, AnimDataId};
 /// and `AnimData`s (NLA track configurations).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AnimationLibrary {
-    pub actions: HashMap<ActionId, Action>,
-    pub anim_datas: HashMap<AnimDataId, AnimData>,
+    // 按 ID 有序：随工程存盘，字节顺序必须每次一致（同 `Sequence::items`）。
+    pub actions: BTreeMap<ActionId, Action>,
+    pub anim_datas: BTreeMap<AnimDataId, AnimData>,
 }
 
 /// Error type for animation sampling.

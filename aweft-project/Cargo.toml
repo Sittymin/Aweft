@@ -1,0 +1,12 @@
+[package]
+name = "aweft-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aweft-model = { path = "../aweft-model" }
+aweft-storage = { path = "../aweft-storage" }
+anyhow = "1.0.104"
+chrono = "0.4.45"
+serde = "1.0.229"
+log = "0.4.33"

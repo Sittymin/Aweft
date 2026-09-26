@@ -1,6 +1,6 @@
 use crate::actions::Action;
 use crate::clipboard::Clipboard;
-use crate::depsgraph::Depsgraph;
+use crate::depsgraph::{Depsgraph, Tag};
 use crate::store::state::AppState;
 use crate::store::ui_models::UiModels;
 use anyhow::Result;
@@ -20,6 +20,8 @@ pub struct AppStore {
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,
     pub(crate) clipboard: Clipboard,
+    /// 外来写入的排队句柄：`project_watch` 的订阅者往里放，`dispatch` 收尾时取走换 tag。
+    pub(crate) refresh_queue: crate::store::project_watch::RefreshQueue,
 }
 
 impl AppStore {
@@ -39,8 +41,11 @@ impl AppStore {
         let video_state = main_window
             .global::<crate::bridge::types::VideoState>()
             .as_weak();
+        // 订阅者注册要借用工程存储，所以状态先建好、再登记接入方。
+        let mut state = AppState::new(&main_window.window(), theme_settings);
+        let refresh_queue = crate::store::project_watch::register(&mut state.project);
         Self {
-            state: AppState::new(&main_window.window(), theme_settings),
+            state,
             ui_models: UiModels::new(),
             depsgraph,
             overlay_state: Some(overlay_state),
@@ -48,24 +53,47 @@ impl AppStore {
             video_state: Some(video_state),
             main_window: Some(main_window.as_weak()),
             clipboard: Clipboard::new(),
+            refresh_queue,
         }
     }
 
     /// 分发 Action：修改数据并向依赖图打 tag。
     pub fn dispatch(&mut self, action: Action) -> Result<()> {
-        let tags = match action {
-            Action::Screen(screen_action) => self.dispatch_screen(screen_action)?,
-            Action::Drag(drag_action) => self.dispatch_drag(drag_action)?,
-            Action::Area(area_action) => self.dispatch_area(area_action)?,
-            Action::Media(act) => self.dispatch_media(act)?,
-            Action::Sequence(act) => self.dispatch_sequence(act)?,
-            Action::NodeGraph(act) => self.dispatch_node_graph(act)?,
-            Action::Animation(act) => self.dispatch_animation(act)?,
-        };
-        for tag in tags {
+        // 一次交互可能改多行：批量作用域把其间的写入合成一次广播。
+        let batch = self.state.project.begin_batch();
+        let outcome = self.dispatch_action(action);
+        // 无论成败都要收口：`hold` 落不回零，之后的写入就永远不再通知订阅者。
+        self.state.project.end_batch(batch);
+        // 报错前已落进真相的写入同样要刷出来，所以队列先于判错处理。
+        self.apply_refresh_queue();
+        for tag in outcome? {
             self.depsgraph.tag(tag);
         }
         Ok(())
+    }
+
+    fn dispatch_action(&mut self, action: Action) -> Result<Vec<Tag>> {
+        match action {
+            Action::Screen(screen_action) => self.dispatch_screen(screen_action),
+            Action::Drag(drag_action) => self.dispatch_drag(drag_action),
+            Action::Area(area_action) => self.dispatch_area(area_action),
+            Action::Media(act) => self.dispatch_media(act),
+            Action::Sequence(act) => self.dispatch_sequence(act),
+            Action::NodeGraph(act) => self.dispatch_node_graph(act),
+            Action::Animation(act) => self.dispatch_animation(act),
+        }
+    }
+
+    /// 把排队的外来写入换成刷新 tag。
+    /// 界面自己的写入不在此列：那些 tag 由 reducer 当场打。
+    pub(crate) fn apply_refresh_queue(&mut self) {
+        let receipts = self.refresh_queue.take();
+        if receipts.is_empty() {
+            return;
+        }
+        for tag in crate::store::project_watch::refresh_tags(self, &receipts) {
+            self.depsgraph.tag(tag);
+        }
     }
 
     /// 把已挂起的依赖图标记应用到 UI 投影。
@@ -114,7 +142,7 @@ impl AppStore {
     ) -> slint::ModelRc<crate::bridge::types::SlintSubtitleRow> {
         self.ui_models
             .sequence_state
-            .initialize_rows(&self.state.project);
+            .initialize_rows(self.state.project.sequence());
         self.ui_models.sequence_state.init_filter_model()
     }
 }

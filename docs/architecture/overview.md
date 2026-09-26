@@ -12,6 +12,8 @@ UI 事件 → callbacks → Action → AppStore::dispatch
 **crate**：
 - `aweft-model`：数据模型（Project / AnimationLibrary / NodeGraph）
 - `aweft-gui`：GUI（actions / bridge / depsgraph / store / reducers / projections / screen / render / ui）
+- `aweft-storage`：落盘的公共规矩（配置目录、原子写、JSON 版本门、文件与目录权限），不认识任何业务结构体，不依赖其它成员
+- `aweft-settings`：应用设置（插件根），不依赖 Slint，只依赖 `aweft-storage`，详见 `docs/architecture/settings.md`
 - `aweft-libass`：ASS 渲染绑定
 
 **区域类型**：LineEditor(Sequence 表格) ✅ | Timeline(Sequence 泳道) ✅ | Viewport 占位 | StyleGraphEditor ✅ | AppGraphEditor ✅ | GraphEditor（曲线编辑器，Action 曲线）✅ | DopeSheet（摄影表）✅ | NLAEditor（AnimData 轨道）✅ — 动画域 Graph/Dope/NLA 共享 DataId::Animation（`store/animation/{graph,nla}`）
