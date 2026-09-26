@@ -5,6 +5,7 @@
 //! 再刷新时间条行。帧图像与波形后台批次属于高频异步流，不走本投影，只允许行级
 //! 更新（见 `docs/architecture/video-playback.md` 中的实时例外）。
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::{Model as _, VecModel};
@@ -67,6 +68,10 @@ fn ui_append_audio_models(store: &mut AppStore, index: usize) {
     audio.track_models.push(Rc::clone(&model));
     audio.tracks.push(slint::ModelRc::from(model));
     audio.buckets.push(buckets);
+    audio.column_cache.push(vec![
+        crate::store::audio::TrackColumnCache::default();
+        tracks.len()
+    ]);
 }
 
 fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
@@ -90,18 +95,24 @@ fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
     if let Some(slot) = audio.buckets.get_mut(index) {
         *slot = buckets;
     }
+    if let Some(slot) = audio.column_cache.get_mut(index) {
+        *slot = vec![crate::store::audio::TrackColumnCache::default(); tracks.len()];
+    }
+    // 基础桶已整体重建：作废该视频的列缓存与 Area 窗口，旧媒体的列值
+    // 不能当新鲜值返回，列模型立即清空。
+    crate::store::audio::ui_invalidate_waveform_columns_for_video(audio, index);
 }
 
 fn ui_build_audio_track_models(
     tracks: &[crate::store::state::AudioTrackInfo],
 ) -> (
     Vec<SlintAudioTrack>,
-    Vec<Rc<VecModel<crate::bridge::types::SlintWaveformBucket>>>,
+    Vec<Rc<RefCell<Vec<crate::bridge::types::SlintWaveformBucket>>>>,
 ) {
     let mut rows = Vec::with_capacity(tracks.len());
     let mut bases = Vec::with_capacity(tracks.len());
     for track in tracks {
-        let base = Rc::new(VecModel::default());
+        let base = Rc::new(RefCell::new(Vec::new()));
         rows.push(SlintAudioTrack {
             stream_id: track.stream_id.clone().into(),
             label: track.label.clone().into(),
