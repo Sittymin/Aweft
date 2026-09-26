@@ -20,6 +20,12 @@ src/
 │       └── nla.rs       # NLA 轨道/片断 Action（Strip/Track/PushDown/Search）
 ├── app/                 # 应用生命周期（window_manager：创建窗口、初始化 store/编辑器）
 ├── bridge/              # Slint ↔ Rust（callbacks / types / converters）
+│   └── callbacks/       # 回调装配，每个功能域一文件，入口是 `pub(super) fn setup_*`
+│       ├── mod.rs       # setup_callbacks（唯一知道完整清单的地方）+ dispatch_and_render（唯一跨域共用）
+│       ├── area.rs      # 区域类型切换、区域拖拽、边拖拽
+│       ├── render.rs    # 渲染通知器、逐帧驱动、播放时间同步
+│       ├── window.rs    # winit 窗口事件（尺寸、缩放因子）
+│       └── video.rs / audio.rs / sequence.rs / node_graph.rs / animation.rs / nla.rs
 ├── clipboard/           # 剪贴板（facade 强类型 API + backend 系统/内存 + kinds 数据种类）
 ├── depsgraph/           # 依赖图调度器（DataId / Component / Operation / Tag，graph.rs 调度实现）
 ├── projections/         # depsgraph 投影注册（只读权威状态，tag → 写派生 UI 模型；按 DataId 分文件：sequence/screen/animation/node_graph/video/audio）
