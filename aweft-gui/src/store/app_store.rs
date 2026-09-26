@@ -20,6 +20,9 @@ pub struct AppStore {
     /// 主窗口弱引用：视频输出后端（wayland 原始句柄/帧通知）按需升级使用。
     pub(crate) main_window: Option<slint::Weak<crate::bridge::types::MainWindow>>,
     pub(crate) clipboard: Clipboard,
+    /// 协作桥：启动期按配置里的活跃会话起后台引擎并注册订阅者。
+    /// 没有活跃会话（首启的正常状态）时它是未启用的空壳，主流程照常运行。
+    pub(crate) collab_bridge: crate::collab_bridge::CollabBridge,
     /// 外来写入的排队句柄：`project_watch` 的订阅者往里放，`dispatch` 收尾时取走换 tag。
     pub(crate) refresh_queue: crate::store::project_watch::RefreshQueue,
     /// Android 媒体选择对话框的一次等待：查库后填入，选择/取消回调取走。
@@ -48,6 +51,7 @@ impl AppStore {
         // 订阅者注册要借用工程存储，所以状态先建好、再登记接入方。
         let mut state = AppState::new(&main_window.window(), theme_settings);
         let refresh_queue = crate::store::project_watch::register(&mut state.project);
+        let collab_bridge = crate::collab_bridge::CollabBridge::load(&mut state.project);
         Self {
             state,
             ui_models: UiModels::new(),
@@ -57,6 +61,7 @@ impl AppStore {
             video_state: Some(video_state),
             main_window: Some(main_window.as_weak()),
             clipboard: Clipboard::new(),
+            collab_bridge,
             refresh_queue,
             #[cfg(target_os = "android")]
             pending_media_pick: None,

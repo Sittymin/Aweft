@@ -11,6 +11,7 @@ use std::{cell::RefCell, rc::Rc};
 mod animation;
 mod area;
 mod audio;
+mod collab;
 mod media_picker;
 mod nla;
 mod node_graph;
@@ -46,6 +47,7 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     video::setup_video_callbacks(instance, Rc::clone(&store));
     audio::setup_audio_callbacks(instance, Rc::clone(&store));
     media_picker::setup_media_picker_callbacks(instance, Rc::clone(&store));
+    collab::setup_collab_callbacks(instance, store);
 }
 
 /// 统一的 dispatch 和渲染逻辑。

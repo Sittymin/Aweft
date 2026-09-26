@@ -171,3 +171,15 @@ export global MediaPickerState {
     // 待选行文案（Rust 按 "名 · 时长 · 大小" 拼好，下标与 Rust 侧条目一一对应）
     in property <[string]> items: [];
 }
+
+// 协作面板展示状态：只展示引擎和本机会话记录能够提供的数据。
+export global CollabUiState {
+    // 连接状态文案（如"未连接"/"已连接"）
+    in property <string> status-text: "未连接";
+    // 当前连接的远端节点数（不含本机；来源是 CollabEvent::Peers）
+    in property <int> peer-count: 0;
+    // 当前会话名（"" = 未加入会话）
+    in property <string> session-name: "";
+    // 本机成员 id（"" = 未初始化）
+    in property <string> member-id: "";
+}

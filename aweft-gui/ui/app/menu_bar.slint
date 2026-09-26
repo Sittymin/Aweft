@@ -1,0 +1,55 @@
+// 主窗口顶栏操作菜单：左区（文件/编辑/帮助，暂占位无交互）+ 右区协作按钮。
+import { CollabButton } from "collab_panel.slint";
+import { Tokens } from "../theme/tokens.slint";
+
+export component MenuBar inherits Rectangle {
+    // 顶栏高度：Rust 布局后续需在可用区顶部预留该高度（读 MainWindow.menu-bar-height）。
+    out property <length> bar-height: 32px;
+
+    height: root.bar-height;
+    background: Tokens.data.neutral.header;
+
+    HorizontalLayout {
+        padding-left: Tokens.data.spacing.md;
+        padding-right: Tokens.data.spacing.md;
+        spacing: 18px;
+
+        // 左区占位：暂无交互，后续接下拉菜单
+        Text {
+            text: "文件";
+            color: Tokens.data.neutral.text-muted;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "编辑";
+            color: Tokens.data.neutral.text-muted;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: "帮助";
+            color: Tokens.data.neutral.text-muted;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+
+        // 弹性空隙：把协作按钮推到最右侧
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        CollabButton {
+            y: (parent.height - self.height) / 2;
+            height: parent.height - 8px;
+        }
+    }
+
+    // 底部分隔线
+    Rectangle {
+        y: parent.height - self.height;
+        width: 100%;
+        height: 1px;
+        background: Tokens.data.neutral.border-strong;
+    }
+}

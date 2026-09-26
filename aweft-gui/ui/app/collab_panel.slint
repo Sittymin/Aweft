@@ -1,0 +1,350 @@
+// 顶栏右侧协作按钮 + 弹出面板。
+// 表单严格对应 aweft-collab::config：创建需要名称，签发邀请需要接收方成员 ID，
+// 加入会话只需要邀请码。成员名册不是当前引擎公开给 UI 的数据，因此不在这里伪造。
+import { Button } from "std-widgets.slint";
+import { CollabUiState } from "../bridge/state.slint";
+import { CollabCallbacks } from "../bridge/callbacks.slint";
+import { Tokens } from "../theme/tokens.slint";
+import { Mixins } from "../theme/mixins.slint";
+import { InputBox } from "../widgets/input_box.slint";
+
+export component CollabButton inherits Rectangle {
+    private property <string> session-name: "";
+    private property <string> invite-code: "";
+    private property <string> invite-member-id: "";
+    private property <length> panel-width: 320px;
+
+    width: btn-layout.preferred-width + 16px;
+    background: btn-area.has-hover || popup.is-open ? Tokens.data.widget.popup-highlight : transparent;
+    border-radius: Tokens.data.border.radius-sm;
+
+    btn-layout := HorizontalLayout {
+        x: 8px;
+        width: parent.width - 16px;
+        height: 100%;
+        spacing: Tokens.data.spacing.sm;
+        alignment: center;
+        Image {
+            source: @image-url("../assets/icons/collab.svg");
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+        }
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            y: (parent.height - self.height) / 2;
+            background: CollabUiState.peer-count > 0
+                ? Tokens.data.accent.success
+                : Tokens.data.neutral.text-muted;
+        }
+        Text {
+            text: "协作";
+            color: Tokens.data.neutral.text;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+
+    btn-area := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            if (!popup.is-open) {
+                popup.show();
+            } else {
+                popup.close();
+            }
+        }
+    }
+
+    popup := PopupWindow {
+        x: root.width - root.panel-width - 4px;
+        y: root.height + 4px;
+        width: root.panel-width;
+        height: panel-layout.preferred-height;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            background: Mixins.popup-surface.background;
+            border-radius: Mixins.popup-surface.border-radius;
+            border-width: Mixins.popup-surface.border-width;
+            border-color: Mixins.popup-surface.border-color;
+            drop-shadow-blur: 6px;
+            drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+            panel-layout := VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+
+                HorizontalLayout {
+                    height: 24px;
+                    spacing: 8px;
+                    Image {
+                        source: @image-url("../assets/icons/collab.svg");
+                        width: 18px;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: "协作";
+                        color: Tokens.data.neutral.text;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle {
+                        width: 44px;
+                        height: 24px;
+                        border-radius: Tokens.data.border.radius-sm;
+                        background: close-area.has-hover
+                            ? Tokens.data.widget.popup-highlight
+                            : transparent;
+                        Text {
+                            text: "关闭";
+                            color: Tokens.data.neutral.text-muted;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        close-area := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => { popup.close(); }
+                        }
+                    }
+                }
+
+                // 状态是引擎事件的投影，不把“在线成员”误认为本地成员名册。
+                Rectangle {
+                    height: 58px;
+                    background: Tokens.data.neutral.header;
+                    border-radius: Tokens.data.border.radius-md;
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 10px;
+                        Rectangle {
+                            width: 30px;
+                            height: 30px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 15px;
+                            background: CollabUiState.peer-count > 0
+                                ? rgba(0, 255, 255, 0.14)
+                                : rgba(159, 164, 173, 0.14);
+                            Rectangle {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 5px;
+                                background: CollabUiState.peer-count > 0
+                                    ? Tokens.data.accent.success
+                                    : Tokens.data.neutral.text-muted;
+                            }
+                        }
+                        VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 2px;
+                            Text {
+                                text: CollabUiState.status-text;
+                                color: Tokens.data.neutral.text;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: "\{CollabUiState.peer-count} 个远端节点已连接";
+                                color: Tokens.data.neutral.text-muted;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    background: Tokens.data.neutral.background;
+                    border-radius: Tokens.data.border.radius-sm;
+                    border-width: Tokens.data.border.thin;
+                    border-color: Tokens.data.neutral.border;
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Text { text: "本机身份"; color: Tokens.data.neutral.text-muted; font-size: 11px; }
+                            Text {
+                                text: CollabUiState.member-id == "" ? "正在初始化身份" : CollabUiState.member-id;
+                                color: Tokens.data.neutral.text;
+                                font-size: 10px;
+                                overflow: elide;
+                            }
+                        }
+                        Button {
+                            text: "复制 ID";
+                            enabled: CollabUiState.member-id != "";
+                            clicked => { CollabCallbacks.copy-member-id(); }
+                        }
+                    }
+                }
+
+                // 未加入时只显示创建表单；已加入时显示本机会话记录。
+                if CollabUiState.session-name == "": Rectangle {
+                    background: Tokens.data.neutral.background;
+                    border-radius: Tokens.data.border.radius-sm;
+                    border-width: Tokens.data.border.thin;
+                    border-color: Tokens.data.neutral.border;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 7px;
+                        Text {
+                            text: "创建协作会话";
+                            color: Tokens.data.neutral.text;
+                            font-size: 13px;
+                        }
+                        Text {
+                            text: "会话名称只保存在本机，用于识别工程。";
+                            color: Tokens.data.neutral.text-muted;
+                            font-size: 11px;
+                        }
+                        HorizontalLayout {
+                            spacing: Tokens.data.spacing.xs;
+                            InputBox {
+                                horizontal-stretch: 1;
+                                height: 28px;
+                                background: Tokens.data.neutral.background;
+                                border-width: Tokens.data.border.thin;
+                                border-color: Tokens.data.neutral.border-strong;
+                                border-radius: Tokens.data.border.radius-sm;
+                                text <=> root.session-name;
+                                placeholder-text: "输入会话名称";
+                                font-size: 11px;
+                                text-color: Tokens.data.neutral.text;
+                                placeholder-color: Tokens.data.neutral.text-muted;
+                                accepted(name) => {
+                                    if name != "" {
+                                        CollabCallbacks.create-session(name);
+                                    }
+                                }
+                            }
+                            Button {
+                                text: "创建";
+                                clicked => {
+                                    if root.session-name != "" {
+                                        CollabCallbacks.create-session(root.session-name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if CollabUiState.session-name != "": Rectangle {
+                    background: Tokens.data.neutral.background;
+                    border-radius: Tokens.data.border.radius-sm;
+                    border-width: Tokens.data.border.thin;
+                    border-color: Tokens.data.neutral.border;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+                        Text { text: "当前会话"; color: Tokens.data.neutral.text-muted; font-size: 11px; }
+                        Text { text: CollabUiState.session-name; color: Tokens.data.neutral.text; font-size: 13px; overflow: elide; }
+                    }
+                }
+
+                // 邀请签发需要接收方成员 ID，不能只点击“复制邀请”。
+                if CollabUiState.session-name != "": Rectangle {
+                    background: Tokens.data.neutral.header;
+                    border-radius: Tokens.data.border.radius-sm;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 7px;
+                        Text { text: "邀请成员"; color: Tokens.data.neutral.text; font-size: 12px; }
+                        Text {
+                            text: "先让对方把本机身份 ID 发给你，再生成专属邀请码。";
+                            color: Tokens.data.neutral.text-muted;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            spacing: Tokens.data.spacing.xs;
+                            InputBox {
+                                horizontal-stretch: 1;
+                                height: 28px;
+                                background: Tokens.data.neutral.background;
+                                border-width: Tokens.data.border.thin;
+                                border-color: Tokens.data.neutral.border-strong;
+                                border-radius: Tokens.data.border.radius-sm;
+                                text <=> root.invite-member-id;
+                                placeholder-text: "对方成员 ID";
+                                font-size: 10px;
+                                text-color: Tokens.data.neutral.text;
+                                placeholder-color: Tokens.data.neutral.text-muted;
+                                accepted(id) => {
+                                    if id != "" { CollabCallbacks.copy-invite(id); }
+                                }
+                            }
+                            Button {
+                                text: "生成邀请";
+                                clicked => {
+                                    if root.invite-member-id != "" {
+                                        CollabCallbacks.copy-invite(root.invite-member-id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 接受邀请不依赖当前是否已加入，输入完整邀请码后加入。
+                Rectangle {
+                    background: Tokens.data.neutral.background;
+                    border-radius: Tokens.data.border.radius-sm;
+                    border-width: Tokens.data.border.thin;
+                    border-color: Tokens.data.neutral.border;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 7px;
+                        Text { text: "加入协作会话"; color: Tokens.data.neutral.text; font-size: 12px; }
+                        HorizontalLayout {
+                            spacing: Tokens.data.spacing.xs;
+                            InputBox {
+                                horizontal-stretch: 1;
+                                height: 28px;
+                                background: Tokens.data.neutral.background;
+                                border-width: Tokens.data.border.thin;
+                                border-color: Tokens.data.neutral.border-strong;
+                                border-radius: Tokens.data.border.radius-sm;
+                                text <=> root.invite-code;
+                                placeholder-text: "粘贴完整邀请码";
+                                font-size: 10px;
+                                text-color: Tokens.data.neutral.text;
+                                placeholder-color: Tokens.data.neutral.text-muted;
+                                accepted(invite) => {
+                                    if invite != "" {
+                                        CollabCallbacks.accept-invite(invite);
+                                        root.invite-code = "";
+                                    }
+                                }
+                            }
+                            Button {
+                                text: "加入";
+                                clicked => {
+                                    if root.invite-code != "" {
+                                        CollabCallbacks.accept-invite(root.invite-code);
+                                        root.invite-code = "";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if CollabUiState.session-name != "": Button {
+                    text: "离开当前会话";
+                    clicked => { CollabCallbacks.leave-session(); }
+                }
+            }
+        }
+    }
+}

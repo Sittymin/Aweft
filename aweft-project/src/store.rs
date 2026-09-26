@@ -92,6 +92,12 @@ impl ProjectStore {
         self.subscribers.push(subscriber);
     }
 
+    /// 摘掉某个来源名下的全部订阅者：该功能关闭时用，否则它停了还继续收广播。
+    pub fn unsubscribe_origin(&mut self, origin: &Origin) {
+        self.subscribers
+            .retain(|subscriber| subscriber.origin() != *origin);
+    }
+
     /// 开始一个批量作用域：其间所有写入只排队，到 [`Self::end_batch`] 才一次广播。
     pub fn begin_batch(&mut self) -> BatchToken {
         self.hold += 1;

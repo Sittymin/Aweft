@@ -2,6 +2,7 @@ pub mod actions;
 pub mod app;
 pub mod bridge;
 pub mod clipboard;
+pub mod collab_bridge;
 pub mod depsgraph;
 pub mod file_picker;
 pub mod projections;

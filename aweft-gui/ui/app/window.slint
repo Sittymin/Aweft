@@ -21,6 +21,7 @@ import {
     ScrEdgeTouchAreaData,
     ScrAreaData,
 } from "../core/types.slint";
+import { MenuBar } from "menu_bar.slint";
 import {
     VideoState,
     AudioState,
@@ -30,6 +31,7 @@ import {
     DismissOverlayState,
     AnimationState,
     MediaPickerState,
+    CollabUiState,
 } from "../bridge/state.slint";
 import {
     DragCallbacks,
@@ -40,6 +42,7 @@ import {
     VideoCallbacks,
     AudioCallbacks,
     MediaPickerCallbacks,
+    CollabCallbacks,
 } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -52,6 +55,7 @@ export {
     NodeGraphState,
     DismissOverlayState,
     AnimationState,
+    CollabUiState,
     DragCallbacks,
     AreaCallbacks,
     SequenceCallbacks,
@@ -61,6 +65,7 @@ export {
     AudioCallbacks,
     MediaPickerState,
     MediaPickerCallbacks,
+    CollabCallbacks,
     Theme
 }
 
@@ -69,7 +74,9 @@ export component MainWindow inherits Window {
     // 四周系统栏的厚度（逻辑像素）。Android 上窗口是全屏的，状态栏与导航条盖在
     // 内容上、且那一圈的触摸归系统，Rust 侧读这四个值把布局整体内缩；桌面恒为 0。
     out property <length> safe-inset-left: root.safe-area-insets.left;
-    out property <length> safe-inset-top: root.safe-area-insets.top;
+    // 顶栏属于应用内容，不应覆盖 Area；将其与系统安全区合并，Rust 布局据此
+    // 从顶栏下方创建 screen map。其余三边只保留系统安全区。
+    out property <length> safe-inset-top: root.safe-area-insets.top + root.menu-bar-height;
     out property <length> safe-inset-right: root.safe-area-insets.right;
     out property <length> safe-inset-bottom: root.safe-area-insets.bottom;
 
@@ -141,4 +148,14 @@ export component MainWindow inherits Window {
         border-color: Theme.data.subtitle-overlay.border-color;
         subtitle-frame: SubtitleState.current-subtitle-frame;
     }
+
+    // 顶栏操作菜单：左区文件/编辑/帮助（占位），右区协作按钮 + 弹出面板。
+    // y 起始于系统安全区下方，避免被 Android 状态栏遮挡。
+    menu-bar := MenuBar {
+        x: 0px;
+        y: root.safe-area-insets.top;
+        width: 100%;
+    }
+    // 顶栏高度会合并到 safe-inset-top，供 Rust 布局预留。
+    out property <length> menu-bar-height: menu-bar.bar-height;
 }

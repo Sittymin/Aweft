@@ -1,6 +1,7 @@
 use std::env;
 use std::io;
 mod cli;
+mod collab_cli;
 use self::cli::parse_cli_commands;
 
 fn main() -> io::Result<()> {
@@ -11,7 +12,12 @@ fn main() -> io::Result<()> {
         None => eprintln!("无法从环境变量确定配置目录，设置按出厂值"),
     }
 
-    let args = env::args().skip(1).peekable();
+    let mut args = env::args().skip(1).peekable();
+    // 协作子命令先于原有解析分流：它管的是身份与会话，和 ASS 那套位置参数无关。
+    if args.peek().is_some_and(|arg| arg == "collab") {
+        args.next();
+        return collab_cli::run(args);
+    }
     if args.len() == 0 {
         if let Err(e) = aweft_gui::create_window() {
             eprint!("Error starting GUI: {}", e);
