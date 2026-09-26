@@ -194,5 +194,3 @@ impl AppState {
         self.selected_videos.last().copied().or(self.main_video)
     }
 }
-
-

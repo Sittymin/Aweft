@@ -27,7 +27,6 @@ impl UniformGrid {
     }
 }
 
-
 /// 在 `0..=n` 的格点上求「覆盖到每个格点所需的最少段数」，返回 `parent` 表。
 pub(crate) fn min_segmentation(
     n: usize,

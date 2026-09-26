@@ -238,10 +238,7 @@ fn set_scalar_u32(slot: &mut Option<u32>, value: u32, mode: BlendMode, influence
 fn set_bool(slot: &mut Option<bool>, value: bool, mode: BlendMode) {
     match mode {
         BlendMode::Replace => *slot = Some(value),
-        BlendMode::Add
-        | BlendMode::Subtract
-        | BlendMode::Multiply
-        | BlendMode::Combine => {}
+        BlendMode::Add | BlendMode::Subtract | BlendMode::Multiply | BlendMode::Combine => {}
     }
 }
 

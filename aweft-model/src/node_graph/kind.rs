@@ -96,7 +96,10 @@ pub trait NodeTreeType: Clone + PartialEq + Eq + fmt::Debug + 'static {
     ) -> Result<(), EvalError>;
 
     /// 图级结果收集（样式图：viewer/组输出；应用图：组输出端口顺序合并）。
-    fn collect_result(graph: &NodeGraph<Self>, cache: &EvalCache) -> Result<Self::Result, EvalError>;
+    fn collect_result(
+        graph: &NodeGraph<Self>,
+        cache: &EvalCache,
+    ) -> Result<Self::Result, EvalError>;
 
     /// 样式引用节点（Reference / AppRef）引用的样式链 id；非引用节点返回 None。
     fn reference_id(&self) -> Option<NodeGraphId>;

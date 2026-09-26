@@ -358,7 +358,10 @@ pub mod evaluate_modifiers {
     /// Apply a time modifier. Returns the new evaluation time.
     /// Called in REVERSE stack order.
     pub fn evaluate_time(m: &FModifierInstance, evaltime: f64, fcurve: &FCurve) -> f64 {
-        if matches!(m.data, FModifier::Cycles(_) | FModifier::Stepped(_) | FModifier::Limits(_)) {
+        if matches!(
+            m.data,
+            FModifier::Cycles(_) | FModifier::Stepped(_) | FModifier::Limits(_)
+        ) {
             let inf = m.effective_influence(evaltime);
             if inf <= 1e-12 {
                 return evaltime;
@@ -377,7 +380,12 @@ pub mod evaluate_modifiers {
 
     /// Apply a value modifier. Returns the new output value.
     /// Called in FORWARD stack order.
-    pub fn evaluate_value(m: &FModifierInstance, evaltime: f64, cvalue: f64, fcurve: &FCurve) -> f64 {
+    pub fn evaluate_value(
+        m: &FModifierInstance,
+        evaltime: f64,
+        cvalue: f64,
+        fcurve: &FCurve,
+    ) -> f64 {
         if matches!(
             m.data,
             FModifier::Noise(_)
@@ -461,9 +469,23 @@ pub mod evaluate_modifiers {
         }
 
         if evaltime < first {
-            eval_cycles_side(cycles.before_mode, cycles.before_cycles, first, length, evaltime, -1)
+            eval_cycles_side(
+                cycles.before_mode,
+                cycles.before_cycles,
+                first,
+                length,
+                evaltime,
+                -1,
+            )
         } else if evaltime > last {
-            eval_cycles_side(cycles.after_mode, cycles.after_cycles, first, length, evaltime, 1)
+            eval_cycles_side(
+                cycles.after_mode,
+                cycles.after_cycles,
+                first,
+                length,
+                evaltime,
+                1,
+            )
         } else {
             evaltime
         }
@@ -488,7 +510,9 @@ pub mod evaluate_modifiers {
                 };
                 evaltime - bounded * length
             }
-            CycleMode::RepeatOffset => CycleMode::Repeat.apply(range_start, length, evaltime, max_cycles),
+            CycleMode::RepeatOffset => {
+                CycleMode::Repeat.apply(range_start, length, evaltime, max_cycles)
+            }
             // RepeatOffset uses same time wrapping (value offset applied separately)
             CycleMode::Mirror => {
                 let raw_offset = (evaltime - range_start) / length;

@@ -95,10 +95,7 @@ pub(super) fn fit_scalar_segment(
             let progress = idx as f64 / (sample_count - 1) as f64;
             let time = t0 + progress * (t1 - t0);
             let value = (eval(time) - start_value) / sample_range;
-            samples.push(FitSample {
-                progress,
-                value,
-            });
+            samples.push(FitSample { progress, value });
         }
         let fit = fit_power_law(&samples);
         return PowerFit {
@@ -112,10 +109,7 @@ pub(super) fn fit_scalar_segment(
         let progress = idx as f64 / (sample_count - 1) as f64;
         let time = t0 + progress * (t1 - t0);
         let value = (eval(time) - start_value) / (end_value - start_value);
-        samples.push(FitSample {
-            progress,
-            value,
-        });
+        samples.push(FitSample { progress, value });
     }
 
     // 正向拟合：value ≈ progress^accel（缓入形状）
@@ -160,10 +154,7 @@ pub(super) fn fit_color_segment(
             let progress = sample_idx as f64 / (sample_count - 1) as f64;
             let time = t0 + progress * (t1 - t0);
             let value = (evaluate_fcurve(curve, time) - start_values[channel_idx]) / range;
-            samples.push(FitSample {
-                progress,
-                value,
-            });
+            samples.push(FitSample { progress, value });
         }
     }
     let accel = if samples.is_empty() {
@@ -182,8 +173,8 @@ pub(super) fn fit_color_segment(
             let time = t0 + progress * (t1 - t0);
             let predicted =
                 start_values[channel_idx] + value_deltas[channel_idx] * progress.powf(exponent);
-            max_deviation = max_deviation
-                .max((evaluate_fcurve(curves[channel_idx], time) - predicted).abs());
+            max_deviation =
+                max_deviation.max((evaluate_fcurve(curves[channel_idx], time) - predicted).abs());
         }
         channel_errors.push(max_deviation);
     }
@@ -227,8 +218,8 @@ pub(super) fn chord_error(
             (delta_sample_x * delta_x + delta_sample_y * delta_y) * chord_inv * chord_inv;
         let proj_x = start_x + projection * delta_x;
         let proj_y = start_y + projection * delta_y;
-        let dev_sq = (sample_x - proj_x) * (sample_x - proj_x)
-            + (sample_y - proj_y) * (sample_y - proj_y);
+        let dev_sq =
+            (sample_x - proj_x) * (sample_x - proj_x) + (sample_y - proj_y) * (sample_y - proj_y);
         let deviation = dev_sq.sqrt() * chord_inv;
         if deviation > max_deviation {
             max_deviation = deviation;

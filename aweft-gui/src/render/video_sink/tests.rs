@@ -911,7 +911,11 @@ fn test_playback_realpath() {
                         );
                     }
                     MessageView::Warning(w) => {
-                        eprintln!("GStreamer 警告: {} (来自 {:?})", w.error(), w.src().map(|s| s.path_string()));
+                        eprintln!(
+                            "GStreamer 警告: {} (来自 {:?})",
+                            w.error(),
+                            w.src().map(|s| s.path_string())
+                        );
                     }
                     MessageView::Element(elem) => {
                         eprintln!("Element 消息: {:?}", elem.structure());

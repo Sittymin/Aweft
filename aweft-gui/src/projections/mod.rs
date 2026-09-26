@@ -75,10 +75,7 @@ pub fn register_all(depsgraph: &mut Depsgraph) {
                 id: OperationId::new(),
                 code: OperationCode::VideoTime,
                 handles: &[TagKind::VideoTime],
-                depends_on: &[
-                    OperationCode::VideoStructure,
-                    OperationCode::VideoSelection,
-                ],
+                depends_on: &[OperationCode::VideoStructure, OperationCode::VideoSelection],
                 exec: ui_project_video_time,
             },
             Operation {

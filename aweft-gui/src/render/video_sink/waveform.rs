@@ -638,9 +638,7 @@ mod tests {
                 ..Default::default()
             },
         ]));
-        let model = std::rc::Rc::new(slint::VecModel::from(vec![
-            slint::ModelRc::from(tracks),
-        ]));
+        let model = std::rc::Rc::new(slint::VecModel::from(vec![slint::ModelRc::from(tracks)]));
         instance
             .global::<crate::bridge::types::AudioState>()
             .set_audio_tracks(slint::ModelRc::from(model));

@@ -135,9 +135,7 @@ pub(crate) fn ui_compute_waveform_columns(
         }
         let range_start = range_start.max(0) as usize;
         let range_end = range_end.min(base_len) as usize;
-        columns.push(
-            fold_waveform_bucket(base, range_start, range_end).unwrap_or_default(),
-        );
+        columns.push(fold_waveform_bucket(base, range_start, range_end).unwrap_or_default());
     }
     columns
 }
@@ -291,9 +289,7 @@ pub(crate) async fn ui_pump_waveform_batches(
                 .map(|(key, view)| (*key, *view))
                 .collect();
             for (key, view) in views {
-                if view.video_index != batch.video_index
-                    || view.track_index != batch.track_index
-                {
+                if view.video_index != batch.video_index || view.track_index != batch.track_index {
                     continue;
                 }
                 ui_sync_waveform_columns(&mut store.ui_models.audio, key, view);
@@ -506,10 +502,7 @@ mod tests {
         let model = ui_sync_waveform_columns(&mut audio, key, narrow);
         assert_eq!(model.row_count(), 2);
         // 视窗扩大：尾部追加行，存量行复用。
-        let wide = AreaWaveformView {
-            count: 4,
-            ..narrow
-        };
+        let wide = AreaWaveformView { count: 4, ..narrow };
         let model = ui_sync_waveform_columns(&mut audio, key, wide);
         assert_eq!(model.row_count(), 4);
         assert!(Rc::ptr_eq(
@@ -534,5 +527,4 @@ mod tests {
         let model = ui_sync_waveform_columns(&mut audio, key, view);
         assert_eq!(model.row_count(), 0);
     }
-
 }

@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::animation::{AnimationError, AnimationLibrary, apply_animation_to_style};
 use crate::ids::{AnimDataId, NodeGraphId, NodeId};
 use crate::node_graph::{
+    Node, NodeGraph, NodeHandle,
     error::EvalError,
     kind::{EvalCache, EvalContext, NodeTreeType},
     socket::{
@@ -14,7 +15,6 @@ use crate::node_graph::{
         SocketValue, StyleSocket, TextSocket,
     },
     style::StyleResult,
-    Node, NodeGraph, NodeHandle,
 };
 
 // ── LineContext ───────────────────────────────────────────────────────────────
@@ -299,7 +299,10 @@ impl NodeTreeType for ApplicationNodeKind {
         Ok(())
     }
 
-    fn collect_result(graph: &NodeGraph<Self>, cache: &EvalCache) -> Result<Self::Result, EvalError> {
+    fn collect_result(
+        graph: &NodeGraph<Self>,
+        cache: &EvalCache,
+    ) -> Result<Self::Result, EvalError> {
         // 组输出是唯一出口：按输入端口连接顺序（= 端口创建顺序）收集上游应用单元，
         // 依次合并——后连接的端口优先级更高（覆盖前者），对应总应用图里
         // ApplicationLayer 按 Vec 顺序"后面的图覆盖前面的图"。
@@ -315,7 +318,8 @@ impl NodeTreeType for ApplicationNodeKind {
                         let Some(from) = graph.input_source(input_id) else {
                             continue;
                         };
-                        let Some(unit) = cache.node_applications.get(&graph.socket(from).node) else {
+                        let Some(unit) = cache.node_applications.get(&graph.socket(from).node)
+                        else {
                             continue;
                         };
                         if !unit.condition {
@@ -1100,7 +1104,9 @@ mod tests {
             line_text: String::new(),
             line_index: 0,
         };
-        let err = g.evaluate(&EvalContext::app(&ctx, &HashMap::new())).unwrap_err();
+        let err = g
+            .evaluate(&EvalContext::app(&ctx, &HashMap::new()))
+            .unwrap_err();
         assert!(matches!(err, EvalError::StyleNotConnected(_)));
     }
 }

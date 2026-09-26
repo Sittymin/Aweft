@@ -270,7 +270,8 @@ impl AppStore {
                 });
                 let indices = drag.targets.iter().map(|target| target.index).collect();
                 for target in drag.targets {
-                    let Some(session) = self.state_mut().video_sessions.get_mut(target.index) else {
+                    let Some(session) = self.state_mut().video_sessions.get_mut(target.index)
+                    else {
                         continue;
                     };
                     if !target.was_playing {
@@ -374,9 +375,7 @@ fn media_select_audio_track(
         audio.select_stream(&stream_id);
     }
     store.state_mut().audio_track_indices[video_index] = Some(track_index);
-    log::info!(
-        "切换实时播放音轨: video={video_index}, track={track_index}, stream-id={stream_id}"
-    );
+    log::info!("切换实时播放音轨: video={video_index}, track={track_index}, stream-id={stream_id}");
     Ok(())
 }
 

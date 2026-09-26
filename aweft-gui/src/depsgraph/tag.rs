@@ -334,15 +334,22 @@ pub enum Tag {
 
     // ── Video ─────────────────────────────────────────────────────────
     /// 视频会话结构变化；`inserted` 区分追加与原地替换。
-    VideoStructureChanged { index: usize, inserted: bool },
+    VideoStructureChanged {
+        index: usize,
+        inserted: bool,
+    },
     /// 视频视口选择变化。
     VideoSelectionChanged,
     /// 主视频变化（同时影响参考框、位置和时间条标量）。
     VideoMainChanged,
     /// 视频视口位置变化。
-    VideoPositionChanged { indices: Vec<usize> },
+    VideoPositionChanged {
+        indices: Vec<usize>,
+    },
     /// 单个视频静音状态变化。
-    VideoMuteChanged { index: usize },
+    VideoMuteChanged {
+        index: usize,
+    },
     /// 视频会话时间变化（seek 或非实时状态同步）。
     /// sync_timeline=false 表示用户正在主动 Seek：仅刷新视频实际时间，不以钳制后的
     /// 会话时间覆盖动画时间轴；播放时钟仍通过实时出口以实际位置接管时间轴。
@@ -353,7 +360,9 @@ pub enum Tag {
     /// 全局视频 transport 播放状态变化。
     VideoPlaybackChanged,
     /// 某个视频当前播放音轨发生切换。
-    VideoAudioTrackChanged { video_index: usize },
+    VideoAudioTrackChanged {
+        video_index: usize,
+    },
 }
 
 /// 操作语义分类：同一语义的 Tag 归为一类，供操作按 `handles` 精确路由。
