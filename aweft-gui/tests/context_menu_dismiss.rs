@@ -10,8 +10,8 @@
 use std::time::Duration;
 
 use i_slint_backend_testing::{ElementHandle, init_no_event_loop, mock_elapsed_time};
-use slint::platform::PointerEventButton;
 use slint::ComponentHandle;
+use slint::platform::PointerEventButton;
 
 slint::slint! {
     import { ContextMenu, MenuItem, MenuRect } from "ui/widgets/context_menu.slint";
@@ -109,8 +109,16 @@ fn menu_hole_uses_window_coordinates() {
 
     let state = ui.global::<OverlayMirror>();
     assert!(state.get_active(), "菜单打开后遮罩应激活");
-    assert_eq!(state.get_hole_x(), 130.0, "孔 x = Area 偏移 100 + 菜单本地 30");
-    assert_eq!(state.get_hole_y(), 90.0, "孔 y = Area 偏移 50 + 菜单本地 40");
+    assert_eq!(
+        state.get_hole_x(),
+        130.0,
+        "孔 x = Area 偏移 100 + 菜单本地 30"
+    );
+    assert_eq!(
+        state.get_hole_y(),
+        90.0,
+        "孔 y = Area 偏移 50 + 菜单本地 40"
+    );
     assert_eq!(state.get_hole_width(), 180.0, "孔宽 = 菜单固定宽");
     assert!(
         state.get_hole_height() > 0.0,

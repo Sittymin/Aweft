@@ -1,4 +1,3 @@
-
 use super::*;
 use gstreamer::prelude::*;
 use gstreamer_app::AppSink;
@@ -891,11 +890,11 @@ fn paused_seek_past_end_prerolls_last_frame() {
         uri,
         pipeline: pipeline.clone(),
         sink_element,
-            wgpu_sink,
-            audio: Some(audio),
-            position_x: 0.0,
-            position_y: 0.0,
-            current_time: 0.0,
+        wgpu_sink,
+        audio: Some(audio),
+        position_x: 0.0,
+        position_y: 0.0,
+        current_time: 0.0,
         duration: Some(duration_secs),
         muted: false,
         playing: false,
@@ -1119,10 +1118,10 @@ fn select_audio_track_updates_index_and_emits_tag() {
         encoder: String::new(),
         encoded_by: String::new(),
     };
-    store.state_mut().audio_tracks.push(vec![
-        fake_track("stream-a"),
-        fake_track("stream-b"),
-    ]);
+    store
+        .state_mut()
+        .audio_tracks
+        .push(vec![fake_track("stream-a"), fake_track("stream-b")]);
     store.state_mut().audio_track_indices.push(None);
 
     let tags = store
@@ -1143,21 +1142,25 @@ fn select_audio_track_updates_index_and_emits_tag() {
     );
 
     // 越界音轨与不存在的视频都应报错，且不改已选下标。
-    assert!(store
-        .dispatch_media(crate::actions::media::MediaAction::Video(
-            crate::actions::media::VideoAction::SelectAudioTrack {
-                video_index: 0,
-                track_index: 5,
-            },
-        ))
-        .is_err());
-    assert!(store
-        .dispatch_media(crate::actions::media::MediaAction::Video(
-            crate::actions::media::VideoAction::SelectAudioTrack {
-                video_index: 3,
-                track_index: 0,
-            },
-        ))
-        .is_err());
+    assert!(
+        store
+            .dispatch_media(crate::actions::media::MediaAction::Video(
+                crate::actions::media::VideoAction::SelectAudioTrack {
+                    video_index: 0,
+                    track_index: 5,
+                },
+            ))
+            .is_err()
+    );
+    assert!(
+        store
+            .dispatch_media(crate::actions::media::MediaAction::Video(
+                crate::actions::media::VideoAction::SelectAudioTrack {
+                    video_index: 3,
+                    track_index: 0,
+                },
+            ))
+            .is_err()
+    );
     assert_eq!(store.state().audio_track_indices[0], Some(1));
 }

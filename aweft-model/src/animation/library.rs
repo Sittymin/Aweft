@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::animation::PropertyPath;
 use crate::animation::action::Action;
 use crate::animation::anim_data::AnimData;
 use crate::animation::fcurve::FCurve;
-use crate::animation::sample::{sample_anim_data, ActionProvider, EvaluatedStrip};
+use crate::animation::sample::{ActionProvider, EvaluatedStrip, sample_anim_data};
 use crate::animation::strip::{NlaStrip, NlaTrack, StripPlacement};
-use crate::animation::PropertyPath;
 use crate::ids::{ActionId, AnimDataId};
 
 /// The animation library stores both reusable `Action`s (FCurve sets)
@@ -132,10 +132,7 @@ impl AnimationLibrary {
 // ── ActionProvider impl (allows sample_anim_data to resolve actions) ──────
 
 impl ActionProvider for AnimationLibrary {
-    fn get_fcurves(
-        &self,
-        action_id: ActionId,
-    ) -> Option<Vec<(PropertyPath, FCurve)>> {
+    fn get_fcurves(&self, action_id: ActionId) -> Option<Vec<(PropertyPath, FCurve)>> {
         let action = self.actions.get(&action_id)?;
         Some(
             action

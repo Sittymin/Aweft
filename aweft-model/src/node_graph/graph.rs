@@ -8,9 +8,7 @@ use crate::ids::{NodeGraphId, NodeId, SocketId};
 use super::error::EvalError;
 use super::kind::{EvalCache, EvalContext, NodeTreeType};
 use super::math::{Vec2, Vec3};
-use super::node::{
-    get_socket_decls, ColorRole, FromNode, Node, NodeKind, StyleOpKind, VecOpKind,
-};
+use super::node::{ColorRole, FromNode, Node, NodeKind, StyleOpKind, VecOpKind, get_socket_decls};
 use super::socket::{InputSocket, Link, Socket, SocketDecl, SocketRef, SocketValue};
 use super::style::StyleResult;
 
@@ -504,7 +502,10 @@ impl NodeTreeType for NodeKind {
         Ok(())
     }
 
-    fn collect_result(graph: &NodeGraph<Self>, cache: &EvalCache) -> Result<Self::Result, EvalError> {
+    fn collect_result(
+        graph: &NodeGraph<Self>,
+        cache: &EvalCache,
+    ) -> Result<Self::Result, EvalError> {
         let result = if let Some(viewer_id) = graph
             .nodes
             .iter()

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::animation::PropertyPath;
 use crate::animation::anim_data::BlendMode;
 use crate::animation::fcurve::FCurve;
-use crate::animation::PropertyPath;
 use crate::ids::ActionId;
 
 /// Associates an F-Curve with a property path.
@@ -69,10 +69,7 @@ impl Action {
 
     /// Sample all F-Curves at the given time, returning a map of property→value.
     /// Multiple curves for the same property are blended using each curve's `blend_mode`.
-    pub fn sample(
-        &self,
-        time: f64,
-    ) -> std::collections::HashMap<PropertyPath, f64> {
+    pub fn sample(&self, time: f64) -> std::collections::HashMap<PropertyPath, f64> {
         use crate::animation::fcurve::evaluate_fcurve;
         use crate::animation::sample::blend_scalar;
         let mut result: std::collections::HashMap<PropertyPath, f64> =

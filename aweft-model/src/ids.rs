@@ -31,7 +31,7 @@ macro_rules! define_id {
 // 定义项目里用到的各种 ID
 define_id!(ItemId); // 时间轴上的项（分组或事件行）
 define_id!(ActorId); // 角色
-define_id!(ActionId);          // 可复用动画曲线集合（比 AnimData 更底层）
+define_id!(ActionId); // 可复用动画曲线集合（比 AnimData 更底层）
 define_id!(AnimDataId); // NLA 动画数据配置 ID
 define_id!(NodeGraphId); // 节点图模板资源 ID
 define_id!(MediaId); // 媒体文件引用 ID

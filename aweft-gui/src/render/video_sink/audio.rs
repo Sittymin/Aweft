@@ -15,8 +15,8 @@
 //! `decodebin3` 会在内部流线程进行原子无缝切换（Atomic Seamless Switch），无需对管线
 //! 进行带 `FLUSH` 的 Seek，彻底杜绝管道冲刷卡顿、破音或 ASYNC 挂起。
 
-use std::sync::{Arc, Mutex};
 use gstreamer::prelude::*;
+use std::sync::{Arc, Mutex};
 
 /// 音频尾段 volume 元素的固定名称（供定位或测试断言使用）。
 pub(crate) const AUDIO_VOLUME_NAME: &str = "audio-volume";

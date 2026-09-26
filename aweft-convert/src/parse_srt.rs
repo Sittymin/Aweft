@@ -1,5 +1,5 @@
 use aweft_ass::types::{
-    event::{Event, Dialogue, TextSegment},
+    event::{Dialogue, Event, TextSegment},
     time::AssTime,
 };
 use nom::{
@@ -133,7 +133,7 @@ This is a test subtitle
         let (_, events) = parse_srt_file(test_srt_content).unwrap();
         let first_event = &events[0];
         let second_event = &events[1];
-        
+
         if let Event::Dialogue(dialogue) = first_event {
             assert_eq!(dialogue.start.as_centiseconds(), 160); // 1.6 seconds = 160 centiseconds
             assert_eq!(dialogue.end.as_centiseconds(), 420); // 4.2 seconds = 420 centiseconds
@@ -145,7 +145,7 @@ This is a test subtitle
         } else {
             panic!("Expected Event::Dialogue");
         }
-        
+
         if let Event::Dialogue(dialogue) = second_event {
             assert_eq!(dialogue.end.as_centiseconds(), 799); // 7.999 seconds = 799.9 centiseconds
         } else {
@@ -171,7 +171,7 @@ This is a test subtitle
         assert!(result.is_ok());
         let (rest, event) = result.unwrap();
         assert!(rest.is_empty());
-        
+
         if let Event::Dialogue(dialogue) = event {
             if let TextSegment::Text(text) = &dialogue.content[0] {
                 assert_eq!(text, "Test subtitle");
@@ -190,7 +190,7 @@ This is a test subtitle
         assert!(result.is_ok());
         let (rest, event) = result.unwrap();
         assert!(rest.is_empty());
-        
+
         if let Event::Dialogue(dialogue) = event {
             if let TextSegment::Text(text) = &dialogue.content[0] {
                 assert_eq!(text, "Line 1\nLine 2");

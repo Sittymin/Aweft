@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::animation::anim_data::{AnimData, BlendMode, PropertyPath};
 use crate::animation::strip::{
-    compute_strip_influence, evaluate_transition, find_active_strip,
-    ActiveStrip, ExtendMode, NlaStrip, StripType,
+    ActiveStrip, ExtendMode, NlaStrip, StripType, compute_strip_influence, evaluate_transition,
+    find_active_strip,
 };
 use crate::ids::ActionId;
 
@@ -125,12 +125,19 @@ fn evaluate_strip(
     all_tracks: &[crate::animation::strip::NlaTrack],
 ) -> HashMap<PropertyPath, f64> {
     match &active.strip.strip_type {
-StripType::Action { action, actstart: _, actend: _ } => {
-            evaluate_action_strip(active, *action, action_provider)
-        }
-        StripType::Transition => {
-            evaluate_transition_strip(active, evaltime, target_duration, action_provider, track_idx, all_tracks)
-        }
+        StripType::Action {
+            action,
+            actstart: _,
+            actend: _,
+        } => evaluate_action_strip(active, *action, action_provider),
+        StripType::Transition => evaluate_transition_strip(
+            active,
+            evaltime,
+            target_duration,
+            action_provider,
+            track_idx,
+            all_tracks,
+        ),
         StripType::Meta { strips } => {
             evaluate_meta_strip(active, evaltime, strips, action_provider)
         }
@@ -196,7 +203,11 @@ fn evaluate_transition_strip(
             if let Some(prev_action) = prev_s.action_id() {
                 let prev_active = ActiveStrip {
                     strip: (*prev_s).clone(),
-                    clip_time: prev_s.action_range().unwrap().1.max(prev_s.action_range().unwrap().0),
+                    clip_time: prev_s
+                        .action_range()
+                        .unwrap()
+                        .1
+                        .max(prev_s.action_range().unwrap().0),
                     influence: 1.0,
                     strip_start: *prev_st,
                     strip_end: *prev_en,
@@ -319,9 +330,8 @@ fn evaluate_meta_strip(
             strip_end: child_end,
         };
 
-        let child_vals = evaluate_strip_in_meta(
-            &child_active, meta_dur, action_provider, child_strips,
-        );
+        let child_vals =
+            evaluate_strip_in_meta(&child_active, meta_dur, action_provider, child_strips);
         for (prop, val) in child_vals {
             let entry = result.entry(prop).or_insert(0.0);
             let inf = child_active.influence;
@@ -380,7 +390,7 @@ fn evaluate_meta_transition(
     let mut prev_vals = HashMap::new();
     let mut next_vals = HashMap::new();
 
-        if let Some(tx_idx) = tx_pos {
+    if let Some(tx_idx) = tx_pos {
         // Previous neighbor: walk backward, skip other transitions, find the
         // nearest non-transition strip and sample it at its end frame.
         for prev in (0..tx_idx).rev() {
@@ -388,7 +398,11 @@ fn evaluate_meta_transition(
             if let Some(prev_action) = prev_s.action_id() {
                 let prev_active = ActiveStrip {
                     strip: (*prev_s).clone(),
-                    clip_time: prev_s.action_range().unwrap().1.max(prev_s.action_range().unwrap().0),
+                    clip_time: prev_s
+                        .action_range()
+                        .unwrap()
+                        .1
+                        .max(prev_s.action_range().unwrap().0),
                     influence: 1.0,
                     strip_start: *prev_st,
                     strip_end: *prev_en,

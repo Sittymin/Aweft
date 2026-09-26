@@ -83,7 +83,9 @@ fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
         *slot = Rc::clone(&model);
     }
     if index < audio.tracks.row_count() {
-        audio.tracks.set_row_data(index, slint::ModelRc::from(model));
+        audio
+            .tracks
+            .set_row_data(index, slint::ModelRc::from(model));
     }
     if let Some(slot) = audio.buckets.get_mut(index) {
         *slot = buckets;

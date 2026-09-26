@@ -572,15 +572,16 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         let s = store.borrow();
         let astate = instance.global::<crate::bridge::types::AudioState>();
         astate.set_audio_tracks(slint::ModelRc::from(s.ui_models.audio.tracks.clone()));
-        astate.set_playback_tracks(slint::ModelRc::from(s.ui_models.audio.playback_tracks.clone()));
+        astate.set_playback_tracks(slint::ModelRc::from(
+            s.ui_models.audio.playback_tracks.clone(),
+        ));
     }
 
     // 波形后台 worker 经通道发批次，pump 任务在 UI 线程写模型（见
     // `store::audio::ui_pump_waveform_batches`）。发送端存入 AppState 供任务入队时克隆。
     {
-        let (ui_sender, ui_receiver) = futures::channel::mpsc::unbounded::<
-            crate::store::audio::WaveformBatch,
-        >();
+        let (ui_sender, ui_receiver) =
+            futures::channel::mpsc::unbounded::<crate::store::audio::WaveformBatch>();
         let _ = slint::spawn_local(crate::store::audio::ui_pump_waveform_batches(
             Rc::clone(&store),
             ui_receiver,
@@ -628,9 +629,8 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
         use crate::bridge::types::AudioCallbacks;
         let weak = instance.as_weak();
         let s = Rc::clone(&store);
-        instance
-            .global::<AudioCallbacks>()
-            .on_select_audio_track(move |video_index, track_index| {
+        instance.global::<AudioCallbacks>().on_select_audio_track(
+            move |video_index, track_index| {
                 if video_index < 0 || track_index < 0 {
                     return;
                 }
@@ -644,7 +644,8 @@ fn setup_audio_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
                     )),
                     &weak,
                 );
-            });
+            },
+        );
     }
 }
 fn handle_rendering_teardown(store: &Rc<RefCell<AppStore>>) {

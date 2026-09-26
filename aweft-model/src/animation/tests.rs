@@ -7,13 +7,11 @@ use crate::animation::keyframe::{Extrapolation, Keyframe};
 use crate::animation::library::AnimationLibrary;
 use crate::animation::merge::apply_animation_to_style;
 use crate::animation::modifier::{
-    CycleMode, FModCycles, FModEnvelope, FModLimits,
-    FModNoise, FModStepped, FModifier, FModifierInstance,
+    CycleMode, FModCycles, FModEnvelope, FModLimits, FModNoise, FModStepped, FModifier,
+    FModifierInstance,
 };
-use crate::animation::sample::{blend_scalar, blend_strip_results, EvaluatedStrip};
-use crate::animation::strip::{
-    ExtendMode, NlaStrip, NlaTrack, StripControlCurves, StripPlacement,
-};
+use crate::animation::sample::{EvaluatedStrip, blend_scalar, blend_strip_results};
+use crate::animation::strip::{ExtendMode, NlaStrip, NlaTrack, StripControlCurves, StripPlacement};
 use crate::ids::{ActionId, AnimDataId};
 use crate::node_graph::style::StyleResult;
 
@@ -339,7 +337,9 @@ fn extrapolation_hold_forward_only_after() {
 
     // Before strip: HoldForward = no contribution before
     let map = lib.sample(id, 0.5, 5.0).unwrap();
-    assert!(map.is_empty() || map.get(&PropertyPath::PositionX).copied() == Some(0.0).or(Some(0.0)));
+    assert!(
+        map.is_empty() || map.get(&PropertyPath::PositionX).copied() == Some(0.0).or(Some(0.0))
+    );
 
     // After strip: hold last frame
     let map = lib.sample(id, 4.0, 5.0).unwrap();
@@ -458,10 +458,7 @@ fn blend_in_fade() {
             placement: StripPlacement::Full,
             control_curves: StripControlCurves {
                 influence: Some(FCurve {
-                    keyframes: vec![
-                        Keyframe::linear(0.0, 0.0),
-                        Keyframe::linear(0.5, 1.0),
-                    ],
+                    keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(0.5, 1.0)],
                     extrapolation: Extrapolation::Constant,
                     modifiers: vec![],
                     integer: false,
@@ -529,13 +526,9 @@ fn fcurve_linear_extrapolation() {
         integer: false,
     };
     // Before first keyframe: slope = 10, so at t=-1: 10 - 10 = 0
-    assert!(
-        (crate::animation::fcurve::evaluate_fcurve(&fcurve, -1.0) - 0.0).abs() < 1e-9
-    );
+    assert!((crate::animation::fcurve::evaluate_fcurve(&fcurve, -1.0) - 0.0).abs() < 1e-9);
     // After last keyframe: slope = 10, so at t=2: 20 + 10 = 30
-    assert!(
-        (crate::animation::fcurve::evaluate_fcurve(&fcurve, 2.0) - 30.0).abs() < 1e-9
-    );
+    assert!((crate::animation::fcurve::evaluate_fcurve(&fcurve, 2.0) - 30.0).abs() < 1e-9);
 }
 
 #[test]
@@ -619,13 +612,9 @@ fn fcurve_limits_clamp_value() {
         integer: false,
     };
     // t=0: value 0, clamped to 10
-    assert!(
-        (crate::animation::fcurve::evaluate_fcurve(&fcurve, 0.0) - 10.0).abs() < 1e-9
-    );
+    assert!((crate::animation::fcurve::evaluate_fcurve(&fcurve, 0.0) - 10.0).abs() < 1e-9);
     // t=1.0: value 200, clamped to 90
-    assert!(
-        (crate::animation::fcurve::evaluate_fcurve(&fcurve, 1.0) - 90.0).abs() < 1e-9
-    );
+    assert!((crate::animation::fcurve::evaluate_fcurve(&fcurve, 1.0) - 90.0).abs() < 1e-9);
 }
 
 #[test]
@@ -636,13 +625,11 @@ fn fcurve_envelope_maps_values() {
         modifiers: vec![{
             let mut m = FModifierInstance::default();
             m.data = FModifier::Envelope(FModEnvelope {
-                control_points: vec![
-                    crate::animation::modifier::EnvelopePoint {
-                        time: 0.0,
-                        min: 100.0,
-                        max: 200.0,
-                    },
-                ],
+                control_points: vec![crate::animation::modifier::EnvelopePoint {
+                    time: 0.0,
+                    min: 100.0,
+                    max: 200.0,
+                }],
                 midval: 0.0,
                 min: 0.0,
                 max: 1.0,
@@ -991,7 +978,10 @@ fn temporary_edit_deactivates_base_and_relies_on_nla() {
             solo: false,
             strips: vec![NlaStrip {
                 name: "s".into(),
-                placement: StripPlacement::Absolute { start: 2.0, end: 5.0 },
+                placement: StripPlacement::Absolute {
+                    start: 2.0,
+                    end: 5.0,
+                },
                 ..NlaStrip::new_action("s", strip_action.id)
             }],
         }],
