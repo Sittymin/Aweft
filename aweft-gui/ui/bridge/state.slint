@@ -89,13 +89,6 @@ export global SubtitleState {
     in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];
 }
 
-// 已装载插件的名字列表（下标 = PluginCallbacks.open-plugin-panel 的参数）。
-// 装载只发生在启动期，列表由 Rust 在 AppStore::new 里写一次；
-// 名字来自各插件的 aweft-plugin.json，主程序不硬编码任何插件。
-export global PluginState {
-    in property <[string]> plugin-titles: [];
-}
-
 // 节点图编辑器状态：样式图/应用图各一组模型，由 Rust 侧驱动。
 // 节点/连线模型为 Rust 持有的 VecModel（增删节点重建、拖动节点局部更新）。
 export global NodeGraphState {
