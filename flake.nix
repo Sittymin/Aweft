@@ -121,6 +121,12 @@
           SLINT_BACKEND = "winit-femtovg-wgpu";
           # 实时更新
           SLINT_LIVE_PREVIEW = 1;
+          # live preview 把整个宿主 .slint 挪到运行期当场编译（rust.rs:172 整份文档分岔，
+          # 嵌的是构建机绝对路径），那一刻编译器读「进程环境」选内建类型表
+          # （compiler/lib.rs:276）；ComponentContainer/component-factory 是实验类型，
+          # 没有它建窗即报 Unknown type 'component-factory'。build.rs 的 set_var/rustc-env
+          # 只够构建期用，到不了运行中的二进制，运行期这份只能由 shell 出。
+          SLINT_ENABLE_EXPERIMENTAL_FEATURES = 1;
           # 显示代码的所有 log 输出
           RUST_LOG = "warn,aweft_gui=trace,aweft_model=trace,aweft_ass=trace,aweft_collab=trace,aweft_convert=trace,aweft_libass=trace";
         };
