@@ -99,7 +99,8 @@ pub enum NodeGraphChange {
         node_id: NodeId,
         socket_id: SocketId,
     },
-    /// 引用节点换引用链（原位改值，投影重建该节点一行：menu_selected/端口）。
+    /// 引用节点换引用对象（样式链引用换样式链，非线性动画引用换动画片段；
+    /// 都是原位改 kind 内嵌 id，投影重建该节点一行：menu_selected/端口）。
     ReferenceChanged { node_id: NodeId },
     /// 新建链后切到它（投影：派生链菜单 + 设当前链 + 全量重建快照）。`target` 为目标链下标。
     ChainSwitched { target: usize },

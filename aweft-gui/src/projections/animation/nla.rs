@@ -11,13 +11,15 @@
 use crate::depsgraph::Tag;
 use crate::store::AppStore;
 
-/// NLA：结构变化（装载/向下插入/搜索）→ 派生层全量重建 + 过滤视图重新绑定 Slint。
+/// NLA：结构变化（装载/切换编辑的动画片段/向下插入/搜索）→ 派生层全量重建 +
+/// 过滤视图重新绑定 Slint + Header 下拉选中项同步。
 pub fn op_nla_structure(store: &mut AppStore, tags: &[Tag]) {
     if !tags.iter().any(|t| matches!(t, Tag::NlaStructureChanged)) {
         return;
     }
     store.ui_models.animation.nla.apply_structure();
     store.rebind_nla_tracks();
+    store.sync_nla_scalars();
 }
 
 /// NLA：片断选中变化→就地 set_row_data 选中列，不触碰位置/结构。

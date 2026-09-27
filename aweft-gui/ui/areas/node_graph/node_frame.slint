@@ -38,6 +38,9 @@ export struct NodeSocketData {
     input: bool,
     // 内嵌输入框的当前值（端口默认值）
     input-text: string,
+    // 该端口行内嵌真/假切换（如布尔常量的输出端口），bool-value 即端口默认值
+    bool-editor: bool,
+    bool-value: bool,
 }
 
 // 一条节点连接：数据流方向固定 from（输出端）→ to（输入端）。
@@ -72,8 +75,8 @@ export struct GraphNode {
     input-count: int,
     // 端口总行数 = max(输入, 输出)（两列各自独立从顶排），决定节点高度。
     socket-rows: int,
-    // 样式引用节点的下拉菜单行：menu-label 非空时在标题栏下显示
-    // "标签 + 下拉菜单"（选择引用的样式链）
+    // 引用节点的下拉菜单行：menu-label 非空时在标题栏下显示"标签 + 下拉菜单"。
+    // 样式链引用选样式链，非线性动画引用选动画片段；候选与选中下标都由 Rust 侧填。
     menu-label: string,
     menu-options: [string],
     menu-selected: int,
@@ -184,6 +187,8 @@ export component SocketInteractions inherits Rectangle {
     // 内嵌文本输入框提交 / 聚焦变化
     callback socket-input-changed(socket-index: int, text: string);
     callback socket-input-focused(socket-index: int, focused: bool);
+    // 真/假切换被点击：编辑据此翻转该端口的默认值
+    callback socket-bool-toggled(socket-index: int);
 
     // 按 view-zoom 缩放后的几何量
     private property <length> socket-size: Theme.data.node-editor.socket-size * view-zoom;
@@ -224,6 +229,34 @@ export component SocketInteractions inherits Rectangle {
         }
     }
 
+    // 真/假切换（布尔常量的输出端口）：标签即端口默认值，点一下翻转。
+    if socket.bool-editor: Rectangle {
+        x: parent.width - socket-size - 58px * view-zoom;
+        y: 3px * view-zoom;
+        width: 56px * view-zoom;
+        height: socket-row-height - 6px * view-zoom;
+        border-radius: 3px * view-zoom;
+        background: socket.bool-value
+            ? Theme.data.node-editor.node-header-background
+            : Theme.data.node-editor.canvas-background;
+        border-width: 1px * view-zoom;
+        border-color: Theme.data.node-editor.node-border;
+        Text {
+            text: socket.bool-value ? "真" : "假";
+            width: 100%;
+            height: 100%;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            color: Theme.data.node-editor.node-text;
+            font-size: socket-font-size;
+        }
+        TouchArea {
+            clicked => {
+                root.socket-bool-toggled(root.socket-index);
+            }
+        }
+    }
+
     // 内嵌文本输入框（字符串常量输出端口）
     if socket.input: InputBox {
         x: 6px * view-zoom;
@@ -256,7 +289,8 @@ export component SocketInteractions inherits Rectangle {
     }
 }
 
-// 样式引用下拉菜单行：标题栏下"标签 + 下拉菜单"选择引用的样式链。
+// 引用节点的下拉菜单行：标题栏下"标签 + 下拉菜单"选择引用的对象
+// （样式链引用选样式链，非线性动画引用选动画片段）。
 // 独立组件便于 NodeFrame 组装（避免 NodeFrame 巨型化）。
 export component ReferenceMenuRow inherits Rectangle {
     in property <string> menu-label: "";
@@ -295,9 +329,11 @@ export component ReferenceMenuRow inherits Rectangle {
         border-width: 1px * view-zoom;
         border-color: Theme.data.node-editor.node-border;
         Text {
+            // 未选中（引用的对象已删或还没选）时的占位文案：按标签拼，
+            // 样式链引用读作「选择样式链」，非线性动画引用读作「选择非线性动画」。
             text: root.menu-options.length > 0 && root.menu-selected >= 0 && root.menu-selected < root.menu-options.length
                 ? root.menu-options[root.menu-selected]
-                : "选择样式链";
+                : "选择" + root.menu-label;
             x: 6px * view-zoom;
             width: parent.width - 12px * view-zoom;
             height: 100%;
@@ -336,7 +372,7 @@ export component NodeFrame inherits Rectangle {
     in property <float> view-zoom: 1.0;
     // 选中状态：整圈描边换成高亮色并加粗（Blender 用主题 select 色画节点轮廓）
     in property <bool> selected: false;
-    // 样式引用下拉菜单行（menu-label 非空才显示）
+    // 引用节点的下拉菜单行（样式链引用 / 非线性动画引用；menu-label 非空才显示）
     in property <string> menu-label: "";
     in property <[string]> menu-options;
     in property <int> menu-selected: -1;
@@ -356,7 +392,7 @@ export component NodeFrame inherits Rectangle {
     callback socket-drag-canceled();
     // 右键按下节点主体（未在端口拖拽中）：编辑据此弹出节点菜单（世界坐标）
     callback right-pressed(at-world-x: length, at-world-y: length);
-    // 点击样式引用下拉按钮：编辑据此在按钮位置弹出样式链选择菜单
+    // 点击引用节点的下拉按钮：编辑据此在按钮位置弹出候选菜单（样式链或动画片段）
     callback menu-requested();
     // 点击端口预设下拉按钮（socket-index 为组合数组下标）：编辑据此弹出预设菜单
     callback socket-menu-requested(socket-index: int);
@@ -364,6 +400,8 @@ export component NodeFrame inherits Rectangle {
     callback socket-input-changed(socket-index: int, text: string);
     // 内嵌文本输入框聚焦变化：编辑据此设置全窗口收起遮罩（挖孔定位）
     callback socket-input-focused(socket-index: int, focused: bool);
+    // 端口行内的真/假切换被点击（布尔常量输出端口）：编辑据此翻转端口默认值
+    callback socket-bool-toggled(socket-index: int);
     // 端口命中（本地坐标，相对节点左上角；含 ta-overhang 已减后的节点内坐标）：
     // 返回 sockets 组合数组下标，-1 无。由编辑器绑定到 Rust 统一命中（与
     // find_drop_socket 同源，消除 Slint 硬编码端口数上限——C1 修复）。
@@ -379,7 +417,7 @@ export component NodeFrame inherits Rectangle {
     private property <length> node-radius: Theme.data.node-editor.node-border-radius * view-zoom;
     private property <length> title-font-size: Theme.data.node-editor.node-title-font-size * view-zoom;
     private property <length> socket-font-size: Theme.data.node-editor.node-socket-font-size * view-zoom;
-    // 下拉菜单行（仅样式引用节点）：标题栏与端口行之间的额外一行
+    // 下拉菜单行（仅引用节点：样式链引用 / 非线性动画引用）：标题栏与端口行之间的额外一行
     private property <length> menu-row-height: root.menu-label == "" ? 0px : socket-row-height;
 
     x: node-x * view-zoom + view-pan-x;
@@ -513,7 +551,7 @@ export component NodeFrame inherits Rectangle {
         }
     }
 
-    // 端口行可交互元素（预设下拉按钮 / 内嵌文本输入框）：
+    // 端口行可交互元素（预设下拉按钮 / 内嵌文本输入框 / 真/假切换）：
     // 置于端口拖拽 TouchArea 之后，否则点击会被 ta 抢走（同 ReferenceMenuRow 处理模式）。
     for socket[i] in root.sockets: SocketInteractions {
         y: header-height + root.menu-row-height + socket.row * socket-row-height;
@@ -530,9 +568,12 @@ export component NodeFrame inherits Rectangle {
         socket-input-focused(socket-idx, focused) => {
             root.socket-input-focused(socket-idx, focused);
         }
+        socket-bool-toggled(socket-idx) => {
+            root.socket-bool-toggled(socket-idx);
+        }
     }
 
-    // 样式引用下拉菜单行（在端口拖拽 TouchArea 之后，避免按钮点击被 ta 抢走）
+    // 引用节点的下拉菜单行（在端口拖拽 TouchArea 之后，避免按钮点击被 ta 抢走）
     if root.menu-label != "": ReferenceMenuRow {
         y: header-height;
         menu-label: root.menu-label;

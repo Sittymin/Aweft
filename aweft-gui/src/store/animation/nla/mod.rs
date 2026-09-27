@@ -30,7 +30,7 @@ use std::rc::Rc;
 use aweft_model::{animation::strip::NlaStrip, ids::AnimDataId};
 use slint::VecModel;
 
-use crate::bridge::types::{SlintNlaStrip, SlintNlaTrack};
+use crate::bridge::types::{ContextMenuItem, SlintNlaStrip, SlintNlaTrack};
 
 pub mod drag;
 pub mod load;
@@ -90,6 +90,12 @@ pub struct NlaEditorState {
     pub anim_data_id: Option<AnimDataId>,
 
     // —— 数据层（reducer 可写） ——
+    /// Header 下拉的候选：库里全部 AnimData 的 id，顺序 = 显示顺序（按名排序，
+    /// 与非线性动画引用节点的下拉同一份顺序，见 `AppStore::anim_data_entries`）。
+    pub anim_order: Vec<AnimDataId>,
+    /// Header 下拉的菜单项（由 `anim_order` 对应的名字派生；共享 inner，
+    /// 初始化时绑定一次，之后 `set_vec` 自动通知 Slint）。
+    pub anim_items: Rc<VecModel<ContextMenuItem>>,
     /// 轨道视图数据（权威 UI 态；`strips` 字段占位，真实片断在 `editing_strips`）。
     /// 第 0 轨为虚拟"全局 Action 轨"（只读，显示当前编辑的 Action）。
     pub(crate) track_view: Vec<SlintNlaTrack>,
@@ -119,6 +125,8 @@ impl Default for NlaEditorState {
     fn default() -> Self {
         Self {
             anim_data_id: None,
+            anim_order: Vec::new(),
+            anim_items: Rc::new(VecModel::default()),
             track_view: Vec::new(),
             editing_strips: Vec::new(),
             next_strip_id: 1,

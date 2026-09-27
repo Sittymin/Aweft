@@ -290,6 +290,14 @@ impl crate::store::AppStore {
             self.ui_models.animation.graph.preview_handles.clone(),
         ));
         state.set_nla_tracks(self.ui_models.animation.nla.tracks_filter.clone().into());
+        state.set_nla_anim_items(ModelRc::from(
+            self.ui_models.animation.nla.anim_items.clone(),
+        ));
+
+        // 播种的第二段动画片段（「主 NLA」）在 `create_test_animation_data` 里才进库，
+        // 晚于节点图编辑器初始化，所以这里再派生一次候选并重算应用图节点行的选中下标。
+        self.refresh_anim_data_menu();
+        self.sync_nla_scalars();
     }
 
     /// 新建一个**空的**编辑 Action 并装载（正确初始化路径）。

@@ -8,7 +8,7 @@ import { ContextMenu, ContextMenuItem, MenuItem } from "../../widgets/context_me
 import { InputBox } from "../../widgets/input_box.slint";
 import { GraphType } from "../../core/types.slint";
 import { NodeGraphCallbacks } from "../../bridge/callbacks.slint";
-import { NodeGraphState, DismissOverlayState } from "../../bridge/state.slint";
+import { DismissOverlayState } from "../../bridge/state.slint";
 import { Mixins } from "../../theme/mixins.slint";
 import { Theme } from "../../theme/index.slint";
 
@@ -32,15 +32,15 @@ export component NodeGraphEditor inherits Rectangle {
 
     // 右键菜单状态
     private property <bool> menu-open: false;
-    // 0=画布空白右键（增加节点），1=节点右键（删除节点），2=样式引用下拉（选样式链），3=端口预设下拉
+    // 0=画布空白右键（增加节点），1=节点右键（删除节点），2=引用节点下拉（样式链引用选样式链，非线性动画引用选动画片段），3=端口预设下拉
     private property <int> menu-mode: 0;
     private property <length> menu-screen-x: 0px;
     private property <length> menu-screen-y: 0px;
     // 右键处的世界坐标（新节点放置位置）
     private property <length> menu-world-x: 0px;
     private property <length> menu-world-y: 0px;
-    // 样式引用下拉：当前打开下拉的节点下标（-1 无）
-    private property <int> chain-menu-node: -1;
+    // 引用节点下拉：当前打开下拉的节点下标（-1 无）
+    private property <int> reference-menu-node: -1;
     // 端口预设下拉：节点下标 + 端口组合数组下标
     private property <int> socket-menu-node: -1;
     private property <int> socket-menu-idx: 0;
@@ -68,7 +68,7 @@ export component NodeGraphEditor inherits Rectangle {
     private property <length> drag-y: 0px;
 
     // 第 i 个端口垂直中心相对节点顶部的偏移。
-    // 样式引用节点多一行下拉菜单（menu-label 非空），端口整体下移一格。
+    // 引用节点（样式链引用 / 非线性动画引用）多一行下拉菜单（menu-label 非空），端口整体下移一格。
     function socket-offset(node-idx: int, idx: int) -> length {
         let menu: length = root.nodes[node-idx].menu-label != "" ? Theme.data.node-editor.node-socket-row-height : 0px;
         return Theme.data.node-editor.node-header-height + menu + idx * Theme.data.node-editor.node-socket-row-height + Theme.data.node-editor.node-socket-row-height / 2;
@@ -126,13 +126,16 @@ export component NodeGraphEditor inherits Rectangle {
             return NodeGraphCallbacks.socket-at(root.graph-type, i, x, y);
         }
         menu-requested => {
-            root.open-chain-menu(i);
+            root.open-reference-menu(i);
         }
         socket-menu-requested(socket-idx) => {
             root.open-socket-menu(i, socket-idx);
         }
         socket-input-changed(socket-idx, text) => {
             NodeGraphCallbacks.socket-input-changed(root.graph-type, i, socket-idx, text);
+        }
+        socket-bool-toggled(socket-idx) => {
+            NodeGraphCallbacks.socket-bool-toggled(root.graph-type, i, socket-idx);
         }
         socket-input-focused(socket-idx, focused) => {
             if focused {
@@ -178,7 +181,7 @@ export component NodeGraphEditor inherits Rectangle {
     // 只有当前模式菜单打开时才实例化菜单项。故当前形态即"只实例化打开菜单的项"。
     // 若未来出现单模式海量菜单项（30 万），才需在 for 前接过滤模型（被过滤项不构造
     // UI 对象）；届时仅需替换 for 的模型源，容器结构不变。
-    // 模式 0=画布空白（增加节点），1=节点右键（删除），2=样式引用下拉（选样式链），
+    // 模式 0=画布空白（增加节点），1=节点右键（删除），2=引用节点下拉（样式链引用选样式链，非线性动画引用选动画片段），
     // 3=端口预设下拉（选角色/新建角色）。
 
     // 模式 0：画布空白右键 → 增加节点（数据驱动菜单项来自 Rust，动作声明式）
@@ -233,7 +236,9 @@ export component NodeGraphEditor inherits Rectangle {
         }
     }
 
-    // 模式 2：样式引用下拉 → 选样式链（不夹取，菜单可落在按钮下方）
+    // 模式 2：引用节点下拉 → 选引用对象（不夹取，菜单可落在按钮下方）。
+    // 候选取节点自己的 menu-options：样式链引用列出样式链名字，
+    // 非线性动画引用列出动画片段名字（全局的 style-chain-items 只有样式链）。
     if root.menu-mode == 2: ContextMenu {
         open <=> root.menu-open;
         menu-x: root.menu-screen-x;
@@ -248,12 +253,12 @@ export component NodeGraphEditor inherits Rectangle {
             DismissOverlayState.hide();
         }
         clamp-position: false;
-        for item[i] in NodeGraphState.style-chain-items: MenuItem {
-            text: item.text;
-            selected: i == root.nodes[root.chain-menu-node].menu-selected;
+        for item[i] in root.nodes[root.reference-menu-node].menu-options: MenuItem {
+            text: item;
+            selected: i == root.nodes[root.reference-menu-node].menu-selected;
             menu-open <=> root.menu-open;
             activated => {
-                NodeGraphCallbacks.menu-selected(root.graph-type, root.chain-menu-node, i);
+                NodeGraphCallbacks.menu-selected(root.graph-type, root.reference-menu-node, i);
             }
         }
     }
@@ -354,9 +359,9 @@ export component NodeGraphEditor inherits Rectangle {
         menu-open = true;
     }
 
-    // 样式引用下拉：在节点下拉按钮位置弹出样式链选择菜单
-    function open-chain-menu(node-id: int) {
-        chain-menu-node = node-id;
+    // 引用节点下拉：在节点下拉按钮位置弹出候选菜单（样式链或动画片段，候选来自该节点的 menu-options）
+    function open-reference-menu(node-id: int) {
+        reference-menu-node = node-id;
         menu-mode = 2;
         // 按钮位于节点右侧中部（菜单行内），下拉菜单在其下方
         let n = root.nodes[node-id];
@@ -365,7 +370,7 @@ export component NodeGraphEditor inherits Rectangle {
         menu-open = true;
     }
 
-    // 端口预设下拉：在端口下拉按钮下方弹出预设菜单（与样式引用同款：按钮下方）
+    // 端口预设下拉：在端口下拉按钮下方弹出预设菜单（与引用节点下拉同款：按钮下方）
     function open-socket-menu(node-id: int, socket-idx: int) {
         socket-menu-node = node-id;
         socket-menu-idx = socket-idx;

@@ -14,7 +14,7 @@ use std::{
 
 use aweft_model::{
     application_graph::{ApplicationGraph, ApplicationNodeKind},
-    ids::{NodeGraphId, NodeId, SocketId},
+    ids::{AnimDataId, NodeGraphId, NodeId, SocketId},
     node_graph::{
         ColorRole, Link, Node, NodeGraph, NodeGraphKind, NodeKind, NodeTreeType, Socket,
         SocketDecl, SocketType, SocketValue, StyleOpKind, VecOpKind, error::EvalError,
@@ -204,6 +204,11 @@ pub struct NodeGraphState {
     pub style_chain_names: Vec<String>,
     /// 角色名字列表（按名排序；匹配角色 pattern 的下拉候选，含"新建角色"尾项）
     pub actor_names: Vec<String>,
+    /// 动画片段显示顺序（与 `style_order` 对称：模型侧为 id-keyed map，下拉顺序在这里派生）。
+    /// 只有应用图编辑器用得上——非线性动画引用节点只存在于应用图。
+    pub anim_order: Vec<AnimDataId>,
+    /// 动画片段名字（与 `anim_order` 一一对应，非线性动画引用节点的下拉候选）
+    pub anim_names: Vec<String>,
     /// 节点位置（UI 数据，世界坐标，逻辑像素）
     positions: HashMap<NodeId, (f32, f32)>,
     /// 节点模型顺序：下标 → NodeId（增删节点后重建）
@@ -222,6 +227,8 @@ impl Default for NodeGraphState {
             style_order: Vec::new(),
             style_chain_names: Vec::new(),
             actor_names: Vec::new(),
+            anim_order: Vec::new(),
+            anim_names: Vec::new(),
             positions: HashMap::new(),
             order: Vec::new(),
             metrics: EditorMetrics::default(),
@@ -230,22 +237,90 @@ impl Default for NodeGraphState {
 }
 
 impl NodeGraphState {
-    /// 节点位置：有记录用记录，否则自动排布（横向平铺）
+    /// 节点位置：布局产物（`place_unpositioned`）；还没排布过的节点按插入序横向排开。
     fn pos(&self, node_id: NodeId, order_index: usize) -> (f32, f32) {
-        self.positions
-            .get(&node_id)
-            .copied()
-            .unwrap_or((40.0 + order_index as f32 * 220.0, 40.0))
+        self.positions.get(&node_id).copied().unwrap_or((
+            LAYOUT_MARGIN + order_index as f32 * (self.metrics.node_width + LAYOUT_GAP_X),
+            LAYOUT_MARGIN,
+        ))
     }
 
-    /// 把图的当前结构同步到视图模型（顺序只增不减：已有节点不动，新节点追加，删掉的移除，
-    /// 保证模型下标稳定，不随连线变化漂移）。
-    /// 无位置记录的节点按"上游深度"自动布局（源在左、汇在右，同深度纵向堆叠）——
-    /// 位置直接由图结构推导，与迭代顺序无关，因此默认布局确定且正确（样式源在最左、组输出在最右）。
-    /// 位置一旦分配即持久化（UI 数据），之后拖拽/重连都不会让节点跳位。
+    /// 给还没有位置记录的节点排位置；已有位置一律不动——拖拽结果与右键落点是用户的
+    /// 显式意图，重排会把它抹掉。
     ///
-    /// 运行期变更走 `apply_change` 精确 diff（row_added/row_removed/row_changed）；
-    /// `rebuild`（本函数所在，供初始化/切链）仍全量 set_rows。
+    /// 列号 = 最长上游路径长度（`flow_depth`），所以自动排布的节点必然源在左、汇在右；
+    /// 同列落点先对齐上游重心，再往下推到不与任何已占节点相交，所以也不会重叠。
+    /// 按列号递增处理，上游先就位，重心与占位才有依据。
+    fn place_unpositioned<G: GraphEditable>(&mut self, graph: &G) {
+        let mut depth_cache = HashMap::new();
+        let mut visiting = HashSet::new();
+        let mut pending: Vec<(usize, NodeId)> = self
+            .order
+            .iter()
+            .filter(|node_id| !self.positions.contains_key(node_id))
+            .map(|&node_id| {
+                (
+                    flow_depth(graph, node_id, &mut depth_cache, &mut visiting),
+                    node_id,
+                )
+            })
+            .collect();
+        // 稳定排序：同列保持插入序，布局与 `order` 的偶然顺序无关。
+        pending.sort_by_key(|&(rank, _)| rank);
+        let column_pitch = self.metrics.node_width + LAYOUT_GAP_X;
+        for (rank, node_id) in pending {
+            let x = LAYOUT_MARGIN + rank as f32 * column_pitch;
+            let height = node_height(graph, node_id, &self.metrics);
+            let y = self.free_top(graph, node_id, x, height);
+            self.positions.insert(node_id, (x, y));
+        }
+    }
+
+    /// 落位上边 y：节点中心先对齐上游重心，再逐个躲开与本节点 x 区间相交的已占矩形
+    /// （不同列本来就碰不到，不必为它们让位）。每轮 y 只增不减，矩形有限，必然收敛。
+    fn free_top<G: GraphEditable>(&self, graph: &G, node_id: NodeId, x: f32, height: f32) -> f32 {
+        let mut y = (self.upstream_center(graph, node_id) - height / 2.0).max(LAYOUT_MARGIN);
+        loop {
+            let clash = self
+                .occupied(graph, x)
+                .find_map(|(top, bottom)| (y < bottom && top < y + height).then_some(bottom));
+            let Some(bottom) = clash else { return y };
+            y = bottom + LAYOUT_GAP_Y;
+        }
+    }
+
+    /// 已排布上游节点的中心均值（重心）；一个都没有时回落到上边距。
+    fn upstream_center<G: GraphEditable>(&self, graph: &G, node_id: NodeId) -> f32 {
+        let placed: Vec<f32> = upstream_nodes(graph, node_id)
+            .iter()
+            .filter_map(|upstream| {
+                let (_, y) = self.positions.get(upstream).copied()?;
+                Some(y + node_height(graph, *upstream, &self.metrics) / 2.0)
+            })
+            .collect();
+        if placed.is_empty() {
+            return LAYOUT_MARGIN;
+        }
+        placed.iter().sum::<f32>() / placed.len() as f32
+    }
+
+    /// 当前图里已占用的纵向区间，只取 x 区间与 `x` 相交的节点（两矩形相交 ⇔ 列距小于节点宽）。
+    fn occupied<'a, G: GraphEditable>(
+        &'a self,
+        graph: &'a G,
+        x: f32,
+    ) -> impl Iterator<Item = (f32, f32)> + 'a {
+        self.order.iter().filter_map(move |&node_id| {
+            let (other_x, other_y) = self.positions.get(&node_id).copied()?;
+            ((other_x - x).abs() < self.metrics.node_width).then(|| {
+                (
+                    other_y,
+                    other_y + node_height(graph, node_id, &self.metrics),
+                )
+            })
+        })
+    }
+
     /// 构建单个节点的 Slint 快照（供投影对单个节点精确构建）。
     /// 需要 `editor` 的布局/角色/样式链上下文。
     pub fn build_node_at<G: GraphEditable>(&self, graph: &G, node_id: NodeId) -> Option<GraphNode> {
@@ -287,6 +362,8 @@ impl NodeGraphState {
                 connected,
                 input: false,
                 input_text: SharedString::default(),
+                bool_editor: false,
+                bool_value: false,
             });
         }
         for (output_row, &socket_id) in G::outputs(node).iter().enumerate() {
@@ -301,6 +378,15 @@ impl NodeGraphState {
             } else {
                 SharedString::default()
             };
+            let is_bool_editor = G::bool_editor(node, false, output_row);
+            let bool_value = if is_bool_editor {
+                matches!(
+                    &socket.default_value,
+                    Some(aweft_model::node_graph::SocketValue::Bool(true))
+                )
+            } else {
+                false
+            };
             sockets.push(NodeSocketData {
                 name: socket.name.clone().into(),
                 is_input: false,
@@ -311,34 +397,30 @@ impl NodeGraphState {
                 connected,
                 input: is_editor,
                 input_text,
+                bool_editor: is_bool_editor,
+                bool_value,
             });
         }
-        // 样式引用节点：生成下拉菜单行数据（标签 + 样式链选项 + 当前选中）
-        let (menu_label, menu_options, menu_selected) = match G::reference_chain_id(node) {
-            Some(ref_chain_id) => {
-                let selected = self
-                    .style_order
-                    .iter()
-                    .position(|&chain_id| chain_id == ref_chain_id)
-                    .map_or(-1, |chain_index| chain_index as i32);
-                let options: Vec<SharedString> = self
-                    .style_chain_names
-                    .iter()
-                    .cloned()
-                    .map(SharedString::from)
-                    .collect();
-                (
-                    SharedString::from("样式链"),
-                    ModelRc::from(Rc::new(VecModel::from(options))),
-                    selected,
+        // 引用节点的下拉菜单行（标签 + 候选 + 当前选中）：样式链引用选样式链，
+        // 非线性动画引用选动画片段。一个节点只可能是其中一种，共用这一行。
+        let (menu_label, menu_options, menu_selected) =
+            if let Some(ref_chain_id) = G::reference_chain_id(node) {
+                menu_row(
+                    "样式链",
+                    &self.style_chain_names,
+                    self.style_order
+                        .iter()
+                        .position(|&chain_id| chain_id == ref_chain_id),
                 )
-            }
-            None => (
-                SharedString::default(),
-                ModelRc::from(Rc::new(VecModel::default())),
-                0,
-            ),
-        };
+            } else if let Some(anim_id) = G::anim_ref_id(node) {
+                menu_row(
+                    "非线性动画",
+                    &self.anim_names,
+                    self.anim_order.iter().position(|&id| id == anim_id),
+                )
+            } else {
+                menu_row("", &[], None)
+            };
         Some(GraphNode {
             title: graph.title(node).into(),
             x,
@@ -385,8 +467,12 @@ impl NodeGraphState {
             .collect()
     }
 
-    /// 全量重建快照（初始化/切链用）：更新 order + 布局位置 + 节点/连线快照。
-    /// 运行期精确更新走 `apply_change`，此处仅限切链/初始化。
+    /// 全量重建快照（初始化/切链用）：更新 order + 补排新节点位置 + 节点/连线快照。
+    /// 顺序只增不减：已有节点不动，新节点追加，删掉的移除——模型下标稳定，不随连线漂移。
+    /// 位置只给还没有记录的节点排（`place_unpositioned`）：拖拽结果与右键落点跨装载保留。
+    ///
+    /// 运行期变更走 `apply_change` 精确 diff（row_added/row_removed/row_changed）；
+    /// 本函数仅限切链/初始化。
     pub fn rebuild<G: GraphEditable>(&mut self, graph: &G) {
         self.order
             .retain(|node_id| graph.nodes().contains_key(node_id));
@@ -395,17 +481,7 @@ impl NodeGraphState {
                 self.order.push(*node_id);
             }
         }
-        let mut depth_cache = HashMap::new();
-        let mut visiting = HashSet::new();
-        let mut depth_rows = HashMap::new();
-        for &node_id in &self.order {
-            self.positions.entry(node_id).or_insert_with(|| {
-                let depth = flow_depth(graph, node_id, &mut depth_cache, &mut visiting);
-                let y = 40.0 + depth_rows.get(&depth).copied().unwrap_or(0) as f32 * 60.0;
-                *depth_rows.entry(depth).or_insert(0) += 1;
-                (40.0 + depth as f32 * 220.0, y)
-            });
-        }
+        self.place_unpositioned(graph);
         let rows: Vec<GraphNode> = self
             .order
             .iter()
@@ -490,7 +566,7 @@ impl NodeGraphState {
                 }
             }
             NodeGraphChange::ReferenceChanged { node_id } => {
-                // 换引用链：原位改值，节点不增删——单行重建（端口/高度/menu_selected）。
+                // 换引用对象（样式链 / 动画片段）：原位改值，节点不增删——单行重建（端口/高度/menu_selected）。
                 if let Some(idx) = self.order.iter().position(|&n| n == *node_id)
                     && let Some(node) = self.build_node_at(graph, *node_id)
                 {
@@ -613,6 +689,8 @@ pub trait NodeUi: NodeTreeType {
     fn actor_dropdown(&self, is_input: bool, idx: usize) -> bool;
     /// 该端口行是否内嵌文本输入框（如字符串常量的输出端口）。
     fn text_editor(&self, is_input: bool, idx: usize) -> bool;
+    /// 该端口行是否内嵌真/假切换（如布尔常量的输出端口）。
+    fn bool_editor(&self, is_input: bool, idx: usize) -> bool;
 }
 
 impl NodeUi for NodeKind {
@@ -623,6 +701,9 @@ impl NodeUi for NodeKind {
         false
     }
     fn text_editor(&self, _is_input: bool, _idx: usize) -> bool {
+        false
+    }
+    fn bool_editor(&self, _is_input: bool, _idx: usize) -> bool {
         false
     }
 }
@@ -638,6 +719,10 @@ impl NodeUi for ApplicationNodeKind {
     fn text_editor(&self, is_input: bool, idx: usize) -> bool {
         // 字符串常量的输出端口：无输入，端口行内嵌文本输入框
         !is_input && idx == 0 && matches!(self, ApplicationNodeKind::TextConst)
+    }
+    fn bool_editor(&self, is_input: bool, idx: usize) -> bool {
+        // 布尔常量的输出端口：端口行内嵌真/假切换，点一下翻转默认值
+        !is_input && idx == 0 && matches!(self, ApplicationNodeKind::BoolConst)
     }
 }
 
@@ -702,7 +787,9 @@ fn application_node_kind_title(kind: &ApplicationNodeKind) -> &'static str {
         ApplicationNodeKind::Or => "或",
         ApplicationNodeKind::Not => "非",
         ApplicationNodeKind::AppRef(_) => "样式链引用",
+        ApplicationNodeKind::AnimRef(_) => "非线性动画引用",
         ApplicationNodeKind::TextConst => "字符串常量",
+        ApplicationNodeKind::BoolConst => "布尔常量",
         ApplicationNodeKind::ApplyMatch => "应用匹配",
         ApplicationNodeKind::ApplyAnimation => "应用动画",
         ApplicationNodeKind::GroupOutput => "组输出",
@@ -737,6 +824,8 @@ pub trait GraphEditable: Sized {
         node_id: NodeId,
         new_id: NodeGraphId,
     ) -> Result<(), EvalError>;
+    /// 原位改非线性动画引用节点的动画片段（仅改 kind 内嵌 id，不删节点）。
+    fn graph_set_anim_ref(&mut self, node_id: NodeId, new_id: AnimDataId) -> Result<(), EvalError>;
     /// 节点显示名
     fn title(&self, n: &Self::Node) -> &'static str;
     fn inputs(n: &Self::Node) -> &[SocketId];
@@ -745,11 +834,15 @@ pub trait GraphEditable: Sized {
     fn kind_decls(kind: &Self::Kind) -> (Vec<SocketDecl>, Vec<SocketDecl>);
     /// 样式引用节点（Reference / AppRef）引用的样式链 id；非引用节点返回 None。
     fn reference_chain_id(n: &Self::Node) -> Option<NodeGraphId>;
+    /// 非线性动画引用节点（AnimRef）引用的动画片段 id；其余节点返回 None。
+    fn anim_ref_id(n: &Self::Node) -> Option<AnimDataId>;
     /// 该端口是否需要"角色下拉"（候选 = 当前所有 actor，含"新建角色"项）；
     /// 如匹配角色的 pattern 输入。idx 为端口在输入/输出列内的下标。
     fn actor_dropdown(n: &Self::Node, is_input: bool, idx: usize) -> bool;
     /// 该端口行是否内嵌文本输入框（如字符串常量的输出端口）。
     fn text_editor(n: &Self::Node, is_input: bool, idx: usize) -> bool;
+    /// 该端口行是否内嵌真/假切换（如布尔常量的输出端口）。
+    fn bool_editor(n: &Self::Node, is_input: bool, idx: usize) -> bool;
 }
 
 impl<K: NodeTreeType + NodeUi> GraphEditable for NodeGraph<K> {
@@ -797,6 +890,9 @@ impl<K: NodeTreeType + NodeUi> GraphEditable for NodeGraph<K> {
     ) -> Result<(), EvalError> {
         NodeGraph::<K>::set_node_reference(self, node_id, new_id)
     }
+    fn graph_set_anim_ref(&mut self, node_id: NodeId, new_id: AnimDataId) -> Result<(), EvalError> {
+        NodeGraph::<K>::set_node_anim_ref(self, node_id, new_id)
+    }
     fn title(&self, n: &Node<K>) -> &'static str {
         n.kind.title()
     }
@@ -812,15 +908,36 @@ impl<K: NodeTreeType + NodeUi> GraphEditable for NodeGraph<K> {
     fn reference_chain_id(n: &Node<K>) -> Option<NodeGraphId> {
         n.kind.reference_id()
     }
+    fn anim_ref_id(n: &Node<K>) -> Option<AnimDataId> {
+        n.kind.anim_ref_id()
+    }
     fn actor_dropdown(n: &Node<K>, is_input: bool, idx: usize) -> bool {
         n.kind.actor_dropdown(is_input, idx)
     }
     fn text_editor(n: &Node<K>, is_input: bool, idx: usize) -> bool {
         n.kind.text_editor(is_input, idx)
     }
+    fn bool_editor(n: &Node<K>, is_input: bool, idx: usize) -> bool {
+        n.kind.bool_editor(is_input, idx)
+    }
 }
 
 // ── 图操作（原 Slint 逐槽位展开逻辑，现用循环） ───────────────────────────────
+
+/// 直接上游节点：经输入连线指向本节点的节点（按输入端口序，重复的输入各计一次）。
+fn upstream_nodes<G: GraphEditable>(graph: &G, node_id: NodeId) -> Vec<NodeId> {
+    let node = graph.node(node_id);
+    G::inputs(node)
+        .iter()
+        .filter_map(|&socket_id| {
+            graph
+                .links()
+                .iter()
+                .find(|link| link.to == socket_id)
+                .map(|link| graph.socket(link.from).node)
+        })
+        .collect()
+}
 
 /// 上游深度：经输入连线可达的最深上游层数（源节点 = 0）。带记忆与环保护。
 fn flow_depth<G: GraphEditable>(
@@ -835,22 +952,45 @@ fn flow_depth<G: GraphEditable>(
     if !visiting.insert(node_id) {
         return 0; // 有环：按叶子处理，避免无限递归
     }
-    let node = graph.node(node_id);
-    let depth = G::inputs(node)
+    let depth = upstream_nodes(graph, node_id)
         .iter()
-        .filter_map(|&socket_id| {
-            graph
-                .links()
-                .iter()
-                .find(|link| link.to == socket_id)
-                .map(|link| graph.socket(link.from).node)
-        })
-        .map(|upstream| flow_depth(graph, upstream, depth_cache, visiting) + 1)
+        .map(|&upstream| flow_depth(graph, upstream, depth_cache, visiting) + 1)
         .max()
         .unwrap_or(0);
     visiting.remove(&node_id);
     depth_cache.insert(node_id, depth);
     depth
+}
+
+// ── 自动布局（给首次出现的节点排位置） ────────────────────────────────────────
+
+/// 布局间距（世界逻辑像素）：列距 = 节点宽 + `LAYOUT_GAP_X`，落位行距 = `LAYOUT_GAP_Y`。
+const LAYOUT_MARGIN: f32 = 40.0;
+const LAYOUT_GAP_X: f32 = 56.0;
+const LAYOUT_GAP_Y: f32 = 24.0;
+
+/// 节点渲染高度，必须与 `ui/areas/node_graph/node_frame.slint` 的 `height` 一致
+/// （标题栏 + 引用节点的菜单行 + 端口行数 × 行高）：算小了自动排布就会重叠。
+fn node_height<G: GraphEditable>(graph: &G, node_id: NodeId, metrics: &EditorMetrics) -> f32 {
+    let node = graph.node(node_id);
+    let rows = G::inputs(node).len().max(G::outputs(node).len()) as f32;
+    let has_menu_row = G::reference_chain_id(node).is_some() || G::anim_ref_id(node).is_some();
+    metrics.header + (f32::from(has_menu_row) + rows) * metrics.row
+}
+
+/// 引用节点的下拉菜单行数据（`GraphNode` 的 menu-label/menu-options/menu-selected）：
+/// 候选不在列表里（引用的对象已删）时选中下标为 -1，节点上显示占位文案。
+fn menu_row(
+    label: &str,
+    options: &[String],
+    selected: Option<usize>,
+) -> (SharedString, ModelRc<SharedString>, i32) {
+    let options: Vec<SharedString> = options.iter().cloned().map(SharedString::from).collect();
+    (
+        SharedString::from(label),
+        ModelRc::from(Rc::new(VecModel::from(options))),
+        selected.map_or(-1, |index| index as i32),
+    )
 }
 
 /// 角色下拉菜单项：当前所有 actor + 末尾"新建角色"。
@@ -978,6 +1118,21 @@ pub fn add_node<G: GraphEditable>(
     };
     editor.positions.insert(node_id, (x, y));
     Some(node_id)
+}
+
+/// 把应用图模板里带载荷的 kind 补上真实 id：`app_templates` 是纯函数，拿不到库数据，
+/// 非线性动画引用在里面只能放占位 `AnimDataId`，添加时换成按名排序的第一个动画片段。
+/// 库里一个动画片段都没有时返回 None（不加这个节点，因为它的下拉没有任何候选）。
+fn resolve_app_payload(
+    kind: ApplicationNodeKind,
+    editor: &NodeGraphState,
+) -> Option<ApplicationNodeKind> {
+    match kind {
+        ApplicationNodeKind::AnimRef(_) => {
+            Some(ApplicationNodeKind::AnimRef(*editor.anim_order.first()?))
+        }
+        other => Some(other),
+    }
 }
 
 /// 删除节点（自动断开相关连线）。只改权威图，不 sync。
@@ -1216,7 +1371,7 @@ impl<'a> GraphEditorAccess<'a> {
                 let kind = crate::actions::node_graph::app_templates()
                     .get(template_index)
                     .cloned()?;
-                add_node(g, editor, kind, x, y)
+                add_node(g, editor, resolve_app_payload(kind, editor)?, x, y)
             }
         }
     }
@@ -1261,6 +1416,26 @@ impl<'a> GraphEditorAccess<'a> {
         }
     }
 
+    /// 该下标的节点是不是非线性动画引用节点（下拉回调据此分派到动画片段候选）。
+    pub(crate) fn is_anim_ref(self, editor: &NodeGraphState, node_index: usize) -> bool {
+        match self {
+            Self::Style(g) => is_anim_ref(g, editor, node_index),
+            Self::App(g) => is_anim_ref(g, editor, node_index),
+        }
+    }
+
+    pub(crate) fn set_anim_reference(
+        self,
+        editor: &mut NodeGraphState,
+        node_index: usize,
+        anim_id: AnimDataId,
+    ) {
+        match self {
+            Self::Style(g) => set_anim_reference(g, editor, node_index, anim_id),
+            Self::App(g) => set_anim_reference(g, editor, node_index, anim_id),
+        }
+    }
+
     pub(crate) fn set_socket_text_default(
         self,
         editor: &mut NodeGraphState,
@@ -1286,28 +1461,22 @@ impl<'a> GraphEditorAccess<'a> {
         }
     }
 
+    pub(crate) fn toggle_socket_bool_default(
+        self,
+        editor: &mut NodeGraphState,
+        node_index: usize,
+        socket_index: usize,
+    ) {
+        match self {
+            Self::Style(g) => toggle_socket_bool_default(g, editor, node_index, socket_index),
+            Self::App(g) => toggle_socket_bool_default(g, editor, node_index, socket_index),
+        }
+    }
+
     pub(crate) fn rebuild(self, editor: &mut NodeGraphState) {
         match self {
             Self::Style(g) => editor.rebuild(g),
             Self::App(g) => editor.rebuild(g),
-        }
-    }
-
-    pub(crate) fn set_default_layout(&mut self, editor: &mut NodeGraphState) {
-        if let Self::App(g) = self {
-            let mut pos: HashMap<NodeId, (f32, f32)> = HashMap::new();
-            for (nid, n) in &g.nodes {
-                let p = match &n.kind {
-                    ApplicationNodeKind::ContextInput => (40.0, 40.0),
-                    ApplicationNodeKind::AppRef(_) => (260.0, 40.0),
-                    ApplicationNodeKind::MatchActor => (260.0, 120.0),
-                    ApplicationNodeKind::ApplyMatch => (480.0, 40.0),
-                    ApplicationNodeKind::GroupOutput => (700.0, 40.0),
-                    _ => continue,
-                };
-                pos.insert(*nid, p);
-            }
-            editor.positions = pos;
         }
     }
 }
@@ -1478,14 +1647,6 @@ impl AppStore {
         self.with_graph(kind, |editor, access| access.rebuild(editor));
     }
 
-    /// 默认应用链固定四列布局（初始化/新建时）。设 positions + rebuild（一次性初始化）。
-    pub fn layout_default_app_chain(&mut self) {
-        self.with_graph(NodeGraphKind::App, |editor, mut access| {
-            access.set_default_layout(editor);
-            access.rebuild(editor);
-        });
-    }
-
     /// 初始化两个编辑器：建链菜单/右键菜单，绑定视图模型到 Slint 全局，加载第 0 条链。
     pub fn initialize_node_graph_editors(&mut self, instance: &crate::bridge::types::MainWindow) {
         use slint::ComponentHandle;
@@ -1511,6 +1672,8 @@ impl AppStore {
         self.refresh_app_chain_menu();
         // 角色下拉候选（匹配角色 pattern）
         self.refresh_actors();
+        // 动画片段下拉候选（非线性动画引用节点 + NLA Header），顺带重算应用图节点行
+        self.refresh_anim_data_menu();
 
         // 右键菜单（色点 = 节点主端口类型颜色）
         let style_menu: Vec<ContextMenuItem> = crate::actions::node_graph::style_templates()
@@ -1557,8 +1720,6 @@ impl AppStore {
 
         self.load_chain(NodeGraphKind::Style, 0);
         self.load_chain(NodeGraphKind::App, 0);
-        // 默认应用链固定四列布局（初始化时）
-        self.layout_default_app_chain();
     }
 }
 
@@ -1613,6 +1774,27 @@ pub fn menu_selected_dispatch(
     node_index: usize,
     menu_index: usize,
 ) {
+    // 非线性动画引用节点的下拉选的是动画片段，候选与写入目标都不同（AnimDataId）。
+    let is_anim_ref = store
+        .with_graph(graph_type, |editor, access| {
+            access.is_anim_ref(editor, node_index)
+        })
+        .unwrap_or(false);
+    if is_anim_ref {
+        let Some(anim_id) = store
+            .ui_models
+            .app_graph
+            .anim_order
+            .get(menu_index)
+            .copied()
+        else {
+            return;
+        };
+        store.with_graph(graph_type, |editor, access| {
+            access.set_anim_reference(editor, node_index, anim_id)
+        });
+        return;
+    }
     let Some(style_id) = store
         .ui_models
         .style_graph
@@ -1679,6 +1861,17 @@ pub fn set_socket_text_default_dispatch(
 ) {
     store.with_graph(graph_type, |editor, access| {
         access.set_socket_text_default(editor, node_index, socket_index, text)
+    });
+}
+
+pub fn toggle_socket_bool_default_dispatch(
+    store: &mut AppStore,
+    graph_type: NodeGraphKind,
+    node_index: usize,
+    socket_index: usize,
+) {
+    store.with_graph(graph_type, |editor, access| {
+        access.toggle_socket_bool_default(editor, node_index, socket_index)
     });
 }
 
@@ -1856,6 +2049,26 @@ impl AppStore {
         self.ui_models.style_graph.actor_names = names.clone();
         self.ui_models.app_graph.actor_names = names;
     }
+
+    /// 派生动画片段候选（非线性动画引用节点的下拉 + NLA Header 的下拉共用一份）：
+    /// 模型侧为 id-keyed map，显示顺序按名字排序，与 `refresh_style_chain_menu` 同款派生。
+    ///
+    /// 候选一变必须同时重算已建好的节点行：行上的 `menu_selected` 存的是"引用哪个 id"
+    /// 在候选里的下标，只换候选不换行，节点上显示的名字会错位（库里后加一个排序靠前的
+    /// 片段，原先指向第 0 项的节点就会显示成新片段的名字）。位置存在 `positions` 里，
+    /// 重建不动它。
+    ///
+    /// 只在编辑器初始化时调用：`AnimData` 目前只在播种/测试代码里创建
+    /// （`app/test_data.rs`、`store/animation/nla/load.rs`），没有用户新建入口。
+    /// 将来加了新建/改名/删除动画片段的入口，必须在同一处调用本方法，
+    /// 否则两处下拉与库内容脱节。
+    pub(crate) fn refresh_anim_data_menu(&mut self) {
+        let entries = self.anim_data_entries();
+        self.ui_models.app_graph.anim_order = entries.iter().map(|(id, _)| *id).collect();
+        self.ui_models.app_graph.anim_names = entries.iter().map(|(_, n)| n.clone()).collect();
+        self.set_nla_anim_menu(&entries);
+        self.with_graph(NodeGraphKind::App, |editor, access| access.rebuild(editor));
+    }
 }
 
 // ── 通用图操作（G: GraphEditable，被 GraphEditorAccess 分发） ─────────────────
@@ -1883,6 +2096,23 @@ fn set_socket_text_default<G: GraphEditable>(
     if let Some(sid) = sid {
         let _ = graph.graph_set_socket_value(sid, value);
     }
+}
+
+/// 翻转端口布尔默认值（布尔常量的输出端口：点一下在真/假之间切换）。
+fn toggle_socket_bool_default<G: GraphEditable>(
+    graph: &mut G,
+    editor: &mut NodeGraphState,
+    node_index: usize,
+    socket_index: usize,
+) {
+    let Some(sid) = socket_id_at(graph, editor, node_index, socket_index) else {
+        return;
+    };
+    let current = matches!(
+        graph.socket(sid).default_value,
+        Some(SocketValue::Bool(true))
+    );
+    let _ = graph.graph_set_socket_value(sid, Some(SocketValue::Bool(!current)));
 }
 
 /// 取指定图类型某端口的真实 SocketId。
@@ -1914,6 +2144,28 @@ fn set_reference<G: GraphEditable>(
         return;
     };
     let _ = graph.graph_set_reference(node_id, style_id);
+}
+
+/// 该下标的节点是不是非线性动画引用节点。样式链引用与非线性动画引用共用一个下拉
+/// 回调（`MenuSelected`），分派前先在这里认清节点类型。
+fn is_anim_ref<G: GraphEditable>(graph: &G, editor: &NodeGraphState, node_index: usize) -> bool {
+    editor
+        .id_at(node_index)
+        .is_some_and(|node_id| G::anim_ref_id(graph.node(node_id)).is_some())
+}
+
+/// 原位改非线性动画引用节点的动画片段：改 kind 内嵌 id + 标脏（不删节点、不动端口/连线）。
+/// 投影同样收 `ReferenceChanged` 后单行重建该节点。
+fn set_anim_reference<G: GraphEditable>(
+    graph: &mut G,
+    editor: &mut NodeGraphState,
+    node_index: usize,
+    anim_id: AnimDataId,
+) {
+    let Some(node_id) = editor.id_at(node_index) else {
+        return;
+    };
+    let _ = graph.graph_set_anim_ref(node_id, anim_id);
 }
 
 fn menu_dot_color_for(
@@ -1983,6 +2235,13 @@ mod tests {
         (0..st.nodes.row_count())
             .find(|&i| st.nodes.row_data(i).unwrap().title.as_str() == title)
             .unwrap()
+    }
+
+    // 按节点 id 查排布后的位置（世界坐标）
+    fn pos_of(st: &NodeGraphState, node_id: NodeId) -> (f32, f32) {
+        let index = st.order.iter().position(|&id| id == node_id).unwrap();
+        let row = st.nodes.row_data(index).unwrap();
+        (row.x, row.y)
     }
 
     #[test]
@@ -2149,7 +2408,7 @@ mod tests {
 
     #[test]
     fn default_chain_layout_source_left() {
-        // 默认样式链（无位置记录）自动布局：样式源在最左、组输出在最右，且确定
+        // 默认样式链（无位置记录）自动布局：样式源在最左列、组输出在右一列
         let g = new_style_chain("t");
         let mut st = NodeGraphState::default();
         st.metrics = metrics();
@@ -2158,27 +2417,142 @@ mod tests {
         assert_eq!(st.nodes.row_count(), 2);
         let src = idx_by_title(&st, "样式源");
         let out = idx_by_title(&st, "组输出");
-        assert_eq!(st.nodes.row_data(src).unwrap().x, 40.0);
-        assert_eq!(st.nodes.row_data(out).unwrap().x, 260.0);
-        assert!(st.nodes.row_data(src).unwrap().x < st.nodes.row_data(out).unwrap().x);
+        assert_eq!(st.nodes.row_data(src).unwrap().x, LAYOUT_MARGIN);
+        assert_eq!(
+            st.nodes.row_data(out).unwrap().x,
+            LAYOUT_MARGIN + st.metrics.node_width + LAYOUT_GAP_X
+        );
         assert_eq!(st.links.row_count(), 1);
     }
 
     #[test]
     fn default_app_chain_layout_source_left() {
+        // 列号 = 最长上游路径：上下文输入/样式链引用(0) → 匹配角色(1) → 应用匹配(2) → 组输出(3)
         let g = new_app_chain("t", Some(NodeGraphId::new()), None);
         let mut st = NodeGraphState::default();
         st.metrics = metrics();
         st.rebuild(&g);
 
         assert_eq!(st.nodes.row_count(), 5);
-        let ctx = idx_by_title(&st, "上下文输入");
-        let apply = idx_by_title(&st, "应用匹配");
-        let out = idx_by_title(&st, "组输出");
-        assert_eq!(st.nodes.row_data(ctx).unwrap().x, 40.0);
-        assert_eq!(st.nodes.row_data(apply).unwrap().x, 480.0);
-        assert!(st.nodes.row_data(apply).unwrap().x < st.nodes.row_data(out).unwrap().x);
+        let pitch = st.metrics.node_width + LAYOUT_GAP_X;
+        for (title, rank) in [
+            ("上下文输入", 0),
+            ("样式链引用", 0),
+            ("匹配角色", 1),
+            ("应用匹配", 2),
+            ("组输出", 3),
+        ] {
+            let x = st.nodes.row_data(idx_by_title(&st, title)).unwrap().x;
+            assert_eq!(x, LAYOUT_MARGIN + rank as f32 * pitch, "{title} 的列");
+        }
         assert_eq!(st.links.row_count(), 4);
+    }
+
+    /// 插入序不决定列：先加汇、后加源并连上，源依旧在左（用户报的「入口节点反而在后面」）。
+    #[test]
+    fn sink_added_before_source_still_lands_right() {
+        let mut g = NodeGraph::new("t");
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        let out = g
+            .add_node::<NodeId>(NodeKind::GroupOutput, &[], &[])
+            .unwrap();
+        let src = g
+            .add_node::<NodeId>(NodeKind::StyleSource, &[], &[])
+            .unwrap();
+        g.connect_raw(g.nodes[&src].outputs[0], g.nodes[&out].inputs[0])
+            .unwrap();
+        st.rebuild(&g);
+
+        let (src_x, _) = pos_of(&st, src);
+        let (out_x, _) = pos_of(&st, out);
+        assert!(src_x < out_x, "源 x={src_x} 应在汇 x={out_x} 左边");
+    }
+
+    /// 同列不重叠（用户报的「有重叠」）：高度按渲染公式算——引用节点多一行下拉菜单，
+    /// 多端口节点按端口行数长高，旧的固定 60px 行距压不住它们。
+    #[test]
+    fn same_column_nodes_do_not_overlap() {
+        let mut g = NodeGraph::new("t");
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        g.add_node::<NodeId>(NodeKind::StyleSource, &[], &[])
+            .unwrap();
+        g.add_node::<NodeId>(NodeKind::Reference(NodeGraphId::new()), &[], &[])
+            .unwrap();
+        let decls: Vec<SocketDecl> = (0..5)
+            .map(|i| SocketDecl::input(format!("in{i}"), SocketType::Style))
+            .collect();
+        g.add_node::<NodeId>(NodeKind::GroupOutput, &decls, &[])
+            .unwrap();
+        st.rebuild(&g);
+
+        let rects: Vec<(String, f32, f32, f32)> = (0..st.nodes.row_count())
+            .map(|i| {
+                let row = st.nodes.row_data(i).unwrap();
+                let height = node_height(&g, st.id_at(i).unwrap(), &st.metrics);
+                (row.title.as_str().to_string(), row.x, row.y, height)
+            })
+            .collect();
+        assert_eq!(rects.len(), 3, "三个节点都没有连线，同属第 0 列");
+        for (i, a) in rects.iter().enumerate() {
+            for b in rects.iter().skip(i + 1) {
+                assert_eq!(a.1, b.1, "{} 与 {} 应同列", a.0, b.0);
+                assert!(
+                    a.2 + a.3 <= b.2 || b.2 + b.3 <= a.2,
+                    "{} {:?} 与 {} {:?} 重叠",
+                    a.0,
+                    (a.2, a.3),
+                    b.0,
+                    (b.2, b.3)
+                );
+            }
+        }
+    }
+
+    /// 拖拽是显式意图：重建（切链回来）后位置保持，不被自动布局覆盖。
+    #[test]
+    fn dragged_position_survives_rebuild() {
+        let g = new_style_chain("t");
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        st.rebuild(&g);
+        let src = idx_by_title(&st, "样式源");
+        st.set_node_position(src, 900.0, 900.0);
+
+        st.rebuild(&g);
+        let row = st.nodes.row_data(idx_by_title(&st, "样式源")).unwrap();
+        assert_eq!((row.x, row.y), (900.0, 900.0));
+    }
+
+    /// 自动布局要给已占位置让路：用户把节点拖到第 1 列，之后新连上的下游不落在它身上。
+    #[test]
+    fn new_node_avoids_a_dragged_neighbour() {
+        let mut g = NodeGraph::new("t");
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        let src = add_node(&mut g, &mut st, NodeKind::StyleSource, 40.0, 40.0).unwrap();
+        st.rebuild(&g);
+        // 用户把源拖到第 1 列的落点上，随后才接下游
+        let pitch = st.metrics.node_width + LAYOUT_GAP_X;
+        st.set_node_position(0, LAYOUT_MARGIN + pitch, 40.0);
+
+        let out = add_node(&mut g, &mut st, NodeKind::GroupOutput, 0.0, 0.0).unwrap();
+        g.connect_raw(g.nodes[&src].outputs[0], g.nodes[&out].inputs[0])
+            .unwrap();
+        st.positions.remove(&out); // 走自动布局（右键落点不参与）
+        st.rebuild(&g);
+
+        let (src_x, src_y) = pos_of(&st, src);
+        let (out_x, out_y) = pos_of(&st, out);
+        let src_bottom = src_y + node_height(&g, src, &st.metrics);
+        let out_bottom = out_y + node_height(&g, out, &st.metrics);
+        assert!(
+            (src_x - out_x).abs() >= st.metrics.node_width
+                || src_bottom <= out_y
+                || out_bottom <= src_y,
+            "下游 ({out_x}, {out_y}) 压在被拖走的源 ({src_x}, {src_y}) 上"
+        );
     }
 
     #[test]
@@ -2268,5 +2642,100 @@ mod tests {
         assert!(matches!(g.nodes[&nid].kind, NodeKind::Reference(id) if id == new_id));
         let row = st.nodes.row_data(0).unwrap();
         assert_eq!(row.menu_selected, 0);
+    }
+
+    /// 非线性动画引用节点的下拉候选 = 库里的动画片段，选中项指向它引用的那一段；
+    /// 引用的片段已从库里删掉时选中下标为 -1，节点上显示占位文案「选择非线性动画」。
+    #[test]
+    fn anim_ref_row_lists_anim_data_candidates() {
+        let clip_a = AnimDataId::new();
+        let clip_b = AnimDataId::new();
+        let mut g = ApplicationGraph::new("t");
+        let nid = g
+            .add_node::<NodeId>(ApplicationNodeKind::AnimRef(clip_b), &[], &[])
+            .unwrap();
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        st.anim_order = vec![clip_a, clip_b];
+        st.anim_names = vec!["甲".into(), "乙".into()];
+        st.positions.insert(nid, (40.0, 40.0));
+        st.rebuild(&g);
+
+        let index = idx_by_title(&st, "非线性动画引用");
+        let row = st.nodes.row_data(index).unwrap();
+        assert_eq!(row.menu_label.as_str(), "非线性动画");
+        assert_eq!(row.menu_options.row_count(), 2);
+        assert_eq!(row.menu_options.row_data(1).unwrap().as_str(), "乙");
+        assert_eq!(row.menu_selected, 1);
+        // 端口只有一个输出口（声明来自 socket_decls，添加时没传 extras）
+        assert_eq!(row.sockets.row_count(), 1);
+        assert_eq!(g.nodes[&nid].outputs.len(), 1);
+
+        st.anim_order.clear();
+        st.anim_names.clear();
+        st.rebuild(&g);
+        let row = st
+            .nodes
+            .row_data(idx_by_title(&st, "非线性动画引用"))
+            .unwrap();
+        assert_eq!(row.menu_options.row_count(), 0);
+        assert_eq!(row.menu_selected, -1);
+    }
+
+    /// 换引用的动画片段与换样式链走同一条路径：原位改 kind 内嵌 id、单行重建，
+    /// 节点不删不增、order 不动、端口与连线不受影响。
+    #[test]
+    fn switching_anim_reference_updates_row_in_place() {
+        let mut g = ApplicationGraph::new("t");
+        let nid = g
+            .add_node::<NodeId>(ApplicationNodeKind::AnimRef(AnimDataId::new()), &[], &[])
+            .unwrap();
+        let mut st = NodeGraphState::default();
+        st.metrics = metrics();
+        st.positions.insert(nid, (40.0, 40.0));
+        st.rebuild(&g);
+        assert_eq!(st.nodes.row_count(), 1);
+
+        // 下拉回调分派前先认清节点类型：共用 MenuSelected，样式链那条路径不能误接
+        assert!(is_anim_ref(&g, &st, 0));
+        let target = AnimDataId::new();
+        st.anim_order = vec![target];
+        st.anim_names = vec!["目标片段".into()];
+        set_anim_reference(&mut g, &mut st, 0, target);
+        st.apply_change(
+            &g,
+            &crate::depsgraph::NodeGraphChange::ReferenceChanged { node_id: nid },
+        );
+
+        assert_eq!(st.nodes.row_count(), 1);
+        assert_eq!(st.id_at(0), Some(nid));
+        assert!(matches!(g.nodes[&nid].kind, ApplicationNodeKind::AnimRef(id) if id == target));
+        let row = st.nodes.row_data(0).unwrap();
+        assert_eq!(row.menu_label.as_str(), "非线性动画");
+        assert_eq!(row.menu_selected, 0);
+        assert_eq!(g.nodes[&nid].outputs.len(), 1);
+    }
+
+    /// 面板模板里的 `AnimDataId` 是占位（`app_templates` 是纯函数，拿不到库数据）：
+    /// 添加时换成库里按名排序的第一个动画片段，库里一个片段都没有时不加这个节点。
+    #[test]
+    fn anim_ref_payload_resolves_to_first_clip_or_nothing() {
+        let mut st = NodeGraphState::default();
+        assert_eq!(
+            resolve_app_payload(ApplicationNodeKind::AnimRef(AnimDataId::new()), &st),
+            None
+        );
+
+        let first = AnimDataId::new();
+        st.anim_order = vec![first, AnimDataId::new()];
+        assert_eq!(
+            resolve_app_payload(ApplicationNodeKind::AnimRef(AnimDataId::new()), &st),
+            Some(ApplicationNodeKind::AnimRef(first))
+        );
+        // 其余 kind 原样通过
+        assert_eq!(
+            resolve_app_payload(ApplicationNodeKind::ContextInput, &st),
+            Some(ApplicationNodeKind::ContextInput)
+        );
     }
 }

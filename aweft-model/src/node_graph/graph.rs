@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use palette::Srgba;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{NodeGraphId, NodeId, SocketId};
+use crate::ids::{AnimDataId, NodeGraphId, NodeId, SocketId};
 
 use super::error::EvalError;
 use super::kind::{EvalCache, EvalContext, NodeTreeType};
@@ -293,6 +293,24 @@ impl<K: NodeTreeType> NodeGraph<K> {
                 .get_mut(&node_id)
                 .ok_or(EvalError::MissingNode(node_id))?;
             node.kind.set_reference_id(new_id)?;
+        }
+        self.mark_dirty(node_id);
+        Ok(())
+    }
+
+    /// 原位改非线性动画引用节点的动画片段（同 `set_node_reference`：仅改 kind
+    /// 内嵌 id + 标脏，不删节点、不动端口/连线）。
+    pub fn set_node_anim_ref(
+        &mut self,
+        node_id: NodeId,
+        new_id: AnimDataId,
+    ) -> Result<(), EvalError> {
+        {
+            let node = self
+                .nodes
+                .get_mut(&node_id)
+                .ok_or(EvalError::MissingNode(node_id))?;
+            node.kind.set_anim_ref_id(new_id)?;
         }
         self.mark_dirty(node_id);
         Ok(())

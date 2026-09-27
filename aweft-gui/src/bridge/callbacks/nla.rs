@@ -179,4 +179,16 @@ pub(super) fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppSt
                 &weak,
             );
         });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
+        .on_nla_anim_selected(move |index| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::AnimDataSelected { index })),
+                &weak,
+            );
+        });
 }

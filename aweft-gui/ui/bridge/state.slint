@@ -89,6 +89,13 @@ export global SubtitleState {
     in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];
 }
 
+// 已装载插件的名字列表（下标 = PluginCallbacks.open-plugin-panel 的参数）。
+// 装载只发生在启动期，列表由 Rust 在 AppStore::new 里写一次；
+// 名字来自各插件的 aweft-plugin.json，主程序不硬编码任何插件。
+export global PluginState {
+    in property <[string]> plugin-titles: [];
+}
+
 // 节点图编辑器状态：样式图/应用图各一组模型，由 Rust 侧驱动。
 // 节点/连线模型为 Rust 持有的 VecModel（增删节点重建、拖动节点局部更新）。
 export global NodeGraphState {
@@ -127,6 +134,12 @@ export global AnimationState {
     in property <[SlintExtrapolation]> extrapolations: [];
     // NLA 编辑器
     in property <[SlintNlaTrack]> nla-tracks: [];
+    // NLA Header：动画片段选择下拉（候选 = 库里全部 AnimData，按名排序）
+    in property <[ContextMenuItem]> nla-anim-items: [];
+    // 当前编辑的动画片段在 nla-anim-items 里的下标（-1 = 还没装载或已不在库里）
+    in property <int> current-nla-anim: -1;
+    // 下拉按钮上显示的文字（选中项名字；无选中时 Rust 侧给占位文案）
+    in property <string> nla-anim-name: "";
     // 共享：当前时间（播放头）
     in property <float> current-time: 0.0;
     // 当前 Action 名称（header 栏中区显示）

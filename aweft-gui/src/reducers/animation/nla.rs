@@ -6,11 +6,16 @@
 //!    保住 Slint 拖拽抓取；
 //!  - **提交**：`StripReleased` 后 `commit_to_model` 把编辑数据写回 model AnimData；
 //!  - **装载**：`load_nla_from_model` 读 model AnimData 重建编辑数据（初始化路径）。
+//!  - **切换**：Header 下拉 `AnimDataSelected` 换 `anim_data_id` 后按装载路径重建
+//!    （候选清单 `anim_data_entries` 与非线性动画引用节点的下拉同一份顺序）。
 
 use crate::actions::animation::nla::NlaAction;
+use crate::bridge::converters::build_name_menu_items;
 use crate::depsgraph::{NlaStripInsert, Tag};
 use aweft_model::animation::AnimData;
 use aweft_model::animation::strip::NlaTrack;
+use aweft_model::ids::AnimDataId;
+use slint::{Model, SharedString};
 
 impl crate::store::AppStore {
     /// 当前 NLA 编辑的 AnimData（model 权威数据）。
@@ -37,6 +42,35 @@ impl crate::store::AppStore {
             .get_mut(&id)
     }
 
+    /// 库里的动画片段清单（按名排序）：NLA Header 的下拉与非线性动画引用节点的下拉
+    /// 共用这一份顺序，两处的候选文字与下标始终一致。
+    pub(crate) fn anim_data_entries(&self) -> Vec<(AnimDataId, String)> {
+        let mut pairs: Vec<(AnimDataId, String)> = self
+            .state
+            .project
+            .project()
+            .library
+            .animation_library
+            .anim_datas
+            .iter()
+            .map(|(id, anim_data)| (*id, anim_data.name.clone()))
+            .collect();
+        pairs.sort_by(|a, b| a.1.cmp(&b.1));
+        pairs
+    }
+
+    /// 写入 NLA Header 下拉的候选（清单由 `refresh_anim_data_menu` 派生一次，两处共用）。
+    /// `anim_items` 是共享 inner 模型，初始化时绑定一次，这里 `set_vec` 即自动通知 Slint。
+    pub(crate) fn set_nla_anim_menu(&mut self, entries: &[(AnimDataId, String)]) {
+        let nla = &mut self.ui_models.animation.nla;
+        nla.anim_order = entries.iter().map(|(id, _)| *id).collect();
+        let names: Vec<SharedString> = entries
+            .iter()
+            .map(|(_, name)| name.as_str().into())
+            .collect();
+        nla.anim_items.set_vec(build_name_menu_items(&names));
+    }
+
     /// 分发 NLA 子 Action：reducer 只改数据层 + model 并返回精确 tag。
     pub(crate) fn dispatch_nla_action(&mut self, action: NlaAction) -> anyhow::Result<Vec<Tag>> {
         use NlaAction::*;
@@ -44,6 +78,7 @@ impl crate::store::AppStore {
         // 每分支独立作用域：先改数据层（借用 ui_models），再同步 model（借用 state），
         // 避免跨字段借用冲突。
         let tags = match action {
+            AnimDataSelected { index } => self.select_anim_data(index),
             StripPressed {
                 track,
                 strip,
@@ -193,11 +228,28 @@ impl crate::store::AppStore {
         }
     }
 
-    /// 从 model 装载 NLA 编辑器（与 `create_test_animation_data` 配套）。
-    /// 仅改数据层，派生层由 `NlaStructureChanged`/`NlaTrackChanged` 投影重建（初始化亦走 depsgraph）。
-    pub fn load_nla_from_model(&mut self) {
+    /// Header 下拉选中某一项：换成编辑那一段动画片段。
+    ///
+    /// 切换前不需要写回旧片段：数据层在静止时始终与 model 同步（拖拽预览只发生在
+    /// 按下到松开之间，松开即 `commit_to_model`）。下标越界（含负数）或选的就是
+    /// 当前片段时什么都不做。
+    fn select_anim_data(&mut self, index: i32) -> Vec<Tag> {
+        let Some(&id) = self.ui_models.animation.nla.anim_order.get(index as usize) else {
+            return Vec::new();
+        };
+        if self.ui_models.animation.nla.anim_data_id == Some(id) {
+            return Vec::new();
+        }
+        self.ui_models.animation.nla.anim_data_id = Some(id);
+        self.load_nla_data_layer()
+    }
+
+    /// 把当前 `anim_data_id` 指向的动画片段装载到数据层，返回重建派生层所需的 tag。
+    /// reducer 路径（`select_anim_data`）把 tag 交给 dispatch；初始化路径
+    /// （`load_nla_from_model`）自己打 tag 并求值。
+    fn load_nla_data_layer(&mut self) -> Vec<Tag> {
         let Some(anim_data) = self.current_anim_data().cloned() else {
-            return;
+            return Vec::new();
         };
         let target_duration = self.ui_models.animation.graph.action_end;
         self.ui_models
@@ -206,10 +258,36 @@ impl crate::store::AppStore {
             .load_from_model(&anim_data, target_duration);
         let mut tags = vec![Tag::NlaStructureChanged];
         tags.extend(self.sync_nla_global_action());
-        for tag in tags {
+        tags
+    }
+
+    /// 从 model 装载 NLA 编辑器（与 `create_test_animation_data` 配套）。
+    /// 仅改数据层，派生层由 `NlaStructureChanged`/`NlaTrackChanged` 投影重建（初始化亦走 depsgraph）。
+    pub fn load_nla_from_model(&mut self) {
+        for tag in self.load_nla_data_layer() {
             self.depsgraph.tag(tag);
         }
         self.evaluate_depsgraph();
+    }
+
+    /// 把 Header 下拉的当前选中项同步到 Slint 全局（`op_nla_structure` 投影调用）。
+    /// 下标由 `anim_data_id` 在 `anim_order` 里的位置派生，不另存字段；
+    /// 片段已不在库里（或还没装载）时下标为 -1，按钮显示占位文案。
+    pub(crate) fn sync_nla_scalars(&self) {
+        let Some(state) = self.animation_state.as_ref().and_then(|w| w.upgrade()) else {
+            return;
+        };
+        let nla = &self.ui_models.animation.nla;
+        let selected = nla
+            .anim_data_id
+            .and_then(|id| nla.anim_order.iter().position(|&x| x == id));
+        state.set_current_nla_anim(selected.map(|i| i as i32).unwrap_or(-1));
+        state.set_nla_anim_name(
+            selected
+                .and_then(|i| nla.anim_items.row_data(i))
+                .map(|item| item.text)
+                .unwrap_or_else(|| "选择动画片段".into()),
+        );
     }
 
     /// 把投影重建的轨道过滤视图重新绑定到 Slint 全局（`op_nla_structure` 调用）。
@@ -224,3 +302,6 @@ impl crate::store::AppStore {
         state.set_nla_tracks(self.ui_models.animation.nla.tracks_filter.clone().into());
     }
 }
+
+// 本分支不含 `app/test_data.rs`（那份字幕播种助手由 feat/subtitle-viewport 建），
+// 依赖它的两条 NLA 切换测试随那条分支一起进来（见 39c3908 对本文件的 `mod tests`）。

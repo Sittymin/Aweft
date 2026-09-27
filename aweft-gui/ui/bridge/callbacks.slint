@@ -139,6 +139,8 @@ export global NodeGraphCallbacks {
     callback create-actor(graph-type: GraphType, node-index: int, socket-row: int, name: string);
     // 内嵌文本输入框提交（字符串常量）：设端口默认值
     callback socket-input-changed(graph-type: GraphType, node-index: int, socket-row: int, text: string);
+    // 端口行内嵌真/假切换（布尔常量）：翻转端口默认值
+    callback socket-bool-toggled(graph-type: GraphType, node-index: int, socket-row: int);
 }
 
 // 动画编辑器（曲线编辑器 + 摄影表 + NLA）回调：编辑器只做渲染与拖拽瞬态，
@@ -218,10 +220,20 @@ export global AnimationCallbacks {
     callback nla-track-push-down();
     // 轨道列表搜索（空 = 全部）
     callback nla-search-changed(text: string);
+    // —— NLA 编辑器：Header 下拉 ——
+    // 切换编辑的动画片段（下标指向 Rust 侧候选清单）
+    callback nla-anim-selected(index: int);
     // —— 共享：当前时间（播放头） ——
     callback set-current-time(time: float);
     // —— 摄影表 Header：Action 选择下拉菜单 ——
     callback action-selected(index: int);
     // —— 共享：视图缩放变化 —— 更新命中检测容差依据（刻度已 Slint 侧即时计算）
     callback view-changed(zoom-x: float, zoom-y: float);
+}
+
+// 插件回调：每插件独立窗口（运行时解析插件自带 Slint 片段）。
+// 窗口内容由插件作者编写，主程序只负责开窗与回调路由。
+export global PluginCallbacks {
+    // 行编辑器工具条上的插件按钮：参数是 PluginState.plugin-titles 的下标。
+    callback open-plugin-panel(index: int);
 }
