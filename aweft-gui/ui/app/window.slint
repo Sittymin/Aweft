@@ -13,7 +13,6 @@ import {
 import { ScrEdgeDisplay } from "../screen/edges/edge_display.slint";
 import { ScrEdgeTouchArea } from "../screen/edges/edge_touch_area.slint";
 import { SlintScrArea } from "../screen/area_container.slint";
-import { SubtitleOverlay } from "../areas/subtitle.slint";
 import { DismissOverlay } from "../widgets/dismiss_overlay.slint";
 import {
     ScrEdgeTouchAreaDisplayData,
@@ -29,6 +28,7 @@ import {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
+    SubtitleCallbacks,
 } from "../bridge/callbacks.slint";
 import { Theme } from "../theme/index.slint";
 
@@ -48,6 +48,7 @@ export {
     AnimationCallbacks,
     VideoCallbacks,
     AudioCallbacks,
+    SubtitleCallbacks,
     Theme
 }
 
@@ -94,19 +95,5 @@ export component MainWindow inherits Window {
         dismissed => {
             DismissOverlayState.active = false;
         }
-    }
-
-    // 字幕覆盖层，显示在所有内容之上
-    // HACK: 目前还不是相对于视频Area来说的
-    in property <length> subtitle-x: 0px;
-    in property <length> subtitle-y: 0px;
-    subtitle-overlay := SubtitleOverlay {
-        x: subtitle-x;
-        y: subtitle-y;
-        width: SubtitleState.current-subtitle-frame.width * 1px;
-        height: SubtitleState.current-subtitle-frame.height * 1px;
-        border-width: Theme.data.subtitle-overlay.border-width;
-        border-color: Theme.data.subtitle-overlay.border-color;
-        subtitle-frame: SubtitleState.current-subtitle-frame;
     }
 }

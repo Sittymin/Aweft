@@ -453,13 +453,14 @@ fn main() {
             };
             let _ = convert_anim_data(
                 &Default::default(),
-                &mut Cursor::from_style(&Default::default()),
+                &mut Cursor::from_style(&Default::default(), (1920, 1080)),
                 &anim,
                 &lib,
                 1.0,
                 &ConvertOptions {
                     error_tolerance: 0.01,
                     progress_sender: Some(tx.clone()),
+                    progress_detail: aweft_convert::ProgressDetail::Diagnostic,
                 },
             );
         }
@@ -470,12 +471,14 @@ fn main() {
         let total = render_curves.len();
         let mut grid_times = Vec::new();
         let mut curve_samples = Vec::new();
+        let mut parents: Vec<usize> = Vec::new();
         let mut n = 0;
         let mut curve_idx = 0usize;
         for event in rx {
             match event {
                 ProgressEvent::ActionStarted {
                     action_id: _,
+                    name: _,
                     n: dn,
                     grid_times: gt,
                     curve_samples: cs,
@@ -483,14 +486,15 @@ fn main() {
                     n = dn;
                     grid_times = gt;
                     curve_samples = cs;
+                    parents = vec![usize::MAX; n + 1];
                     curve_idx += 1;
                 }
-                ProgressEvent::DpStep {
-                    end,
-                    valid,
-                    chosen,
-                    parent_chain,
+                ProgressEvent::DpProgress {
+                    end, chosen, valid, ..
                 } => {
+                    // 每格的起点一旦报出来就是定案，逐格记下来就是已锁定的前缀路径。
+                    // 采样跳过的那些格也要记，否则回溯会踩空洞。
+                    parents[end] = chosen.unwrap_or(usize::MAX);
                     // 采样约 1/4 帧（浏览器 33ms 轮询，全量 256 帧既拖慢也看不完），
                     // 再用自适应定速：渲染耗时不足 33ms 就补觉到 ~30fps，
                     // 渲染本身慢（debug）则顺其自然，避免叠加卡顿。
@@ -509,7 +513,7 @@ fn main() {
                         &curve_samples,
                         &valid,
                         chosen,
-                        &parent_chain,
+                        &parents,
                     );
                     let target = Duration::from_millis(33);
                     let elapsed = t0.elapsed();

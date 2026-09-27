@@ -705,7 +705,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
- "aweft-libass",
+ "aweft-ass",
+ "aweft-convert",
  "aweft-model",
  "aweft-project",
  "bitflags 2.13.1",

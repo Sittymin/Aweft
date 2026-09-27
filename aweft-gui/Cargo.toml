@@ -30,7 +30,8 @@ gstreamer-allocators = { version = "0.25", package = "gstreamer-allocators" }
 libc = "0.2"
 url = "2.5.8"
 futures = "0.3.33"
-aweft-libass = { path = "../aweft-libass" }
+aweft-ass = { path = "../aweft-ass" }
+aweft-convert = { path = "../aweft-convert" }
 aweft-model = { path = "../aweft-model" }
 aweft-project = { path = "../aweft-project" }
 bytemuck = "1.25.2"

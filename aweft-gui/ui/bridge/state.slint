@@ -2,6 +2,7 @@
 // Rust 侧通过 set_xxx 更新这些状态
 import {
     SlintAudioTrack,
+    SlintSubtitleBox,
     SlintSubtitleRow,
     SlintTimelineSubBlock,
     SlintVideoPos,
@@ -28,6 +29,9 @@ import {
 import {
     CloseAreaOverlayData,
 } from "../screen/overlays/close_area.slint";
+import {
+    SubtitleFitOverlayData,
+} from "../areas/viewport/subtitle_fit.slint";
 
 export global VideoState {
     // 每个会话的最新视频帧（首帧到来前为空图）
@@ -84,9 +88,22 @@ export global DismissOverlayState {
 export global SubtitleState {
     in property <image> current-subtitle-frame;
     in property <[SlintSubtitleRow]> rows: [];
+    // 每行字幕的包围框（排版像素）。Rust 每次出帧从 libass 的字形块还原，视口把它画成
+    // 选中行的包围框，并据它判定点击命中哪一行、按住拖动哪一行。
+    in property <[SlintSubtitleBox]> boxes: [];
     // 时间线根级收起时显示的"全部字幕行片段块"（Rust 侧全量事件模型；
     // 与分组收起显示的 child-blocks 共用同一渲染组件）
     in property <[SlintTimelineSubBlock]> timeline-root-blocks: [];
+    // 字幕覆盖层矩形（= 主视频矩形）当前的逻辑尺寸，由视口报上来。
+    // .slint 里读不到窗口 scale factor，所以这里只报逻辑值，Rust 侧乘缩放得到
+    // 光栅尺寸；档化与钳制策略全在 Rust（`render::subtitle::pipeline::raster_size`）。
+    out property <length> overlay-width: 0px;
+    out property <length> overlay-height: 0px;
+
+    public function report-overlay-size(width: length, height: length) {
+        overlay-width = width;
+        overlay-height = height;
+    }
 }
 
 // 已装载插件的名字列表（下标 = PluginCallbacks.open-plugin-panel 的参数）。
@@ -174,4 +191,9 @@ export global OverlayState {
     in property <JoinHighlightOverlayData> join-highlight-overlay-data;
     in property <bool> show-close-area-overlays: false;
     in property <[CloseAreaOverlayData]> close-area-overlay-datas;
+    // 字幕拟合浮层的显隐：脚本在后台线程编，编的过程中在视口右上角（`areas/viewport/
+    // subtitle_fit.slint`）显示这份进度，不挡操作。由 UI 线程上的进度 pump 直接写
+    // （不走 depsgraph，理由同波形批次：它是后台增量，不是状态变更）。
+    in property <bool> show-subtitle-fit-overlay: false;
+    in property <SubtitleFitOverlayData> subtitle-fit-overlay-data;
 }

@@ -1,4 +1,11 @@
 pub mod animate_to_ass;
-pub use animate_to_ass::{convert_anim_data, AnimAssResult, Cursor, ProgressEvent, TimedTags};
+pub use animate_to_ass::{
+    AnimAssResult, ConvertOptions, Cursor, ProgressDetail, ProgressEvent, TimedTags,
+    convert_anim_data,
+};
 pub mod parse_srt;
+pub mod sequence_to_ass;
+pub use sequence_to_ass::{
+    Converted, LineHit, SequenceFitCache, sequence_to_ass, sequence_to_ass_with_cache,
+};
 pub(crate) mod segmentation;

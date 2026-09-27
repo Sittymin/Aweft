@@ -52,16 +52,21 @@ pub fn op_node_graph_socket(store: &mut AppStore, tags: &[Tag]) {
     }
 }
 
-/// 节点图：新建链（全量重建）。独立（自带菜单派生/当前链设置）。
+/// 节点图：链列表变化（新建链 / 自动生成或删掉链）。独立（自带菜单派生/当前链设置）。
 pub fn op_node_graph_chain(store: &mut AppStore, tags: &[Tag]) {
     for tag in tags {
-        if let Tag::NodeGraph { kind, change } = tag
-            && let NodeGraphChange::ChainSwitched { target } = change
-        {
-            // 派生链菜单 + 设当前链 + 全量重建（位置按连线拓扑平铺）
-            store.refresh_chain_menus();
-            store.set_current_chain(*kind, *target);
-            store.with_graph(*kind, |editor, access| access.rebuild(editor));
+        if let Tag::NodeGraph { kind, change } = tag {
+            match change {
+                NodeGraphChange::ChainSwitched { target } => {
+                    // 派生链菜单 + 设当前链 + 全量重建（位置按连线拓扑平铺）
+                    store.refresh_chain_menus();
+                    store.set_current_chain(*kind, *target);
+                    store.with_graph(*kind, |editor, access| access.rebuild(editor));
+                }
+                // 视口拖动写出的链：菜单要长出新条目，但用户正在编辑的链不能被换掉
+                NodeGraphChange::ChainListChanged => store.reload_chain_list(*kind),
+                _ => {}
+            }
         }
     }
 }

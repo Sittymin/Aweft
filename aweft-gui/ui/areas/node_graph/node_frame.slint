@@ -24,9 +24,12 @@ export struct NodeSocketData {
     // true 为左侧输入端口，false 为右侧输出端口
     is-input: bool,
     data-type: NodeSocketType,
-    // 端口在其所在列（输入列/输出列）中的行号（从 0 起）：
-    // 输入/输出各自从节点顶部独立排列（Blender 式），渲染/连线/命中全用它。
+    // 端口在其所在列（输入列/输出列）中的起始行号（从 0 起）：两列各自从节点顶部
+    // 独立排列（Blender 式），互不影响。渲染/连线/命中全用这个 row。
     row: int,
+    // 该端口占几个可视行。数值输入口一个分量一行（Vec2 两行、ClipRect 四行），
+    // 其余端口一行。圆点与端口名只画在第一行。
+    span: int,
     // 端口预设下拉（如匹配角色的 pattern 输入）：非空且未连接时显示下拉按钮，
     // 从预设里选值作为端口默认数据；连接后隐藏下拉、使用连线的数据。
     menu-items: [ContextMenuItem],
@@ -41,6 +44,13 @@ export struct NodeSocketData {
     // 该端口行内嵌真/假切换（如布尔常量的输出端口），bool-value 即端口默认值
     bool-editor: bool,
     bool-value: bool,
+    // 该端口的数字框（未连接的数值输入口），一项一行。空列表 = 不放：输出口
+    // （值算出来的，不是设进去的）、已连线的输入口（数据由连线供）都是空。
+    // 各分量**一项一行**纵向排在该口的 span 行里，所以长度总等于 span 或为 0。
+    number-texts: [string],
+    // 各分量的轴标签，与 number-texts 同长（x/y/z、x1/y1/x2/y2）。
+    // 只有一个分量时是空串：单个数不需要标签。
+    number-labels: [string],
 }
 
 // 一条节点连接：数据流方向固定 from（输出端）→ to（输入端）。
@@ -99,14 +109,15 @@ export component SocketRow inherits Rectangle {
     private property <length> socket-font-size: Theme.data.node-editor.node-socket-font-size * view-zoom;
 
     width: 100%;
-    height: socket-row-height;
+    // 数值口按分量占好几行；这一层要跟着长高，后面的端口才不会被压住
+    height: socket.span * socket-row-height;
 
-    // 端口圆点：输入靠左半伸、输出靠右半伸
+    // 端口圆点：输入靠左半伸、输出靠右半伸。始终画在该口的第一行
     if socket.is-input: Rectangle {
         width: socket-size;
         height: socket-size;
         x: -socket-size / 2;
-        y: (parent.height - socket-size) / 2;
+        y: (socket-row-height - socket-size) / 2;
         border-radius: socket-size / 2;
         background: socket-color(socket.data-type);
         border-width: 1px * view-zoom;
@@ -116,19 +127,19 @@ export component SocketRow inherits Rectangle {
         width: socket-size;
         height: socket-size;
         x: parent.width - socket-size / 2;
-        y: (parent.height - socket-size) / 2;
+        y: (socket-row-height - socket-size) / 2;
         border-radius: socket-size / 2;
         background: socket-color(socket.data-type);
         border-width: 1px * view-zoom;
         border-color: Theme.data.node-editor.socket-outline;
     }
 
-    // 端口名：输入靠左、输出靠右（内嵌输入框行不显示名字）
+    // 端口名：输入靠左、输出靠右，只占第一行（内嵌输入框行不显示名字）
     Text {
         visible: !socket.input;
         text: socket.name;
         width: parent.width - socket-size - 8px * view-zoom;
-        height: 100%;
+        height: socket-row-height;
         x: socket.is-input ? socket-size + 6px * view-zoom : 0px;
         horizontal-alignment: socket.is-input ? left : right;
         vertical-alignment: center;
@@ -173,6 +184,44 @@ export component SocketRow inherits Rectangle {
     }
 }
 
+// 端口行里的一个数字框。独立成组件是为了每个分量各存一份草稿：失焦提交时 InputBox
+// 的 lost-focus 不带文本，只能自己记住输入到哪一步（同内嵌文本输入框的做法）。
+// 必须排在 SocketInteractions 之前——Slint 只认先声明后引用。
+component SocketNumberField inherits Rectangle {
+    in property <int> field: 0;
+    in property <string> text: "";
+    in property <float> view-zoom: 1.0;
+    in property <bool> edit-active-mirror: false;
+    callback changed(field: int, text: string);
+
+    private property <string> draft: "";
+    private property <length> font-size: Theme.data.node-editor.node-socket-font-size * root.view-zoom;
+
+    InputBox {
+        width: 100%;
+        height: 100%;
+        background: Theme.data.node-editor.canvas-background;
+        border-radius: 3px * root.view-zoom;
+        border-width: 1px * root.view-zoom;
+        border-color: Theme.data.node-editor.node-border;
+        active-mirror: root.edit-active-mirror;
+        text: root.text;
+        font-size: root.font-size;
+        horizontal-alignment: center;
+        text-color: Theme.data.node-editor.node-text;
+        placeholder-color: Theme.data.node-editor.node-muted-text;
+        text-changed(t) => {
+            root.draft = t;
+        }
+        accepted(value) => {
+            root.changed(root.field, value);
+        }
+        lost-focus => {
+            root.changed(root.field, root.draft);
+        }
+    }
+}
+
 // 端口行可交互元素（预设下拉按钮 / 内嵌文本输入框）。
 // 独立于 SocketRow 置于端口拖拽 TouchArea 之上——ta 会抢走其下方所有按钮点击
 //（同 ReferenceMenuRow 的既有处理模式，见 NodeFrame）。
@@ -189,6 +238,8 @@ export component SocketInteractions inherits Rectangle {
     callback socket-input-focused(socket-index: int, focused: bool);
     // 真/假切换被点击：编辑据此翻转该端口的默认值
     callback socket-bool-toggled(socket-index: int);
+    // 数字框提交（未连接的数值输入口）：该端口的第 field 个分量改成了 text
+    callback socket-number-changed(socket-index: int, field: int, text: string);
 
     // 按 view-zoom 缩放后的几何量
     private property <length> socket-size: Theme.data.node-editor.socket-size * view-zoom;
@@ -198,7 +249,8 @@ export component SocketInteractions inherits Rectangle {
     private property <string> edit-text: "";
 
     width: 100%;
-    height: socket-row-height;
+    // 与 SocketRow 同步长高：数值口一个分量一行，控件要能盖住该口的每一行
+    height: socket.span * socket-row-height;
 
     // 预设下拉按钮（未连接且有菜单时显示）
     if socket.menu-items.length > 0 && !socket.connected: Rectangle {
@@ -285,6 +337,39 @@ export component SocketInteractions inherits Rectangle {
         }
         lost-focus => {
             root.socket-input-changed(root.socket-index, root.edit-text);
+        }
+    }
+
+    // 数字框（未连接的数值输入口）：一个分量占一行，纵向排在该口的 span 行里，
+    // 各行右缘对齐成一列。分量顺序与 Rust 侧 socket_numbers/socket_labels 同一口径。
+    for value[idx] in socket.number-texts: Rectangle {
+        y: idx * socket-row-height;
+        width: 100%;
+        height: socket-row-height;
+        // 轴标签（x/y/z、x1/y1/x2/y2）紧贴数字框左侧；单个分量不需要
+        Text {
+            visible: socket.number-texts.length > 1;
+            x: parent.width - socket-size - 88px * view-zoom;
+            width: 20px * view-zoom;
+            height: 100%;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: socket.number-labels[idx];
+            color: Theme.data.node-editor.node-muted-text;
+            font-size: socket-font-size;
+        }
+        SocketNumberField {
+            x: parent.width - socket-size - 66px * view-zoom;
+            y: 3px * view-zoom;
+            width: 62px * view-zoom;
+            height: socket-row-height - 6px * view-zoom;
+            field: idx;
+            text: value;
+            view-zoom: root.view-zoom;
+            edit-active-mirror: root.edit-active-mirror;
+            changed(field, text) => {
+                root.socket-number-changed(root.socket-index, field, text);
+            }
         }
     }
 }
@@ -398,6 +483,8 @@ export component NodeFrame inherits Rectangle {
     callback socket-menu-requested(socket-index: int);
     // 内嵌文本输入框提交（字符串常量输出端口）：编辑据此更新端口默认值
     callback socket-input-changed(socket-index: int, text: string);
+    // 内嵌数字框提交（数值输入口的某个分量）：编辑据此更新端口默认值
+    callback socket-number-changed(socket-index: int, field: int, text: string);
     // 内嵌文本输入框聚焦变化：编辑据此设置全窗口收起遮罩（挖孔定位）
     callback socket-input-focused(socket-index: int, focused: bool);
     // 端口行内的真/假切换被点击（布尔常量输出端口）：编辑据此翻转端口默认值
@@ -564,6 +651,9 @@ export component NodeFrame inherits Rectangle {
         }
         socket-input-changed(socket-idx, text) => {
             root.socket-input-changed(socket-idx, text);
+        }
+        socket-number-changed(socket-idx, field, text) => {
+            root.socket-number-changed(socket-idx, field, text);
         }
         socket-input-focused(socket-idx, focused) => {
             root.socket-input-focused(socket-idx, focused);

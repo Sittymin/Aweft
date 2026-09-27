@@ -100,4 +100,97 @@ AnimationCallbacks → AnimationAction::Graph/Nla → AppStore::dispatch_animati
 - 测试：`nla_editor/tests.rs` 单测（`project`走`apply_selection/strip_structure/position`单职责；`hit_test`纯只读）+
   `tests/nla_editor_integration.rs`（dispatch → 投影 → model 写回全链路；`strip_hit_test`+`StripPressed` dispatch）
 
+**位置锚点的两种单位**（同一个锚点，可并存）：
+- `PropertyPath::PositionX/Y` = 排版像素；`PositionRatioX/Y` = 排版尺寸的分数（0..1）。
+  核心数据侧（aweft-model）只有这两个抽象概念，不含 ASS 语义。
+- **唯一换算点**是 `aweft-convert` 的 `Cursor::anchor_at`：`(基线像素 + Σ像素曲线) +
+  layout * (基线分数 + Σ分数曲线)`。样式位置（`position` / `position_ratio`）是**基线**，
+  曲线是相对它的位移而不是它本身——这条规则是「视口能拖动画行」的前提（见下）。分数部分
+  随排版尺寸（= `AppState::preview_frame_size()`，见 [video-playback.md](video-playback.md)）
+  等比缩放，像素部分作固定偏移。新增消费者不要另起一处换算。
+- 一条 strip 走完，`convert_action_strip` 末尾调用一次 `Cursor::advance_to`，把该时刻
+  解析出的像素写回 `offset` 并把 `ratio` 清零——下一条 strip 接续的是绝对位置。段内每段
+  都从同一个基值解析，把每段终点折回基值会让分数部分被重复累加。
+- ASS 侧有两条像素出口：动画锚点走 `\move` 端点，**静态**锚点走 `\pos`。后者由
+  `match_to_ass_tags` 发（不在 `style_to_static_tags` 里——那个函数不拿排版尺寸，换不了
+  像素），换算仍旧只走 `Cursor::anchor_at`，静态时通过 `Cursor::base_anchor` 传空曲线。
+  两者在 libass 里**先到者生效**（`ass_parse.c` 的 `EVENT_POSITIONED` 分支整个忽略后来者），
+  所以 `\pos` 只补给不含 `\move` 的行；预置到动画行上会让该行的位置动画失效。动画行的基线
+  不必另走 `\pos`：它已经折进 `\move` 的每个端点里。
+- `\pos` 的锚点是**行框底部中点**，不是左上角：唯一那份生成样式 `Default` 用
+  `Alignment::BottomCenter`（`aweft-ass/src/types/style.rs`），libass 的 `get_base_point`
+  按对齐方式决定 `\pos` 钉住盒子的哪个点。视口拖动的落点换算必须按这个语义写。
+- 纯分数基准值只有曲线一个来源：`SetPosition` 这个 `StyleOpKind` 写的是 `position`
+  （像素）而非 `position_ratio`，视口拖动就落在它上面——落的是**增量**（`ShiftLinePosition`
+  的 `dx`/`dy` 加到端口原值上，端口没值从 0 起算），因为送绝对坐标会把按下那一瞬动画恰好
+  走到的偏移烤进基线，一行拖下来位置就漂。
+- `设位置` 除样式口外还多一个 `position` 的 **Vec2 数据出口**（按下标追加在末尾，符合上面
+  那条「新增输出口一律追加」的规则），把写进样式的那份位置作为数据供下游运算；端口没有值时
+  求值会把这个出口从缓存里**删掉**，下游才会退回 socket 默认值而不是拿到上一次的旧数字。
+- **数值输入口在节点上直接显示并编辑端口默认值，一个分量占一行**：未连接的 `float`/`int`
+  一行一个框，`Vec2`/`Vec3`/`ClipRect` 分别占 2/3/4 行并带轴标签。分量顺序与行数只在
+  `store/node_graph.rs` 的 `socket_labels`/`socket_numbers`/`socket_value_from_parts` 这一组
+  函数里定义（x/y/z、x1/y1/x2/y2），`.slint` 那边照 `number-texts` 逐行摆框，不另记一份顺序。
+  输出口不给框（值是算出来的），已连线的输入口也不给（数据由连线供，同一行摆两处真相会打架）。
+  提交的文本解析不了就不写，删空的中间态不该把已有值清零。
+- **端口因此不再等分节点高度**：圆点与端口名只画在该口的**第一行**，行号 `socket.row` 是
+  输入列内累加出来的。凡是按行算 y 的地方——命中判定 `find_socket_at`、拖拽释放
+  `find_drop_socket`、节点高度 `node_height`、连线端点与橡皮线的 `socket-offset`、端口预设
+  菜单的弹出位置——都必须读模型里的 `row`/`span`，拿端口下标乘行高就会整体错位（顺带修掉了
+  拖输出口时橡皮线起点偏低一格的老错：那里传的是 sockets 组合下标，输入在前）。
+
+**应用链怎么绑到某一行字幕**（链与行之间没有引用字段，只有条件这一条路）：
+- 应用链与样式链都不持有行 ID：唯一能问到「当前是哪一行」的入口是 `ContextInput` 的输出
+  （actor / line_text / line_index / id）。自动生成的链就靠这条路径，别另找旁路。
+- `line_index` 是当前**可见行序号**，插入/删除/隐藏任意一行都会让它移位。凡是需要跨编辑
+  存活绑定（视口拖动写出的那条链）都必须用 `LineContext.item_id` 配 `TextEq`；按 index 绑
+  `IntEq` 只适合当场的一次性判断。
+- `ContextInput` 的 `id` 是**追加在输出口末尾**（下标 3）：已存盘图的端口按下标记录，
+  插队会让老连线指错口。新增输出口一律走这个规则。
+- 图求值缓存（`EvalCache`）**按行有效**：`NodeGraph::evaluate` 开头比对 `line_key`，与
+  上一轮不同就整图标脏。`ensure_node_evaluated` 只重算脏节点，少了这一步的话同一张图求值
+  第二行会直接沿用第一行的 `ContextInput` 输出——每行一条链的功能会静默地只命中第一行。
+
+**视口拖动写出的链对**（`src/store/subtitle_chains.rs`，位置的唯一真相）：
+- 拖动一行 = 生成一对链：样式链 `样式源 → 设位置(Vec2 排版像素) → 组输出`，应用链
+  `上下文.id → 文本全等(expected = item_id) → 应用 → 组输出`。行上没有也不该有旁路位置字段。
+- **一行一对，不共用一条链**：端口只能在 `add_node` 时声明，没有给既有节点追加输入口的 API，
+  所以应用链的组输出口没法再接第二个「应用」。共用一条链的方案走不通。
+- 找回这对链**靠结构不靠名字，也不加持久化标记字段**：从 `expected == item_id` 的 `文本全等`
+  出发，顺着连线走「它的输出门控了哪个 应用 的条件口」→「那个 应用 的样式口来自哪个 样式链引用」
+  →「引用的样式链里第一个 设位置 的 position 口」。用户改链名、往链里加节点都不影响找回；
+  代价是这段图结构一旦有人手工拆开（比如把 文本全等 的 expected 改成常量文本）绑定就断，
+  下次拖动会再生成一对，旧的那对留在菜单里由用户清理。
+- 应用链 `push` 到 `style_layer.graphs` 末尾 = 最高优先级（后者经 `merge_over` 覆盖前者），
+  所以视口拖动的位置总是压过用户手工搭的链；这是刻意的，别改成插入到固定下标。
+- 新建这对链打 `NodeGraphChange::ChainListChanged`（两侧各一次），投影走
+  `reload_chain_list`：只重派生两个菜单，并把当前编辑的链**按 id** 重新定位下标。不能用
+  `ChainSwitched`——样式链菜单按名字排序，中间插进一条新链会让原来的下标指向另一条链，
+  而拖动一行不该把用户正在编辑的那条换掉。
+
+**位置拟合的误差口径**：`error_tolerance` 对位置通道读作「偏排版尺寸的百分之几」——
+`chord_error` 把「真实锚点」到「该时刻线性插值位置」的距离除以排版尺寸
+（`Cursor::layout` 的较大边），默认 0.01 即 1% 画面。两处口径都会被否掉：只量到弦所在
+无限直线的垂直距离，单轴往复（只有 Y 动的上下浮动）所有采样点都落在那条直线上、误差恒
+为 0，整段来回会被一根静止的 `\move` 吃掉；按弦长归一化则在转折点附近失真，弦长趋零而
+弯曲量只是二阶小量，相对误差反而飙升，每格都不合格、DP 连不通，最后退化成逐格切段（一行
+几百条 `Dialogue`）。代价是端点只在容差内逼近波的极值，不会精确落在关键帧时间上。
+
+**拟合跑在后台线程**：DP 分段是格点平方量级的求值，一份真实工程的脚本要几百毫秒，在 UI
+线程上同步跑就等于每次动字幕冻住界面。`op_subtitle_script` 因此只把 `Project` 副本交给
+`store/subtitle_fit.rs` 的工作线程，进度经两条通道回到 UI 线程的 pump，pump 直接写
+`OverlayState.show-subtitle-fit-overlay`（与波形批次同属「后台增量」，不进依赖图），收尾才把
+脚本字节交给 `SubtitlePipeline::set_script`。这份进度画在**视口右上角**的小浮层上
+（`aweft-gui/ui/areas/viewport/subtitle_fit.slint`，live_dp 那张曲线图：曲线 + 网格 +
+有效性色带 + 当前格点 + 候选段，收尾逐段着色）。浮层刻意不做成模态：卡片里一个 TouchArea
+都没有，按下事件穿到它下面的画布上，拟合期间照常编辑——浮层只负责解释「画面为什么还是旧的」。
+并发策略是单飞 + 合并最新：同时最多一份在飞，期间新到的请求只置 `fit_pending`，手上这份
+跑完再用当时最新的数据补一份，浮层在两次之间不撤。后台线程不回写任何真相——它的唯一产物
+是脚本文本，副本里过期的求值缓存只影响一次命中。导出（还没实现）这类必须等结果的场合，
+将来另加一个阻塞式反馈，别拿这块角标当挡操作的遮罩用。
+
+**测试字幕动画的播种**（`aweft-gui/src/app/test_data.rs`，HACK，随真实工程流程落地后整块删除）：
+`create_test_subtitle_animation` 必须在 `initialize_node_graph_editors` **之前**调用——
+链菜单、当前链下标与默认布局都从 model 派生，播种晚于初始化则编辑器看不到这两条链。
+
 **已知 TODO**：调色盘（channel.rs）

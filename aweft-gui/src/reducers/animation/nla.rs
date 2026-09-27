@@ -303,5 +303,99 @@ impl crate::store::AppStore {
     }
 }
 
-// 本分支不含 `app/test_data.rs`（那份字幕播种助手由 feat/subtitle-viewport 建），
-// 依赖它的两条 NLA 切换测试随那条分支一起进来（见 39c3908 对本文件的 `mod tests`）。
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actions::Action;
+    use crate::actions::animation::AnimationAction;
+    use crate::bridge::types::{AnimationState, MainWindow};
+    use crate::store::AppStore;
+    use slint::ComponentHandle;
+
+    /// 按真实启动顺序播种（见 `app/window_manager.rs`）：字幕链 → 节点图编辑器 →
+    /// 曲线/NLA 测试数据 → 动画编辑器。走完库里正好有两段动画片段：
+    /// 「字幕浮动」（1 条轨道，`app/test_data.rs`）与「主 NLA」（3 条轨道，
+    /// `store/animation/nla/load.rs`），NLA 编辑器装载的是后者。
+    fn seeded() -> (MainWindow, AppStore) {
+        i_slint_backend_testing::init_no_event_loop();
+        let instance = MainWindow::new().unwrap();
+        let mut store = AppStore::new(&instance);
+        crate::app::test_data::create_test_subtitle_animation(&mut store);
+        store.initialize_node_graph_editors(&instance);
+        store.create_test_animation_data();
+        store.initialize_animation_editors(&instance);
+        (instance, store)
+    }
+
+    /// Header 下拉的候选 = 库里全部动画片段，按名排序（主 U+4E3B 在 字 U+5B57 前）；
+    /// 按钮上的文字与下标跟着当前装载的那一段走。
+    #[test]
+    fn header_menu_lists_every_anim_data_sorted() {
+        let (instance, store) = seeded();
+        let nla = &store.ui_models.animation.nla;
+
+        let names: Vec<String> = (0..nla.anim_items.row_count())
+            .map(|i| nla.anim_items.row_data(i).unwrap().text.to_string())
+            .collect();
+        assert_eq!(names, ["主 NLA", "字幕浮动"]);
+        assert_eq!(nla.anim_order.len(), names.len());
+
+        let state = instance.global::<AnimationState>();
+        assert_eq!(state.get_current_nla_anim(), 0);
+        assert_eq!(state.get_nla_anim_name().as_str(), "主 NLA");
+        // 装载的是「主 NLA」：3 条真实轨道 + 第 0 轨虚拟全局 Action 轨
+        assert_eq!(nla.track_view.len(), 4);
+    }
+
+    /// 从下拉选另一段：编辑目标换掉、轨道与片断按新片段重建、Header 显示跟上。
+    /// 应用图里「非线性动画引用」节点的选中项按它自己引用的 id 重算，
+    /// 不随 NLA 编辑目标变化——它引的一直是「字幕浮动」（候选下标 1）。
+    #[test]
+    fn selecting_from_header_switches_edited_anim_data() {
+        let (instance, mut store) = seeded();
+        let target = store.ui_models.animation.nla.anim_order[1];
+
+        store
+            .dispatch(Action::Animation(AnimationAction::Nla(
+                NlaAction::AnimDataSelected { index: 1 },
+            )))
+            .unwrap();
+        store.evaluate_depsgraph();
+
+        let nla = &store.ui_models.animation.nla;
+        assert_eq!(nla.anim_data_id, Some(target));
+        // 「字幕浮动」只有一条名为「浮动」的轨道，轨道里只有一个片断
+        assert_eq!(nla.track_view.len(), 2);
+        assert_eq!(nla.track_view[1].name.as_str(), "浮动");
+        assert_eq!(nla.tracks_filter.row_count(), 2);
+        assert_eq!(nla.strip_models[1].row_count(), 1);
+
+        let state = instance.global::<AnimationState>();
+        assert_eq!(state.get_current_nla_anim(), 1);
+        assert_eq!(state.get_nla_anim_name().as_str(), "字幕浮动");
+
+        let editor = &store.ui_models.app_graph;
+        let row = (0..editor.nodes.row_count())
+            .map(|i| editor.nodes.row_data(i).unwrap())
+            .find(|row| row.title.as_str() == "非线性动画引用")
+            .expect("播种链应有非线性动画引用节点");
+        assert_eq!(row.menu_options.row_data(1).unwrap().as_str(), "字幕浮动");
+        assert_eq!(row.menu_selected, 1);
+    }
+
+    /// 越界下标（负数按 `as usize` 变成天文数字，同样取不到）与「选的就是当前片段」
+    /// 都不产生 tag：编辑目标不动，也就不会白白重建一遍轨道。
+    #[test]
+    fn out_of_range_or_unchanged_selection_is_a_no_op() {
+        let (_instance, mut store) = seeded();
+        let before = store.ui_models.animation.nla.anim_data_id;
+
+        for index in [0, -1, 2] {
+            let tags = store
+                .dispatch_nla_action(NlaAction::AnimDataSelected { index })
+                .unwrap();
+            assert!(tags.is_empty(), "下标 {index} 不该改动编辑目标");
+        }
+        assert_eq!(store.ui_models.animation.nla.anim_data_id, before);
+    }
+}

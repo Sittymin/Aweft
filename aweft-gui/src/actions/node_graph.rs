@@ -65,6 +65,15 @@ pub enum NodeGraphAction {
         socket_index: usize,
         text: String,
     },
+    /// 端口行内嵌数字框提交（数值输入口）：把 `field` 分量写回端口默认值。
+    /// 文本在 store 侧解析，解析不了的提交不动数据。
+    SocketNumberChanged {
+        graph_type: NodeGraphKind,
+        node_index: usize,
+        socket_index: usize,
+        field: usize,
+        text: String,
+    },
     /// 端口行内嵌真/假切换（布尔常量输出）：翻转端口默认值。
     SocketBoolToggled {
         graph_type: NodeGraphKind,
@@ -125,6 +134,7 @@ pub fn app_templates() -> Vec<ApplicationNodeKind> {
         ApplicationNodeKind::MatchActor,
         ApplicationNodeKind::MatchText,
         ApplicationNodeKind::IntEq,
+        ApplicationNodeKind::TextEq,
         ApplicationNodeKind::And,
         ApplicationNodeKind::Or,
         ApplicationNodeKind::Not,

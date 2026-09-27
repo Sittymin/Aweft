@@ -56,6 +56,24 @@ export global VideoCallbacks {
     callback video-hit-top(x: float, y: float) -> int;
 }
 
+// 视口字幕回调：点击选中一行字幕、按住把它拖到别处。
+// 位移写进自动生成的一对链（样式链的「设位置」+ 应用链的门控，见
+// `src/store/subtitle_chains.rs`），字幕行本身没有存位置的旁路字段。
+export global SubtitleCallbacks {
+    // 点击一行字幕：选中它（与行编辑器共用同一份选择集合）。返回 true 表示这一点归
+    // 字幕，视口就不再把它交给视频选中。
+    callback line-picked(x: float, y: float, modifier: SlintSelectionModifier) -> bool;
+    // 按住一行想把它拖走：命中判定在 Rust（它才知道此刻画面上有哪些行框）。返回 true
+    // 表示 Rust 已经开始这一行的拖拽会话，视口据此进入字幕拖动分支；false 时视口照旧
+    // 去试视频移动。
+    callback line-drag-started(x: float, y: float) -> bool;
+    // 拖动中：相对按下瞬间的世界坐标位移（排版像素）。只画预览，不写数据。
+    callback line-dragged(dx: float, dy: float);
+    // 松手：把这一笔位移提交到该行的位置基线上。重编脚本要几百毫秒，所以只在松手时提交
+    // 一次，拖动过程中不提交。
+    callback line-released();
+}
+
 // 音频回调：音轨选择与视图上报（Rust 侧处理）。
 // 波形后台批次经 Rust 通道直写基础桶模型，不经过 Slint 回调（见 store/audio.rs）。
 // 视图上报返回该 Area 的持久列模型（标识恒定，Slint 侧不重建槽位）：bucket-ms
@@ -139,6 +157,10 @@ export global NodeGraphCallbacks {
     callback create-actor(graph-type: GraphType, node-index: int, socket-row: int, name: string);
     // 内嵌文本输入框提交（字符串常量）：设端口默认值
     callback socket-input-changed(graph-type: GraphType, node-index: int, socket-row: int, text: string);
+    // 内嵌数字框提交（数值输入口）：把该端口的第 field 个分量写回端口默认值。
+    // 分量顺序按端口类型固定：float/int 只有 0，Vec2 是 x/y，Vec3 是 x/y/z，
+    // ClipRect 是 x1/y1/x2/y2。
+    callback socket-number-changed(graph-type: GraphType, node-index: int, socket-row: int, field: int, text: string);
     // 端口行内嵌真/假切换（布尔常量）：翻转端口默认值
     callback socket-bool-toggled(graph-type: GraphType, node-index: int, socket-row: int);
 }

@@ -104,6 +104,10 @@ pub enum NodeGraphChange {
     ReferenceChanged { node_id: NodeId },
     /// 新建链后切到它（投影：派生链菜单 + 设当前链 + 全量重建快照）。`target` 为目标链下标。
     ChainSwitched { target: usize },
+    /// 链列表变了但不切当前链（视口拖动这类自动生成操作往列表里加/删链）。
+    /// 投影只重派生菜单，并把当前编辑的链**按 id** 重新定位下标——样式链按名排序，
+    /// 中间插进一条新链会让原来的下标指向另一条链。
+    ChainListChanged,
 }
 
 impl NodeGraphChange {
@@ -508,6 +512,8 @@ pub enum OperationCode {
     VideoPlayback,
     /// 视频当前播放音轨投影。
     VideoAudioTrack,
+    /// 字幕脚本投影（序列 + 样式图 + 动画 → ASS 脚本）。
+    SubtitleScript,
 }
 
 impl Tag {
@@ -626,7 +632,9 @@ impl Tag {
                 NodeGraphChange::LinksChanged { .. } => TagKind::NodeGraphLinks,
                 NodeGraphChange::SocketValueChanged { .. }
                 | NodeGraphChange::ReferenceChanged { .. } => TagKind::NodeGraphSocket,
-                NodeGraphChange::ChainSwitched { .. } => TagKind::NodeGraphChain,
+                NodeGraphChange::ChainSwitched { .. } | NodeGraphChange::ChainListChanged => {
+                    TagKind::NodeGraphChain
+                }
             },
 
             Tag::VideoStructureChanged { .. } => TagKind::VideoStructure,

@@ -59,7 +59,9 @@ fn media_set_video_playing(store: &mut AppStore, playing: bool) {
 ///    拖动时间条的效果，保证播放键始终能开始/恢复播放。
 pub(super) fn media_apply_video_playback(store: &mut AppStore, playing: bool) -> Vec<usize> {
     if store.state().video_sessions.is_empty() {
-        media_set_video_playing(store, false);
+        // 没有媒体管线可控：transport 只落播放标量，播放头由预览时钟推进
+        //（起停在 `ui_sync_video_playback_scalar` 里同步，见 `bridge::preview_clock`）
+        media_set_video_playing(store, playing);
         return Vec::new();
     }
     let targets = media_control_targets(store);

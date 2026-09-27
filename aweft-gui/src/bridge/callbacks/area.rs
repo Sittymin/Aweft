@@ -3,6 +3,8 @@ use crate::bridge::types::{AreaCallbacks, DragCallbacks, MainWindow};
 
 use crate::bridge::{slint_area_key_to_key, slint_area_type_to_rust};
 use crate::store::AppStore;
+// winit 事件只在桌面后端存在：Android 特性集里 winit 后端被彻底排除
+//（见 aweft-gui/Cargo.toml），slint::winit_030 模块在该目标上不存在。
 use slint::ComponentHandle;
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,6 +13,7 @@ use super::dispatch_and_render;
 /// 设置区域类型切换回调 - 使用 Action 模式
 pub(super) fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
+    let s = Rc::clone(&store);
 
     instance.global::<AreaCallbacks>().on_switch_area_type(
         move |slint_area_key, slint_area_type| {
@@ -24,7 +27,7 @@ pub(super) fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<
             });
 
             // 分发 Action 并更新 UI
-            dispatch_and_render(&store, action, &weak_instance);
+            dispatch_and_render(&s, action, &weak_instance);
         },
     );
 }

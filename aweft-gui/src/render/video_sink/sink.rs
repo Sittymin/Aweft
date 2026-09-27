@@ -5,7 +5,6 @@
 //! 帧字节到位图的具体处理（dmabuf/sysmem、上传、转色、槽位池）在 `frame`。
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use futures::channel::mpsc::UnboundedSender;
@@ -17,9 +16,8 @@ use slint::wgpu_30::wgpu;
 
 use super::convert::YuvConvertPipeline;
 use super::dmabuf::DmabufImporter;
-use super::frame::{
-    CacheEpoch, CachedPlane, OUTPUT_TEXTURE_POOL_SIZE, OutputTextureSlot, PlaneCacheKey,
-};
+use super::frame::{CacheEpoch, CachedPlane, PlaneCacheKey};
+use crate::render::output_pool::OutputSlotPool;
 
 /// 连接视频 Sink 所需的 GPU 句柄：slint::GraphicsAPI 仅在渲染通知回调期间
 /// 有效，RenderingSetup 时克隆缓存，之后可随时按需连接（如打开视频时）。
@@ -41,9 +39,8 @@ pub struct SlintWGPUSink {
     // YUV→RGB 离屏管线（connect 时构建）
     pub(crate) convert: Option<YuvConvertPipeline>,
     // 固定槽位的 RGBA 输出纹理池。槽位在 AfterRendering 后才归还，避免
-    // Slint 仍在采样上一帧时被下一帧覆盖。
-    pub(crate) output_pool: Vec<OutputTextureSlot>,
-    pub(crate) active_output_slot: Option<usize>,
+    // Slint 仍在采样上一帧时被下一帧覆盖。池与字幕输出共用同一份实现。
+    pub(crate) output_pool: OutputSlotPool,
     // dmabuf 零拷贝导入器（connect 时构建；非 Vulkan 渲染器/扩展缺失为 None）
     pub(crate) dmabuf: Option<DmabufImporter>,
     // 上一帧的 dmabuf 缓存代际（caps 宽高/格式），池重建时据此清空导入缓存
@@ -74,8 +71,7 @@ impl SlintWGPUSink {
             wgpu_queue: None,
             plane_cache: HashMap::new(),
             convert: None,
-            output_pool: Vec::new(),
-            active_output_slot: None,
+            output_pool: OutputSlotPool::new("video-rgba-out"),
             dmabuf: None,
             last_cache_epoch: None,
             frame_dur_secs: Default::default(),
@@ -105,8 +101,6 @@ impl SlintWGPUSink {
         self.dmabuf = dmabuf;
         self.last_cache_epoch = None;
         self.output_pool.clear();
-        self.active_output_slot = None;
-        self.output_pool.reserve(OUTPUT_TEXTURE_POOL_SIZE);
 
         // 设置总线消息处理器
         bus.set_sync_handler({
@@ -203,20 +197,7 @@ impl SlintWGPUSink {
     /// 在 Slint 完成本轮场景提交后调用。此时 queue 上已经包含 Slint 对
     /// 当前输出纹理的采样命令，槽位只能在这之后等待 GPU 完成再复用。
     pub fn after_rendering(&mut self) {
-        let Some(index) = self.active_output_slot.take() else {
-            return;
-        };
-        let Some(slot) = self.output_pool.get(index) else {
-            return;
-        };
-        let in_flight = slot.in_flight.clone();
-        let Some(queue) = self.wgpu_queue.clone() else {
-            in_flight.store(false, Ordering::Release);
-            return;
-        };
-        queue.on_submitted_work_done(move || {
-            in_flight.store(false, Ordering::Release);
-        });
+        self.output_pool.after_rendering(self.wgpu_queue.as_deref());
     }
 
     /// 清理渲染器销毁时不能继续使用的 GPU 资源。
@@ -229,7 +210,6 @@ impl SlintWGPUSink {
         self.plane_cache.clear();
         self.convert = None;
         self.output_pool.clear();
-        self.active_output_slot = None;
         self.dmabuf = None;
         self.last_cache_epoch = None;
         self.last_video_size = None;

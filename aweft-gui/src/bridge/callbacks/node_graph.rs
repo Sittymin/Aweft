@@ -2,6 +2,8 @@ use crate::actions::Action;
 use crate::bridge::types::{MainWindow, NodeGraphCallbacks};
 
 use crate::store::AppStore;
+// winit 事件只在桌面后端存在：Android 特性集里 winit 后端被彻底排除
+//（见 aweft-gui/Cargo.toml），slint::winit_030 模块在该目标上不存在。
 use slint::{ComponentHandle, Model};
 use std::{cell::RefCell, rc::Rc};
 
@@ -183,6 +185,21 @@ pub(super) fn setup_node_graph_callbacks(instance: &MainWindow, store: Rc<RefCel
                 graph_type: graph_type_of(graph_type),
                 node_index: node_index as usize,
                 socket_index: socket_row as usize,
+                text: text.to_string(),
+            });
+            dispatch_and_render(&s, action, &weak);
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<NodeGraphCallbacks>()
+        .on_socket_number_changed(move |graph_type, node_index, socket_row, field, text| {
+            let action = Action::NodeGraph(NodeGraphAction::SocketNumberChanged {
+                graph_type: graph_type_of(graph_type),
+                node_index: node_index as usize,
+                socket_index: socket_row as usize,
+                field: field as usize,
                 text: text.to_string(),
             });
             dispatch_and_render(&s, action, &weak);

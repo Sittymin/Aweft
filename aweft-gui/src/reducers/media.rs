@@ -521,7 +521,7 @@ fn media_video_cascade_anchor(store: &AppStore) -> (f64, f64) {
         .wgpu_sink
         .last_video_size
         .map(|(_, h)| h)
-        .unwrap_or(1080) as f64;
+        .unwrap_or(crate::store::state::DEFAULT_PREVIEW_FRAME_SIZE.1) as f64;
     let offset = (height * 0.08).clamp(32.0, 200.0);
     (ax + offset, ay + offset)
 }
@@ -558,14 +558,14 @@ impl AppStore {
         indices
     }
 
-    /// 视频会话的视口世界尺寸（含 PAR 换算的显示宽度；未收到首帧用 1080P 默认）。
+    /// 视频会话的视口世界尺寸（含 PAR 换算的显示宽度；未收到首帧用兜底预览尺寸）。
     fn video_world_size(&self, index: usize) -> (f64, f64) {
         let (w, h) = self
             .state()
             .video_sessions
             .get(index)
             .and_then(|s| s.wgpu_sink.last_video_size)
-            .unwrap_or((1920, 1080));
+            .unwrap_or(crate::store::state::DEFAULT_PREVIEW_FRAME_SIZE);
         (w as f64, h as f64)
     }
 

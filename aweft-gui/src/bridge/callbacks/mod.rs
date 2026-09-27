@@ -6,6 +6,8 @@ use crate::actions::Action;
 use crate::bridge::types::MainWindow;
 
 use crate::store::AppStore;
+// winit 事件只在桌面后端存在：Android 特性集里 winit 后端被彻底排除
+//（见 aweft-gui/Cargo.toml），slint::winit_030 模块在该目标上不存在。
 use std::{cell::RefCell, rc::Rc};
 
 mod animation;
@@ -15,6 +17,7 @@ mod nla;
 mod node_graph;
 mod render;
 mod sequence;
+mod subtitle;
 mod video;
 mod window;
 
@@ -42,7 +45,10 @@ pub fn setup_callbacks(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     animation::setup_animation_callbacks(instance, Rc::clone(&store));
     nla::setup_nla_callbacks(instance, Rc::clone(&store));
     video::setup_video_callbacks(instance, Rc::clone(&store));
+    subtitle::setup_preview_clock(instance, &store);
     audio::setup_audio_callbacks(instance, Rc::clone(&store));
+    subtitle::setup_subtitle_callbacks(instance, Rc::clone(&store));
+    subtitle::setup_subtitle_fit(Rc::clone(&store));
 }
 
 /// 统一的 dispatch 和渲染逻辑。

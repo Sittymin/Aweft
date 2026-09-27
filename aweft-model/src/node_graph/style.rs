@@ -22,7 +22,10 @@ pub struct StyleResult {
     pub factor: Option<Vec2>,
     pub blur: Option<f64>,
     pub blur_edges: Option<u32>,
+    /// 锚点的排版像素位置
     pub position: Option<Vec2>,
+    /// 锚点相对排版尺寸的分数位置（0..1），与 `position` 相加
+    pub position_ratio: Option<Vec2>,
     pub origin: Option<Vec2>,
     pub clip_rect: Option<ClipRect>,
 }
@@ -48,6 +51,7 @@ impl StyleResult {
             blur: other.blur.or(self.blur),
             blur_edges: other.blur_edges.or(self.blur_edges),
             position: other.position.or(self.position),
+            position_ratio: other.position_ratio.or(self.position_ratio),
             origin: other.origin.or(self.origin),
             clip_rect: other.clip_rect.or(self.clip_rect),
         }

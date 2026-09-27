@@ -378,6 +378,14 @@ impl AssScriptRenderer {
         Ok(self)
     }
 
+    /// 换脚本字节而不重建渲染器：`Library`（字体数据）与 `Renderer`（字形缓存与
+    /// 字体提供器）都保持原样，只有 `ASS_Track` 按新字节重新解析一次。帧尺寸记在
+    /// 渲染器上，因此换脚本不会把它带走。
+    pub fn load_script(&mut self, data: &[u8], codepage: Option<&str>) -> Result<&mut Self> {
+        self.core.track.load_script(data, codepage)?;
+        Ok(self)
+    }
+
     pub fn renderer_settings(&mut self) -> RendererSettings<'_> {
         RendererSettings {
             renderer: &mut self.core.renderer,
@@ -655,6 +663,56 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,Hello"#;
             .set_feature(TrackFeature::WholeTextLayout, true)
             .unwrap();
         assert_eq!(track.event_count(), 0);
+    }
+
+    const SECOND_SCRIPT: &[u8] = br#"[Script Info]
+ScriptType: v4.00+
+PlayResX: 640
+PlayResY: 360
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,24,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:03.00,0:00:05.00,Default,,0,0,0,,World"#;
+
+    /// 换脚本只换轨道：`Library`/`Renderer` 连同字体提供器与字形缓存必须原样留着，
+    /// 否则每次改字幕都要重做一次字体匹配、并把所有字形重新光栅化。
+    ///
+    /// 两份脚本的时刻刻意不重叠（`SCRIPT` 是 0..2s，`SECOND_SCRIPT` 是 3..5s），
+    /// 于是「新时刻出图、旧时刻不再出图」只有真的换掉了轨道才成立。
+    #[test]
+    fn load_script_replaces_the_track_but_keeps_the_renderer() {
+        let mut script = AssScriptRenderer::from_memory(640, 360, SCRIPT, None, false).unwrap();
+        assert_eq!(script.event_count(), 1);
+        assert!(!script.render_frame(100).unwrap().images().is_empty());
+        assert!(script.render_frame(3_100).unwrap().images().is_empty());
+        let library_ptr = script.core.library.as_ptr();
+        let track_ptr = script.core.track.as_ptr();
+
+        script.load_script(SECOND_SCRIPT, None).unwrap();
+
+        assert_eq!(
+            script.core.library.as_ptr(),
+            library_ptr,
+            "换脚本把 Library 换掉了：字体提供器与已加载字体一起丢失"
+        );
+        assert_ne!(
+            script.core.track.as_ptr(),
+            track_ptr,
+            "换脚本没有重新解析出新的 Track"
+        );
+        assert_eq!(script.event_count(), 1);
+        assert!(
+            !script.render_frame(3_100).unwrap().images().is_empty(),
+            "换完脚本后新时刻仍然空，说明渲染器读的还是旧轨道"
+        );
+        assert!(
+            script.render_frame(100).unwrap().images().is_empty(),
+            "换完脚本后旧时刻还在出图，说明渲染器读的是旧轨道"
+        );
     }
 
     const CODEC_PRIVATE: &[u8] = br#"[Script Info]

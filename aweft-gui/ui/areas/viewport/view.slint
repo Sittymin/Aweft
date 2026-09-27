@@ -7,12 +7,15 @@
 //  - 横向/竖向标尺复用曲线编辑器的刻度文字（TickLabels，无背景、无刻度线、无网格），
 //    直接浮在页面上：顶部横标尺 = 水平像素，左侧竖标尺 = 垂直像素
 //  - 未加载视频时显示为黑色占位，加载后视频画面按 fill 铺在其内
+//  - 字幕拟合进行中，右上角贴一块进度浮层（live_dp 那张曲线图）；它不参与命中，
+//    按下事件照常穿到画布上，拟合期间可以继续编辑
 import { CanvasNavigation } from "../../widgets/canvas_navigation.slint";
 import { ContextMenu, MenuItem } from "../../widgets/context_menu.slint";
 import { TickLabels } from "../graph_editor/ruler.slint";
+import { SubtitleFitOverlay } from "./subtitle_fit.slint";
 import { Theme } from "../../theme/index.slint";
-import { DismissOverlayState, VideoState } from "../../bridge/state.slint";
-import { VideoCallbacks } from "../../bridge/callbacks.slint";
+import { DismissOverlayState, OverlayState, SubtitleState, VideoState } from "../../bridge/state.slint";
+import { SubtitleCallbacks, VideoCallbacks } from "../../bridge/callbacks.slint";
 
 export component VideoPlayer inherits Rectangle {
     background: #3a3a40;
@@ -79,6 +82,10 @@ export component VideoPlayer inherits Rectangle {
     private property <float> move-start-wy: 0.0;
     private property <float> move-video-sx: 0.0;
     private property <float> move-video-sy: 0.0;
+
+    // 拖拽移动一行字幕的会话状态：命中哪一行、已经拖了多少都由 Rust 持有，这里只记
+    // 「本次拖动归字幕」，用于决定要不要继续上报位移。
+    private property <bool> moving-line: false;
 
     // 右键菜单状态（目标视频下标 + 弹出位置）
     private property <bool> menu-open: false;
@@ -212,6 +219,51 @@ export component VideoPlayer inherits Rectangle {
         }
     }
 
+    // 字幕覆盖层：贴在主视频矩形上的整帧图。帧的排版比例 = 主视频显示像素比例，
+    // 但纹理按这个矩形在屏幕上的**物理像素数**光栅化（1:1，放大字幕时不发虚），
+    // 倍率由 Rust 决定，见 `render::subtitle::pipeline::raster_size`。
+    // 声明在所有视频矩形之后、标尺之前：字幕压在画面上，但不遮标尺。
+    // 缩放/平移与主视频共用同一组 screen-x/screen-y。
+    Rectangle {
+        x: root.main-rect-x;
+        y: root.main-rect-y;
+        width: root.main-rect-w;
+        height: root.main-rect-h;
+        clip: true;
+        // 逻辑尺寸报给 Rust 换算光栅尺寸（.slint 读不到 scale factor）。
+        // 只有缩放手势与改窗口尺寸会触发，档位之外的抖动在 Rust 侧被吸收。
+        changed width => {
+            SubtitleState.report-overlay-size(root.main-rect-w, root.main-rect-h);
+        }
+        changed height => {
+            SubtitleState.report-overlay-size(root.main-rect-w, root.main-rect-h);
+        }
+
+        Image {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            image-fit: fill;
+            source: SubtitleState.current-subtitle-frame;
+        }
+
+        // 选中行的包围框。框的坐标是排版像素，与本矩形（= 脚本的排版帧）同一基准，
+        // 所以只乘视口缩放，不必再换算平移。裁剪到这里跟 libass 自己画的范围一致。
+        // 纯显示物：里面没有 TouchArea，按下事件照常穿到上面的 CanvasNavigation，
+        // 由它问 Rust 这一点命中哪一行（`SubtitleCallbacks.line-picked` /
+        // `line-drag-started`，命中判定读的就是这一份模型）。
+        for lbox in SubtitleState.boxes: Rectangle {
+            visible: lbox.selected;
+            x: lbox.x * root.nav-zoom * 1px;
+            y: lbox.y * root.nav-zoom * 1px;
+            width: lbox.width * root.nav-zoom * 1px;
+            height: lbox.height * root.nav-zoom * 1px;
+            border-width: 2px;
+            border-color: Theme.data.node-editor.node-selected-outline;
+        }
+    }
+
     // 顶部横向标尺：无背景、无刻度线，仅主刻度数字（水平像素）
     Rectangle {
         x: 0px;
@@ -264,19 +316,31 @@ export component VideoPlayer inherits Rectangle {
         zoom-step: 1.2;
         marquee-enabled: true;
         marquee-dragged(x1, y1, x2, y2) => {
-            // 首次拖动：判定起点是否命中非主视频 → 进入移动会话
-            if !root.moving-video {
+            // 首次拖动：先看起点命中哪一行字幕，再判断是否命中可移动的非主视频。
+            // 字幕排在画面之上，按住字幕时的意图是挪字幕，所以字幕优先。
+            if !root.moving-video && !root.moving-line {
                 let wx: float = root.world-x(x1);
                 let wy: float = root.world-y(y1);
-                let idx: int = VideoCallbacks.video-hit-top(wx, wy);
-                if idx >= 0 && idx != VideoState.main-video {
-                    root.moving-video = true;
-                    root.moving-video-index = idx;
-                    root.move-start-wx = wx;
-                    root.move-start-wy = wy;
-                    root.move-video-sx = VideoState.video-positions[idx].x;
-                    root.move-video-sy = VideoState.video-positions[idx].y;
+                // 这一点命不命中一行字幕由 Rust 判（位置是基线，每行都拖得动）
+                if SubtitleCallbacks.line-drag-started(wx, wy) {
+                    root.moving-line = true;
+                } else {
+                    let idx: int = VideoCallbacks.video-hit-top(wx, wy);
+                    if idx >= 0 && idx != VideoState.main-video {
+                        root.moving-video = true;
+                        root.moving-video-index = idx;
+                        root.move-start-wx = wx;
+                        root.move-start-wy = wy;
+                        root.move-video-sx = VideoState.video-positions[idx].x;
+                        root.move-video-sy = VideoState.video-positions[idx].y;
+                    }
                 }
+            }
+            if root.moving-line {
+                // 位移换算成排版像素（= 世界坐标）报给 Rust；落点由 Rust 在松手时提交
+                SubtitleCallbacks.line-dragged(
+                    root.world-x(x2) - root.world-x(x1),
+                    root.world-y(y2) - root.world-y(y1));
             }
             if root.moving-video {
                 let wx: float = root.world-x(x2);
@@ -288,13 +352,20 @@ export component VideoPlayer inherits Rectangle {
             }
         }
         marquee-done(x1, y1, x2, y2, modifier) => {
+            if root.moving-line {
+                SubtitleCallbacks.line-released();
+            }
+            root.moving-line = false;
             root.moving-video = false;
         }
         background-pressed(modifier) => {
-            // 点击（未拖成移动）：命中选中视频（重叠时按选中顺序循环）
+            // 点击（未拖成移动）：命中一行字幕就选中那一行，否则命中选中视频
+            // （重叠时按选中顺序循环）
             let wx: float = root.world-x(nav.mouse-x / 1px);
             let wy: float = root.world-y(nav.mouse-y / 1px);
-            VideoCallbacks.select-video(VideoCallbacks.video-picked(wx, wy), modifier);
+            if !SubtitleCallbacks.line-picked(wx, wy, modifier) {
+                VideoCallbacks.select-video(VideoCallbacks.video-picked(wx, wy), modifier);
+            }
         }
         context-pressed(x, y) => {
             // 右键命中视频 → 弹上下文菜单（设为主视频/更换视频）
@@ -308,6 +379,17 @@ export component VideoPlayer inherits Rectangle {
                 root.menu-open = true;
             }
         }
+    }
+
+    // 字幕拟合进度浮层：贴在视口右上角，纯显示物（卡片里没有 TouchArea），
+    // 按下事件穿到上面的 CanvasNavigation。声明在右键菜单之前：菜单要能盖住它。
+    if OverlayState.show-subtitle-fit-overlay: SubtitleFitOverlay {
+        data: OverlayState.subtitle-fit-overlay-data;
+        // `y` 让开视口顶部那 16px 的横向标尺；宽高各留余量，视口挤小时整块卡片仍在画布内。
+        width: min(420px, parent.width - 24px);
+        height: min(224px, parent.height - 40px);
+        x: parent.width - self.width - 12px;
+        y: 20px;
     }
 
     // 视频右键菜单：非主视频可设为主视频；所有视频可切换静音/更换视频。

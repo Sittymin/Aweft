@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::animation::{AnimationError, AnimationLibrary, apply_animation_to_style};
-use crate::ids::{AnimDataId, NodeGraphId, NodeId};
+use crate::ids::{AnimDataId, ItemId, NodeGraphId, NodeId};
 use crate::node_graph::{
     Node, NodeGraph, NodeHandle,
     error::EvalError,
@@ -20,11 +20,15 @@ use crate::node_graph::{
 // ── LineContext ───────────────────────────────────────────────────────────────
 
 /// 外部传入的当前行信息。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LineContext {
     pub actor: String,
     pub line_text: String,
+    /// 当前可见行的序号：插入/删除/隐藏任意一行都会让它移位，因此只能用于人眼可读的
+    /// 展示与临时判断，**不要**用它绑定任何需要跨编辑存活的东西。
     pub line_index: i64,
+    /// 这条字幕行的稳定身份。自动生成的条件（视口拖动写出的那条链）只认它。
+    pub item_id: ItemId,
 }
 
 // ── 求值结果 ─────────────────────────────────────────────────────────────────
@@ -55,6 +59,8 @@ pub enum ApplicationNodeKind {
     MatchActor,
     MatchText,
     IntEq,
+    /// 文本全等判断：按行自动生成的条件用它，`MatchActor` 的子串匹配不足以锁定一行。
+    TextEq,
     And,
     Or,
     Not,
@@ -143,6 +149,11 @@ impl NodeTreeType for ApplicationNodeKind {
                         .socket_values
                         .insert(sid, SocketValue::Int(line.line_index));
                 }
+                if let Some(&sid) = node.outputs.get(3) {
+                    cache
+                        .socket_values
+                        .insert(sid, SocketValue::Text(line.item_id.to_string()));
+                }
             }
 
             ApplicationNodeKind::MatchActor => {
@@ -188,6 +199,22 @@ impl NodeTreeType for ApplicationNodeKind {
                     .unwrap_or(0);
                 if let Some(&sid) = node.outputs.first() {
                     cache.socket_values.insert(sid, SocketValue::Bool(a == b));
+                }
+            }
+
+            // 文本全等。自动生成的条件要的是「就这一行」，而 MatchActor 的子串匹配太宽
+            // （空 pattern 恒真、互相前缀的值会串台），所以单列一个全等判断。任一侧缺值
+            // 或未连线都判 false：条件宁可永不成立，也不能让一条按行写的单元套到所有行上。
+            ApplicationNodeKind::TextEq => {
+                let eq = match (
+                    graph.read_input(node, 0, &cache.socket_values),
+                    graph.read_input(node, 1, &cache.socket_values),
+                ) {
+                    (Some(SocketValue::Text(a)), Some(SocketValue::Text(b))) => a == b,
+                    _ => false,
+                };
+                if let Some(&sid) = node.outputs.first() {
+                    cache.socket_values.insert(sid, SocketValue::Bool(eq));
                 }
             }
 
@@ -539,7 +566,8 @@ define_application_nodes! {
     ContextInput, ContextInputIn, ContextInputOut {
         kind: ApplicationNodeKind::ContextInput;
         inputs: {}
-        outputs: { actor: TextSocket, text: TextSocket, index: IntSocket }
+        // `id` 追加在末尾：已存盘图里的端口按下标存着，插队会让老连线指错口。
+        outputs: { actor: TextSocket, text: TextSocket, index: IntSocket, id: TextSocket }
     }
     MatchActor, MatchActorIn, MatchActorOut {
         kind: ApplicationNodeKind::MatchActor;
@@ -554,6 +582,11 @@ define_application_nodes! {
     IntEq, IntEqIn, IntEqOut {
         kind: ApplicationNodeKind::IntEq;
         inputs: { a: IntSocket, b: IntSocket }
+        outputs: { equal: BoolSocket }
+    }
+    TextEq, TextEqIn, TextEqOut {
+        kind: ApplicationNodeKind::TextEq;
+        inputs: { source: TextSocket, expected: TextSocket }
         outputs: { equal: BoolSocket }
     }
     And, AndIn, AndOut {
@@ -717,6 +750,7 @@ mod tests {
             actor: "Alice".into(),
             line_text: "hello world".into(),
             line_index: 3,
+            item_id: ItemId::new(),
         };
         let empty = HashMap::new();
         let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
@@ -744,6 +778,7 @@ mod tests {
             actor: "Alice".into(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let empty = HashMap::new();
         let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
@@ -773,6 +808,7 @@ mod tests {
             actor: String::new(),
             line_text: "delay 1.5s then start".into(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let empty = HashMap::new();
         let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
@@ -811,6 +847,7 @@ mod tests {
             actor: "Alice".into(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let empty = HashMap::new();
         let matched = g.evaluate(&EvalContext::app(&ctx, &empty)).unwrap();
@@ -862,6 +899,7 @@ mod tests {
             actor: "Alice".into(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let style_results = HashMap::new();
         let matched = g.evaluate(&EvalContext::app(&ctx, &style_results)).unwrap();
@@ -913,12 +951,83 @@ mod tests {
             actor: "Alice says hello".into(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let style_results = HashMap::new();
         let matched = g.evaluate(&EvalContext::app(&ctx, &style_results)).unwrap();
         assert!(matched.is_some());
     }
 
+    /// 按行自动生成的条件走 `ContextInput.id` + `TextEq` 全等。
+    ///
+    /// 同一个图对象连评两行是这条测试的重点：求值缓存必须按行失效，否则第二行会沿用
+    /// 第一行的 `ContextInput` 输出，一条按行写的样式就会套到整条时间轴上。
+    #[test]
+    fn text_eq_gates_a_unit_to_one_line() {
+        let mut g = ApplicationGraph::new("test");
+        let ctx_node: ApplicationNodeHandle<ContextInput> = g
+            .add_node(ApplicationNodeKind::ContextInput, &[], &[])
+            .unwrap();
+        let eq: ApplicationNodeHandle<TextEq> =
+            g.add_node(ApplicationNodeKind::TextEq, &[], &[]).unwrap();
+        let app_ref = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::AppRef(NodeGraphId::new()),
+                &[],
+                &[SocketDecl::output("style", SocketType::Style)],
+            )
+            .unwrap();
+        let apply: ApplicationNodeHandle<ApplyMatch> = g
+            .add_node(ApplicationNodeKind::ApplyMatch, &[], &[])
+            .unwrap();
+        let group_out = g
+            .add_node::<NodeId>(
+                ApplicationNodeKind::GroupOutput,
+                &[SocketDecl::input("application", SocketType::Application)],
+                &[],
+            )
+            .unwrap();
+
+        g.connect_raw(g.nodes[&app_ref].outputs[0], apply.inputs.style.id)
+            .unwrap();
+        g.connect(ctx_node.outputs.id, eq.inputs.source).unwrap();
+        g.connect(eq.outputs.equal, apply.inputs.condition).unwrap();
+        g.connect_raw(apply.outputs.application.id, g.nodes[&group_out].inputs[0])
+            .unwrap();
+
+        let item_id = ItemId::new();
+        g.set_socket_value(
+            eq.inputs.expected.id,
+            Some(SocketValue::Text(item_id.to_string())),
+        )
+        .unwrap();
+
+        let owning = LineContext {
+            actor: String::new(),
+            line_text: String::new(),
+            line_index: 0,
+            item_id,
+        };
+        let other = LineContext {
+            actor: String::new(),
+            line_text: String::new(),
+            line_index: 1,
+            item_id: ItemId::new(),
+        };
+        let style_results = HashMap::new();
+        assert!(
+            g.evaluate(&EvalContext::app(&owning, &style_results))
+                .unwrap()
+                .is_some(),
+            "本行应命中"
+        );
+        assert!(
+            g.evaluate(&EvalContext::app(&other, &style_results))
+                .unwrap()
+                .is_none(),
+            "换到别行不该再命中"
+        );
+    }
     #[test]
     fn app_layer_composes_styles_by_priority() {
         let mut bold_chain = make_bold_chain(12.0, true);
@@ -1024,6 +1133,7 @@ mod tests {
             actor: "Alice".into(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
 
         let result = layer
@@ -1110,6 +1220,7 @@ mod tests {
             actor: "Alice".into(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
 
         // Animation library without the referenced clip should error.
@@ -1153,6 +1264,7 @@ mod tests {
             actor: String::new(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let err = g
             .evaluate(&EvalContext::app(&ctx, &HashMap::new()))
@@ -1196,6 +1308,7 @@ mod tests {
             actor: String::new(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let style_results = HashMap::new();
         let ctx = EvalContext::app(&line_ctx, &style_results);
@@ -1256,6 +1369,7 @@ mod tests {
             actor: String::new(),
             line_text: String::new(),
             line_index: 0,
+            item_id: ItemId::new(),
         };
         let style_results = HashMap::new();
         let ctx = EvalContext::app(&line_ctx, &style_results);

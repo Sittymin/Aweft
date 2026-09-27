@@ -44,3 +44,7 @@ add-line 时间解析分支、折叠 → FilterModel 过滤、选择路由（单
 MainWindow 窗口坐标（`absolute-position`，Area 偏移参与计算）、孔外**右键**按下即收起并自动关菜单
 （`clicked` 只认左键，是当初波形图音轨菜单收不起来的根因）、孔内点击命中菜单项且收起时释放遮罩、
 已收起菜单（`visible: false`）不再吞点击。
+
+**subtitle_fit_hud.rs**（字幕拟合浮层“不挡操作”契约）：真实 `SubtitleFitOverlay` + 视口挂载点那组几何 +
+整窗 `TouchArea` 当画布替身，锁定浮层是宿主右上角的局部角标（不铺满宿主、贴右边界留 12px、y 让开顶部
+16px 标尺）、点击卡片中心仍然命中下面的画布——往卡片里加 `TouchArea` 或任何可交互元素会在这里失败。

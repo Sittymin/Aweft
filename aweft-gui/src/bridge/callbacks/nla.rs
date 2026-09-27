@@ -2,6 +2,8 @@ use crate::actions::Action;
 use crate::bridge::types::{AnimationCallbacks, MainWindow};
 
 use crate::store::AppStore;
+// winit 事件只在桌面后端存在：Android 特性集里 winit 后端被彻底排除
+//（见 aweft-gui/Cargo.toml），slint::winit_030 模块在该目标上不存在。
 use slint::ComponentHandle;
 use std::{cell::RefCell, rc::Rc};
 
@@ -154,6 +156,18 @@ pub(super) fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppSt
     let s = Rc::clone(&store);
     instance
         .global::<AnimationCallbacks>()
+        .on_nla_anim_selected(move |index| {
+            dispatch_and_render(
+                &s,
+                Action::Animation(AnimationAction::Nla(NlaAction::AnimDataSelected { index })),
+                &weak,
+            );
+        });
+
+    let weak = instance.as_weak();
+    let s = Rc::clone(&store);
+    instance
+        .global::<AnimationCallbacks>()
         .on_nla_strip_drag_cancel(move || {
             dispatch_and_render(
                 &s,
@@ -176,18 +190,6 @@ pub(super) fn setup_nla_callbacks(instance: &MainWindow, store: Rc<RefCell<AppSt
                     row_hi,
                     modifier,
                 })),
-                &weak,
-            );
-        });
-
-    let weak = instance.as_weak();
-    let s = Rc::clone(&store);
-    instance
-        .global::<AnimationCallbacks>()
-        .on_nla_anim_selected(move |index| {
-            dispatch_and_render(
-                &s,
-                Action::Animation(AnimationAction::Nla(NlaAction::AnimDataSelected { index })),
                 &weak,
             );
         });

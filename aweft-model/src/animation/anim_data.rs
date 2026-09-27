@@ -53,8 +53,13 @@ pub enum PropertyPath {
     Blur,
     BlurEdges,
 
+    /// 位置锚点：排版像素
     PositionX,
     PositionY,
+    /// 位置锚点：排版尺寸的分数（0..1）。与 `PositionX/Y` 是同一个锚点的两种单位，
+    /// 可以并存：分数部分随输出尺寸等比缩放，像素部分作固定偏移。
+    PositionRatioX,
+    PositionRatioY,
 
     OriginX,
     OriginY,

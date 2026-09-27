@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 
 use aweft_ass::types::tags::StyleTag;
-use aweft_ass::AssColorRgb;
 use aweft_model::animation::action::ActionCurve;
 use aweft_model::animation::anim_data::PropertyPath;
 use aweft_model::animation::fcurve::evaluate_fcurve;
@@ -25,12 +24,12 @@ use aweft_model::ids::ActionId;
 use aweft_model::node_graph::style::StyleResult;
 
 use super::{
-    curve_global_range, has_modifiers, try_build_segment, AnimAssResult, ConvertOptions, Cursor,
-    ProgressEvent, TimeMapper, TimedTags,
+    AnimAssResult, ConvertOptions, Cursor, ProgressDetail, ProgressEvent, TimeMapper, TimedTags,
+    curve_global_range, has_modifiers, try_build_segment,
 };
 use crate::segmentation::{
-    diagnostic_min_segmentation, force_single_step_path, min_segmentation, reconstruct_path,
-    UniformGrid,
+    UniformGrid, force_single_step_path, min_segmentation, min_segmentation_traced,
+    reconstruct_path,
 };
 
 type FallbackFrames = Vec<(f64, Vec<StyleTag>)>;
@@ -182,29 +181,22 @@ fn convert_action_strip(
     // 因此落在局部极值上的段（段内 (v1-v0) ≈ 0）不会被强制切成细条。
     let granges: HashMap<PropertyPath, f64> = curve_map
         .iter()
-        .map(|(prop, curve)| {
-            (
-                prop.clone(),
-                curve_global_range(&curve.curve, t_start, t_end),
-            )
-        })
+        .map(|(prop, curve)| (prop.clone(), curve_global_range(&curve.curve, t_start, t_end)))
         .collect();
 
     // Action 时长为 0，或所有关键帧都在一个点：直接输出单个瞬间快照，
     // 避免无效的零宽 DP 计算。
     if span <= 1e-12 {
-        return Ok(single_snapshot_segment(
-            t_start, t_end, &curve_map, &granges, &time, cursor,
-        ));
+        let snapshot =
+            single_snapshot_segment(t_start, t_end, &curve_map, &granges, &time, cursor);
+        advance_cursor_to_end(&curve_map, cursor, t_end);
+        return Ok(snapshot);
     }
 
-    // 采样节点处的 cursor 与路径无关：缺失轴回退到基础位置，存在的轴使用该
-    // 时刻的曲线值。
-    let (base_x, base_y) = cursor.pos_or_default();
-    let base_colors = cursor.colors;
+    // 探测用基 cursor 的副本：颜色会就地写回副本，不影响真实链路；位置只读基值。
     log::info!("DP segmenting action {action_id} (n={n}, tolerance={tolerance})...");
     let is_valid = |start: usize, end: usize| {
-        let mut probe = node_cursor_at(&curve_map, &grid, base_x, base_y, base_colors, start);
+        let mut probe = cursor.clone();
         let (_, diagnostics) = try_build_segment(
             grid.time_at(start),
             grid.time_at(end),
@@ -216,43 +208,55 @@ fn convert_action_strip(
         diagnostics.max_err <= tolerance
     };
 
-    let mut parent = if let Some(sender) = &opts.progress_sender {
-        let curve_samples: Vec<(f64, f64)> = (0..=128)
-            .map(|i| {
-                let t = t_start + (i as f64 / 128.0) * span;
-                let v = curve_map
-                    .values()
-                    .next()
-                    .map_or(0.0, |ac| evaluate_fcurve(&ac.curve, t));
-                (t, v)
-            })
-            .collect();
-        let grid_times: Vec<f64> = (0..=grid.len()).map(|i| grid.time_at(i)).collect();
-        let _ = sender.send(ProgressEvent::ActionStarted {
-            action_id,
-            n: grid.len(),
-            grid_times,
-            curve_samples,
-        });
-        let s = sender.clone();
-        let result = diagnostic_min_segmentation(
-            grid.len(),
-            is_valid,
-            move |end, valid, chosen, parent_chain| {
-                let _ = s.send(ProgressEvent::DpStep {
-                    end,
-                    valid,
-                    chosen,
-                    parent_chain,
-                });
-            },
-        );
-        let _ = sender.send(ProgressEvent::SegmentsFound {
-            path: reconstruct_path(&result),
-        });
-        result
-    } else {
-        min_segmentation(grid.len(), is_valid)
+    let mut parent = match &opts.progress_sender {
+        None => min_segmentation(grid.len(), is_valid, |_, _| {}),
+        Some(sender) => {
+            // 曲线图取全局摆幅最大的那条通道：读第一条的话，一个只有 Y 在动的上下浮动
+            // 会画成一根平线，图上根本看不出拟合的是什么。
+            let busiest = curve_map
+                .iter()
+                .max_by(|(_, ac_a), (_, ac_b)| {
+                    granges[&ac_a.property].total_cmp(&granges[&ac_b.property])
+                })
+                .map(|(_, ac)| &ac.curve);
+            let curve_samples: Vec<(f64, f64)> = (0..=128)
+                .map(|i| {
+                    let t = t_start + (i as f64 / 128.0) * span;
+                    let v = busiest.as_ref().map_or(0.0, |ac| evaluate_fcurve(ac, t));
+                    (t, v)
+                })
+                .collect();
+            let grid_times: Vec<f64> = (0..=grid.len()).map(|i| grid.time_at(i)).collect();
+            let _ = sender.send(ProgressEvent::ActionStarted {
+                action_id,
+                name: action.name.clone(),
+                n: grid.len(),
+                grid_times,
+                curve_samples,
+            });
+            let n = grid.len();
+            let s = sender.clone();
+            let diagnostic = opts.progress_detail == ProgressDetail::Diagnostic;
+            if diagnostic {
+                min_segmentation_traced(n, is_valid, move |end, valid, chosen| {
+                    let _ = s.send(ProgressEvent::DpProgress {
+                        end,
+                        n,
+                        chosen,
+                        valid: valid.to_vec(),
+                    });
+                })
+            } else {
+                min_segmentation(n, is_valid, move |end, chosen| {
+                    let _ = s.send(ProgressEvent::DpProgress {
+                        end,
+                        n,
+                        chosen,
+                        valid: Vec::new(),
+                    });
+                })
+            }
+        }
     };
     if parent[n] == usize::MAX {
         log::warn!(
@@ -261,9 +265,17 @@ fn convert_action_strip(
         );
         force_single_step_path(&mut parent);
     }
+    // 收尾路径必须在兜底之后发：不可达时 `parent` 里还是 `usize::MAX`，
+    // `reconstruct_path` 会拿它当下标直接越界 panic。
+    if let Some(sender) = &opts.progress_sender {
+        let _ = sender.send(ProgressEvent::SegmentsFound {
+            path: reconstruct_path(&parent),
+        });
+    }
 
     let path = reconstruct_path(&parent);
     let segments = build_segments_from_path(&path, &grid, &curve_map, &granges, &time, cursor);
+    advance_cursor_to_end(&curve_map, cursor, t_end);
     Ok(group_into_lines(segments))
 }
 
@@ -285,11 +297,7 @@ fn group_into_lines(segments: Vec<TimedTags>) -> Vec<TimedTags> {
             .any(|tag| matches!(tag, StyleTag::Move { .. }));
         let line_has_move = current
             .as_ref()
-            .map(|line| {
-                line.tags
-                    .iter()
-                    .any(|tag| matches!(tag, StyleTag::Move { .. }))
-            })
+            .map(|line| line.tags.iter().any(|tag| matches!(tag, StyleTag::Move { .. })))
             .unwrap_or(false);
 
         // 行内最多一个 \move：当前行已有 \move 而这段又要 \move → 该段另起一行。
@@ -323,7 +331,11 @@ fn group_into_lines(segments: Vec<TimedTags>) -> Vec<TimedTags> {
 
 /// 收集所有无修饰动画曲线的关键帧时间点，裁剪到 action 时间窗 `[actstart, actend]`
 /// 内，并补上窗口边界。返回 None 表示没有可用的动画内容。
-fn collect_segment_times(curves: &[ActionCurve], actstart: f64, actend: f64) -> Option<Vec<f64>> {
+fn collect_segment_times(
+    curves: &[ActionCurve],
+    actstart: f64,
+    actend: f64,
+) -> Option<Vec<f64>> {
     // 合并所有无修饰动画曲线的关键帧时间点
     // HACK: 似乎目前还没有处理 Modifier 的情况
     let all_kfs: Vec<&[Keyframe]> = curves
@@ -359,27 +371,22 @@ fn collect_segment_times(curves: &[ActionCurve], actstart: f64, actend: f64) -> 
     Some(times)
 }
 
-/// 构建采样节点处的「路径无关」cursor：缺失轴回退到基础位置，存在的轴使用该
-/// 时刻的曲线值。
-fn node_cursor_at(
+/// strip 走完才推进 cursor：把终点时刻解析出的锚点折成像素基值，下一条 strip 从这里
+/// 接着走。这条 strip 没有位置曲线时不动 cursor——位置槽原样继承，折一次会把样式的
+/// 分数基值永久变成像素偏移。
+fn advance_cursor_to_end(
     curve_map: &HashMap<PropertyPath, &ActionCurve>,
-    grid: &UniformGrid,
-    base_x: f64,
-    base_y: f64,
-    base_colors: [Option<AssColorRgb>; 4],
-    idx: usize,
-) -> Cursor {
-    let t = grid.time_at(idx);
-    let x = curve_map
-        .get(&PropertyPath::PositionX)
-        .map_or(base_x, |curve| evaluate_fcurve(&curve.curve, t));
-    let y = curve_map
-        .get(&PropertyPath::PositionY)
-        .map_or(base_y, |curve| evaluate_fcurve(&curve.curve, t));
-    Cursor {
-        pos: Some((x, y)),
-        colors: base_colors,
+    cursor: &mut Cursor,
+    t_end: f64,
+) {
+    let axes = Cursor::position_curves(curve_map);
+    if axes
+        .iter()
+        .all(|axis| axis.offset.is_none() && axis.ratio.is_none())
+    {
+        return;
     }
+    cursor.advance_to(cursor.anchor_at(axes, t_end));
 }
 
 /// 把切分路径（格点对序列）转换成最终的时间段 + 标签段列表。

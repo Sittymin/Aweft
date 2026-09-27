@@ -815,9 +815,14 @@ impl Display for Event {
                             write!(f, "{}", s)?;
                         }
                         TextSegment::Overrides(style_tags) => {
+                            // 覆盖块必须由花括号定界：解析侧只认 {...}
+                            // （types/parse_style_override.rs:790），少了括号 libass 会把
+                            // \fs、\move 当正文渲染出来。
+                            write!(f, "{{")?;
                             for st in style_tags {
                                 write!(f, "{}", st)?;
                             }
+                            write!(f, "}}")?;
                         }
                         TextSegment::Drawing(drawing_commands) => {
                             for dc in drawing_commands {

@@ -148,6 +148,106 @@ fn typed_api_vec2_chain() {
 }
 
 #[test]
+fn position_output_is_data_that_downstream_can_compute_from() {
+    let mut graph = NodeGraph::new("position-output");
+
+    let source: NodeHandle<StyleSource> = graph.add_node(NodeKind::StyleSource, &[], &[]).unwrap();
+    let combine: NodeHandle<CombineVec2> = graph
+        .add_node(NodeKind::VecOp(VecOpKind::CombineVec2), &[], &[])
+        .unwrap();
+    let set_a: NodeHandle<SetPosition> = graph
+        .add_node(NodeKind::StyleOp(StyleOpKind::SetPosition), &[], &[])
+        .unwrap();
+    let separate: NodeHandle<SeparateVec2> = graph
+        .add_node(NodeKind::VecOp(VecOpKind::SeparateVec2), &[], &[])
+        .unwrap();
+    let swapped: NodeHandle<CombineVec2> = graph
+        .add_node(NodeKind::VecOp(VecOpKind::CombineVec2), &[], &[])
+        .unwrap();
+    let set_b: NodeHandle<SetPosition> = graph
+        .add_node(NodeKind::StyleOp(StyleOpKind::SetPosition), &[], &[])
+        .unwrap();
+    let output: NodeHandle<GroupOutput> = graph.add_node(NodeKind::GroupOutput, &[], &[]).unwrap();
+
+    graph
+        .connect(source.outputs.style, set_a.inputs.style)
+        .unwrap();
+    graph
+        .connect(combine.outputs.vector, set_a.inputs.position)
+        .unwrap();
+    graph
+        .connect(set_a.outputs.style, set_b.inputs.style)
+        .unwrap();
+    graph
+        .connect(set_b.outputs.style, output.inputs.style)
+        .unwrap();
+    // 位置数据出口 → 拆分量 → x、y 对调后重组 → 第二个设位置。对调过，所以结果里的
+    // (4,3) 只可能来自数据通路，样式链传不过去这个值。
+    graph
+        .connect(set_a.outputs.position, separate.inputs.vector)
+        .unwrap();
+    graph.connect(separate.outputs.x, swapped.inputs.y).unwrap();
+    graph.connect(separate.outputs.y, swapped.inputs.x).unwrap();
+    graph
+        .connect(swapped.outputs.vector, set_b.inputs.position)
+        .unwrap();
+    graph.set_value(combine.inputs.x, 3.0).unwrap();
+    graph.set_value(combine.inputs.y, 4.0).unwrap();
+
+    let result = graph.evaluate(&EvalContext::style()).unwrap();
+    assert_eq!(result.position, Some(Vec2 { x: 4.0, y: 3.0 }));
+}
+
+#[test]
+fn position_output_is_cleared_with_the_position() {
+    let mut graph = NodeGraph::new("position-output-clear");
+
+    let source: NodeHandle<StyleSource> = graph.add_node(NodeKind::StyleSource, &[], &[]).unwrap();
+    let set_a: NodeHandle<SetPosition> = graph
+        .add_node(NodeKind::StyleOp(StyleOpKind::SetPosition), &[], &[])
+        .unwrap();
+    let separate: NodeHandle<SeparateVec2> = graph
+        .add_node(NodeKind::VecOp(VecOpKind::SeparateVec2), &[], &[])
+        .unwrap();
+    let swapped: NodeHandle<CombineVec2> = graph
+        .add_node(NodeKind::VecOp(VecOpKind::CombineVec2), &[], &[])
+        .unwrap();
+    let set_b: NodeHandle<SetPosition> = graph
+        .add_node(NodeKind::StyleOp(StyleOpKind::SetPosition), &[], &[])
+        .unwrap();
+    let output: NodeHandle<GroupOutput> = graph.add_node(NodeKind::GroupOutput, &[], &[]).unwrap();
+
+    graph
+        .connect(source.outputs.style, set_a.inputs.style)
+        .unwrap();
+    graph
+        .connect(set_a.outputs.style, set_b.inputs.style)
+        .unwrap();
+    graph
+        .connect(set_b.outputs.style, output.inputs.style)
+        .unwrap();
+    graph
+        .connect(set_a.outputs.position, separate.inputs.vector)
+        .unwrap();
+    graph.connect(separate.outputs.x, swapped.inputs.y).unwrap();
+    graph.connect(separate.outputs.y, swapped.inputs.x).unwrap();
+    graph
+        .connect(swapped.outputs.vector, set_b.inputs.position)
+        .unwrap();
+
+    graph
+        .set_value(set_a.inputs.position, Vec2 { x: 3.0, y: 4.0 })
+        .unwrap();
+    let first = graph.evaluate(&EvalContext::style()).unwrap();
+    assert_eq!(first.position, Some(Vec2 { x: 4.0, y: 3.0 }));
+
+    graph.clear_value(set_a.inputs.position).unwrap();
+    // 位置不再写进样式，位置数据出口也不能留着上一次的数字
+    let second = graph.evaluate(&EvalContext::style()).unwrap();
+    assert_eq!(second.position, Some(Vec2 { x: 0.0, y: 0.0 }));
+}
+
+#[test]
 fn clip_rect_is_normalized() {
     let mut graph = NodeGraph::new("clip-rect-test");
 

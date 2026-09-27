@@ -10,6 +10,13 @@ use aweft_project::{ProjectStore, SavedProject};
 use slint::PhysicalSize;
 use std::sync::atomic::AtomicBool;
 
+/// 兜底预览帧尺寸：没有主视频、或主视频还没收到首帧时，视口世界尺寸、字幕排版尺寸
+/// 与合成输出尺寸统一取它（即"空视口按 1080P 预览"）。
+///
+/// `ui/areas/viewport/view.slint` 的 `video-world-w/h` 兜底写的是同一组字面量：Slint
+/// 侧读不到这里的常量，改数值必须两处一起改。
+pub const DEFAULT_PREVIEW_FRAME_SIZE: (u32, u32) = (1920, 1080);
+
 /// 拖拽操作的状态信息
 #[derive(Debug, Clone)]
 pub enum DragOperation {
@@ -149,10 +156,23 @@ pub struct AppState {
     pub video_seek_session: Option<VideoSeekSession>,
     // 渲染器 GPU 句柄（RenderingSetup 时缓存；打开视频时按需连接 Sink）
     pub video_wgpu: Option<crate::render::video_sink::WgpuHandles>,
-    // 字幕渲染器
-    pub subtitle_renderer: Option<crate::render::subtitle::SubtitleRenderer>,
-    // libass 字幕渲染器
-    pub libass_renderer: Option<aweft_libass::SubtitleRenderer>,
+    // 字幕通路：libass 轨 + wgpu 合成器（RenderingSetup 时随 GPU 句柄建好）
+    pub(crate) subtitle: Option<crate::render::subtitle::SubtitlePipeline>,
+    // Some 表示视口里正按住一行字幕拖动；会话持有锚点与预览偏移，松手时才提交到链。
+    pub(crate) subtitle_line_drag: Option<crate::store::subtitle::LineDragSession>,
+    // 字幕拟合后台通路的投递端（`setup_subtitle_fit` 装 pump 时存入）。
+    // 无头测试不装，请求直接跳过。
+    pub(crate) fit_ui_sender:
+        Option<futures::channel::mpsc::UnboundedSender<crate::store::subtitle_fit::FitMessage>>,
+    // 每次真正提交给后台线程的请求递增；回到 UI 线程的消息按它丢弃过期批次。
+    pub(crate) fit_generation: u64,
+    // 单飞：后台线程此刻正握着一份拟合。
+    pub(crate) fit_in_flight: bool,
+    // 合并最新：在飞期间又收到请求，等这份跑完用当时最新的数据再跑一份。
+    pub(crate) fit_pending: bool,
+    // 无视频时的播放心跳（`setup_callbacks` 登记回调；transport 起停它）。
+    // 有视频会话时播放头由媒体时钟驱动，本时钟不参与。
+    pub(crate) preview_clock: crate::bridge::preview_clock::PreviewClock,
 }
 
 impl AppState {
@@ -176,8 +196,13 @@ impl AppState {
             video_playback_dirty: std::sync::Arc::new(AtomicBool::new(false)),
             video_seek_session: None,
             video_wgpu: None,
-            subtitle_renderer: None,
-            libass_renderer: None,
+            subtitle: None,
+            subtitle_line_drag: None,
+            fit_ui_sender: None,
+            fit_generation: 0,
+            fit_in_flight: false,
+            fit_pending: false,
+            preview_clock: Default::default(),
         }
     }
 
@@ -189,6 +214,18 @@ impl AppState {
             xmax: self.window_size.width.saturating_sub(1),
             ymax: self.window_size.height.saturating_sub(1),
         }
+    }
+
+    /// 预览帧尺寸：libass 的排版尺寸、合成器的输出纹理尺寸都取它，与覆盖层贴的主视频
+    /// 矩形同一基准，三者因此不需要互相换算。
+    ///
+    /// 无主视频或尚未收到首帧时回落到 [`DEFAULT_PREVIEW_FRAME_SIZE`]：空视口也要能出
+    /// 字幕、走播放头。
+    pub fn preview_frame_size(&self) -> (u32, u32) {
+        self.main_video
+            .and_then(|index| self.video_sessions.get(index))
+            .and_then(|session| session.wgpu_sink.last_video_size)
+            .unwrap_or(DEFAULT_PREVIEW_FRAME_SIZE)
     }
 
     /// 当前焦点视频：选择集合末项优先，无选择时回落主视频。

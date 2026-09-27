@@ -6,6 +6,8 @@ use crate::bridge::parse_time;
 use crate::store::AppStore;
 use aweft_model::ids::ItemId;
 use log::warn;
+// winit 事件只在桌面后端存在：Android 特性集里 winit 后端被彻底排除
+//（见 aweft-gui/Cargo.toml），slint::winit_030 模块在该目标上不存在。
 use slint::ComponentHandle;
 use std::{cell::RefCell, rc::Rc};
 

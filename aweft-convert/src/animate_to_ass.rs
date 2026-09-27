@@ -23,11 +23,14 @@ use fit::{chord_error, fit_color_segment, fit_scalar_segment, Acceleration};
 const RANGE_SAMPLES_PER_INTERVAL: usize = 256;
 const RANGE_SAMPLES_MAX: usize = 100_000;
 /// 用于评估拟合段相对源曲线误差的采样数。
-// 时间拆分数比较误差值
-const FIT_SAMPLES: usize = 128;
+// 时间拆分数比较误差值。DP 的每个候选段都会用这个预算把段内每个动画属性求一遍，
+// 候选总数是格点的平方量级，因此这里是主要的乘数。64 个点在「每个关键帧区间
+// 至少 16 个采样」的形状下仍能抓住极值，峰值低估约 0.2%，远小于 tolerance。
+const FIT_SAMPLES: usize = 64;
 /// minimax 优化器的粗指数网格。
-// 幂函数区间分割数（尝试的幂函数）
-const MINIMAX_GRID: usize = 80;
+// 幂函数区间分割数（尝试的幂函数）。网格在 log(0.001)..log(1000) 上均分，只负责
+// 挑对盆地，随后的黄金分割精化决定精度，所以每倍量级十个点足够。
+const MINIMAX_GRID: usize = 32;
 
 // ── 属性 → ASS 标签映射表（固定表） ───────────────────────────────────────
 type ColorGroupFn = fn(AssColorRgb) -> AnimatedStyleTag;
@@ -96,36 +99,58 @@ static ALPHA_PAIRS: &[(PropertyPath, AlphaGroupFn)] = &[
 ];
 
 /// DP 进度事件：由分段算法在运行时通过 channel 发送，供实时可视化消费。
+#[derive(Debug, Clone)]
 pub enum ProgressEvent {
     /// DP 开始处理一条新 action
     ActionStarted {
         action_id: aweft_model::ids::ActionId,
+        /// 动作名，界面上「正在拟合哪条动画」就读它。
+        name: String,
         /// 格点数（0..=n）
         n: usize,
         /// 格点对应的时间值（长度 n+1）
         grid_times: Vec<f64>,
-        /// 真实曲线采样（供渲染用）
+        /// 真实曲线采样（供渲染用）：取全局摆幅最大的那条通道，画一根不动的
+        /// 通道没有意义。
         curve_samples: Vec<(f64, f64)>,
     },
-    /// 对固定 end 完成了一次评估：valid 记录每个 start 是否合法
-    DpStep {
+    /// DP 走完一个格点 `end`：进度、本格选出的起点，以及（诊断详略下）本格逐起点的
+    /// 有效性判据。
+    DpProgress {
+        /// 当前格点，取值 `1..=n`。
         end: usize,
-        /// 该 end 下，各 start 的有效性（长度 = end）
-        valid: Vec<bool>,
-        /// DP 为该 end 选择的最优起点（如果有）
+        /// 区间总数，与 `ActionStarted.n` 相同。
+        n: usize,
+        /// DP 为该 `end` 选出的起点，即最终 `parent[end]`；`None` 表示本格还不可达。
+        /// `end` 的起点一旦定案就不再改写，所以按 `end` 顺序记下一份 `chosen` 就能
+        /// 在消费端重建出已锁定的前缀路径，不必每格传整条链。
         chosen: Option<usize>,
-        /// 当前已确定的最优前缀路径：parent[end] 是 end 的起点，
-        /// 沿 parent 链可回溯到 0。用于实时显示已锁定的段。
-        parent_chain: Vec<usize>,
+        /// 该 `end` 下各起点的有效性：`valid[start]` 为真表示该段误差达标，
+        /// 长度 = `end`。只有 `ProgressDetail::Diagnostic` 才填，Light 下为空。
+        valid: Vec<bool>,
     },
     /// DP 完成，`path` 是最终分段路径
     SegmentsFound { path: Vec<(usize, usize)> },
+}
+
+/// 进度事件的详细程度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProgressDetail {
+    /// 界面够用的那一组：动作名、DP 推进（含本格起点）、最终路径。DP 走的是
+    /// 与不发进度时同一条实现，只是每格多一次 channel 发送。
+    #[default]
+    Light,
+    /// `DpProgress.valid` 额外带上该格全部起点的有效性判据，供画有效性色带
+    /// （`live_dp` 与字幕拟合浮层用它）。每格多分配一张布尔表，`is_valid` 次数不变。
+    Diagnostic,
 }
 
 pub struct ConvertOptions {
     pub error_tolerance: f64,
     /// 若设置，DP 分段过程中会通过此通道发送实时进度事件
     pub progress_sender: Option<std::sync::mpsc::Sender<ProgressEvent>>,
+    /// 发了 `progress_sender` 时要不要附带调试用的全量判据。
+    pub progress_detail: ProgressDetail,
 }
 
 impl Default for ConvertOptions {
@@ -133,6 +158,7 @@ impl Default for ConvertOptions {
         Self {
             error_tolerance: 0.01,
             progress_sender: None,
+            progress_detail: ProgressDetail::Light,
         }
     }
 }
@@ -141,17 +167,33 @@ impl Default for ConvertOptions {
 // 如果必须分行，则需要Cursor
 #[derive(Debug, Clone)]
 pub struct Cursor {
-    pos: Option<(f64, f64)>,
+    /// 排版尺寸（写进脚本的 PlayResX/Y）：分数位置通道乘的就是它。
+    layout: [f64; 2],
+    /// 两轴的锚点基线，排版像素：绝对位置曲线在它之上相加，`\move` 走过一段后推进到
+    /// 解析出的锚点。
+    offset: [f64; 2],
+    /// 两轴的锚点基线，排版尺寸的分数：分数位置曲线在它之上相加。锚点一旦解析成像素
+    /// 就清零，避免下一段重复计入。
+    ratio: [f64; 2],
     /// 每个 COLOR_GROUPS 颜色组的当前颜色（按索引对齐）。颜色动画的缺省通道
     /// 从这里读取基础值，因此上一条 strip 动画过的通道会被继承，而不是跳回
-    /// 静态样式。与 `pos` 携带缺失轴基础值的方式相同。
+    /// 静态样式。与 `offset` 携带缺失轴基础值的方式相同。
     colors: [Option<AssColorRgb>; 4],
 }
 
+/// 一轴的位置通道：两条单位不同的曲线，任一条都可能没有。
+#[derive(Debug, Clone, Copy, Default)]
+struct AxisCurves<'a> {
+    offset: Option<&'a FCurve>,
+    ratio: Option<&'a FCurve>,
+}
+
 impl Cursor {
-    pub fn from_style(style: &StyleResult) -> Self {
+    pub fn from_style(style: &StyleResult, layout: (u32, u32)) -> Self {
         Self {
-            pos: style.position.map(|v| (v.x, v.y)),
+            layout: [f64::from(layout.0), f64::from(layout.1)],
+            offset: style.position.map(|v| [v.x, v.y]).unwrap_or([0.0; 2]),
+            ratio: style.position_ratio.map(|v| [v.x, v.y]).unwrap_or([0.0; 2]),
             colors: [
                 style.color_primary.as_ref().map(srgba_to_ass_rgb),
                 style.color_secondary.as_ref().map(srgba_to_ass_rgb),
@@ -161,8 +203,49 @@ impl Cursor {
         }
     }
 
-    fn pos_or_default(&self) -> (f64, f64) {
-        self.pos.unwrap_or((0.0, 0.0))
+    /// 从 action 的曲线表里按 `[x, y]` 取好两轴的位置通道。
+    fn position_curves<'a>(
+        curve_map: &std::collections::HashMap<PropertyPath, &'a ActionCurve>,
+    ) -> [AxisCurves<'a>; 2] {
+        let axis = |offset_path, ratio_path| AxisCurves {
+            offset: curve_map.get(&offset_path).map(|curve| &curve.curve),
+            ratio: curve_map.get(&ratio_path).map(|curve| &curve.curve),
+        };
+        [
+            axis(PropertyPath::PositionX, PropertyPath::PositionRatioX),
+            axis(PropertyPath::PositionY, PropertyPath::PositionRatioY),
+        ]
+    }
+
+    /// 静态样式锚点（两轴都没有曲线时）的排版像素位置。换算仍旧走 `anchor_at`，
+    /// 「排版尺寸 → 像素」这一处换算保持唯一。
+    fn base_anchor(&self) -> [f64; 2] {
+        self.anchor_at([AxisCurves::default(), AxisCurves::default()], 0.0)
+    }
+
+    /// `t` 时刻的锚点，排版像素。样式位置是**基线**，两条曲线都在它之上相加：绝对通道
+    /// 加像素，分数通道乘排版尺寸后加像素。所以动画行被拖动时改样式里的位置，整条
+    /// `\move` 轨迹跟着平移，动画本身不会被抹平。
+    fn anchor_at(&self, axes: [AxisCurves<'_>; 2], t: f64) -> [f64; 2] {
+        std::array::from_fn(|axis| {
+            let curves = axes[axis];
+            let offset = self.offset[axis]
+                + curves
+                    .offset
+                    .map_or(0.0, |curve| evaluate_fcurve(curve, t));
+            let ratio = self.ratio[axis]
+                + curves
+                    .ratio
+                    .map_or(0.0, |curve| evaluate_fcurve(curve, t));
+            offset + self.layout[axis] * ratio
+        })
+    }
+
+    /// 一条 strip 走完：锚点已解析成像素，所以分数基值清零。
+    /// 只在 strip 末尾调用一次——strip 内的每段都从同一个基值解析，折回来会重复计分。
+    fn advance_to(&mut self, anchor: [f64; 2]) {
+        self.offset = anchor;
+        self.ratio = [0.0; 2];
     }
 
     /// 组 `idx` 的通道（0=R, 1=G, 2=B）值，范围 0..1；该组没有记录颜色时
@@ -179,11 +262,13 @@ impl Cursor {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct AnimAssResult {
     pub segments: Vec<TimedTags>,
     pub fallbacks: Vec<(f64, Vec<StyleTag>)>,
 }
 
+#[derive(Debug, Clone)]
 pub struct TimedTags {
     pub start_ms: f64,
     pub end_ms: f64,
@@ -191,6 +276,10 @@ pub struct TimedTags {
 }
 
 // ── StyleResult → 静态 StyleTag ──────────────────────────────────────────
+//
+// 位置两字段（`position` / `position_ratio`）不在这里出：它们要换算成排版像素，而排版尺寸
+// 是 `match_to_ass_tags` 的参数、不在 `StyleResult` 里；且 `\pos` 必须逐行避让 `\move`。
+// 那两件事都由 `match_to_ass_tags` 负责。
 
 pub fn style_to_static_tags(style: &StyleResult) -> Vec<StyleTag> {
     let mut tags = Vec::new();
@@ -283,14 +372,26 @@ pub fn style_to_static_tags(style: &StyleResult) -> Vec<StyleTag> {
     tags
 }
 
+/// `layout` 是脚本的排版尺寸（PlayResX/Y）：位置通道的分数单位按它换算成像素。
 pub fn match_to_ass_tags(
     matched: &aweft_model::application_graph::ApplicationGraphMatch,
     library: &AnimationLibrary,
+    layout: (u32, u32),
     duration: f64,
     opts: &ConvertOptions,
 ) -> AnimAssResult {
-    let mut cursor = Cursor::from_style(&matched.style);
+    let mut cursor = Cursor::from_style(&matched.style, layout);
     let style_baseline = style_to_static_tags(&matched.style);
+
+    // 静态锚点。`\pos` 与 `\move` 在 libass 里先到者生效、后来者被整个忽略
+    // （ass_parse.c 的 EVENT_POSITIONED 分支），所以这条标签只能补给**不含 `\move`
+    // 的行**：预置到动画行上会让该行的位置动画失效。
+    let static_pos = if matched.style.position.is_some() || matched.style.position_ratio.is_some() {
+        let [x, y] = cursor.base_anchor();
+        Some(StyleTag::Position(PointF64 { x, y }))
+    } else {
+        None
+    };
 
     if let Some(ref anim_id) = matched.animation {
         if let Some(anim_data) = library.anim_datas.get(anim_id) {
@@ -308,6 +409,13 @@ pub fn match_to_ass_tags(
             // 第 1 段需要这个，但处处都加也无害。
             for seg in &mut result.segments {
                 let mut full = style_baseline.clone();
+                if !seg
+                    .tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Move { .. }))
+                {
+                    full.extend(static_pos.iter().cloned());
+                }
                 full.append(&mut seg.tags);
                 seg.tags = full;
             }
@@ -317,12 +425,14 @@ pub fn match_to_ass_tags(
     }
 
     // 无动画：输出单个承载静态样式基线的段。
-    if !style_baseline.is_empty() {
+    let mut baseline = style_baseline;
+    baseline.extend(static_pos);
+    if !baseline.is_empty() {
         return AnimAssResult {
             segments: vec![TimedTags {
                 start_ms: 0.0,
                 end_ms: duration * 1000.0,
-                tags: style_baseline,
+                tags: baseline,
             }],
             fallbacks: Vec::new(),
         };
@@ -354,65 +464,41 @@ impl TimeMapper {
     }
 }
 
-/// 位置：单条 `\move` 弦。它是唯一推进共享 cursor 的通道，因此在一个段内
-/// 必须最先执行。
+/// 位置：单条 `\move` 弦。位置曲线是相对样式位置基线的位移，所以这一段只读基值、
+/// 不推进 cursor——段与段的端点都由同一个基值解析出来，首尾自然相接；把上一段终点
+/// 折回基值会让下一段在已解析的像素上再加一次分数。
+///
+/// 两轴各支持两种单位的曲线：排版像素与排版尺寸的分数，两者与基线一并相加。端点一律
+/// 先解析成排版像素再写进 `\move`（ASS 的坐标就是 PlayRes 像素），所以分数曲线随排版
+/// 尺寸等比缩放，绝对曲线一个像素都不动。
 fn build_position(
     curve_map: &std::collections::HashMap<PropertyPath, &ActionCurve>,
     t0: f64,
     t1: f64,
     time: &TimeMapper,
-    cursor: &mut Cursor,
+    cursor: &Cursor,
 ) -> (Vec<StyleTag>, FitDiagnostics) {
-    let has_x = curve_map.contains_key(&PropertyPath::PositionX);
-    let has_y = curve_map.contains_key(&PropertyPath::PositionY);
-    if !has_x && !has_y {
+    let axes = Cursor::position_curves(curve_map);
+    if axes
+        .iter()
+        .all(|axis| axis.offset.is_none() && axis.ratio.is_none())
+    {
         return (Vec::new(), FitDiagnostics { max_err: 0.0 });
     }
-    let (base_x, base_y) = cursor.pos_or_default();
-    let x0 = if has_x {
-        evaluate_fcurve(&curve_map[&PropertyPath::PositionX].curve, t0)
-    } else {
-        base_x
-    };
-    let y0 = if has_y {
-        evaluate_fcurve(&curve_map[&PropertyPath::PositionY].curve, t0)
-    } else {
-        base_y
-    };
-    let x1 = if has_x {
-        evaluate_fcurve(&curve_map[&PropertyPath::PositionX].curve, t1)
-    } else {
-        base_x
-    };
-    let y1 = if has_y {
-        evaluate_fcurve(&curve_map[&PropertyPath::PositionY].curve, t1)
-    } else {
-        base_y
-    };
+    let [x0, y0] = cursor.anchor_at(axes, t0);
+    let [x1, y1] = cursor.anchor_at(axes, t1);
 
     let chord_deviation = chord_error(
-        |t| {
-            if has_x {
-                evaluate_fcurve(&curve_map[&PropertyPath::PositionX].curve, t)
-            } else {
-                base_x
-            }
-        },
-        |t| {
-            if has_y {
-                evaluate_fcurve(&curve_map[&PropertyPath::PositionY].curve, t)
-            } else {
-                base_y
-            }
-        },
+        |t| cursor.anchor_at(axes, t),
         t0,
         t1,
         FIT_SAMPLES,
+        // 位置误差按排版尺寸归一，tolerance 于是读作「偏画面尺寸的百分之几」。
+        cursor.layout[0].max(cursor.layout[1]),
     );
 
     let start_s = time.to_strip(t0);
     let end_s = time.to_strip(t1);
-    cursor.pos = Some((x1, y1));
     (
         vec![StyleTag::Move {
             start: PointF64 { x: x0, y: y0 },
@@ -453,20 +539,22 @@ fn build_colors(
         tags.push(to_static_tag(make_anim(start_color)));
         cursor.colors[color_group_index] = Some(end_color);
 
-        if start_color != end_color {
-            let fit_curves: Vec<&FCurve> = animated.iter().flatten().map(|ac| &ac.curve).collect();
-            let fit = fit_color_segment(&fit_curves, t0, t1, FIT_SAMPLES);
-            let mut present = 0;
-            for (channel_idx, channel) in animated.iter().enumerate() {
-                if channel.is_none() {
-                    continue;
-                }
-                let scale = fit.channel_errors[present] / granges[&props[channel_idx]];
-                present += 1;
-                if scale > max_err {
-                    max_err = scale;
-                }
+        // 与标量同理：颜色组起止相同不等于组内不动。拟合误差必须无条件测量，
+        // 否则一个完整往复的颜色会被静态颜色吃掉而 DP 照样判它合格。
+        let fit_curves: Vec<&FCurve> = animated.iter().flatten().map(|ac| &ac.curve).collect();
+        let fit = fit_color_segment(&fit_curves, t0, t1, FIT_SAMPLES);
+        let mut present = 0;
+        for (channel_idx, channel) in animated.iter().enumerate() {
+            if channel.is_none() {
+                continue;
             }
+            let scale = fit.channel_errors[present] / granges[&props[channel_idx]];
+            present += 1;
+            if scale > max_err {
+                max_err = scale;
+            }
+        }
+        if start_color != end_color {
             tags.push(StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds(
                     (time.to_strip(t0) * 1_000_000.0) as i64,
@@ -524,12 +612,16 @@ fn build_scalars(
         let start_value = evaluate_fcurve(&action_curve.curve, t0);
         let end_value = evaluate_fcurve(&action_curve.curve, t1);
         tags.push(to_static_tag(make_anim(start_value)));
+        // 误差无条件测量：段端点相同不等于段内不动（一个完整往复的起止同值）。这种段
+        // 只能输出一个静态值，把往复整个吃掉；判它不合格，DP 才会在转折点切开，两半
+        // 各自起止不同、可用 `\t` 表达。拟合在 progress=1 处必然偏差一个整幅，所以真
+        // 往复必定超限；幅度远小于全局值域的摆动仍然合格。
+        let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
+        let scale = fit.max_err / granges[prop];
+        if scale > max_err {
+            max_err = scale;
+        }
         if (start_value - end_value).abs() > 1e-9 {
-            let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
-            let scale = fit.max_err / granges[prop];
-            if scale > max_err {
-                max_err = scale;
-            }
             tags.push(StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds(
                     (time.to_strip(t0) * 1_000_000.0) as i64,
@@ -568,12 +660,13 @@ fn build_alphas(
         let alpha_end = ((1.0 - evaluate_fcurve(&action_curve.curve, t1).clamp(0.0, 1.0)) * 255.0)
             .round() as u8;
         tags.push(to_static_tag(make_anim(alpha_start)));
+        // 与标量同理：量化后端点相同不等于段内不动，误差必须无条件测量才能逼 DP 切开。
+        let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
+        let scale = fit.max_err / granges[prop];
+        if scale > max_err {
+            max_err = scale;
+        }
         if alpha_start != alpha_end {
-            let fit = fit_scalar_segment(&action_curve.curve, t0, t1, FIT_SAMPLES);
-            let scale = fit.max_err / granges[prop];
-            if scale > max_err {
-                max_err = scale;
-            }
             tags.push(StyleTag::Transform {
                 start_time: Some(TimeDelta::microseconds(
                     (time.to_strip(t0) * 1_000_000.0) as i64,
@@ -601,7 +694,7 @@ fn try_build_segment(
     let mut tags = Vec::new();
     let mut max_err: f64 = 0.0;
 
-    // 位置必须最先执行：它是唯一推进共享 cursor 的通道。
+    // 颜色会就地写回 cursor（跨段继承基色）；位置与标量只读基值，彼此无先后依赖。
     for (mut built_tags, diagnostics) in [
         build_position(curve_map, t0, t1, time, cursor),
         build_colors(curve_map, granges, cursor, t0, t1, time),
@@ -709,6 +802,9 @@ mod tests {
     use aweft_model::ids::{ActionId, AnimDataId};
     use aweft_model::node_graph::Vec2;
 
+    /// 测试用排版尺寸：分数位置通道乘的就是它。
+    const LAYOUT: (u32, u32) = (1920, 1080);
+
     fn kf(count: usize, duration: f64, y0: f64, ys: &[f64]) -> Vec<(f64, f64)> {
         (0..count)
             .map(|i| {
@@ -716,6 +812,75 @@ mod tests {
                     i as f64 / (count - 1) as f64 * duration,
                     if i == 0 { y0 } else { ys[i - 1] },
                 )
+            })
+            .collect()
+    }
+
+    fn linear_curve(property: PropertyPath, kfs: &[(f64, f64)]) -> ActionCurve {
+        ActionCurve::new(
+            property,
+            FCurve {
+                keyframes: kfs.iter().map(|&(t, v)| Keyframe::linear(t, v)).collect(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// 把这些曲线包成单条 action strip，按 `layout` 转成标签段。
+    fn convert_curves(curves: Vec<ActionCurve>, layout: (u32, u32)) -> AnimAssResult {
+        convert_curves_with(curves, layout, &ConvertOptions::default())
+    }
+
+    fn convert_curves_with(
+        curves: Vec<ActionCurve>,
+        layout: (u32, u32),
+        opts: &ConvertOptions,
+    ) -> AnimAssResult {
+        let duration = curves
+            .iter()
+            .flat_map(|curve| curve.curve.keyframes.iter())
+            .map(|key| key.time)
+            .fold(0.0f64, f64::max)
+            .max(0.001);
+        let mut lib = AnimationLibrary::default();
+        let id = ActionId::new();
+        lib.insert_action(Action {
+            id,
+            name: "a".into(),
+            duration,
+            curves,
+        });
+        let style = StyleResult::default();
+        convert_anim_data(
+            &style,
+            &mut Cursor::from_style(&style, layout),
+            &AnimData {
+                id: AnimDataId::new(),
+                name: "a".into(),
+                base_action: None,
+                temporary_edit: false,
+                tracks: vec![NlaTrack {
+                    name: "t".into(),
+                    muted: false,
+                    solo: false,
+                    strips: vec![NlaStrip::new_action("s", id)],
+                }],
+            },
+            &lib,
+            duration,
+            opts,
+        )
+    }
+
+    /// 结果里所有 `\move` 的端点：[x0, y0, x1, y1]。
+    fn moves(result: &AnimAssResult) -> Vec<[f64; 4]> {
+        result
+            .segments
+            .iter()
+            .flat_map(|segment| segment.tags.iter())
+            .filter_map(|tag| match tag {
+                StyleTag::Move { start, end, .. } => Some([start.x, start.y, end.x, end.y]),
+                _ => None,
             })
             .collect()
     }
@@ -738,7 +903,7 @@ mod tests {
         });
         convert_anim_data(
             &StyleResult::default(),
-            &mut Cursor::from_style(&StyleResult::default()),
+            &mut Cursor::from_style(&StyleResult::default(), LAYOUT),
             &AnimData {
                 id: AnimDataId::new(),
                 name: "a".into(),
@@ -777,6 +942,7 @@ mod tests {
             .iter()
             .any(|t| matches!(t, StyleTag::Bold(_))));
 
+        // 位置的换算不在这里做（要排版尺寸），只此一处；见 `a_static_anchor_is_emitted_as_pos`。
         let style = StyleResult {
             position: Some(Vec2 { x: 100.0, y: 200.0 }),
             ..Default::default()
@@ -827,10 +993,25 @@ mod tests {
     #[test]
     fn chord_error() {
         use super::fit::chord_error;
-        assert!(chord_error(|_| 0.0, |_| 0.0, 0.0, 1.0, 32) < 1e-3);
-        assert!(chord_error(|t| t, |t| t * 2.0, 0.0, 1.0, 32) < 0.01);
-        let err = chord_error(|t| t, |t| (t - 0.5).powi(2) * 4.0, 0.0, 1.0, 64);
+        assert!(chord_error(|_| [0.0, 0.0], 0.0, 1.0, 32, 1.0) < 1e-3);
+        assert!(chord_error(|t| [t, t * 2.0], 0.0, 1.0, 32, 1.0) < 0.01);
+        let err = chord_error(|t| [t, (t - 0.5).powi(2) * 4.0], 0.0, 1.0, 64, 1.0);
         assert!(err > 0.01, "弯曲路径应有弦误差");
+        // `norm` 只做线性缩放，误差仍是「偏基准的百分之几」。
+        let scaled = chord_error(|t| [t, (t - 0.5).powi(2) * 4.0], 0.0, 1.0, 64, 10.0);
+        assert!(
+            (scaled - err / 10.0).abs() < 1e-9,
+            "norm 应只缩放误差：{scaled} vs {err}"
+        );
+        // 往复转折点附近弦长趋零，误差不得因此发散（按基准而非弦长归一）。
+        let turn = chord_error(
+            |t| [0.0, (t - 0.5).powi(2) * 4.0 - 1.0],
+            0.0,
+            1.0,
+            64,
+            100.0,
+        );
+        assert!(turn < 0.05, "零长弦的弯曲量应与画面尺寸同量级，实际 {turn}");
     }
 
     // ── 分段转换 ────────────────────────────────────────────────────────────
@@ -888,7 +1069,7 @@ mod tests {
         });
         let result = convert_anim_data(
             &StyleResult::default(),
-            &mut Cursor::from_style(&StyleResult::default()),
+            &mut Cursor::from_style(&StyleResult::default(), LAYOUT),
             &AnimData {
                 id: AnimDataId::new(),
                 name: "p".into(),
@@ -916,11 +1097,541 @@ mod tests {
         }
     }
 
+    /// 分数通道：排版尺寸翻倍，锚点像素也翻倍——这就是「位置跟视口走」的判据。
+    #[test]
+    fn a_ratio_channel_scales_with_the_layout() {
+        let curves = vec![
+            linear_curve(PropertyPath::PositionRatioX, &[(0.0, 0.5), (2.0, 0.5)]),
+            linear_curve(PropertyPath::PositionRatioY, &[(0.0, 0.7), (2.0, 0.9)]),
+        ];
+        let one = moves(&convert_curves(curves.clone(), LAYOUT));
+        let two = moves(&convert_curves(curves, (3840, 2160)));
+
+        assert_eq!(one.len(), 1, "线性分数曲线应只有一个 \\move");
+        assert_eq!(one.len(), two.len(), "换排版尺寸改变了分段数");
+        for (index, (small, large)) in one[0].into_iter().zip(two[0]).enumerate() {
+            assert!(
+                (large - small * 2.0).abs() <= 1e-6,
+                "第 {index} 个端点没有按排版尺寸翻倍：{small} → {large}"
+            );
+        }
+        // 1920×1080 下的期望锚点：水平居中、纵向 70% → 90%
+        let [x0, y0, x1, y1] = one[0];
+        for (index, (got, want)) in [(x0, 960.0), (y0, 756.0), (x1, 960.0), (y1, 972.0)]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(
+                (got - want).abs() <= 1e-6,
+                "第 {index} 个端点 {got} 不是排版尺寸的分数位置 {want}"
+            );
+        }
+    }
+
+    /// 绝对通道：换排版尺寸一个像素都不动。
+    #[test]
+    fn an_absolute_channel_is_the_same_pixels_at_any_layout() {
+        let curves = vec![linear_curve(
+            PropertyPath::PositionY,
+            &[(0.0, 700.0), (2.0, 900.0)],
+        )];
+        let one = moves(&convert_curves(curves.clone(), LAYOUT));
+        let two = moves(&convert_curves(curves, (3840, 2160)));
+        assert_eq!(one, two, "排版像素通道被排版尺寸改动了");
+    }
+
+    /// 同一轴上两种单位并存：分数部分按比例缩放，绝对部分作固定偏移。
+    #[test]
+    fn a_ratio_and_an_absolute_channel_on_the_same_axis_add() {
+        let curves = vec![
+            linear_curve(PropertyPath::PositionRatioY, &[(0.0, 0.5), (2.0, 0.5)]),
+            linear_curve(PropertyPath::PositionY, &[(0.0, -40.0), (2.0, -40.0)]),
+        ];
+        let one = moves(&convert_curves(curves.clone(), LAYOUT));
+        let two = moves(&convert_curves(curves, (3840, 2160)));
+        assert!(
+            (one[0][1] - 500.0).abs() <= 1e-6,
+            "1080 高时 0.5 + (-40px) 应为 500：{}",
+            one[0][1]
+        );
+        assert!(
+            (two[0][1] - 1040.0).abs() <= 1e-6,
+            "2160 高时同一个通道组合应为 1040：{}",
+            two[0][1]
+        );
+    }
+
+    /// 单轴往复：一个来回的起点=终点，弦退化成一个点。退化分支若直接按零误差放行，
+    /// 整段会被判成完美拟合、位置被拍平成一个静态 `\move`，字幕看着就是不动。
+    #[test]
+    fn a_round_trip_on_one_axis_is_still_split_into_motion() {
+        let curves = vec![
+            linear_curve(PropertyPath::PositionRatioX, &[(0.0, 0.5), (2.0, 0.5)]),
+            linear_curve(
+                PropertyPath::PositionRatioY,
+                &[
+                    (0.0, 0.72),
+                    (0.5, 0.60),
+                    (1.0, 0.72),
+                    (1.5, 0.60),
+                    (2.0, 0.72),
+                ],
+            ),
+        ];
+        let result = convert_curves(curves, LAYOUT);
+        let moves = moves(&result);
+        let ys: Vec<f64> = moves.iter().flat_map(|m| [m[1], m[3]]).collect();
+
+        assert!(moves.len() > 1, "一个往复应拆成多段 \\move，实际 {moves:?}");
+        // 位置误差按排版尺寸归一（默认 1%），端点只需在容差内逼近波的上下两端：
+        // 0.72 → 777.6、0.60 → 648。
+        let tol = ConvertOptions::default().error_tolerance
+            * f64::max(f64::from(LAYOUT.0), f64::from(LAYOUT.1));
+        for extreme in [777.6, 648.0] {
+            assert!(
+                ys.iter().any(|&y| (y - extreme).abs() <= tol),
+                "上下两端都应在 `\\move` 端点的 {tol}px 邻域内出现，实际 y 端点 {ys:?}"
+            );
+        }
+    }
+
+    /// 输出里出现过的所有 `\fs` 值：既包括静态标签，也包括 `\t` 的目标值。
+    fn font_sizes(result: &AnimAssResult) -> Vec<f64> {
+        let mut out = Vec::new();
+        for segment in &result.segments {
+            for tag in &segment.tags {
+                match tag {
+                    StyleTag::FontSize(v) => out.push(*v),
+                    StyleTag::Transform { tags, .. } => {
+                        for anim in tags {
+                            if let AnimatedStyleTag::FontSize(v) = anim {
+                                out.push(*v);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// 标量版的同一个坑：字号一个来回的起止也同值，退化分支同样会把它拍平成一根静态
+    /// `\fs`。波峰必须仍然出现在输出里（允许 tolerance × 全局值域的误差）。
+    #[test]
+    fn a_round_trip_scalar_still_reaches_its_peak() {
+        let curves = vec![linear_curve(
+            PropertyPath::FontSize,
+            &[
+                (0.0, 40.0),
+                (0.5, 60.0),
+                (1.0, 40.0),
+                (1.5, 60.0),
+                (2.0, 40.0),
+            ],
+        )];
+        let sizes = font_sizes(&convert_curves(curves, LAYOUT));
+        let peak = sizes.iter().cloned().fold(f64::MIN, f64::max);
+        let tol = ConvertOptions::default().error_tolerance * 20.0;
+        assert!(
+            (peak - 60.0).abs() <= tol,
+            "往复的波峰 60 应出现在输出里（±{tol}），实际 {sizes:?}"
+        );
+    }
+
+    /// 轻量进度事件是界面浮层唯一的输入：每条动画一份曲线图、按格点推进到满格、收尾
+    /// 给出分段路径，而且不带调试版那张逐起点有效性表。发不发进度不得改变转换结果。
+    #[test]
+    fn light_progress_events_drive_the_ui_overlay() {
+        let keyframes = &[(0.0, 40.0), (0.5, 60.0), (1.0, 40.0)];
+        let build = || linear_curve(PropertyPath::FontSize, keyframes);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opts = ConvertOptions {
+            progress_sender: Some(sender),
+            ..Default::default()
+        };
+        let with_progress = font_sizes(&convert_curves_with(vec![build()], LAYOUT, &opts));
+        let events: Vec<ProgressEvent> = receiver.try_iter().collect();
+
+        let plain = font_sizes(&convert_curves(vec![build()], LAYOUT));
+        assert_eq!(with_progress, plain, "进度上报不得改变拟合结果");
+
+        let started: Vec<&ProgressEvent> = events
+            .iter()
+            .filter(|event| matches!(event, ProgressEvent::ActionStarted { .. }))
+            .collect();
+        assert_eq!(started.len(), 1, "一条动画一份曲线图，实际 {started:?}");
+        let ProgressEvent::ActionStarted {
+            name,
+            n,
+            grid_times,
+            curve_samples,
+            ..
+        } = started[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(name, "a");
+        assert_eq!(grid_times.len(), n + 1, "格点时间必须覆盖 0..=n");
+        assert!(!curve_samples.is_empty(), "曲线图不能是空的");
+
+        let steps: Vec<usize> = events
+            .iter()
+            .filter_map(|event| match event {
+                ProgressEvent::DpProgress { end, .. } => Some(*end),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !steps.is_empty() && steps[steps.len() - 1] == *n,
+            "进度要一路报满 {n} 格，实际 {steps:?}"
+        );
+        assert!(
+            events.iter().any(
+                |event| matches!(event, ProgressEvent::SegmentsFound { path } if !path.is_empty())
+            ),
+            "收尾要给出最终分段路径"
+        );
+        assert!(
+            events.iter().all(
+                |event| !matches!(event, ProgressEvent::DpProgress { valid, .. } if !valid.is_empty())
+            ),
+            "轻量模式不该带逐起点有效性表"
+        );
+    }
+
+    /// 诊断详略下界面拿两样东西：逐起点有效性表画色带，本格起点画候选段。
+    /// 已锁定路径不随事件传，消费端按 `end` 顺序记 `chosen` 自己回溯——这条测试就是
+    /// 在钉住「记下来的链」和「最终导出的路径」是同一份东西。
+    #[test]
+    fn diagnostic_progress_rebuilds_the_final_path() {
+        let keyframes = &[(0.0, 40.0), (0.5, 60.0), (1.0, 40.0)];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opts = ConvertOptions {
+            progress_sender: Some(sender),
+            progress_detail: ProgressDetail::Diagnostic,
+            ..Default::default()
+        };
+        let _ = convert_curves_with(
+            vec![linear_curve(PropertyPath::FontSize, keyframes)],
+            LAYOUT,
+            &opts,
+        );
+        let events: Vec<ProgressEvent> = receiver.try_iter().collect();
+
+        let mut parents: Vec<usize> = Vec::new();
+        let mut n = 0;
+        let mut final_path = Vec::new();
+        for event in &events {
+            match event {
+                ProgressEvent::DpProgress {
+                    end,
+                    n: en,
+                    chosen,
+                    valid,
+                } => {
+                    assert!(
+                        !valid.is_empty(),
+                        "诊断详略下第 {end} 格要带有效性表，实际长度 {}",
+                        valid.len()
+                    );
+                    assert_eq!(valid.len(), *end, "有效性表逐起点，长度 = end");
+                    parents.push(chosen.unwrap_or(usize::MAX));
+                    assert_eq!(parents.len(), *end, "每格报一次、按序报");
+                    n = *en;
+                }
+                ProgressEvent::SegmentsFound { path } => final_path = path.clone(),
+                _ => {}
+            }
+        }
+        assert_eq!(parents.len(), n, "报满 {n} 格");
+
+        let mut rebuilt = Vec::new();
+        let mut end = n;
+        while end != 0 {
+            let start = parents[end - 1];
+            assert_ne!(start, usize::MAX, "格点 {end} 不可达，链回溯不回去");
+            rebuilt.push((start, end));
+            end = start;
+        }
+        rebuilt.reverse();
+        assert_eq!(rebuilt, final_path, "按 chosen 重建的链就是导出用的路径");
+    }
+
+    /// 可重复的拟合开销测量：与初始化播种的「上下浮动」同形（贝塞尔往复 + 分数位置）。
+    /// 预览卡住主线程的就是这个数，调网格/采样常量前后都回来跑一次：
+    /// `cargo test -p aweft-convert --lib -- --ignored --nocapture`。
+    #[test]
+    #[ignore = "手动跑的耗时测量，不进常规用例"]
+    fn measure_fit_cost_of_seeded_float() {
+        use aweft_model::animation::keyframe::BezierHandle;
+
+        let handle = 0.5 / 3.0;
+        let ease = |time, value| {
+            Keyframe::bezier(
+                time,
+                value,
+                BezierHandle::new(-handle, 0.0),
+                BezierHandle::new(handle, 0.0),
+            )
+        };
+        let eased = |property, keyframes: Vec<Keyframe>| {
+            ActionCurve::new(
+                property,
+                FCurve {
+                    keyframes,
+                    ..Default::default()
+                },
+            )
+        };
+        let curves = vec![
+            eased(
+                PropertyPath::PositionRatioX,
+                vec![ease(0.0, 0.5), ease(2.0, 0.5)],
+            ),
+            eased(
+                PropertyPath::PositionRatioY,
+                vec![
+                    ease(0.0, 0.72),
+                    ease(0.5, 0.60),
+                    ease(1.0, 0.72),
+                    ease(1.5, 0.60),
+                    ease(2.0, 0.72),
+                ],
+            ),
+        ];
+        let started = std::time::Instant::now();
+        let result = convert_curves(curves, LAYOUT);
+        let moves = moves(&result);
+        println!(
+            "位置 {} 行（{} 个 \\move），用时 {:.0}ms",
+            result.segments.len(),
+            moves.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+
+        // 标量通道走的是幂函数拟合（minimax 指数网格）这条完全不同的代码路径，
+        // 因此单独计时，才能看出指数网格这个旋钮的代价。
+        let scalar = eased(
+            PropertyPath::FontSize,
+            vec![
+                ease(0.0, 40.0),
+                ease(0.5, 60.0),
+                ease(1.0, 40.0),
+                ease(1.5, 60.0),
+                ease(2.0, 40.0),
+            ],
+        );
+        let started = std::time::Instant::now();
+        let scalar_result = convert_curves(vec![scalar], LAYOUT);
+        let sizes = font_sizes(&scalar_result);
+        let transforms = scalar_result
+            .segments
+            .iter()
+            .flat_map(|segment| segment.tags.iter())
+            .filter(|tag| matches!(tag, StyleTag::Transform { .. }))
+            .count();
+        println!(
+            "标量 {} 行（{transforms} 个连挂 \\t），峰值 {:.1}（应≈60），用时 {:.0}ms",
+            scalar_result.segments.len(),
+            sizes.iter().cloned().fold(f64::MIN, f64::max),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
+    /// 位置真的一动不动时仍只输出一段：退化分支不能把静态位置也切成细条。
+    #[test]
+    fn a_still_position_stays_a_single_move() {
+        let curves = vec![linear_curve(
+            PropertyPath::PositionRatioY,
+            &[(0.0, 0.72), (2.0, 0.72)],
+        )];
+        let moves = moves(&convert_curves(curves, LAYOUT));
+        assert_eq!(moves.len(), 1, "静态位置不该被拆分：{moves:?}");
+        assert_eq!((moves[0][1], moves[0][3]), (777.6, 777.6));
+    }
+
+    /// 解析规则本身：样式的分数基值与像素基值相加，没有曲线的轴也走同一条解析。
+    #[test]
+    fn a_style_anchor_is_its_ratio_plus_its_offset() {
+        use std::collections::HashMap;
+
+        let style = StyleResult {
+            position: Some(Vec2 { x: -40.0, y: 20.0 }),
+            position_ratio: Some(Vec2 { x: 0.5, y: 0.25 }),
+            ..Default::default()
+        };
+        let cursor = Cursor::from_style(&style, LAYOUT);
+        let no_curves: HashMap<PropertyPath, &ActionCurve> = HashMap::new();
+        let [x, y] = cursor.anchor_at(Cursor::position_curves(&no_curves), 0.0);
+        assert!((x - (960.0 - 40.0)).abs() <= 1e-9, "x 锚点 {x}");
+        assert!((y - (270.0 + 20.0)).abs() <= 1e-9, "y 锚点 {y}");
+    }
+
+    /// 把 `curves` 装成一条 action strip 的 `AnimData`，连同承载它的 library 一起返回。
+    fn anim_of(curves: Vec<ActionCurve>) -> (AnimationLibrary, AnimDataId) {
+        let duration = curves
+            .iter()
+            .flat_map(|curve| curve.curve.keyframes.iter())
+            .map(|key| key.time)
+            .fold(0.0f64, f64::max)
+            .max(0.001);
+        let mut lib = AnimationLibrary::default();
+        let id = ActionId::new();
+        lib.insert_action(Action {
+            id,
+            name: "a".into(),
+            duration,
+            curves,
+        });
+        let aid = AnimDataId::new();
+        lib.insert_anim_data(AnimData {
+            id: aid,
+            name: "d".into(),
+            base_action: None,
+            temporary_edit: false,
+            tracks: vec![NlaTrack {
+                name: "t".into(),
+                muted: false,
+                solo: false,
+                strips: vec![NlaStrip::new_action("s", id)],
+            }],
+        });
+        (lib, aid)
+    }
+
+    /// 一条匹配（样式 + 可选动画）按 `LAYOUT` 转成标签段。
+    fn matched(
+        style: StyleResult,
+        animation: Option<AnimDataId>,
+        lib: &AnimationLibrary,
+    ) -> AnimAssResult {
+        match_to_ass_tags(
+            &aweft_model::application_graph::ApplicationGraphMatch { style, animation },
+            lib,
+            LAYOUT,
+            2.0,
+            &ConvertOptions::default(),
+        )
+    }
+
+    /// 静态锚点要真的进脚本：视口里拖出来的位置靠 `\pos` 落位，否则拖动没有可见结果。
+    #[test]
+    fn a_static_anchor_is_emitted_as_pos() {
+        let style = StyleResult {
+            position: Some(Vec2 { x: -40.0, y: 20.0 }),
+            position_ratio: Some(Vec2 { x: 0.5, y: 0.25 }),
+            ..Default::default()
+        };
+        let result = matched(style, None, &AnimationLibrary::default());
+        let [StyleTag::Position(p)] = result.segments[0].tags.as_slice() else {
+            panic!(
+                "只有静态锚点的行应输出一条 \\pos，实际 {:?}",
+                result.segments[0].tags
+            );
+        };
+        assert!((p.x - 920.0).abs() <= 1e-9, "x {p:?}");
+        assert!((p.y - 290.0).abs() <= 1e-9, "y {p:?}");
+    }
+
+    /// 位置动画行不吃静态 `\pos`：libass 里 `\pos` 与 `\move` 先到者生效，
+    /// 基线带上 `\pos` 会把整条位置动画吃掉。
+    #[test]
+    fn an_animated_position_suppresses_the_static_pos() {
+        let (lib, aid) = anim_of(vec![linear_curve(
+            PropertyPath::PositionX,
+            &[(0.0, 100.0), (2.0, 400.0)],
+        )]);
+        let style = StyleResult {
+            position: Some(Vec2 { x: 10.0, y: 20.0 }),
+            ..Default::default()
+        };
+        let result = matched(style, Some(aid), &lib);
+        assert!(!result.segments.is_empty(), "位置动画应产出段");
+        for seg in &result.segments {
+            assert!(
+                seg.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Move { .. })),
+                "每行都该有 \\move：{:?}",
+                seg.tags
+            );
+            assert!(
+                !seg.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Position(_))),
+                "带 \\move 的行不该再有 \\pos：{:?}",
+                seg.tags
+            );
+        }
+    }
+
+    /// 有位置动画时样式位置是**基线**：整条 `\move` 轨迹跟着平移，动画不被抹平。
+    /// 视口里拖动一行动画字幕改的就是这条基线。
+    #[test]
+    fn the_style_position_shifts_an_animated_track() {
+        let curves = || {
+            vec![
+                linear_curve(PropertyPath::PositionX, &[(0.0, 100.0), (2.0, 400.0)]),
+                linear_curve(PropertyPath::PositionRatioY, &[(0.0, 0.5), (2.0, 0.5)]),
+            ]
+        };
+        let (lib, aid) = anim_of(curves());
+        let bare = moves(&matched(StyleResult::default(), Some(aid), &lib));
+        let (lib, aid) = anim_of(curves());
+        let styled = matched(
+            StyleResult {
+                position: Some(Vec2 { x: 30.0, y: -50.0 }),
+                ..Default::default()
+            },
+            Some(aid),
+            &lib,
+        );
+        let styled = moves(&styled);
+
+        assert!(!bare.is_empty(), "位置动画应产出 \\move");
+        assert_eq!(bare.len(), styled.len(), "基线改变了分段数");
+        let delta = [30.0, -50.0, 30.0, -50.0];
+        for (plain, shifted) in bare.iter().zip(styled.iter()) {
+            for (index, (want, got)) in plain.iter().zip(shifted).enumerate() {
+                assert!(
+                    (got - (want + delta[index])).abs() <= 1e-6,
+                    "端点 {index} 没按基线平移：{want} → {got}"
+                );
+            }
+        }
+    }
+
+    /// 动画没碰位置的行照旧吃静态锚点：位置属于样式，与有没有别的动画无关。
+    #[test]
+    fn an_animation_without_position_keeps_the_static_pos() {
+        let (lib, aid) = anim_of(vec![linear_curve(
+            PropertyPath::FontSize,
+            &[(0.0, 24.0), (2.0, 36.0)],
+        )]);
+        let style = StyleResult {
+            position: Some(Vec2 { x: 10.0, y: 20.0 }),
+            ..Default::default()
+        };
+        let result = matched(style, Some(aid), &lib);
+        assert!(!result.segments.is_empty(), "字号动画应产出段");
+        for seg in &result.segments {
+            assert!(
+                seg.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Position(_))),
+                "无位置动画的行该有 \\pos：{:?}",
+                seg.tags
+            );
+        }
+    }
+
     #[test]
     fn empty_data() {
         let result = convert_anim_data(
             &StyleResult::default(),
-            &mut Cursor::from_style(&StyleResult::default()),
+            &mut Cursor::from_style(&StyleResult::default(), LAYOUT),
             &AnimData::new("e"),
             &AnimationLibrary::default(),
             5.0,
@@ -965,7 +1676,7 @@ mod tests {
         });
         let result = convert_anim_data(
             &StyleResult::default(),
-            &mut Cursor::from_style(&StyleResult::default()),
+            &mut Cursor::from_style(&StyleResult::default(), LAYOUT),
             &AnimData {
                 id: AnimDataId::new(),
                 name: "c".into(),
@@ -1021,7 +1732,7 @@ mod tests {
         });
         let result = convert_anim_data(
             &StyleResult::default(),
-            &mut Cursor::from_style(&StyleResult::default()),
+            &mut Cursor::from_style(&StyleResult::default(), LAYOUT),
             &AnimData {
                 id: AnimDataId::new(),
                 name: "cf".into(),
@@ -1081,7 +1792,7 @@ mod tests {
         });
         let result = convert_anim_data(
             &StyleResult::default(),
-            &mut Cursor::from_style(&StyleResult::default()),
+            &mut Cursor::from_style(&StyleResult::default(), LAYOUT),
             &AnimData {
                 id: AnimDataId::new(),
                 name: "2".into(),
@@ -1165,6 +1876,7 @@ mod tests {
                 animation: Some(aid),
             },
             &lib,
+            LAYOUT,
             2.0,
             &ConvertOptions::default(),
         );

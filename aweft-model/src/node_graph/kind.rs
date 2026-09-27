@@ -19,7 +19,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::application_graph::LineContext;
-use crate::ids::{AnimDataId, NodeGraphId, NodeId, SocketId};
+use crate::ids::{AnimDataId, ItemId, NodeGraphId, NodeId, SocketId};
 use crate::node_graph::style::StyleResult;
 
 use super::error::EvalError;
@@ -55,8 +55,12 @@ impl<'a> EvalContext<'a> {
 }
 
 /// 求值缓存：两种图共用一份（应用图多写 `node_applications`，样式图只用其余两个）。
+///
+/// 缓存按行有效：应用图每行求值一次，`line_key` 记的就是这批值属于哪一行。
 #[derive(Debug, Clone, Default)]
 pub struct EvalCache {
+    /// 这批缓存值所属的字幕行；样式图求值没有行，为 `None`。
+    pub line_key: Option<ItemId>,
     pub socket_values: HashMap<SocketId, SocketValue>,
     pub node_styles: HashMap<NodeId, StyleResult>,
     /// 应用匹配 / 应用动画节点的产出单元（组输出按端口顺序收集）。
