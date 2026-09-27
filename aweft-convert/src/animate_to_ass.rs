@@ -229,14 +229,10 @@ impl Cursor {
     fn anchor_at(&self, axes: [AxisCurves<'_>; 2], t: f64) -> [f64; 2] {
         std::array::from_fn(|axis| {
             let curves = axes[axis];
-            let offset = self.offset[axis]
-                + curves
-                    .offset
-                    .map_or(0.0, |curve| evaluate_fcurve(curve, t));
-            let ratio = self.ratio[axis]
-                + curves
-                    .ratio
-                    .map_or(0.0, |curve| evaluate_fcurve(curve, t));
+            let offset =
+                self.offset[axis] + curves.offset.map_or(0.0, |curve| evaluate_fcurve(curve, t));
+            let ratio =
+                self.ratio[axis] + curves.ratio.map_or(0.0, |curve| evaluate_fcurve(curve, t));
             offset + self.layout[axis] * ratio
         })
     }

@@ -495,7 +495,9 @@ mod tests {
         let set_pos = chain
             .add_node::<NodeId>(NodeKind::StyleOp(StyleOpKind::SetPosition), &[], &[])
             .unwrap();
-        let style_out = chain.add_node::<NodeId>(NodeKind::GroupOutput, &[], &[]).unwrap();
+        let style_out = chain
+            .add_node::<NodeId>(NodeKind::GroupOutput, &[], &[])
+            .unwrap();
         chain
             .connect_raw(
                 chain.nodes[&source].outputs[0],
@@ -547,8 +549,11 @@ mod tests {
             .unwrap();
         app.connect_raw(app.nodes[&eq].outputs[0], app.nodes[&apply].inputs[1])
             .unwrap();
-        app.connect_raw(app.nodes[&style_ref].outputs[0], app.nodes[&apply].inputs[0])
-            .unwrap();
+        app.connect_raw(
+            app.nodes[&style_ref].outputs[0],
+            app.nodes[&apply].inputs[0],
+        )
+        .unwrap();
         app.connect_raw(app.nodes[&apply].outputs[0], app.nodes[&app_out].inputs[0])
             .unwrap();
         app.set_socket_value(

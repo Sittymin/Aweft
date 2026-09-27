@@ -24,12 +24,12 @@ use aweft_model::ids::ActionId;
 use aweft_model::node_graph::style::StyleResult;
 
 use super::{
-    AnimAssResult, ConvertOptions, Cursor, ProgressDetail, ProgressEvent, TimeMapper, TimedTags,
-    curve_global_range, has_modifiers, try_build_segment,
+    curve_global_range, has_modifiers, try_build_segment, AnimAssResult, ConvertOptions, Cursor,
+    ProgressDetail, ProgressEvent, TimeMapper, TimedTags,
 };
 use crate::segmentation::{
-    UniformGrid, force_single_step_path, min_segmentation, min_segmentation_traced,
-    reconstruct_path,
+    force_single_step_path, min_segmentation, min_segmentation_traced, reconstruct_path,
+    UniformGrid,
 };
 
 type FallbackFrames = Vec<(f64, Vec<StyleTag>)>;
@@ -181,14 +181,18 @@ fn convert_action_strip(
     // 因此落在局部极值上的段（段内 (v1-v0) ≈ 0）不会被强制切成细条。
     let granges: HashMap<PropertyPath, f64> = curve_map
         .iter()
-        .map(|(prop, curve)| (prop.clone(), curve_global_range(&curve.curve, t_start, t_end)))
+        .map(|(prop, curve)| {
+            (
+                prop.clone(),
+                curve_global_range(&curve.curve, t_start, t_end),
+            )
+        })
         .collect();
 
     // Action 时长为 0，或所有关键帧都在一个点：直接输出单个瞬间快照，
     // 避免无效的零宽 DP 计算。
     if span <= 1e-12 {
-        let snapshot =
-            single_snapshot_segment(t_start, t_end, &curve_map, &granges, &time, cursor);
+        let snapshot = single_snapshot_segment(t_start, t_end, &curve_map, &granges, &time, cursor);
         advance_cursor_to_end(&curve_map, cursor, t_end);
         return Ok(snapshot);
     }
@@ -297,7 +301,11 @@ fn group_into_lines(segments: Vec<TimedTags>) -> Vec<TimedTags> {
             .any(|tag| matches!(tag, StyleTag::Move { .. }));
         let line_has_move = current
             .as_ref()
-            .map(|line| line.tags.iter().any(|tag| matches!(tag, StyleTag::Move { .. })))
+            .map(|line| {
+                line.tags
+                    .iter()
+                    .any(|tag| matches!(tag, StyleTag::Move { .. }))
+            })
             .unwrap_or(false);
 
         // 行内最多一个 \move：当前行已有 \move 而这段又要 \move → 该段另起一行。
@@ -331,11 +339,7 @@ fn group_into_lines(segments: Vec<TimedTags>) -> Vec<TimedTags> {
 
 /// 收集所有无修饰动画曲线的关键帧时间点，裁剪到 action 时间窗 `[actstart, actend]`
 /// 内，并补上窗口边界。返回 None 表示没有可用的动画内容。
-fn collect_segment_times(
-    curves: &[ActionCurve],
-    actstart: f64,
-    actend: f64,
-) -> Option<Vec<f64>> {
+fn collect_segment_times(curves: &[ActionCurve], actstart: f64, actend: f64) -> Option<Vec<f64>> {
     // 合并所有无修饰动画曲线的关键帧时间点
     // HACK: 似乎目前还没有处理 Modifier 的情况
     let all_kfs: Vec<&[Keyframe]> = curves
