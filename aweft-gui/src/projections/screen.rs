@@ -31,10 +31,7 @@ pub fn op_screen_overlays(store: &mut AppStore, _tags: &[Tag]) {
 pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
     let mut edge_keys: Vec<crate::screen::edge::ScrEdgeKey> = Vec::new();
     let mut area_keys: Vec<crate::screen::area::ScrAreaKey> = Vec::new();
-    let mut area_type_changed: Option<(
-        crate::screen::area::ScrAreaKey,
-        crate::bridge::types::SlintAreaType,
-    )> = None;
+    let mut area_type_changed: Option<crate::screen::area::ScrAreaKey> = None;
     let mut geometry_update = false;
     // 边移动结束：area 数量不变（仅几何变），row_changed 局部更新；
     // 边拓扑可能因 remove_duplicate_vertices 变化，需全量重建 edges。
@@ -78,12 +75,7 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
                 merged_into,
             } => joined = Some((removed_keys.clone(), added_keys.clone(), *merged_into)),
 
-            Tag::AreaTypeChanged {
-                area_key, new_type, ..
-            } => {
-                let slint_type = crate::bridge::types::rust_area_type_to_slint(new_type);
-                area_type_changed = Some((*area_key, slint_type));
-            }
+            Tag::AreaTypeChanged { area_key, .. } => area_type_changed = Some(*area_key),
 
             Tag::EdgeUpdated {
                 edge_keys: ek,
@@ -111,8 +103,13 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
 
     // 执行：互斥分档，取优先级最高者（Blender 式分档：每次只处理一类变化）。
     // 正确性依赖 reducer 先改 state、投影读最新 state——见函数注释。
-    if let Some((key, slint_type)) = area_type_changed {
-        store.ui_models_mut().update_area_type(&key, slint_type);
+    if let Some(key) = area_type_changed {
+        // 整行重算而非只换枚举值：插件 Area 还带 plugin-id 与面板工厂，
+        // 三者必须一起换。写回同一行（row_changed），Area 组件不重建。
+        let data = crate::bridge::converters::convert_area(store, key);
+        if let Some(data) = data {
+            store.ui_models_mut().update_scrarea(&key, data);
+        }
     }
 
     if edges_rebuild {
@@ -120,7 +117,8 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
             // 顶点合并 → 边结构变化 → 全量重建 edges（areas 数量不变，row_changed）
             let area_keys: Vec<_> = store.state().screen_map.areas.keys().collect();
             for key in area_keys {
-                if let Some(data) = crate::bridge::converters::convert_area(store.state(), key) {
+                let data = crate::bridge::converters::convert_area(store, key);
+                if let Some(data) = data {
                     store.ui_models_mut().update_scrarea(&key, data);
                 }
             }
@@ -139,10 +137,7 @@ pub fn op_screen_layout(store: &mut AppStore, tags: &[Tag]) {
         // 拖拽中：只更新受影响的 area 几何 + edge 局部重算（仅 Display，
         // 不更新 Touch——避免 TouchArea 重建导致焦点丢失/额外 mouse 事件）。
         for key in &area_keys {
-            let new_data = {
-                let state = store.state();
-                crate::bridge::converters::convert_area(state, *key)
-            };
+            let new_data = crate::bridge::converters::convert_area(store, *key);
             if let Some(data) = new_data {
                 store.ui_models_mut().update_scrarea_geometry(key, data);
             }
@@ -173,20 +168,16 @@ fn apply_split(
     new_area_key: crate::screen::area::ScrAreaKey,
 ) {
     // 原 area 几何更新，得到其索引（新 area 插在其后）
-    let parent_data = {
-        let state = store.state();
-        crate::bridge::converters::convert_area(state, parent_key).expect("split 源 area 应存在")
-    };
+    let parent_data =
+        crate::bridge::converters::convert_area(store, parent_key).expect("split 源 area 应存在");
     let parent_idx = store
         .ui_models_mut()
         .update_scrarea(&parent_key, parent_data)
         .expect("split 源 area 应在 index map 中");
 
     // 新 area 插入在原 area 之后（row_added，存量组件复用）
-    let new_data = {
-        let state = store.state();
-        crate::bridge::converters::convert_area(state, new_area_key).expect("split 新 area 应存在")
-    };
+    let new_data =
+        crate::bridge::converters::convert_area(store, new_area_key).expect("split 新 area 应存在");
     store
         .ui_models_mut()
         .insert_scrarea_at(parent_idx + 1, new_data);
@@ -221,7 +212,8 @@ fn apply_join(
         .map(|(k, _)| k)
         .collect();
     for key in alive {
-        if let Some(data) = crate::bridge::converters::convert_area(store.state(), key) {
+        let data = crate::bridge::converters::convert_area(store, key);
+        if let Some(data) = data {
             store.ui_models_mut().update_scrarea(&key, data);
         }
     }
@@ -244,7 +236,7 @@ fn apply_join(
 
     // 3. 追加新增的 area（slotmap 插入序 = 末尾，顺序与 convert_areas 一致）
     for key in added_keys {
-        let data = crate::bridge::converters::convert_area(store.state(), *key);
+        let data = crate::bridge::converters::convert_area(store, *key);
         if let Some(data) = data {
             let at = store.ui_models().scrarea_count();
             store.ui_models_mut().insert_scrarea_at(at, data);
@@ -258,10 +250,7 @@ fn apply_join(
 
 /// 全量重建 areas/edges 模型（`ScreenInitialized`/`AreasSplit`/`AreasJoined`）。
 fn rebuild_all(store: &mut AppStore) {
-    let areas = {
-        let state = store.state();
-        crate::bridge::converters::convert_areas(state)
-    };
+    let areas = crate::bridge::converters::convert_areas(store);
     store.ui_models_mut().set_scrareas(areas);
 
     rebuild_edges(store);
@@ -286,7 +275,8 @@ fn update_geometry_locally(store: &mut AppStore) {
     // areas：遍历所有 area，逐个重算几何
     let area_keys: Vec<_> = store.state().screen_map.areas.keys().collect();
     for key in area_keys {
-        if let Some(data) = crate::bridge::converters::convert_area(store.state(), key) {
+        let data = crate::bridge::converters::convert_area(store, key);
+        if let Some(data) = data {
             store.ui_models_mut().update_scrarea(&key, data);
         }
     }

@@ -27,6 +27,11 @@
             "rust-analyzer"
             "clippy"
           ];
+          # 插件 Guest 的编译目标：plugins/*/guest 下的 Rust 源码要编成
+          # wasm 字节码提交为 plugins/*/guest.wasm，运行时由 wasmi 装载。
+          targets = [
+            "wasm32-unknown-unknown"
+          ];
         };
         slintRuntimeDeps = with pkgs; [
           wayland

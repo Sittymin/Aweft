@@ -1,0 +1,28 @@
+import { Button, VerticalBox } from "std-widgets.slint";
+
+// 示例插件的面板：宿主只按通用约定填值——
+// command-labels（来自插件描述 JSON）、status-lines（插件自己写）、
+// command-clicked（参数是命令编号）、command-busy（有命令在跑）。
+// 主程序不为具体功能写任何控件。忙时按钮由面板自己置灰：
+// 点不点得由插件作者决定，宿主漏进来的点击只会得到一条"正忙"拒绝。
+export component PluginPanel inherits Window {
+    in property <[string]> command-labels;
+    in property <[string]> status-lines;
+    in property <bool> command-busy;
+    callback command-clicked(int);
+
+    title: "示例插件";
+    min-width: 300px;
+    min-height: 260px;
+
+    VerticalBox {
+        for label[index] in command-labels: Button {
+            text: label;
+            enabled: !root.command-busy;
+            clicked => { root.command-clicked(index); }
+        }
+        for line in status-lines: Text {
+            text: line;
+        }
+    }
+}

@@ -1,5 +1,8 @@
 /target
 /wgpu-hal-29-patch/
+# 示例插件 Guest 是独立 workspace（自带 Cargo.lock），构建目录不落在根 /target。
+# 编出的 plugins/*/guest.wasm 要提交：测试与运行时装载都用它。
+/plugins/*/guest/target/
 
 # clangd
 compile_flags.txt

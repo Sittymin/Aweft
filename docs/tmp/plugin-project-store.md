@@ -1,0 +1,228 @@
+# 临时文档：aweft-project + aweft-plugins（分支 feat/plugin-project-store）
+
+> 目标：项目库与插件运行时都按"能长期演进的初版"对待，设计更好就大片重构。
+> 端到端功能：字幕行时间被改时插件收到"哪一行变成了什么"；插件命令写回同一份真相；
+> 每插件一个自带 Slint 片段的独立窗口。
+> 2026-09-10 决定：只保留独立窗口，砍掉主程序内嵌的列渲染。
+> 2026-09-11 决定：示例插件改用 Rust SDK + 提交预编译 `guest.wasm`；GUI 的数据真相改为持有 `ProjectStore`。
+> 2026-09-11 决定（同日二改）：变更分发从"持有者泵写日志"下沉进 `ProjectStore`——写入即广播，
+> 界面与插件一样注册成订阅者，谁都不再记得要 pump。
+> 2026-09-11 决定（同日三改）：清单的权限申请从"申报项"变成"闸门"——宿主按
+> `permissions.project_write` 装配 linker，没批的写入口根本不链接，插件 import 它就在装载期被指名拒绝。
+> 2026-09-11 决定（同日四改）：Guest 搬上每插件一个的 worker 线程——命令分发只快照与发送，
+> 产出经事件通道回来，`set_status_line` 在调用中途直发 `Progress`（执行中刷新面板）。
+> `aweft-plugins` 与界面框架解耦：pump 归各客户端（GUI 只是其中之一，`spawn_local` 任务；
+> 测试/命令行同步 drain）。"写入返回前通知送达"作废，代之以"写入返回时 job 已发出"。
+> 忙时点击由插件作者按 `command-busy` 自行置灰，宿主只 backstop 拒绝，不排队。
+
+## 三个问题的结论
+
+**Q1「`aweft-gui/build.rs` 里为什么有插件相关部分？」——不该有，已删。**
+build.rs 现在只做 `slint_build::compile("ui/app/window.slint")`。插件在运行时装载：
+`PluginBridge::load(store)` 在 `AppStore::new` 里扫描插件根目录（顺带把声明了订阅的插件注册成
+存储的订阅者），`wat` 构建期依赖与 `OUT_DIR` 内嵌字节码全部撤掉。为了让示例插件在测试与运行里都可用，改为提交
+预编译夹具 `plugins/test-plugin/guest.wasm`（`plugins/*/guest/target/` 已 gitignore）。
+
+**Q2「为什么 GUI 里有 `plugin_notify_time_changed`，不该是 project 通知插件吗？」——方向已反转，且分发落在了存储里。**
+`ProjectStore` 既持真相也持订阅者注册表：已建模的写入在 `record()` 里落成 `MutationReceipt`
+后立刻广播（**写入即广播**），使用方不需要记得 pump。规则全在存储一处——
+批量作用域（`begin_batch`/`end_batch` + `BatchToken`）把一次交互的多行写入合成一次通知；
+广播期间 `hold` 非零，嵌套写入只排队，回到栈顶后按轮继续投；
+轮数上限 `MAX_BROADCAST_ROUNDS = 8`，超限丢弃剩余回执并告警；
+按 `Origin` 做回声过滤，写入者听不到自己那次写入。
+订阅者是 `Rc<dyn MutationSubscriber>`（`&self` + 内部可变），广播时注册表被 `mem::take` 出来，
+因此回调能拿到 `&mut ProjectStore` 写回。GUI 与插件平级：`store::project_watch` 把界面登记成
+`Origin::LocalGui` 的订阅者，回调只把回执排进队列（广播发生在 `AppStore` 已被可变借用的中途，
+此刻不能回头借同一个 `RefCell<AppStore>`），`dispatch` 收尾时取走队列换成刷新 `Tag`。
+第一版的"持有者在一轮交互结束时 `take_pending()` 泵一次"已作废：那样每个接入方都要自己记得 pump，
+插件写回的行还得再绕一轮才刷得出来。
+删除的东西：`plugin_notify_time_changed`、`apply_plugin_receipts`、manager 内的工程数据镜像
+（`sync_mirror`/`notify_on_project`/`invoke_on_project`）、按 tag 反推"哪些行变了"的扫描、
+`ProjectStore::take_pending`、`PluginManager::{deliver_pending, deliver_time_changed, handle_map}`
+与 `MAX_DELIVERY_ROUNDS`、GUI 的 `pump_plugins`/`receipt_tags`。
+
+**Q3「`test-guest.wat` 真的是用户要写的东西吗？」——不是，已删。**
+示例/测试插件现在是普通 Rust crate（`plugins/test-plugin/guest`）依赖 `aweft-plugin-sdk`，
+`build.sh` 用 `cargo build --target wasm32-unknown-unknown` 产出 `guest.wasm`。
+Python 路线本轮不做，准确的理由分两层：官方那条 wasm 产物路线走 `wasm-bindgen`，`.wasm` 的
+import 指向 JS 侧胶水，纯 wasmi 宿主（没有 JS 引擎）在实例化阶段就满足不了这些 import；
+可行的替代是自己做一个内嵌 RustPython 的 cdylib 壳、导出本 ABI、编到 `wasm32-wasip1`，
+宿主侧再挂 wasmi 自带的 WASI preview1 支持（`wasmi_wasi`）——这条路未实测，
+且每个 Python 插件要背上解释器体积与 VM 启动成本。示例插件的职责是把 ABI 讲清楚，故选 Rust SDK。
+
+**Q4「订阅分类是不是就相当于是权限系统了？」——一半是，写能力不能靠自述。**
+"声明监听什么 → 才收得到"这一半成立且零成本：声明与实现同在 Guest 一处，漏写只会少刷面板，
+不会越权，所以订阅表留在描述 JSON。但"插件自己声明能改真相"不成立——描述 JSON 是插件自己写的，
+拿它当授权依据等于让被管制的一方自己批条子。因此写入口由清单（人可读、审阅时看得见、可与来源策略挂钩）授予。
+两个更"自动"的方案都否了：
+① 按描述 JSON 的声明装配 linker——描述要先调用导出才读得到，而调用导出本身要求 linker 已装配完，
+先有鸡还是先有蛋；② 读 wasm 自定义段拿声明——实例化前确实读得到，但 `wasm-opt` 之类的工具会剥掉未知段，
+插件作者一次优化就把权限声明弄丢了。故选清单授权，规则是"改了真相才要申请"：
+读行数/起止时间、写自己的状态行与日志（都进不了真相）不必申请，`set_event_*_ms` 要 `project_write`。
+
+## 现在的形态
+
+### 目录与装载
+```
+plugins/<id>/
+  aweft-plugin.json   # 身份 + 构件位置 + 权限闸门（不声明功能）
+  guest.wasm          # 逻辑（提交预编译夹具）
+  panel.slint         # 自带面板片段（单根组件，嵌进宿主的 Area）
+```
+装载根按存在与否探测：设置里的 `plugin_root` → `config_dir()/plugins`
+（Android 即外部数据目录，桌面即 `~/.config/aweft/plugins`）→
+`$PWD/plugins` → `$PWD/../plugins` → 可执行文件同级 `plugins`，
+覆盖"用户装插件""仓库根运行""crate 目录跑测试""打包安装"这几种布局。无 env 开关。
+`load_root` 只扫一层子目录并排序（投递顺序稳定），单个插件失败只记日志；
+面板缺失或编译失败只当"没有 UI"：该插件不进 Area 菜单那一列，命令与订阅照常工作。
+
+### Guest ABI v1
+导出：`aweft_describe_ptr`/`aweft_describe_len`（描述 JSON
+`{"abi":1,"commands":["计算最早时间","全部后移 1s","全部前移 10s（延迟 10s）"],"events":["time_changed"]}`）、
+`aweft_on_command(i32) -> i32`、可选 `aweft_on_event_time(i32, i64, i64)`。
+导入 `aweft` 模块，宿主按清单授权装配 linker，分三组：
+读（`event_count`、`event_start_ms`、`event_end_ms`）与插件自己的输出
+（`set_status_line(line,ptr,len)`、`log_text(ptr,len)`）总是链接——它们进不了真相；
+工具（时间双原语：`now_ms() -> i64` 进程启动起的单调毫秒，只增不减不对应墙钟；
+`sleep_ms(ms)` 阻塞 worker 线程等待，UI 线程照常转）同样常链接：
+wasm32-unknown-unknown 的 Guest 没有时钟（`std::time` 是直接 panic 的桩），
+时间只能是宿主授予的 capability——`now_ms` 负责"算"（deadline 写法不漂移），
+`sleep_ms` 负责"等"（分段等保证刷新率与超调上界），光给一个都做不出倒计时；
+busy-loop 既烧 CPU、时序又无从换算；
+写真相（`set_event_start_ms`、`set_event_end_ms`）只在 `permissions.project_write` 为真时链接，
+未授予却 import 时 `check_grants` 在实例化前先报错并指名缺哪项权限
+（不先查的话只会得到一条含糊的"实例化失败：找不到 import"）。
+数字句柄 = `ProjectStore::ordered_event_ids()` 的下标（按开始时间排序，每次进入 Guest 前重建快照）。
+**显示文本一律由插件自己组装**：旧的 `command_result_kind`/`command_format` 模板机制删除，
+宿主不做格式化与模板替换。命令编号未声明即拒绝执行。
+
+### 面板通用契约（宿主与片段之间只有四项，`command-busy` 可选）
+`in property <[string]> command-labels`、`in property <[string]> status-lines`、
+`callback command-clicked(int)`，另有可选的 `in property <bool> command-busy`。
+片段自己决定这些值渲染成什么控件；busy 态由插件作者自行消费（置灰按钮），
+宿主漏进来的点击只会得到"正忙"拒绝，不排队。
+
+装载路线（2026-09-12 按 pin 的 slint rev `5e097e2` 逐条核实，订正此前"无法嵌入"的结论）：
+嵌入这条路本来就只差一个入口。`FactoryContext` 是公开的且字段全 pub
+（`internal/core/component_factory.rs:14`），`ComponentFactory::new` 公开并在
+`api/rs/slint/lib.rs:221` 重导出，内建 `ComponentContainer` 带
+`in property <component-factory> component-factory`（`internal/compiler/builtins.slint:487`），
+解释器的 `ComponentInstance` 也已实现 `ComponentHandle`。缺的只是把 `FactoryContext`
+递进解释器组件那一步：`ComponentDefinition::create_embedded`
+（`internal/interpreter/api.rs:1194`）挂着 `#[doc(hidden)] #[cfg(feature = "internal")]`，
+它背后的 `create_with_options` 是 `pub(crate)`。所以"嵌不进编译期树"要读成
+"开了 slint-interpreter 的 `internal` 特性就嵌得进"。该特性官方声明零稳定性保证，
+但 rev 已 pin 死在 `aweft-plugins/Cargo.toml:19,23`（`slint-interpreter` 与
+`i-slint-core` 两份都是），风险是冻结的而不是会漂移的。
+桌面继续用独立开窗（多窗是正常体验，不动）；Android 必须换到嵌入路线：
+`internal/backends/android-activity/lib.rs:106` 的 `create_window_adapter` 恒返回
+`Ok(self.window.clone())`，每个 `slint::Window` 都是那块唯一的 NativeActivity 表面，
+`definition.create()` + `.show()` 拿不到第二个窗口，只会和主界面抢同一块。
+Overlay 盖窗方案仍否决（Wayland 下应用无法自定位窗口）。
+
+### 真相侧（aweft-project）
+`ProjectStore` 是文档唯一所有者，时间写入的单一入口：`set_event_start_ms`、
+`set_event_end_ms`、`set_event_times_ms`（成对写，按移动方向自己选顺序：
+开始往早走先写开始、往晚走先写结束，合法成对目标在任一方向都不误触发钳制；固定"先结束"在负向平移时会把目标截断，示例插件命令 2 抓到过这个 bug）、
+`set_event_time_fuzzy`、`adjust_event_time`（含钳制）、`shift_event_times`
+（整体平移，不钳制，允许开始时间为负）。`record_time_write` 比对写入前后的成对值，
+**钳制后值未变就不记回执**，插件不会为一次无效写入收到通知。
+分发也在这一侧：`subscribe(SubscriberRef)` 注册 `Rc<dyn MutationSubscriber>`，
+`record()` 落成回执后立刻 `broadcast()`。广播把注册表 `mem::take` 出来再按轮投，
+所以回调签名是 `on_mutations(&self, store: &mut ProjectStore, &[MutationReceipt])`；
+`hold` 计数让广播期间与批量作用域内的嵌套写入只排队。来源标记 `Origin` 用于回声过滤：
+`Origin::Plugin(id)` 的写入不再回投给该插件自己，`Origin::LocalGui` 的写入不回流界面刷新队列。
+
+### 插件侧（aweft-plugins）
+`PluginManager::load_dir(dir, store)` 读清单 → 校验清单授权 → 装载 Guest → 校验描述声明的导出 →
+编译面板 → 声明了 `time_changed` 的插件注册成存储订阅者。目前只有 `project_write` 是真闸门，
+`network`/`fs_read`/`fs_write` 还没有对应的宿主进口，属申报项（不假装已经管住了）。
+`GuestPlugin` 是成员内部类型
+（`pub(crate)`），对外只有 `PluginManager`/`LoadedPlugin`/面板与 ABI 常量。
+Guest 的读写一律先 `sync_from_store` 建行快照、调用结束后 `take_dirty_rows` 写回，
+**对 `Rc<RefCell<GuestPlugin>>` 的借用绝不跨过对存储的写入**：写入会同步广播，
+而广播可能绕回本插件形成嵌套借用（`RefCell` panic）。命令执行整条包在批量作用域里，
+一条命令对其它订阅者就是一次通知。
+
+### GUI 侧
+`AppState.project` 现在是 `ProjectStore`（不再是裸 `Project`）。
+`SequenceState` 的全部方法参数由 `&Project` 收窄为 `&Sequence`——行编辑器投影只依赖字幕结构。
+reducer 的时间写入统一经存储并标 `Origin::LocalGui`（`adjust_time` 为唯一增减入口，
+`InputTimecode` 走 `set_event_time_fuzzy`，`TimelineBlockDragCommit` 走 `shift_event_times`）；
+预览与取消不写 Domain。有面板的插件在 Area 切换菜单里自成一列（启动期由
+`panel_areas()` 写进 `AreaTypeMetadata.plugin-items`），选中即把该 Area 换成
+`AreaType::Plugin(id)`、面板嵌进这个 Area 的内容区，主程序不硬编码任何插件名；
+嵌入路线与落地细节见 `docs/tmp/plugin-panel-android.md` §12。
+`store::project_watch` 是界面自己的订阅者：回调只把回执排进 `RefreshQueue`，
+`AppStore::dispatch` 用 `begin_batch`/`end_batch` 包住一轮交互、随后 `apply_refresh_queue()`
+把队列换成刷新 tag 并回填插件面板状态行。
+
+## 要干什么（已完成打钩）
+
+- [x] `aweft-project`：文档结构 + 唯一所有权存储 + 写日志回执 + 订阅者注册表与广播 + 工程文件读写（JSON，`format` 版本门）。
+- [x] `aweft-plugins`：清单解析 + 目录装载 + wasmi 运行时 + 自描述 ABI + 按清单授权装配宿主函数 +
+      装载时注册订阅者 + 可嵌入的面板工厂（`PanelHandle`，交给宿主 `ComponentContainer`）。
+- [x] `aweft-plugin-sdk`：Guest 侧 `plugin! { commands, on_time_changed }` 声明宏与 `Api` 封装。
+- [x] 示例插件 `plugins/test-plugin`（Rust Guest + panel.slint + 清单，`guest.wasm` 提交为夹具）。
+- [x] GUI 接线：持有 `ProjectStore`、界面自己注册成订阅者、`dispatch` 用批量作用域包住一轮交互、
+      命令路由、有面板的插件进 Area 切换菜单那一列并把面板嵌进该 Area。
+- [x] 集成测试：`aweft-project` 存储内测试 11 项（广播时机、回声过滤、批量合并、写回触达第三方、
+      轮数上限）、`aweft-plugins/tests/plugin_flow.rs` 10 项（真实装载 `plugins/test-plugin`，
+      含"一次命令只通知一次"与权限闸门的拒/放一对：同一份字节码，只改清单的 `project_write`）、
+      `aweft-gui/tests/plugin_panel.rs` 7 项（原 `plugin_window.rs` 改名）
+      （含"插件写入刷进 UI 行模型"的投影断言，与"面板嵌在 Area 里、切走即释放"的生命周期断言）。
+- [ ] CLI 子命令（本轮砍掉：CLI 尚无工程文件开/存流程，无落点）。
+- [ ] 后续（不在本轮）：读侧暂不设闸（未授予任何权限的插件仍可读全部行）——目前字幕行不算敏感数据，
+      若以后要挡，同样按清单授权装配 linker 即可；结构/层级/文本写入尚无 `MutationKind`（因此不进广播，插件与界面都看不到）；
+      撤销栈策略；`dirty`/保存提示接 UI；远端合流（`aweft-collab`）；多语言 SDK（C/Python）再评估。
+
+## 本轮删除的死代码（可点名否决）
+
+`PluginManager`：`CommandResult`/`StatusTarget`/`PluginCommand`/`NotifyRecord`/`CommandOutcome`、
+`format_ms`/`format_outcome`、工程数据镜像与 `sync_mirror`、`visible_panels`/`set_hidden`/`last_notify`、
+`deliver_pending`/`deliver_time_changed`/`handle_map`/`MAX_DELIVERY_ROUNDS`；
+`GuestPlugin`：`id`/`origin`/`invoke_command`/`notify_time_changed`/`flush_to_store`（快照 + 写回拆开后可由
+`sync_from_store`/`call_*`/`take_dirty_rows` 组合出来）；`ProjectStore::take_pending`（队列只由广播排空）；
+`ui.rs`：`PanelHooks`/`PanelGuard`/`open_panel` 与内嵌的 `TEST_PANEL_SOURCE`；
+`aweft-plugins/assets/`（wat/清单/面板三份测试资产）；`aweft-gui`：`apply_plugin_receipts`、
+`run_plugin_command_text`、`plugin_notify_time_changed`、`Option<PluginBridge>` 降级分支、
+`ProjectStore::shift_all_events_ms`（SDK 用成对写入即可，无调用方）、`receipt::Subscriber`、
+`pump_plugins`、`receipt_tags`。
+
+## 验证结果（2026-09-11，权限闸门后复测）
+
+- `nix develop --command cargo test -p aweft-project -p aweft-plugins -p aweft-plugin-sdk -p aweft-gui`：
+  `aweft-project` 11、`aweft-plugins` 1+10、`aweft-plugin-sdk` 2、
+  `aweft-gui` 197（lib）+ 依赖图/行编辑器/时间线/NLA/DopeSheet/节点图/插件面板共 61 项集成，全绿。
+- `cargo check --workspace --all-targets`：本轮改动的三个 crate 零告警
+  （`aweft-ass`、`src/cli.rs` 的告警是既有噪声）。clippy 仍被 `aweft-libass` 的构建挡住，故用 check+test 验证。
+- 权限闸门只测了"要写的插件"一侧：示例字节码 import 了 `set_event_*_ms`，拒/放两态都成立。
+  "只读不必申请"这一半没有对应夹具（没有第二份只 import 读函数的 `guest.wasm`），
+  目前由 linker 的分组保证，未实测。
+- 真机已验收（2026-09-13，判据与两条装机坑见 `plugin-panel-android.md` §12 的
+  「真机验收」）：菜单里那一列插件项、嵌进 Area 的面板、点命令之后状态行与
+  字幕行时间一起变，三条都在小米 nuwa 上看着成立。
+  `plugin_panel.rs` 那两条断言仍只覆盖投影与实例化这一层（无头路径）。
+
+## 教训
+
+- 存储写入即广播 ⇒ **任何跨过写入的外部借用都会撞嵌套借用**。插件侧固定写法：
+  借出 Guest → 只做纯 Guest 调用 → `take_dirty_rows` → 释放借用 → 才写 store；
+  界面侧则根本不在回调里动 `depsgraph`，只排进 `RefreshQueue`，回合末由 `AppStore` 自己收。
+  广播里 `mem::take` 注册表是同一件事的另一面：回调要拿 `&mut ProjectStore`，注册表不能同时被借用。
+- `begin_batch`/`end_batch` 用令牌而非 RAII（`dispatch` 期间要以 `&mut self` 调子分发，守卫借不住），
+  于是**出错路径必须自己收口**：`end_batch` 放在 `?` 之前，配成一个内层函数 + 外层收口。
+  漏收口的表现是 `hold` 永不归零、之后所有写入静默不再通知——不会有编译错误或 panic。
+- 勿跑任何整树格式化命令（`cargo fmt -- <files>` 与按文件列表的 `rustfmt` 都曾引发全工作区
+  churn，两次共还原 40+ 无关文件；仓库本身非当前工具链 rustfmt 默认风格）。之后只手写格式；
+  本轮实测：先 `rustfmt --check` 逐文件看 diff 是否只落在自己改过的行，再只对那几个文件跑，
+  并用 `git diff --stat` 复核——`reducers/sequence.rs` 因既有漂移（非本次改动行）被跳过。
+- `slint::ComponentHandle` 提供 `global()`；`bridge/types.rs` 用 `include_modules!()`，
+  因此新 global 必须在 `ui/app/window.slint` 里 import + 重新导出，Rust 侧才看得见。
+- `slint-interpreter` 不重导出 `ModelRc`/`VecModel`，需要额外依赖同 rev 的 `i-slint-core`；
+  `ModelRc<T>` 没有 `From<Vec<T>>`，用 `ModelRc::from(slice)` 或 `ModelRc::new(VecModel::from(..))`。
+- wasmi 2.0 API 以本地克隆（`sources/wasmi`）为准：`Linker::func_wrap` + `instantiate_and_start`
+  + `get_typed_func` + `get_memory`/`Memory::read`；`Caller::get_export("memory")` 取宿主函数里的内存。
+- 分发接口不要写成 `deliver(&mut store, store.take_pending())`——同一次表达式里两次可变借用，
+  编译不过且是个脚枪。中途曾改成"由被调方自己排空"的 `deliver_pending(&mut store)`，
+  最终结论是这一步不该存在：队列与注册表都不外露，存储自己在 `record()` 里广播。

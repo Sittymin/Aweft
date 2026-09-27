@@ -1,0 +1,32 @@
+[package]
+name = "aweft-plugins"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aweft-model = { path = "../aweft-model" }
+aweft-project = { path = "../aweft-project" }
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+log = "0.4.33"
+wasmi = "2.0.0"
+# worker → 客户端的事件通道（与主工程波形 pump 同款；本成员不持有接收端，
+# pump 归各客户端自己：图形界面用 spawn_local，命令行/测试用 try_next 轮询）。
+futures = "0.3"
+# Slint 运行时解析：与主工程同 git rev，保证版本一致。
+# 上游 master 的 slint-build/slint 以同一 rev 固定，此处跟随。
+# `internal` 只为一个入口：`ComponentDefinition::create_embedded`
+#（api.rs:1194 上是 #[doc(hidden)] #[cfg(feature = "internal")]，它背后的
+# create_with_options 是 pub(crate)）。面板不另开窗、嵌进宿主的
+# ComponentContainer，除它没有第二条路。
+slint-interpreter = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d", features = ["internal"] }
+# 面板的 [string] 属性要构造 Value::Model(ModelRc<VecModel<Value>>)；
+# slint-interpreter 不重导出 ModelRc/VecModel，按同一 rev 直接依赖，
+# cargo 与 slint-interpreter 内部用的那份合并为同一个包。
+i-slint-core = { git = "https://github.com/slint-ui/slint", rev = "5e097e2c267d7752bfe1bf27f4e9a094e00e335d" }
+# 驱动 slint-interpreter 异步编译入口的最小执行器（与上游 interpreter dev-deps 同款）。
+spin_on = "0.1"
+
+[dev-dependencies]
+chrono = "0.4.45"

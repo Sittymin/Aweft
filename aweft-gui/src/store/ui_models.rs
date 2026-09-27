@@ -103,24 +103,6 @@ impl UiModels {
         self.scredge_touch_model.set_vec(edges);
     }
 
-    // 局部更新单个 ScreenArea 的类型
-    pub fn update_area_type(
-        &mut self,
-        key: &ScrAreaKey,
-        new_area_type: crate::bridge::types::SlintAreaType,
-    ) -> bool {
-        if let Some(&index) = self.scrarea_index_map.get(key) {
-            if let Some(mut data) = self.scrarea_model.row_data(index) {
-                data.area_type = new_area_type;
-                log::debug!("已更新model");
-                self.scrarea_model.set_row_data(index, data);
-                return true;
-            }
-        }
-        log::warn!("尝试更新不存在的 area key: {:?}", key);
-        false
-    }
-
     /// 局部更新单个 ScreenArea 的几何数据（位置/尺寸等）
     pub fn update_scrarea_geometry(&mut self, key: &ScrAreaKey, new_data: ScrAreaData) -> bool {
         if let Some(&index) = self.scrarea_index_map.get(key) {
@@ -204,6 +186,8 @@ mod tests {
             width: 100.0,
             height: 100.0,
             actionzone_side_length: 10.0,
+            plugin_id: Default::default(),
+            plugin_factory: Default::default(),
         }
     }
 

@@ -11,6 +11,7 @@ use super::dispatch_and_render;
 /// 设置区域类型切换回调 - 使用 Action 模式
 pub(super) fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {
     let weak_instance = instance.as_weak();
+    let s = Rc::clone(&store);
 
     instance.global::<AreaCallbacks>().on_switch_area_type(
         move |slint_area_key, slint_area_type| {
@@ -24,9 +25,22 @@ pub(super) fn setup_area_type_callback(instance: &MainWindow, store: Rc<RefCell<
             });
 
             // 分发 Action 并更新 UI
-            dispatch_and_render(&store, action, &weak_instance);
+            dispatch_and_render(&s, action, &weak_instance);
         },
     );
+
+    // 插件一列：枚举带不出插件 id，交的是 id，落成同一个 SwitchType（同一个 reducer、
+    // 同一个 Tag），面板工厂由 Area 投影按 id 现取。
+    let weak = instance.as_weak();
+    instance
+        .global::<AreaCallbacks>()
+        .on_switch_area_type_plugin(move |slint_area_key, plugin_id| {
+            let action = Action::Area(AreaAction::SwitchType {
+                area_key: slint_area_key_to_key(&slint_area_key),
+                area_type: crate::screen::area::AreaType::Plugin(plugin_id.to_string()),
+            });
+            dispatch_and_render(&store, action, &weak);
+        });
 }
 
 pub(super) fn setup_actionzone_drag_callback(instance: &MainWindow, store: Rc<RefCell<AppStore>>) {

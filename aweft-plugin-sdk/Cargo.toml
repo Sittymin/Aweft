@@ -1,0 +1,11 @@
+[package]
+name = "aweft-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Aweft 插件 Guest 侧 SDK：宿主函数声明与导出胶水"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]

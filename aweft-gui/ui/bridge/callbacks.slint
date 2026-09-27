@@ -24,6 +24,8 @@ export global DragCallbacks {
 
 export global AreaCallbacks {
     callback switch-area-type(area-key: SlintKey, area-type: SlintAreaType);
+    // 切到插件一列的某项：插件不是编译期枚举值，交的是插件 id
+    callback switch-area-type-plugin(area-key: SlintKey, plugin-id: string);
 }
 
 // 视口回调：打开视频等媒体操作（Rust 侧处理）

@@ -65,6 +65,9 @@ pub enum AreaType {
     NlaEditor,
     // 音频波形（显示层暂用固定分桶的随机占位数据）
     AudioWaveform,
+    // 插件面板：载荷是插件 id。标题栏用通用 AreaHeader，内容由 ComponentContainer
+    // 按 Rust 侧缓存的工厂现取现嵌
+    Plugin(String),
     // StyleManager,
     // FileBrowser,
 
