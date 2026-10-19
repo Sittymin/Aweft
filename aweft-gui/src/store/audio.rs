@@ -15,7 +15,7 @@
 //! 只允许行级更新（见 `docs/architecture/video-playback.md`）。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,9 +76,10 @@ pub struct AreaColumns {
 pub struct WaveformTrack {
     /// 耐久层：按行号索引的普通 `Vec`，从不绑定到 Slint，写一行不触发任何通知。
     base: Vec<SlintWaveformBucket>,
-    /// 已折算列，外层键 = `bucket_ms`（缩放档）：一档一个范围域，写一批只在该档
-    /// 里按 `[lo/b, (hi-1)/b]` 丢列，不必扫全量条目。
-    folded: HashMap<usize, HashMap<i64, CachedColumn>>,
+    /// 已折算列，外层键 = `bucket_ms`（缩放档）：一档一个范围域。内层用 `BTreeMap`
+    /// 是为了让失效能按列号区间只取真正存在的键——追加批次写的那 4096 行通常在
+    /// 可见窗口之外，用 `HashMap` 就得对整段区间逐个试探不存在的键。
+    folded: HashMap<usize, BTreeMap<i64, CachedColumn>>,
     /// LRU 时钟戳：每次取一列加一，淘汰时按它丢最旧的一半。
     clock: u64,
     /// 见过的最宽视口列数，作为驻留上限的基准（由 `fill_columns`/`refresh_columns`
@@ -111,9 +112,8 @@ impl WaveformTrack {
     }
 
     /// 写入一批基础桶（自行号 `start` 起，间隙补零桶），并立即丢掉与之相交的
-    /// 已折算列。耐久层与缓存只有这一个写入口，「写行」与「丢受影响的列」因此
-    /// 不可能被分开做、分开忘。返回本批实际写入（含间隙填充段）的行区间
-    /// `[lo, hi)`，调用方用它决定重绘哪些列。
+    /// 已折算列。返回本批实际写入（含间隙填充段）的行区间 `[lo, hi)`，
+    /// 调用方用它决定重绘哪些列。
     #[must_use]
     pub(crate) fn apply_batch(
         &mut self,
@@ -126,8 +126,8 @@ impl WaveformTrack {
     }
 
     /// 丢掉覆盖到 `[lo, hi)` 内任一行的折算列。列 `c` 覆盖 `[c*b, (c+1)*b)`，与之
-    /// 相交即 `c ∈ [lo/b, (hi-1)/b]`，所以每档只删这一段键；代价随缩放档数
-    /// （阶梯共十几级）与窗口宽走，与已缓存的总列数无关。
+    /// 相交即 `c ∈ [lo/b, (hi-1)/b]`，所以每档只摘这一段的键；代价与该档里真正
+    /// 相交的条目数成正比，与批次行跨度无关。
     /// 追加而变长的行也落在 `[lo, hi)` 里，所以「半截列补全」不需要额外判据。
     fn drop_folded(&mut self, lo: usize, hi: usize) {
         if hi <= lo {
@@ -137,7 +137,11 @@ impl WaveformTrack {
             let bucket_ms = (*bucket_ms).max(1);
             let column_lo = (lo / bucket_ms) as i64;
             let column_hi = ((hi - 1) / bucket_ms) as i64;
-            for column in column_lo..=column_hi {
+            let doomed: Vec<i64> = group
+                .range(column_lo..=column_hi)
+                .map(|(column, _)| *column)
+                .collect();
+            for column in doomed {
                 group.remove(&column);
             }
         }
@@ -174,6 +178,7 @@ impl WaveformTrack {
     }
 
     /// 超出驻留上限时按 LRU 时钟戳跨缩放档一起丢掉最旧的一半。
+    /// 只要中位数，所以用 `select_nth_unstable` 而不是全排序。
     fn evict_older_half(&mut self) {
         let mut stamps: Vec<u64> = self
             .folded
@@ -181,10 +186,25 @@ impl WaveformTrack {
             .flat_map(|group| group.values())
             .map(|entry| entry.last_used)
             .collect();
-        stamps.sort_unstable();
-        let threshold = stamps[stamps.len() / 2];
+        let median = stamps.len() / 2;
+        stamps.select_nth_unstable(median);
+        let threshold = stamps[median];
         for group in self.folded.values_mut() {
             group.retain(|_, entry| entry.last_used > threshold);
+        }
+    }
+
+    /// 把一列的折算值写进模型第 `j` 槽：值没变就不发通知。
+    /// `widest_window` 必须在取列之前抬到位，它决定驻留上限。
+    fn set_column(
+        &mut self,
+        model: &VecModel<SlintWaveformBucket>,
+        j: usize,
+        view: AreaWaveformView,
+    ) {
+        let value = self.get_or_fold(view.bucket_ms, view.first as i64 + j as i64);
+        if model.row_data(j).as_ref() != Some(&value) {
+            model.set_row_data(j, value);
         }
     }
 
@@ -194,10 +214,7 @@ impl WaveformTrack {
         self.widest_window = self.widest_window.max(view.count);
         resize_column_model(model, view.count);
         for j in 0..view.count {
-            let value = self.get_or_fold(view.bucket_ms, view.first as i64 + j as i64);
-            if model.row_data(j).as_ref() != Some(&value) {
-                model.set_row_data(j, value);
-            }
+            self.set_column(model, j, view);
         }
     }
 
@@ -217,10 +234,7 @@ impl WaveformTrack {
         let j_hi =
             (((row_hi - 1) / bucket_ms) as i64 - first + 1).clamp(0, view.count as i64) as usize;
         for j in j_lo..j_hi {
-            let value = self.get_or_fold(bucket_ms, first + j as i64);
-            if model.row_data(j).as_ref() != Some(&value) {
-                model.set_row_data(j, value);
-            }
+            self.set_column(model, j, view);
         }
     }
 }
@@ -394,12 +408,13 @@ pub(crate) fn ui_refresh_waveform_columns_for_batch(
     };
     // 失效已经在 `apply_batch` 里做过了：相交列此刻必然不在缓存里。
     // 这里只负责把可见窗口重绘出来，非相交列零折算、零通知。
-    for (key, view) in views
+    // 先摘成 owned 副本：循环里要改 `columns`，`views` 的借用必须提前还掉。
+    let visible: Vec<(ScrAreaKey, AreaWaveformView)> = views
         .iter()
         .filter(|(_, view)| view.video_index == video_index && view.track_index == track_index)
         .map(|(key, view)| (*key, *view))
-        .collect::<Vec<_>>()
-    {
+        .collect();
+    for (key, view) in visible {
         let Some(entry) = columns.get_mut(&key) else {
             continue;
         };
