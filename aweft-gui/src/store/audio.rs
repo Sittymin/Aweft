@@ -1095,4 +1095,86 @@ mod tests {
             "4ms 档的相交列必须重折"
         );
     }
+
+    /// `drop_folded` 的代价口径：只摘写入区间内**已有的**键。折过两档之后远端写入
+    /// 不得掉任何条目，相交的那一列则必须掉——`drop_folded` 上那句「代价与该档里真正
+    /// 相交的条目数成正比」由这两组断言守住。
+    #[test]
+    fn invalidation_drops_exactly_the_intersecting_columns() {
+        let mut track = WaveformTrack::with_base(indexed_batch(0, 64));
+        let model = VecModel::default();
+        // 两个缩放档各折一窗：1ms 档折列 0..8（覆盖行 0..8），4ms 档折列 0..2
+        // （覆盖行 0..12）。缓存必须经 `fill_columns` 灌：`widest_window` 只在那里抬，
+        // 直连 `get_or_fold` 会让驻留上限退化成 `WAVEFORM_CACHE_WINDOWS`。
+        track.fill_columns(&model, view_at(1, 0, 8));
+        track.fill_columns(&model, view_at(4, 0, 3));
+        assert_eq!(group_len(&track, 1), 8);
+        assert_eq!(group_len(&track, 4), 3);
+
+        // 远端写行 40..48：与两档折过的列都不相交，条目数必须一动不动。
+        let (lo, hi) = track.apply_batch(40, &indexed_batch(40, 8));
+        assert_eq!((lo, hi), (40, 48));
+        assert_eq!(group_len(&track, 1), 8, "不相交的写入不得摘掉任何已折列");
+        assert_eq!(group_len(&track, 4), 3, "粗档同理");
+
+        // 覆盖行 3：只有 1ms 档的列 3 与 4ms 档的列 0 相交，各只掉那一列。
+        let (lo, hi) = track.apply_batch(3, &[bucket(-0.9, 0.9, 0.8)]);
+        assert_eq!((lo, hi), (3, 4), "单行同长度覆盖的写入区间就是它自己");
+        assert_eq!(group_len(&track, 1), 7, "1ms 档只掉相交的列 3");
+        assert_eq!(group_len(&track, 4), 2, "4ms 档只掉相交的列 0");
+    }
+
+    fn view_at(bucket_ms: usize, first: i32, count: usize) -> AreaWaveformView {
+        AreaWaveformView {
+            video_index: 0,
+            track_index: 0,
+            bucket_ms,
+            first,
+            count,
+        }
+    }
+
+    fn group_len(track: &WaveformTrack, bucket_ms: usize) -> usize {
+        track.folded.get(&bucket_ms).map_or(0, |group| group.len())
+    }
+
+    /// 驻留水位卡在「最宽视口 × `WAVEFORM_CACHE_WINDOWS`」与它的一半之间：
+    /// 连着平移 200 窗（共 215 个不同列，必然多次越上限）之后，总量不得越过上限，
+    /// 又不得被清到半程以下（一次淘汰只丢最旧一半）；最热那一窗必须整窗还在，
+    /// 而最早那一窗必须确实被丢过——否则就是根本没触发淘汰，上面的区间是空的。
+    #[test]
+    fn cache_residence_is_bounded_by_eight_widest_windows() {
+        let mut track = WaveformTrack::with_base(indexed_batch(0, 4096));
+        let model = VecModel::default();
+        let window = 16usize;
+        for first in 0..200 {
+            track.fill_columns(&model, view_at(1, first as i32, window));
+        }
+        let limit = WAVEFORM_CACHE_WINDOWS * window;
+        let total: usize = track.folded.values().map(|group| group.len()).sum();
+        assert!(total <= limit, "驻留量不得超过 {limit} 列，实际 {total}");
+        assert!(
+            total >= limit / 2,
+            "一次淘汰只丢最旧一半，不得清到 {limit} 的半程以下，实际 {total}"
+        );
+        let latest = group_range_len(&track, 1, 199..(199 + window as i64));
+        assert_eq!(latest, window, "最新一窗必须整窗留在缓存里");
+        let earliest = group_range_len(&track, 1, 0..window as i64);
+        assert!(
+            earliest < window,
+            "总量越过后必须真把最旧的丢掉，首窗却仍留着 {earliest} 列"
+        );
+    }
+
+    fn group_range_len(
+        track: &WaveformTrack,
+        bucket_ms: usize,
+        columns: std::ops::Range<i64>,
+    ) -> usize {
+        track
+            .folded
+            .get(&bucket_ms)
+            .map(|group| group.range(columns).count())
+            .unwrap_or(0)
+    }
 }
