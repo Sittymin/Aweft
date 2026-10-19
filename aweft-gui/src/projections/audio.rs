@@ -5,7 +5,6 @@
 //! 再刷新时间条行。帧图像与波形后台批次属于高频异步流，不走本投影，只允许行级
 //! 更新（见 `docs/architecture/video-playback.md` 中的实时例外）。
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::{Model as _, VecModel};
@@ -63,15 +62,11 @@ fn ui_append_audio_models(store: &mut AppStore, index: usize) {
         );
         return;
     }
-    let (track_rows, buckets) = ui_build_audio_track_models(&tracks);
+    let (track_rows, waveform_tracks) = ui_build_audio_track_models(&tracks);
     let model = Rc::new(VecModel::from(track_rows));
     audio.track_models.push(Rc::clone(&model));
     audio.tracks.push(slint::ModelRc::from(model));
-    audio.buckets.push(buckets);
-    audio.column_cache.push(vec![
-        crate::store::audio::TrackColumnCache::default();
-        tracks.len()
-    ]);
+    audio.waveform_tracks.push(waveform_tracks);
 }
 
 fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
@@ -81,7 +76,7 @@ fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
         .get(index)
         .cloned()
         .unwrap_or_default();
-    let (track_rows, buckets) = ui_build_audio_track_models(&tracks);
+    let (track_rows, waveform_tracks) = ui_build_audio_track_models(&tracks);
     let audio = &mut store.ui_models.audio;
     let model = Rc::new(VecModel::from(track_rows));
     if let Some(slot) = audio.track_models.get_mut(index) {
@@ -92,14 +87,11 @@ fn ui_reset_audio_waveform(store: &mut AppStore, index: usize) {
             .tracks
             .set_row_data(index, slint::ModelRc::from(model));
     }
-    if let Some(slot) = audio.buckets.get_mut(index) {
-        *slot = buckets;
+    if let Some(slot) = audio.waveform_tracks.get_mut(index) {
+        *slot = waveform_tracks;
     }
-    if let Some(slot) = audio.column_cache.get_mut(index) {
-        *slot = vec![crate::store::audio::TrackColumnCache::default(); tracks.len()];
-    }
-    // 基础桶已整体重建：作废该视频的列缓存与 Area 窗口，旧媒体的列值
-    // 不能当新鲜值返回，列模型立即清空。
+    // 耐久层与列缓存随整条轨道一起换成新的了；这里只作废该视频的 Area 列窗口，
+    // 列模型立即清空，旧媒体的列值不能再当新鲜值显示。
     crate::store::audio::ui_invalidate_waveform_columns_for_video(audio, index);
 }
 
@@ -107,12 +99,12 @@ fn ui_build_audio_track_models(
     tracks: &[crate::store::state::AudioTrackInfo],
 ) -> (
     Vec<SlintAudioTrack>,
-    Vec<Rc<RefCell<Vec<crate::bridge::types::SlintWaveformBucket>>>>,
+    Vec<crate::store::audio::WaveformTrack>,
 ) {
     let mut rows = Vec::with_capacity(tracks.len());
-    let mut bases = Vec::with_capacity(tracks.len());
+    let mut waveforms = Vec::with_capacity(tracks.len());
     for track in tracks {
-        let base = Rc::new(RefCell::new(Vec::new()));
+        let waveform = crate::store::audio::WaveformTrack::new();
         rows.push(SlintAudioTrack {
             stream_id: track.stream_id.clone().into(),
             label: track.label.clone().into(),
@@ -135,7 +127,7 @@ fn ui_build_audio_track_models(
             waveform: SlintAudioWaveform { duration: 0.0 },
             waveform_status: AudioTrackWaveformStatus::Unprocessed,
         });
-        bases.push(base);
+        waveforms.push(waveform);
     }
-    (rows, bases)
+    (rows, waveforms)
 }

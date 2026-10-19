@@ -2,10 +2,11 @@
 //! Rust 侧持有 VecModel（共享 inner 模型，变更自动通知 Slint）：
 //! - `tracks`：每个视频的音轨行（外层下标 = 会话下标，内层 = 该容器内的音轨）
 //! - `track_models`：与 `tracks` 各行共享 inner 的持久行模型
-//! - `buckets`：每个音轨的 1ms 基础桶（后台任务按批次原地写入的普通 `Vec` 耐久层，
-//!   从不绑定到 Slint，行读取无锁无通知开销）
+//! - `waveform_tracks`：每个视频每条音轨一个 `WaveformTrack`，里面同时装着
+//!   1ms 基础桶（后台任务按批次原地写入的普通 `Vec` 耐久层，从不绑定到 Slint，
+//!   行读取无锁无通知开销）与它的已折算列缓存
 //!
-//! 可见列不整窗重算：`column_cache` 按键 `(bucket_ms, 绝对列号)` 缓存已折算的列值，
+//! 可见列不整窗重算：缓存按键 `(bucket_ms, 绝对列号)` 存已折算的列值，
 //! 平移、回移与批次到达都只折算新出现或被新数据覆盖的列（Audacity 式按需列的
 //! 增量版），不预建全文件金字塔。
 //!
@@ -43,11 +44,9 @@ pub struct AudioUiState {
     pub tracks: Rc<VecModel<slint::ModelRc<SlintAudioTrack>>>,
     /// 每个视频内部的音轨行模型；`tracks` 各行引用对应模型。
     pub track_models: Vec<Rc<VecModel<SlintAudioTrack>>>,
-    /// 波形的 1ms 基础桶耐久层（普通 `Vec`，不绑定 Slint）；可见列计算的数据源。
-    /// 后台任务按批次原地写入（`ui_apply_waveform_batch`）。
-    pub buckets: Vec<Vec<Rc<RefCell<Vec<SlintWaveformBucket>>>>>,
-    /// 与 `buckets` 同构的已折算列缓存：平移/回移/缩放档回切命中即免折算。
-    pub column_cache: Vec<Vec<TrackColumnCache>>,
+    /// 每条音轨的波形：外层下标 = 视频会话，内层下标 = 该视频内的音轨，与
+    /// `track_models` 各行一一对应。耐久层与列缓存同持在一个 `WaveformTrack` 里。
+    pub waveform_tracks: Vec<Vec<WaveformTrack>>,
     /// 各波形 Area 上报的可视窗口（`slotmap` 键标识 Area）。
     pub views: HashMap<ScrAreaKey, AreaWaveformView>,
     /// 各波形 Area 的持久列模型与当前对应的窗口快照（与上报同键，Slint 绑定恒等，
@@ -65,14 +64,21 @@ pub struct AreaColumns {
     pub(crate) window: Option<AreaWaveformView>,
 }
 
-/// 单条音轨的已折算列缓存：键 = `(bucket_ms, 绝对列号)`。
-/// 基础桶以追加为主，但半桶补样本 / PTS 回访会原地修正旧行（同长度覆盖，
-/// 见 `render::video_sink::waveform::accumulate_sample` 的 `changed_start`）；
-/// 条目除记录折算时的基础行数（`folded_at`，覆盖部分列长出新数据的追加情形）
-/// 外，还记录折算时的写入版本号（`folded_rev`，覆盖同长度旧行的修正情形）。
-/// 容量按 `last_used` 时钟戳近似 LRU 淘汰：超出上限时丢弃最旧一半。
-#[derive(Clone, Default)]
-pub struct TrackColumnCache {
+/// 一条音轨的波形：1ms 基础桶耐久层，加上它自己的已折算列缓存。
+///
+/// 缓存键 = `(bucket_ms, 绝对列号)`。基础桶以追加为主，但半桶补样本 / PTS 回访会
+/// 原地修正旧行（同长度覆盖，见 `render::video_sink::waveform::accumulate_sample`
+/// 的 `changed_start`）；条目除记录折算时的基础行数（`folded_at`，覆盖部分列长出
+/// 新数据的追加情形）外，还记录折算时的写入版本号（`folded_rev`，覆盖同长度旧行的
+/// 修正情形）。容量按 `last_used` 时钟戳近似 LRU 淘汰：超出上限时丢弃最旧一半。
+///
+/// 耐久层与缓存合持在一个对象里，为的是让「读基础桶」与「改缓存」永远发生在同一
+/// 步上（见 `get_or_fold`：基础桶只借到该列算完为止），调用方拿不到一份与缓存不
+/// 同步的桶，也就没有「两个平行结构各自重建、忘了其中一个」这类错。
+pub struct WaveformTrack {
+    /// 耐久层：后台批次原地写入（`ui_apply_waveform_batch`），从不绑定到 Slint。
+    /// 共享 `Rc` 让 pump 能先放下 `store` 的借用再写行。
+    base: Rc<RefCell<Vec<SlintWaveformBucket>>>,
     entries: HashMap<(usize, i64), CachedColumn>,
     clock: u64,
     /// 基础桶写入版本号：每次 `note_write` 加一。条目的 `folded_rev` 即折算时
@@ -101,11 +107,26 @@ const WAVEFORM_COLUMN_CACHE_CAPACITY: usize = 16_384;
 /// （4096 桶/批）；超出后早于窗口的缓存条目保守按脏重折，不会错用旧值。
 const WAVEFORM_REVISION_HISTORY: usize = 64;
 
-impl TrackColumnCache {
+impl WaveformTrack {
+    /// 新建一条还没有任何基础桶的音轨（`projections/audio` 建模时用）。
+    pub(crate) fn new() -> Self {
+        Self::with_base(Vec::new())
+    }
+
+    fn with_base(base: Vec<SlintWaveformBucket>) -> Self {
+        Self {
+            base: Rc::new(RefCell::new(base)),
+            entries: HashMap::new(),
+            clock: 0,
+            rev: 0,
+            history: VecDeque::new(),
+        }
+    }
+
     /// 记录一次基础桶写入的行区间 `[lo, hi)`（含间隙零桶填充段与同长度覆盖段）。
     /// 空区间不推进版本。调用方是 `ui_refresh_waveform_columns_for_batch`（pump
-    /// 每批一次），保证“写—记版本—刷列”原子顺序；`ui_invalidate_*` 重建时整体
-    /// 清空，不继承旧版本。
+    /// 每批一次），保证“写—记版本—刷列”原子顺序；换媒体时整条轨道被新建的
+    /// `WaveformTrack` 顶掉，不继承旧版本。
     fn note_write(&mut self, lo: usize, hi: usize) {
         if hi <= lo {
             return;
@@ -136,23 +157,23 @@ impl TrackColumnCache {
     /// 取一列的折算值：缓存新鲜则命中，否则从基础桶现折。
     /// 脏有两种：追加长出新数据（`folded_at` 判）与同长度覆盖修正（`history` 判，
     /// 半桶补样本 / PTS 回访）。未命中只折算这一列，不碰其它列。
-    fn get_or_fold(
-        &mut self,
-        base: &[SlintWaveformBucket],
-        bucket_ms: usize,
-        column: i64,
-    ) -> SlintWaveformBucket {
+    fn get_or_fold(&mut self, bucket_ms: usize, column: i64) -> SlintWaveformBucket {
         self.clock += 1;
-        let base_len = base.len();
         // 该列覆盖的基础行区间（负列号侧裁到 0）：折算只会读这些行。
         let covered_lo = column.max(0) as usize * bucket_ms;
         let covered_hi = (column + 1).max(0) as usize * bucket_ms;
-        if let Some((fresh, value)) = self.entries.get(&(bucket_ms, column)).map(|entry| {
-            let grown = covered_hi > entry.folded_at && covered_lo < base_len;
-            let touched =
-                self.covered_since(entry.folded_rev, covered_lo, covered_hi.min(base_len));
-            ((!grown && !touched), entry.value.clone())
-        }) {
+        // 基础桶只借到判定算完为止：`Ref` 离开作用域后才可变用到 entries，
+        // 「读耐久层」与「写缓存」因而不必同时成立。
+        let cached = {
+            let base = self.base.borrow();
+            self.entries.get(&(bucket_ms, column)).map(|entry| {
+                let grown = covered_hi > entry.folded_at && covered_lo < base.len();
+                let touched =
+                    self.covered_since(entry.folded_rev, covered_lo, covered_hi.min(base.len()));
+                (!grown && !touched, entry.value.clone())
+            })
+        };
+        if let Some((fresh, value)) = cached {
             if fresh {
                 if let Some(entry) = self.entries.get_mut(&(bucket_ms, column)) {
                     entry.last_used = self.clock;
@@ -160,13 +181,16 @@ impl TrackColumnCache {
                 return value;
             }
         }
-        let value = fold_waveform_column(base, bucket_ms, column);
+        let (value, folded_at) = {
+            let base = self.base.borrow();
+            (fold_waveform_column(&base, bucket_ms, column), base.len())
+        };
         let rev = self.rev;
         self.entries.insert(
             (bucket_ms, column),
             CachedColumn {
                 value: value.clone(),
-                folded_at: base_len,
+                folded_at,
                 folded_rev: rev,
                 last_used: self.clock,
             },
@@ -182,6 +206,41 @@ impl TrackColumnCache {
         stamps.sort_unstable();
         let threshold = stamps[stamps.len() / 2];
         self.entries.retain(|_, entry| entry.last_used > threshold);
+    }
+
+    /// 整窗重填一个 Area 的列模型：逐列经缓存取折算值（新鲜命中免折算），
+    /// 行值变化才 `set_row_data`（原地更新，Slint 侧不重建槽位组件）。
+    fn fill_columns(&mut self, model: &VecModel<SlintWaveformBucket>, view: AreaWaveformView) {
+        resize_column_model(model, view.count);
+        for j in 0..view.count {
+            let value = self.get_or_fold(view.bucket_ms, view.first as i64 + j as i64);
+            if model.row_data(j).as_ref() != Some(&value) {
+                model.set_row_data(j, value);
+            }
+        }
+    }
+
+    /// 只刷新与写入行区间 `[row_lo, row_hi)` 相交的列：列 `c` 覆盖 `[c*b, (c+1)*b)`，
+    /// 与 `[row_lo, row_hi)` 相交即 `c ∈ [row_lo/b, (row_hi-1)/b]`，再裁进当前窗口。
+    /// 区间外的列一列不折、一次通知也不发。
+    fn refresh_columns(
+        &mut self,
+        model: &VecModel<SlintWaveformBucket>,
+        view: AreaWaveformView,
+        row_lo: usize,
+        row_hi: usize,
+    ) {
+        let bucket_ms = view.bucket_ms.max(1);
+        let first = view.first as i64;
+        let j_lo = ((row_lo / bucket_ms) as i64 - first).max(0) as usize;
+        let j_hi =
+            (((row_hi - 1) / bucket_ms) as i64 - first + 1).clamp(0, view.count as i64) as usize;
+        for j in j_lo..j_hi {
+            let value = self.get_or_fold(bucket_ms, first + j as i64);
+            if model.row_data(j).as_ref() != Some(&value) {
+                model.set_row_data(j, value);
+            }
+        }
     }
 }
 
@@ -263,8 +322,8 @@ fn fold_waveform_column(
 /// `[(first + j) * bucket_ms, (first + j + 1) * bucket_ms)`。返回列数恒等于 `count`，
 /// 调用方按下标直读，无需对齐。
 ///
-/// 只有测试用。整窗重填走 [`fill_columns_from_cache`]，它逐列经 `TrackColumnCache`
-/// 取值，命中的列根本不折算，所以不经这里。
+/// 只有测试用。整窗重填走 [`WaveformTrack::fill_columns`]，它逐列经缓存取值，
+/// 命中的列根本不折算，所以不经这里。
 #[cfg(test)]
 fn ui_compute_waveform_columns(
     base: &[SlintWaveformBucket],
@@ -288,24 +347,6 @@ fn resize_column_model(columns: &VecModel<SlintWaveformBucket>, count: usize) {
     }
 }
 
-/// 整窗重填一个 Area 的列模型：逐列经缓存取折算值（新鲜命中免折算），
-/// 行值变化才 `set_row_data`（原地更新，Slint 侧不重建槽位组件）。
-fn fill_columns_from_cache(
-    cache: &mut TrackColumnCache,
-    base: &[SlintWaveformBucket],
-    model: &VecModel<SlintWaveformBucket>,
-    view: AreaWaveformView,
-) {
-    resize_column_model(model, view.count);
-    for j in 0..view.count {
-        let column = view.first as i64 + j as i64;
-        let value = cache.get_or_fold(base, view.bucket_ms, column);
-        if model.row_data(j).as_ref() != Some(&value) {
-            model.set_row_data(j, value);
-        }
-    }
-}
-
 /// 按视图同步单个 Area 的持久列模型（Slint `waveform-view` 回调入口）。
 /// 视图与上次一致时直接返回（基础桶变化走 `ui_refresh_waveform_columns_for_batch`，
 /// 不会经过本函数）；视图变化（平移/缩放/换轨）时整窗经缓存重填，重叠列命中缓存
@@ -317,8 +358,7 @@ pub(crate) fn ui_sync_waveform_columns(
     view: AreaWaveformView,
 ) -> Rc<VecModel<SlintWaveformBucket>> {
     let AudioUiState {
-        buckets,
-        column_cache,
+        waveform_tracks,
         columns,
         views,
         ..
@@ -327,17 +367,13 @@ pub(crate) fn ui_sync_waveform_columns(
         model: Rc::new(VecModel::default()),
         window: None,
     });
-    let base = buckets
-        .get(view.video_index)
-        .and_then(|tracks| tracks.get(view.track_index));
-    let cache = column_cache
+    let track = waveform_tracks
         .get_mut(view.video_index)
         .and_then(|tracks| tracks.get_mut(view.track_index));
-    if let (Some(base), Some(cache)) = (base, cache) {
+    if let Some(track) = track {
         // 快路径：视图未变且窗口有效（未失效）时模型内容已是最新的。
         if entry.window != Some(view) {
-            let base = base.borrow();
-            fill_columns_from_cache(cache, &base, &entry.model, view);
+            track.fill_columns(&entry.model, view);
             entry.window = Some(view);
         }
     } else {
@@ -362,19 +398,12 @@ pub(crate) fn ui_refresh_waveform_columns_for_batch(
         return;
     }
     let AudioUiState {
-        buckets,
-        column_cache,
+        waveform_tracks,
         views,
         columns,
         ..
     } = audio;
-    let Some(base) = buckets
-        .get(video_index)
-        .and_then(|tracks| tracks.get(track_index))
-    else {
-        return;
-    };
-    let Some(cache) = column_cache
+    let Some(track) = waveform_tracks
         .get_mut(video_index)
         .and_then(|tracks| tracks.get_mut(track_index))
     else {
@@ -383,8 +412,7 @@ pub(crate) fn ui_refresh_waveform_columns_for_batch(
     // 先记版本再刷列：相交列经 history 判脏自然重折；当前不可见、之后平移回来
     // 的列同样凭版本号识别出底层行被改写过，不会误用旧值。只记区间不预折，
     // 非相交列零折算、零通知。
-    cache.note_write(row_lo, row_hi);
-    let base = base.borrow();
+    track.note_write(row_lo, row_hi);
     for (key, view) in views
         .iter()
         .filter(|(_, view)| view.video_index == video_index && view.track_index == track_index)
@@ -395,40 +423,21 @@ pub(crate) fn ui_refresh_waveform_columns_for_batch(
             continue;
         };
         if entry.window != Some(view) {
-            fill_columns_from_cache(cache, &base, &entry.model, view);
+            track.fill_columns(&entry.model, view);
             entry.window = Some(view);
-            continue;
-        }
-        // 只刷新与写入行区间相交的列：列 `c` 覆盖 `[c*b, (c+1)*b)`，
-        // 与 `[row_lo, row_hi)` 相交即 `c ∈ [row_lo/b, (row_hi-1)/b]`。
-        let bucket_ms = view.bucket_ms.max(1);
-        let column_lo = (row_lo / bucket_ms) as i64;
-        let column_hi = ((row_hi - 1) / bucket_ms) as i64;
-        let first = view.first as i64;
-        let j_lo = (column_lo - first).max(0) as usize;
-        let j_hi = (column_hi - first + 1).clamp(0, view.count as i64) as usize;
-        for j in j_lo..j_hi {
-            let column = first + j as i64;
-            let value = cache.get_or_fold(&base, bucket_ms, column);
-            if entry.model.row_data(j).as_ref() != Some(&value) {
-                entry.model.set_row_data(j, value);
-            }
+        } else {
+            track.refresh_columns(&entry.model, view, row_lo, row_hi);
         }
     }
 }
 
-/// 基础桶耐久层被整体重建后（更换视频）作废该视频的全部列缓存与 Area 窗口：
-/// 缓存条目的 `folded_at` 以旧行数计时，新基础桶行数从 0 重新增长，不清理会把
-/// 旧媒体的列值当新鲜值返回。列模型立即清空，避免继续显示旧媒体的波形。
+/// 更换视频后作废该视频的全部 Area 列窗口。整条 `WaveformTrack` 已被新建的顶掉，
+/// 缓存随之作废（`folded_at` 不可能再拿旧行数当基准）；但 Area 的列模型还挂着
+/// 旧媒体的列值，必须立即清空并把窗口标记为失效，下一次同步整窗重填。
 pub(crate) fn ui_invalidate_waveform_columns_for_video(
     audio: &mut AudioUiState,
     video_index: usize,
 ) {
-    if let Some(tracks) = audio.column_cache.get_mut(video_index) {
-        for cache in tracks {
-            *cache = TrackColumnCache::default();
-        }
-    }
     let stale: Vec<ScrAreaKey> = audio
         .views
         .iter()
@@ -499,16 +508,16 @@ pub(crate) async fn ui_pump_waveform_batches(
         if batch.cancellation.load(Ordering::Acquire) {
             continue;
         }
-        // 基础桶经共享 Rc 原地写，不借 store；替换媒体后旧桶已整体重建，
-        // 此处拿到的 Rc 恒为当前会话的耐久层。
+        // 基础桶经共享 Rc 原地写，不借 store；替换媒体后整条 WaveformTrack 已被
+        // 新建的顶掉，此处拿到的 Rc 恒为当前会话的耐久层。
         let Some(base) = store
             .borrow()
             .ui_models
             .audio
-            .buckets
+            .waveform_tracks
             .get(batch.video_index)
             .and_then(|tracks| tracks.get(batch.track_index))
-            .cloned()
+            .map(|track| Rc::clone(&track.base))
         else {
             log::warn!(
                 "丢弃越界波形结果: video-index={}, track-index={}",
@@ -719,28 +728,28 @@ mod tests {
 
     fn sync_case(base_rows: usize) -> (AudioUiState, ScrAreaKey) {
         let mut audio = AudioUiState::default();
-        audio.buckets.push(vec![Rc::new(RefCell::new(vec![
-            bucket(-0.5, 0.5, 0.4);
-            base_rows
-        ]))]);
-        audio.column_cache.push(vec![TrackColumnCache::default()]);
+        audio
+            .waveform_tracks
+            .push(vec![WaveformTrack::with_base(vec![
+                bucket(-0.5, 0.5, 0.4);
+                base_rows
+            ])]);
         (audio, test_key(1))
     }
 
     /// 第 `row` 个基础桶编码行号（min = -row/10，max = row/10），方便断言某列
-    /// 到底聚合了哪些行。
+    /// 到底聚合了哪些行。返回的句柄指向轨道内的耐久层，测试经它直接追加或改写行。
     fn indexed_audio(rows: usize) -> (AudioUiState, Rc<RefCell<Vec<SlintWaveformBucket>>>) {
         let mut audio = AudioUiState::default();
-        let base = Rc::new(RefCell::new(
+        audio.waveform_tracks.push(vec![WaveformTrack::with_base(
             (0..rows)
                 .map(|row| {
                     let peak = row as f32 / 10.0;
                     bucket(-peak, peak, peak / 2.0)
                 })
                 .collect(),
-        ));
-        audio.buckets.push(vec![Rc::clone(&base)]);
-        audio.column_cache.push(vec![TrackColumnCache::default()]);
+        )]);
+        let base = Rc::clone(&audio.waveform_tracks[0][0].base);
         (audio, base)
     }
 
@@ -946,8 +955,8 @@ mod tests {
         let model = ui_sync_waveform_columns(&mut audio, key, view);
         assert_eq!(model.row_count(), 4);
 
-        // 模拟更换视频：基础桶槽位换成新数据（值翻倍），列缓存必须作废。
-        audio.buckets[0][0] = Rc::new(RefCell::new(vec![bucket(-1.0, 1.0, 0.8); 8]));
+        // 模拟更换视频：整条轨道换成新数据（值翻倍），缓存随新轨道归零。
+        audio.waveform_tracks[0][0] = WaveformTrack::with_base(vec![bucket(-1.0, 1.0, 0.8); 8]);
         ui_invalidate_waveform_columns_for_video(&mut audio, 0);
         assert_eq!(
             model.row_count(),
