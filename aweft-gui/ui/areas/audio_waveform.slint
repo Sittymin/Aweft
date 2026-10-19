@@ -56,7 +56,8 @@ export component AudioWaveformArea inherits Rectangle {
         && root.track-index < root.tracks.length;
     // Audacity 式密度：每像素约一列。target 是“每像素秒数”，列宽取 ≥ 该值的
     // 最细 1/2/5×10^k 档（1ms、2ms、5ms……）。横向标尺（TimeRuler/VerticalGrid）
-    // 只管刻度，不管波形密度。列数据由 Rust 现算（见 compute-columns），这里只定窗口。
+    // 只管刻度，不管波形密度。列数据由 Rust 经 `store::audio::ui_sync_waveform_columns`
+    // 取值（见 docs/architecture/video-playback.md 的「音频波形」），这里只定窗口。
     pure function waveform-bucket-duration() -> float {
         let target = 1.0 / root.nav-zoom;
         if target <= 0.001 { return 0.001; }
